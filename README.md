@@ -31,13 +31,13 @@ open http://localhost:4000
 
 ```mermaid
 graph LR
-    A[Load Generator] -- "POST /api/v1/facts" --> B[Ingestion Service]
-    B -- "Write JSONL" --> C[Local Disk / S3]
-    C -- "ETL Cron" --> D[Rollup Job (Go)]
-    D -- "Write Parquet" --> E[Data Warehouse]
-    F[Trino] -- "Query" --> E
-    G[Cube.js] -- "Aggregates" --> F
-    H[Dashboard] -- "API" --> G
+    A["Load Generator"] -- "POST /api/v1/facts" --> B["Ingestion Service"]
+    B -- "Write JSONL" --> C["Local Disk / S3"]
+    C -- "ETL Cron" --> D["Rollup Job (Go)"]
+    D -- "Write Parquet" --> E["Data Warehouse"]
+    F["Trino"] -- "Query" --> E
+    G["Cube.js"] -- "Aggregates" --> F
+    H["Dashboard"] -- "API" --> G
 ```
 
 ## 📚 Documentation
