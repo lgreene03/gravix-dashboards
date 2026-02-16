@@ -2,33 +2,31 @@
 
 **Mission:** To provide the most reliable, low-latency service health observability platform for high-scale engineering teams.
 
-## Current State: MVP Complete
+## Current State: Horizon 1 Complete ✅
 
-We have successfully validated the **Durable Batch Architecture** (Ingestion -> JSONL -> Rollup -> Parquet -> Trino -> Cube -> Dashboard). The system is functional, verified with synthetic load, and documented.
+We have successfully delivered the **Production-Hardened Durable Batch Architecture**.
+
+- **Protobuf-Hardened Pipeline**: Strictly typed facts and events.
+- **Storage Abstraction**: S3/MinIO backend with a generic interface.
+- **K8s & Observability**: Helm charts and Prometheus/Grafana integration.
 
 ---
 
-## 🗺️ Horizon 1: Production Readiness (Next 3 Months)
+## 🗺️ Horizon 2: Actionable Insights (Active)
 
-**Theme:** "From Localhost to Cloud"
-**Goal:** Deploy a resilient, auto-scaling instance of Gravix that can handle real production traffic.
+**Theme:** "Less Staring, More Knowing"
+**Goal:** Enable sub-60 second root cause identification via multi-dimensional drill-downs and WoW comparisons.
 
-### 1. Cloud-Native Infrastructure
+### 1. Advanced Analytics & Drill-down
 
-- [ ] **Kubernetes Support**: Create Helm charts for Ingestion, Trino, and Cube.
-- [ ] **Real Object Storage**: Replace local filesystem storage with S3/GCS.
-- [ ] **Infrastructure as Code**: Terraform module to provision dependencies (S3 buckets, IAM roles).
+- [ ] **Path-Level Aggregates**: Expand rollup job to aggregate by `path_template`.
+- [ ] **WoW Comparisons**: Support time-comparison queries in Cube.js.
+- [ ] **Detailed Dashboards**: Interactive drill-down from service -> route level.
 
-### 2. Operational Reliability
+### 2. Operational Intelligence
 
-- [ ] **CI/CD Pipelines**: GitHub Actions for automated testing and container publishing.
-- [ ] **Self-Monitoring**: Export internal metrics (ingestion rate, batch latency) to Prometheus.
-- [ ] **Graceful Degradation**: Circuit breakers for Trino query failures.
-
-### 3. Data Integrity
-
-- [ ] **Schema Registry**: Centralized schema management (Protobuf/Avro) instead of loose JSON.
-- [ ] **Dead Letter Queue (DLQ)**: Mechanism to handle and replay malformed events.
+- [ ] **Anomaly Detection**: Basic deviation detection for traffic drops.
+- [ ] **Dead Letter Queue (DLQ)**: Mechanism to handle and replay malformed events (Post-validation).
 
 ---
 

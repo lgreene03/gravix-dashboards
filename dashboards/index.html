@@ -180,6 +180,23 @@
             color: var(--text-secondary);
         }
 
+        .filter-input {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: white;
+            font-family: inherit;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .filter-input:focus {
+            border-color: var(--brand-color);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+        }
+
         .chart-wrapper {
             height: 300px;
             position: relative;
@@ -227,6 +244,83 @@
             margin-top: 8px;
             text-align: right;
         }
+
+        /* Table */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+        }
+
+        .data-table th,
+        .data-table td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table th {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .data-table tr:hover {
+            background: #f8fafc;
+        }
+
+        .path-link {
+            color: var(--brand-color);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .path-link:hover {
+            text-decoration: underline;
+        }
+
+        .badge-error {
+            background: #fee2e2;
+            color: #b91c1c;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background: #dcfce7;
+            color: #15803d;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .drilldown-header {
+            display: none;
+            margin-bottom: 24px;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .back-btn {
+            background: white;
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .back-btn:hover {
+            background: #f1f5f9;
+        }
     </style>
 </head>
 
@@ -249,14 +343,25 @@
     <main class="main-content">
         <div class="header">
             <div class="page-title">
-                <h1>Service Health</h1>
-                <p>Real-time metrics from production services</p>
+                <div id="drilldown-nav" class="drilldown-header">
+                    <button id="backToServices" class="back-btn">← Back to Services</button>
+                    <span id="currentServiceTitle" style="font-weight: 700; font-size: 1.25rem;"></span>
+                </div>
+                <div id="default-header">
+                    <h1>Service Health</h1>
+                    <p>Real-time metrics from production services</p>
+                </div>
             </div>
             <div style="display: flex; gap: 16px; align-items: center;">
                 <select id="serviceFilter" class="filter-input">
                     <option value="">All Services</option>
                 </select>
                 <input type="date" id="dateFilter" class="filter-input">
+                <select id="compareFilter" class="filter-input">
+                    <option value="">No Comparison</option>
+                    <option value="day">Day-over-Day</option>
+                    <option value="week">Week-over-Week</option>
+                </select>
                 <div class="status-badge">
                     <span class="status-dot"></span>
                     Live System
@@ -297,6 +402,35 @@
                     <canvas id="latencyChart"></canvas>
                 </div>
             </div>
+
+            <!-- Top Failing Endpoints Card -->
+            <div class="card" style="grid-column: span 2;">
+                <div class="loading-overlay" id="loading-endpoints">
+                    <div class="loading-spinner"></div>
+                </div>
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Top Failing Endpoints</div>
+                        <div class="card-subtitle">Detailed breakdown of issues by path</div>
+                    </div>
+                </div>
+                <div id="endpoints-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Endpoint</th>
+                                <th>Method</th>
+                                <th>Throughput</th>
+                                <th>Errors</th>
+                                <th>Error Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="endpoints-body">
+                            <!-- Rows injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -317,7 +451,7 @@
         let availableServices = new Set();
 
         // --- DATA FETCHING ---
-        async function fetchCubeData(measures, filters = []) {
+        async function fetchCubeData(measures, filters = [], compareDateRange = null) {
             try {
                 const query = {
                     measures: measures,
@@ -325,6 +459,10 @@
                     order: { "RequestMetricsMinute.bucketStart": "asc" },
                     filters: filters
                 };
+
+                if (compareDateRange) {
+                    query.compareDateRange = compareDateRange;
+                }
 
                 const response = await fetch(CUBE_API_URL, {
                     method: "POST",
@@ -339,10 +477,11 @@
 
                 const result = await response.json();
 
-                // Handle both Cube response formats
+                // Cube returns results[0].data normally, but with comparison it might be different.
+                // In latest Cube, compareDateRange returns a multi-series structure or separate results.
                 let data = [];
-                if (result.data) data = result.data;
-                else if (result.results && result.results[0]) data = result.results[0].data;
+                if (result.results && result.results[0]) data = result.results[0].data;
+                else if (result.data) data = result.data;
 
                 return data;
 
@@ -392,6 +531,7 @@
             // Filters
             const service = document.getElementById('serviceFilter').value;
             const date = document.getElementById('dateFilter').value;
+            const compare = document.getElementById('compareFilter').value;
 
             const filters = [];
             if (service) {
@@ -402,48 +542,74 @@
                 });
             }
             if (date) {
-                // Approximate generic day filter (Cube specific string filter)
-                // Since bucketStart is a string for MVP, simple regex match or string comparison is safest if standard time filter not used
-                // But Trino/Cube time filter is better if type is string. Let's use 'contains' for simple ISO date string match
-                // or strict range if we had proper time. 
-                // Because bucketStart is string "YYYY-MM-DD HH:MM:SS", "contains" YYYY-MM-DD works.
                 filters.push({
                     member: "RequestMetricsMinute.bucketStart",
                     operator: "contains",
                     values: [date]
                 });
             }
+            if (currentDrilldownPath) {
+                filters.push({
+                    member: "RequestMetricsMinute.pathTemplate",
+                    operator: "equals",
+                    values: [currentDrilldownPath]
+                });
+            }
+
+            let compareDateRange = null;
+            if (compare === 'day') compareDateRange = ['1 day ago', 'today'];
+            if (compare === 'week') compareDateRange = ['7 days ago', 'today'];
 
             // Show loading states if first load
             if (!charts['errorRate']) document.getElementById('loading-error').style.display = 'flex';
             if (!charts['latency']) document.getElementById('loading-latency').style.display = 'flex';
+            document.getElementById('loading-endpoints').style.display = 'flex';
 
             const lastUpdatedEl = document.getElementById('lastUpdated');
             lastUpdatedEl.textContent = 'Fetching data...';
 
             try {
                 // 1. Fetch Data
-                const [errorData, latencyData] = await Promise.all([
-                    fetchCubeData(["RequestMetricsMinute.errorRate"], filters),
-                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters)
+                const [errorData, latencyData, endpointData] = await Promise.all([
+                    fetchCubeData(["RequestMetricsMinute.errorRate"], filters, compareDateRange),
+                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters, compareDateRange),
+                    // For the table, we want totals per endpoint, not a time-series
+                    fetchEndPointsData(filters)
                 ]);
 
-                // 2. Process Data
-                const errorLabels = errorData.map(d => d["RequestMetricsMinute.bucketStart"]);
-                const errorValues = errorData.map(d => d["RequestMetricsMinute.errorRate"]);
+                renderEndpointsTable(endpointData);
 
-                const latencyLabels = latencyData.map(d => d["RequestMetricsMinute.bucketStart"]);
-                const latencyValues = latencyData.map(d => d["RequestMetricsMinute.p95Latency"]);
+                // 2. Process Data
+                const processSeries = (data, measure) => {
+                    if (compareDateRange) {
+                        const current = data.filter(d => d["RequestMetricsMinute.compareDateRange"] === "Current");
+                        const previous = data.filter(d => d["RequestMetricsMinute.compareDateRange"] === "Previous");
+                        return {
+                            labels: current.map(d => d["RequestMetricsMinute.bucketStart"].split(' ')[1]), // Just time for comparison
+                            values: {
+                                current: current.map(d => d[measure]),
+                                previous: previous.map(d => d[measure])
+                            }
+                        };
+                    }
+                    return {
+                        labels: data.map(d => d["RequestMetricsMinute.bucketStart"]),
+                        values: data.map(d => d[measure])
+                    };
+                };
+
+                const errorRes = processSeries(errorData, "RequestMetricsMinute.errorRate");
+                const latencyRes = processSeries(latencyData, "RequestMetricsMinute.p95Latency");
 
                 // 3. Update/Create Charts
-                updateChart('errorRate', 'errorRateChart', 'Error Rate', errorLabels, errorValues, {
+                updateChart('errorRate', 'errorRateChart', 'Error Rate', errorRes.labels, errorRes.values, {
                     borderColor: '#ef4444',
                     backgroundColor: 'rgba(239, 68, 68, 0.1)',
                     yMax: 1.0,
                     yTitle: 'Rate'
                 });
 
-                updateChart('latency', 'latencyChart', 'Latency (ms)', latencyLabels, latencyValues, {
+                updateChart('latency', 'latencyChart', 'Latency (ms)', latencyRes.labels, latencyRes.values, {
                     borderColor: '#3b82f6',
                     backgroundColor: 'rgba(59, 130, 246, 0.1)',
                     yTitle: 'ms'
@@ -466,31 +632,51 @@
         function updateChart(key, canvasId, label, labels, data, options) {
             const ctx = document.getElementById(canvasId).getContext('2d');
 
-            // Create gradient
-            const gradient = ctx.createLinearGradient(0, 0, 0, 300);
-            gradient.addColorStop(0, options.backgroundColor);
-            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            const datasets = [];
+
+            // Current Data (Primary)
+            const currentGradient = ctx.createLinearGradient(0, 0, 0, 300);
+            currentGradient.addColorStop(0, options.backgroundColor);
+            currentGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+            datasets.push({
+                label: label + ' (Current)',
+                data: data.current || data,
+                borderColor: options.borderColor,
+                backgroundColor: currentGradient,
+                fill: true,
+                tension: 0.4,
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                borderWidth: 2
+            });
+
+            // Previous Data (Historical - Dashed)
+            if (data.previous) {
+                datasets.push({
+                    label: label + ' (Previous)',
+                    data: data.previous,
+                    borderColor: '#94a3b8', // Gray
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    borderWidth: 1,
+                    borderDash: [5, 5]
+                });
+            }
 
             if (charts[key]) {
                 charts[key].data.labels = labels;
-                charts[key].data.datasets[0].data = data;
+                charts[key].data.datasets = datasets;
                 charts[key].update();
             } else {
                 charts[key] = new Chart(ctx, {
                     type: 'line',
                     data: {
                         labels: labels,
-                        datasets: [{
-                            label: label,
-                            data: data,
-                            borderColor: options.borderColor,
-                            backgroundColor: gradient,
-                            fill: true,
-                            tension: 0.4, // Smoother curve
-                            pointRadius: 0, // Clean look, show on hover
-                            pointHoverRadius: 6,
-                            borderWidth: 2
-                        }]
+                        datasets: datasets
                     },
                     options: {
                         responsive: true,
@@ -513,7 +699,7 @@
                             }
                         },
                         plugins: {
-                            legend: { display: false }
+                            legend: { display: data.previous ? true : false, position: 'top', align: 'end' }
                         }
                     }
                 });
@@ -531,9 +717,81 @@
         // Listeners
         document.getElementById('serviceFilter').addEventListener('change', updateDashboard);
         document.getElementById('dateFilter').addEventListener('change', updateDashboard);
+        document.getElementById('compareFilter').addEventListener('change', updateDashboard);
+
+        async function fetchEndPointsData(filters) {
+            try {
+                const query = {
+                    measures: ["RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount", "RequestMetricsMinute.errorRate"],
+                    dimensions: ["RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"],
+                    order: { "RequestMetricsMinute.errorCount": "desc" },
+                    filters: filters,
+                    limit: 10
+                };
+
+                const response = await fetch(CUBE_API_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query: query })
+                });
+                const result = await response.json();
+                return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
+            } catch (e) {
+                console.error("Endpoint fetch failed", e);
+                return [];
+            }
+        }
+
+        function renderEndpointsTable(data) {
+            const body = document.getElementById('endpoints-body');
+            body.innerHTML = '';
+
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                const errorRate = (row["RequestMetricsMinute.errorRate"] * 100).toFixed(2);
+                const rateBadge = row["RequestMetricsMinute.errorRate"] > 0.01 ? 'badge-error' : 'badge-success';
+
+                tr.innerHTML = `
+                    <td><a href="#" class="path-link" data-path="${row["RequestMetricsMinute.pathTemplate"]}">${row["RequestMetricsMinute.pathTemplate"]}</a></td>
+                    <td><code>${row["RequestMetricsMinute.method"]}</code></td>
+                    <td>${row["RequestMetricsMinute.requestCount"]}</td>
+                    <td>${row["RequestMetricsMinute.errorCount"]}</td>
+                    <td><span class="${rateBadge}">${errorRate}%</span></td>
+                `;
+                body.appendChild(tr);
+            });
+
+            // Add drilldown listeners
+            document.querySelectorAll('.path-link').forEach(link => {
+                link.onclick = (e) => {
+                    e.preventDefault();
+                    drillDownToPath(e.target.dataset.path);
+                };
+            });
+        }
+
+        function drillDownToPath(path) {
+            const serviceFilter = document.getElementById('serviceFilter');
+            const currentService = serviceFilter.value || "All Services";
+
+            document.getElementById('default-header').style.display = 'none';
+            document.getElementById('drilldown-nav').style.display = 'flex';
+            document.getElementById('currentServiceTitle').textContent = `${currentService} > ${path}`;
+
+            currentDrilldownPath = path;
+            updateDashboard();
+        }
+
+        let currentDrilldownPath = null;
+
+        document.getElementById('backToServices').onclick = () => {
+            document.getElementById('default-header').style.display = 'block';
+            document.getElementById('drilldown-nav').style.display = 'none';
+            currentDrilldownPath = null;
+            updateDashboard();
+        };
 
         setInterval(updateDashboard, REFRESH_INTERVAL_MS);
-
     </script>
 </body>
 

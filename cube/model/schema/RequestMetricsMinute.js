@@ -54,6 +54,13 @@ cube(`RequestMetricsMinute`, {
       title: `Time`
     },
 
+    eventDay: {
+      sql: `event_day`,
+      type: `string`,
+      title: `Day`,
+      format: `date`
+    },
+
     service: {
       sql: `service`,
       type: `string`,
