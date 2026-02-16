@@ -1,1 +1,0 @@
-{"event_id":"019c65dd-edeb-7f53-8a94-96f3890179ce","event_time":"2026-02-16T09:52:49Z","service":"auth-service","method":"POST","path_template":"/login","status_code":200,"latency_ms":45}

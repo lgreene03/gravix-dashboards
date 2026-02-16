@@ -1,0 +1,24 @@
+# Binaries
+ingestion-service
+load-generator
+sink-writer
+rollup-job
+*.o
+*.a
+
+# Data
+data/
+storage/trino/data/
+storage/cube/data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Docker
+.env

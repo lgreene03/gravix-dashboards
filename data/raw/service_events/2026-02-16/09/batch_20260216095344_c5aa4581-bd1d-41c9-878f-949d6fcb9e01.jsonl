@@ -1,1 +1,0 @@
-{"event_id":"019c65dd-ee07-720c-b51e-0d85bc502b47","event_time":"2026-02-16T09:52:49Z","service":"payment-service","event_type":"payment_processed","properties":{"amount":"99.99","currency":"USD"}}
