@@ -55,3 +55,16 @@ graph LR
 - `cube/`: Semantic layer configuration.
 - `dashboards/`: Static HTML/JS frontend.
 - `storage/trino`: Trino configuration and schema.
+- `deploy/gravix`: Helm charts for Kubernetes deployment.
+
+---
+
+### Kubernetes (Helm)
+
+The system can be deployed to Kubernetes using the provided Helm chart:
+
+```bash
+helm install gravix ./deploy/gravix
+```
+
+See [deploy/gravix/values.yaml](deploy/gravix/values.yaml) for configuration options.
