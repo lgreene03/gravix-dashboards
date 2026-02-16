@@ -1,52 +1,39 @@
 package schemas
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"regexp"
-	"time"
 
 	"github.com/google/uuid"
+	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// RequestFact represents a completed HTTP request event.
-// Must be immutable.
-type RequestFact struct {
-	EventID         string    `json:"event_id"` // REQUIRED: UUIDv7 (Time-sortable)
-	EventTime       time.Time `json:"event_time"`
-	Service         string    `json:"service"`
-	Method          string    `json:"method"`
-	PathTemplate    string    `json:"path_template"`
-	StatusCode      int       `json:"status_code"`
-	LatencyMs       int       `json:"latency_ms"`
-	UserAgentFamily *string   `json:"user_agent_family,omitempty"` // Nullable
-}
+// RequestFact aliases the generated Protobuf type for convenience and to avoid breaking existing code.
+type RequestFact = gravixv1.RequestFact
 
-// ParseRequestFact decodes and validates a raw JSON byte slice.
+// ParseRequestFact decodes and validates a raw JSON byte slice into a Protobuf message.
 func ParseRequestFact(data []byte) (*RequestFact, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields() // Reject unknown fields
-
 	var fact RequestFact
-	if err := decoder.Decode(&fact); err != nil {
-		return nil, fmt.Errorf("json decode error: %w", err)
+	err := protojson.Unmarshal(data, &fact)
+	if err != nil {
+		return nil, fmt.Errorf("protojson unmarshal error: %w", err)
 	}
 
-	if err := fact.Validate(); err != nil {
+	if err := ValidateRequestFact(&fact); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
 	return &fact, nil
 }
 
-// Validate enforces business rules and schema constraints.
-func (f *RequestFact) Validate() error {
+// ValidateRequestFact enforces business rules and schema constraints on the Protobuf message.
+func ValidateRequestFact(f *RequestFact) error {
 	// Constraint: EventID must be present and valid UUIDv7
-	if f.EventID == "" {
+	if f.EventId == "" {
 		return fmt.Errorf("event_id is required")
 	}
-	uid, err := uuid.Parse(f.EventID)
+	uid, err := uuid.Parse(f.EventId)
 	if err != nil {
 		return fmt.Errorf("event_id invalid: %w", err)
 	}
@@ -55,8 +42,12 @@ func (f *RequestFact) Validate() error {
 	}
 
 	// Constraint: EventTime required
-	if f.EventTime.IsZero() {
+	if f.EventTime == nil {
 		return fmt.Errorf("event_time is required")
+	}
+	t := f.EventTime.AsTime()
+	if t.IsZero() {
+		return fmt.Errorf("event_time is invalid")
 	}
 
 	// Constraint: Service required
@@ -79,13 +70,11 @@ func (f *RequestFact) Validate() error {
 		return fmt.Errorf("path_template must not contain query parameters")
 	}
 
-	// Constraint: NO High Cardinality Paths (Simple Heuristic for MVP)
-	// Reject paths that look like raw UUIDs or high-entropy strings segment
+	// Constraint: NO High Cardinality Paths
 	if containsUUID(f.PathTemplate) {
 		return fmt.Errorf("path_template appears to contain a raw UUID; use {id} placeholders")
 	}
 
-	// Digits-only segment check (heuristic for IDs)
 	if containsRawID(f.PathTemplate) {
 		return fmt.Errorf("path_template appears to contain a raw numeric ID; use {id} placeholders")
 	}

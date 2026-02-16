@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"math/rand"
@@ -16,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/schemas"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -105,9 +106,9 @@ func runWorker(ctx context.Context, id int, url, apiKey string, qps float64, ver
 func sendRequest(ctx context.Context, client *http.Client, url, apiKey string, verbose bool) {
 	fact := generateRandomFact()
 
-	payload, err := json.Marshal(fact)
+	payload, err := protojson.Marshal(fact)
 	if err != nil {
-		log.Printf("Error marshaling JSON: %v", err)
+		log.Printf("Error marshaling Protobuf to JSON: %v", err)
 		return
 	}
 
@@ -133,7 +134,7 @@ func sendRequest(ctx context.Context, client *http.Client, url, apiKey string, v
 	duration := time.Since(start)
 
 	if verbose {
-		log.Printf("Sent event %s: Status %d (%v)", fact.EventID, resp.StatusCode, duration)
+		log.Printf("Sent event %s: Status %d (%v)", fact.EventId, resp.StatusCode, duration)
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
@@ -141,45 +142,42 @@ func sendRequest(ctx context.Context, client *http.Client, url, apiKey string, v
 	}
 }
 
-func generateRandomFact() schemas.RequestFact {
+func generateRandomFact() *schemas.RequestFact {
 	// Simulate Latency Distribution roughly
-	// P50 ~ 50ms, P95 ~ 300ms, Occasional outliers > 1s
 	latency := rand.Float64()
-	var latencyMs int
+	var latencyMs int32
 	if latency < 0.90 {
-		latencyMs = int(rand.Intn(100) + 10) // 10-110ms
+		latencyMs = int32(rand.Intn(100) + 10)
 	} else if latency < 0.99 {
-		latencyMs = int(rand.Intn(500) + 100) // 100-600ms
+		latencyMs = int32(rand.Intn(500) + 100)
 	} else {
-		latencyMs = int(rand.Intn(2000) + 500) // 500ms-2500ms
+		latencyMs = int32(rand.Intn(2000) + 500)
 	}
 
 	// Status Codes
-	status := 200
+	status := int32(200)
 	r := rand.Float64()
 	if r > 0.98 {
-		status = 500 // 2% 5xx errors
+		status = 500
 	} else if r > 0.95 {
-		status = 400 // 3% 4xx errors
+		status = 400
 	}
 
-	// Generate UUIDv7
 	id, err := uuid.NewV7()
 	if err != nil {
-		// Fallback if needed, though NewV7 rarely fails practically
 		id = uuid.New()
 	}
 
 	ua := userAgents[rand.Intn(len(userAgents))]
 
-	return schemas.RequestFact{
-		EventID:         id.String(),
-		EventTime:       time.Now().UTC(),
+	return &schemas.RequestFact{
+		EventId:         id.String(),
+		EventTime:       timestamppb.Now(),
 		Service:         services[rand.Intn(len(services))],
 		Method:          methods[rand.Intn(len(methods))],
 		PathTemplate:    paths[rand.Intn(len(paths))],
 		StatusCode:      status,
 		LatencyMs:       latencyMs,
-		UserAgentFamily: &ua,
+		UserAgentFamily: ua,
 	}
 }

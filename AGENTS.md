@@ -53,7 +53,7 @@ When generating code or docs, optimize for:
 
 ---
 
-# Sprint 1: Observability (Agent Prompts)
+## Sprint 1: Observability (Agent Prompts)
 
 Copy and paste these prompts to your coding agent to execute Sprint 1.
 

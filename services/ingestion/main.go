@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -14,13 +13,50 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/schemas"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/protobuf/encoding/protojson"
 )
+
+var (
+	ingestionRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingestion_requests_total",
+			Help: "Total number of ingestion requests.",
+		},
+		[]string{"path", "status"},
+	)
+	ingestionBatchSizeBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "ingestion_batch_size_bytes",
+			Help:    "Size of ingestion batches written to disk.",
+			Buckets: prometheus.ExponentialBuckets(100, 10, 6),
+		},
+		[]string{"topic"},
+	)
+	ingestionFsyncDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "ingestion_fsync_duration_seconds",
+			Help:    "Duration of fsync operations.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"topic"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(ingestionRequestsTotal)
+	prometheus.MustRegister(ingestionBatchSizeBytes)
+	prometheus.MustRegister(prometheus.NewBuildInfoCollector())
+	prometheus.MustRegister(ingestionFsyncDurationSeconds)
+}
 
 // DurableSink provides fsync-backed appends and async background uploads.
 type DurableSink struct {
-	bufferDir string // e.g. /tmp/buffer/
-	rawDir    string // e.g. /data/raw/ (simulated S3)
+	bufferDir string              // e.g. /tmp/buffer/
+	store     storage.ObjectStore // The abstracted storage (Local or S3)
 
 	activeFiles map[string]*os.File
 	mu          sync.Mutex
@@ -29,18 +65,15 @@ type DurableSink struct {
 	cancel context.CancelFunc
 }
 
-func NewDurableSink(bufferDir, rawDir string) (*DurableSink, error) {
+func NewDurableSink(bufferDir string, store storage.ObjectStore) (*DurableSink, error) {
 	if err := os.MkdirAll(bufferDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create buffer dir: %w", err)
-	}
-	if err := os.MkdirAll(rawDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create raw dir: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ds := &DurableSink{
 		bufferDir:   bufferDir,
-		rawDir:      rawDir,
+		store:       store,
 		activeFiles: make(map[string]*os.File),
 		ctx:         ctx,
 		cancel:      cancel,
@@ -88,9 +121,11 @@ func (ds *DurableSink) Write(topic string, data []byte) error {
 	}
 
 	// CRITICAL: Fsync for Durability
+	syncStart := time.Now()
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("fsync error: %w", err)
 	}
+	ingestionFsyncDurationSeconds.WithLabelValues(topic).Observe(time.Since(syncStart).Seconds())
 
 	return nil
 }
@@ -174,54 +209,28 @@ func (ds *DurableSink) rotateTopic(topic string) {
 	go ds.uploadFile(topic, batchPath, time.Now().UTC())
 }
 
-// uploadFile simulates S3 upload by moving to raw directory structure
+// uploadFile uploads the local batch to the object store
 func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
-	// Destination: raw/<topic>/YYYY-MM-DD/HH/<uuid>.jsonl
+	// Destination Key: raw/<topic>/YYYY-MM-DD/HH/<uuid>.jsonl
 	dayStr := t.Format("2006-01-02")
 	hourStr := t.Format("15")
-	destDir := filepath.Join(ds.rawDir, topic, dayStr, hourStr)
+	destKey := fmt.Sprintf("raw/%s/%s/%s/%s", topic, dayStr, hourStr, filepath.Base(sourcePath))
 
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		log.Printf("Error creating dest dir %s: %v", destDir, err)
+	f, err := os.Open(sourcePath)
+	if err != nil {
+		log.Printf("Error opening source file %s: %v", sourcePath, err)
+		return
+	}
+	defer f.Close()
+
+	if err := ds.store.Put(ds.ctx, destKey, f); err != nil {
+		log.Printf("Error uploading %s to storage: %v", sourcePath, err)
 		return
 	}
 
-	destName := filepath.Base(sourcePath)
-	destPath := filepath.Join(destDir, destName)
-
-	// In real S3, this is PutObject. Here, os.Rename (Move).
-	// Cross-device rename might fail (buffer in /tmp, raw in /data), so we effectively copy+delete if rename fails
-	if err := os.Rename(sourcePath, destPath); err != nil {
-		// Fallback: Copy + Delete
-		// (MVP simplification: assuming same filesystem for Docker volume)
-		log.Printf("Rename failed (cross-device?), trying copy: %v", err)
-		if err := copyFile(sourcePath, destPath); err != nil {
-			log.Printf("Copy failed: %v", err)
-			return
-		}
-		os.Remove(sourcePath)
-	}
-
-	log.Printf("Uploaded %s to %s", sourcePath, destPath)
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err = io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
+	// Success! Delete the local batch
+	os.Remove(sourcePath)
+	log.Printf("Uploaded %s to storage key %s", sourcePath, destKey)
 }
 
 // startupScan checks for any leftover batch files in buffer and uploads them
@@ -268,8 +277,32 @@ func main() {
 	bufferDir := filepath.Join(*baseDir, "buffer")
 	rawDir := filepath.Join(*baseDir, "raw")
 
-	log.Printf("Initializing Durable Sink (Buffer: %s, Raw: %s)...", bufferDir, rawDir)
-	sink, err := NewDurableSink(bufferDir, rawDir)
+	var store storage.ObjectStore
+	if os.Getenv("S3_ENDPOINT") != "" {
+		log.Println("Initializing S3/MinIO Storage...")
+		var err error
+		store, err = storage.NewS3Store(
+			context.Background(),
+			os.Getenv("S3_ENDPOINT"),
+			os.Getenv("S3_REGION"),
+			os.Getenv("S3_BUCKET"),
+			os.Getenv("S3_ACCESS_KEY"),
+			os.Getenv("S3_SECRET_KEY"),
+		)
+		if err != nil {
+			log.Fatalf("Failed to initialize S3 store: %v", err)
+		}
+	} else {
+		log.Printf("Initializing Local Storage at %s...", rawDir)
+		var err error
+		store, err = storage.NewLocalStore(rawDir)
+		if err != nil {
+			log.Fatalf("Failed to initialize local store: %v", err)
+		}
+	}
+
+	log.Printf("Initializing Durable Sink (Buffer: %s)...", bufferDir)
+	sink, err := NewDurableSink(bufferDir, store)
 	if err != nil {
 		log.Fatalf("Failed to create sink: %v", err)
 	}
@@ -279,9 +312,22 @@ func main() {
 	http.Handle("/api/v1/facts", authMiddleware(apiKey, handleFacts(sink)))
 	http.Handle("/api/v1/events", authMiddleware(apiKey, handleEvents(sink)))
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	http.Handle("/metrics", promhttp.Handler())
+
+	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		w.Write([]byte("up"))
+	})
+
+	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		// In a real app, check DB connectivity or sink status.
+		// For now, if the sink is initialized, we are ready.
+		if sink != nil {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ready"))
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
@@ -324,18 +370,25 @@ func handleFacts(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		cleanData, err := json.Marshal(fact)
+		// Use protojson to maintain consistent format and snake_case keys
+		marshalOpts := protojson.MarshalOptions{
+			UseProtoNames: true,
+		}
+		cleanData, err := marshalOpts.Marshal(fact)
 		if err != nil {
-			http.Error(w, "Internal error", http.StatusInternalServerError)
+			http.Error(w, "Internal error during marshal", http.StatusInternalServerError)
 			return
 		}
 
 		if err := sink.Write("request_facts", cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500").Inc()
 			http.Error(w, "Internal error", http.StatusInternalServerError)
 			return
 		}
 
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201").Inc()
+		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
 		w.WriteHeader(http.StatusCreated) // 201 Created (Durable)
 	}
 }
@@ -359,18 +412,25 @@ func handleEvents(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		cleanData, err := json.Marshal(event)
+		// Use protojson to maintain consistent format and snake_case keys
+		marshalOpts := protojson.MarshalOptions{
+			UseProtoNames: true,
+		}
+		cleanData, err := marshalOpts.Marshal(event)
 		if err != nil {
-			http.Error(w, "Internal error", http.StatusInternalServerError)
+			http.Error(w, "Internal error during marshal", http.StatusInternalServerError)
 			return
 		}
 
 		if err := sink.Write("service_events", cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
+			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500").Inc()
 			http.Error(w, "Internal error", http.StatusInternalServerError)
 			return
 		}
 
+		ingestionRequestsTotal.WithLabelValues("/api/v1/events", "201").Inc()
+		ingestionBatchSizeBytes.WithLabelValues("service_events").Observe(float64(len(cleanData)))
 		w.WriteHeader(http.StatusCreated) // 201 Created (Durable)
 	}
 }

@@ -1,50 +1,39 @@
 package schemas
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"regexp"
-	"time"
 
 	"github.com/google/uuid"
+	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// ServiceEvent represents a structured business or state-change event.
-// Designed for low-volume, high-value signals (e.g., "cart_checkout", "deploy_success").
-type ServiceEvent struct {
-	EventID    string            `json:"event_id"` // REQUIRED: UUIDv7
-	EventTime  time.Time         `json:"event_time"`
-	Service    string            `json:"service"`
-	EventType  string            `json:"event_type"`           // Must be snake_case
-	EntityID   *string           `json:"entity_id,omitempty"`  // Nullable
-	Properties map[string]string `json:"properties,omitempty"` // Strictly flat key-value pairs
-}
+// ServiceEvent aliases the generated Protobuf type.
+type ServiceEvent = gravixv1.ServiceEvent
 
-// ParseServiceEvent decodes and validates a raw JSON byte slice.
+// ParseServiceEvent decodes and validates a raw JSON byte slice into a Protobuf message.
 func ParseServiceEvent(data []byte) (*ServiceEvent, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields() // Reject unknown top-level fields
-
 	var event ServiceEvent
-	if err := decoder.Decode(&event); err != nil {
-		return nil, fmt.Errorf("json decode error: %w", err)
+	err := protojson.Unmarshal(data, &event)
+	if err != nil {
+		return nil, fmt.Errorf("protojson unmarshal error: %w", err)
 	}
 
-	if err := event.Validate(); err != nil {
+	if err := ValidateServiceEvent(&event); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
 	return &event, nil
 }
 
-// Validate enforces schema constraints.
-func (e *ServiceEvent) Validate() error {
+// ValidateServiceEvent enforces schema constraints on the Protobuf message.
+func ValidateServiceEvent(e *ServiceEvent) error {
 	// Constraint: EventID must be present and valid UUIDv7
-	if e.EventID == "" {
+	if e.EventId == "" {
 		return fmt.Errorf("event_id is required")
 	}
-	uid, err := uuid.Parse(e.EventID)
+	uid, err := uuid.Parse(e.EventId)
 	if err != nil {
 		return fmt.Errorf("event_id invalid: %w", err)
 	}
@@ -52,7 +41,7 @@ func (e *ServiceEvent) Validate() error {
 		return fmt.Errorf("event_id must be UUIDv7 (got v%d)", uid.Version())
 	}
 
-	if e.EventTime.IsZero() {
+	if e.EventTime == nil {
 		return fmt.Errorf("event_time is required")
 	}
 	if e.Service == "" {
@@ -68,13 +57,11 @@ func (e *ServiceEvent) Validate() error {
 	}
 
 	// Constraint: Flat Properties & No Large Payloads
-	const MAX_PROP_VALUE_LEN = 1024 // Arbitrary limit for "small context"
+	const MAX_PROP_VALUE_LEN = 1024
 	for k, v := range e.Properties {
 		if len(v) > MAX_PROP_VALUE_LEN {
 			return fmt.Errorf("property '%s' value exceeds max length of %d", k, MAX_PROP_VALUE_LEN)
 		}
-		// Heuristic check for nested JSON: if value starts/ends with {} or [], suspect nested JSON
-		// This is not perfect but follows "reject unknown/complex" philosophy
 		if (len(v) > 2 && v[0] == '{' && v[len(v)-1] == '}') || (len(v) > 2 && v[0] == '[' && v[len(v)-1] == ']') {
 			return fmt.Errorf("property '%s' looks like nested JSON; properties must be flat strings", k)
 		}

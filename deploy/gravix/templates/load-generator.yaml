@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-load-generator
+  labels:
+    app: load-generator
+spec:
+  replicas: {{ .Values.loadGenerator.replicaCount }}
+  selector:
+    matchLabels:
+      app: load-generator
+  template:
+    metadata:
+      labels:
+        app: load-generator
+    spec:
+      containers:
+        - name: load-generator
+          image: "{{ .Values.loadGenerator.image.repository }}:{{ .Values.loadGenerator.image.tag }}"
+          imagePullPolicy: {{ .Values.loadGenerator.image.pullPolicy }}
+          command: ["./load-generator"]
+          args:
+            - "--target"
+            - "http://{{ .Release.Name }}-ingestion:{{ .Values.ingestion.service.port }}/api/v1/facts"
+            - "--api-key"
+            - "{{ .Values.global.apiKey }}"
+            - "--qps"
+            - "{{ .Values.loadGenerator.config.qps }}"
+            - "--concurrency"
+            - "{{ .Values.loadGenerator.config.concurrency }}"

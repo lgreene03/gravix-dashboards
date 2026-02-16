@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package gravix.v1;
+
+option go_package = "github.com/lgreene/gravix-dashboards/gen/gravix/v1;gravixv1";
+
+import "google/protobuf/timestamp.proto";
+
+// RequestFact represents a raw HTTP request event.
+message RequestFact {
+  string event_id = 1;
+  google.protobuf.Timestamp event_time = 2;
+  string service = 3;
+  string method = 4;
+  string path_template = 5;
+  int32 status_code = 6;
+  int32 latency_ms = 7;
+  string user_agent_family = 8;
+}
+
+// ServiceEvent represents a generic lifecycle or operational event.
+message ServiceEvent {
+  string event_id = 1;
+  google.protobuf.Timestamp event_time = 2;
+  string service = 3;
+  string event_type = 4;
+  string entity_id = 5; // Added
+  string message = 6;
+  map<string, string> properties = 7;
+}

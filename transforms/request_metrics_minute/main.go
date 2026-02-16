@@ -2,20 +2,60 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"bytes"
+	"net/http"
+
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/montanaflynn/stats"
 	"github.com/parquet-go/parquet-go"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+var (
+	rollupProcessedEventsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rollup_processed_events_total",
+			Help: "Total number of events processed by the rollup job.",
+		},
+		[]string{"service", "day"},
+	)
+	rollupDurationSeconds = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "rollup_duration_seconds",
+			Help: "Duration of the rollup job in seconds.",
+		},
+		[]string{"day"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(rollupProcessedEventsTotal)
+	prometheus.MustRegister(rollupDurationSeconds)
+}
+
+func startMetricsServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			log.Printf("Metrics server error: %v", err)
+		}
+	}()
+	return srv
+}
 
 // MetricRow represents a 1-minute bucket for a specific service/path/method tuple.
 type MetricRow struct {
@@ -90,12 +130,43 @@ func main() {
 		days = append(days, procTime)
 	}
 
+	// Start metrics server
+	srv := startMetricsServer(":9091")
+
+	var store storage.ObjectStore
+	if os.Getenv("S3_ENDPOINT") != "" {
+		log.Println("Initializing S3/MinIO Storage...")
+		var err error
+		store, err = storage.NewS3Store(
+			context.Background(),
+			os.Getenv("S3_ENDPOINT"),
+			os.Getenv("S3_REGION"),
+			os.Getenv("S3_BUCKET"),
+			os.Getenv("S3_ACCESS_KEY"),
+			os.Getenv("S3_SECRET_KEY"),
+		)
+		if err != nil {
+			log.Fatalf("Failed to initialize S3 store: %v", err)
+		}
+	} else {
+		log.Printf("Initializing Local Storage...")
+		var err error
+		store, err = storage.NewLocalStore("./data") // Fallback to current dir if not provided
+		if err != nil {
+			log.Fatalf("Failed to initialize local store: %v", err)
+		}
+	}
+
 	for _, day := range days {
-		if err := processDay(day, inputDir, outputDir); err != nil {
+		if err := processDay(context.Background(), day, store, inputDir, outputDir); err != nil {
 			log.Printf("Failed to process day %s: %v", day.Format("2006-01-02"), err)
 			os.Exit(1)
 		}
 	}
+
+	log.Println("Job complete. Waiting for Prometheus scrape...")
+	time.Sleep(5 * time.Second) // Grace period for scraper
+	srv.Close()
 }
 
 // processDay processes all hours within a day.
@@ -103,39 +174,38 @@ func main() {
 // It performs deduplication across the entire day to ensure correctness if events skew across hour boundaries (within reason).
 // But effectively, we partition output by Day/Hour too if needed, or just by Day.
 // Given Hive supports Day partitioning, let's output by Day.
-func processDay(day time.Time, inputDir, outputDir string) error {
+func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, inputDir, outputDir string) error {
 	dayStr := day.UTC().Format("2006-01-02")
 
-	// Input: raw/request_facts/YYYY-MM-DD/HH/*.jsonl
-	// We need to scan all HH subdirectories for this day.
-	dayInputDir := filepath.Join(inputDir, dayStr)
+	// Input Prefix: raw/request_facts/YYYY-MM-DD/
+	// inputDir is passed as a flag, but we assume it's part of the key now
+	inputPrefix := fmt.Sprintf("%s/%s", strings.TrimPrefix(inputDir, "./data/"), dayStr)
 
-	log.Printf("Processing metrics for day %s...", dayStr)
+	log.Printf("Processing metrics for prefix %s...", inputPrefix)
+	start := time.Now()
 
 	aggs := make(map[AggregationKey]*Aggregator)
 	seen := make(map[string]struct{}) // Deduplication set for the day
 
-	// Walk through all hour directories for the day
-	err := filepath.Walk(dayInputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil // Day might not exist yet
-			}
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(info.Name(), ".jsonl") {
-			return nil
+	// List all files for the day
+	keys, err := store.List(ctx, inputPrefix)
+	if err != nil {
+		return fmt.Errorf("list error: %w", err)
+	}
+
+	for _, key := range keys {
+		if !strings.HasSuffix(key, ".jsonl") {
+			continue
 		}
 
-		// Process JSONL File
-		file, err := os.Open(path)
+		// Process JSONL Object
+		rc, err := store.Get(ctx, key)
 		if err != nil {
-			log.Printf("Error opening file %s: %v", path, err)
-			return nil
+			log.Printf("Error getting object %s: %v", key, err)
+			continue
 		}
-		defer file.Close()
 
-		scanner := bufio.NewScanner(file)
+		scanner := bufio.NewScanner(rc)
 		// Increase buffer size just in case lines are long
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024)
@@ -147,39 +217,37 @@ func processDay(day time.Time, inputDir, outputDir string) error {
 			}
 
 			// Parse JSON Fact
-			// We can use schemas.ParseRequestFact but that does strict validation which is good.
-			// Or just json.Unmarshal since we trust our own data somewhat (but validation is safer).
 			fact, err := schemas.ParseRequestFact(line)
 			if err != nil {
-				log.Printf("Skipping invalid JSON line in %s: %v", path, err)
+				log.Printf("Skipping invalid JSON line in %s: %v", key, err)
 				continue
 			}
 
-			// 1. Deduplication
-			if _, exists := seen[fact.EventID]; exists {
+			// 1. Deduplication (EventID -> EventId)
+			if _, exists := seen[fact.EventId]; exists {
 				continue // Skip duplicate
 			}
-			seen[fact.EventID] = struct{}{}
+			seen[fact.EventId] = struct{}{}
 
 			// 2. Filter Time Window (Strict Day boundary)
-			// Ensure event actually belongs to this day (UTC)
-			if fact.EventTime.UTC().Format("2006-01-02") != dayStr {
-				continue // Wrong day (late/early arrival filed in this day's dir)
+			eventTime := fact.EventTime.AsTime()
+			if eventTime.UTC().Format("2006-01-02") != dayStr {
+				continue // Wrong day
 			}
 
 			// 3. Aggregate
-			bucket := fact.EventTime.Truncate(time.Minute).UTC()
-			key := AggregationKey{
+			bucket := eventTime.Truncate(time.Minute).UTC()
+			keyAgg := AggregationKey{
 				BucketStart:  bucket,
 				Service:      fact.Service,
 				Method:       fact.Method,
 				PathTemplate: fact.PathTemplate,
 			}
 
-			agg, exists := aggs[key]
+			agg, exists := aggs[keyAgg]
 			if !exists {
 				agg = &Aggregator{}
-				aggs[key] = agg
+				aggs[keyAgg] = agg
 			}
 
 			agg.Requests++
@@ -187,22 +255,22 @@ func processDay(day time.Time, inputDir, outputDir string) error {
 				agg.Errors++
 			}
 			agg.Latencies = append(agg.Latencies, float64(fact.LatencyMs))
+
+			rollupProcessedEventsTotal.WithLabelValues(fact.Service, dayStr).Inc()
 		}
-		return nil
-	})
-
-	if err != nil {
-		return fmt.Errorf("walk error: %w", err)
+		rc.Close()
 	}
 
-	// Output Directory: warehouse/request_metrics_minute/ (flat, no partition subdirs)
-	// Idempotency: Clear previous files for this day before writing
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return err
-	}
-	files, _ := filepath.Glob(filepath.Join(outputDir, fmt.Sprintf("*_%s.parquet", dayStr)))
-	for _, f := range files {
-		os.Remove(f)
+	// Output Object: warehouse/request_metrics_minute/metrics_<uuid>_<day>.parquet
+	outputPrefix := strings.TrimPrefix(outputDir, "./data/")
+
+	// Idempotency: Clear previous objects for this day
+	// (List + Delete)
+	existing, _ := store.List(ctx, outputPrefix)
+	for _, k := range existing {
+		if strings.Contains(k, dayStr) {
+			store.Delete(ctx, k)
+		}
 	}
 
 	if len(aggs) == 0 {
@@ -243,16 +311,12 @@ func processDay(day time.Time, inputDir, outputDir string) error {
 		return metrics[i].BucketStart < metrics[j].BucketStart
 	})
 
-	// Write Parquet
+	// Write Parquet to buffer
 	idx := uuid.New().String()
-	outPath := filepath.Join(outputDir, fmt.Sprintf("metrics_%s_%s.parquet", idx, dayStr))
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+	destKey := fmt.Sprintf("%s/metrics_%s_%s.parquet", outputPrefix, idx, dayStr)
 
-	writer := parquet.NewGenericWriter[MetricRow](f)
+	var buf bytes.Buffer
+	writer := parquet.NewGenericWriter[MetricRow](&buf)
 	if _, err := writer.Write(metrics); err != nil {
 		return err
 	}
@@ -260,6 +324,11 @@ func processDay(day time.Time, inputDir, outputDir string) error {
 		return err
 	}
 
-	log.Printf("Wrote %d metrics rows to %s", len(metrics), outPath)
+	if err := store.Put(ctx, destKey, bytes.NewReader(buf.Bytes())); err != nil {
+		return fmt.Errorf("failed to upload metrics: %w", err)
+	}
+
+	log.Printf("Uploaded %d metrics rows to %s", len(metrics), destKey)
+	rollupDurationSeconds.WithLabelValues(dayStr).Set(time.Since(start).Seconds())
 	return nil
 }

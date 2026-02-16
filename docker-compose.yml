@@ -14,6 +14,25 @@ services:
     command: [ "./ingestion-service", "--base-dir", "/app/data" ]
     environment:
       - API_KEY=secret-token-123
+      - S3_ENDPOINT=http://minio:9000
+      - S3_REGION=us-east-1
+      - S3_BUCKET=gravix
+      - S3_ACCESS_KEY=admin
+      - S3_SECRET_KEY=password123
+    depends_on:
+      - minio
+
+  init-minio:
+    image: minio/mc:latest
+    container_name: gravix-init-minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 admin password123;
+      /usr/bin/mc mb myminio/gravix;
+      exit 0;
+      "
+    depends_on:
+      - minio
 
   trino:
     image: trinodb/trino:351
@@ -52,3 +71,37 @@ services:
     command: ["./load-generator", "--target", "http://ingestion:8080/api/v1/facts", "--api-key", "secret-token-123", "--qps", "5", "--concurrency", "2"]
     depends_on:
       - ingestion
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: gravix-prometheus
+    volumes:
+      - ./storage/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    restart: always
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: gravix-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./storage/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    restart: always
+
+  minio:
+    image: minio/minio:latest
+    container_name: gravix-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password123
+    volumes:
+      - ./data/minio:/data
+    command: server /data --console-address ":9001"
+    restart: always

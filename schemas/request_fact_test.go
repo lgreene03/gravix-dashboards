@@ -3,7 +3,8 @@ package schemas
 import (
 	"strings"
 	"testing"
-	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const validUUIDv7 = "018b3e34-5b6c-7e8f-9a0b-1c2d3e4f5a6b"   // a valid UUIDv7
@@ -12,15 +13,15 @@ const invalidUUIDv4 = "52380628-863e-4390-8e12-254245645511" // a random UUIDv4
 func TestRequestFact_Validate(t *testing.T) {
 	tests := []struct {
 		name      string
-		input     RequestFact
+		input     *RequestFact
 		expectErr bool
 		errMsg    string
 	}{
 		{
 			name: "Valid Fact",
-			input: RequestFact{
-				EventID:      validUUIDv7,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
 				Service:      "auth-service",
 				Method:       "POST",
 				PathTemplate: "/login",
@@ -31,8 +32,8 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing EventID",
-			input: RequestFact{
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventTime:    timestamppb.Now(),
 				Service:      "s",
 				Method:       "GET",
 				PathTemplate: "/p",
@@ -43,9 +44,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Invalid UUIDv7 (v4)",
-			input: RequestFact{
-				EventID:      invalidUUIDv4,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      invalidUUIDv4,
+				EventTime:    timestamppb.Now(),
 				Service:      "s",
 				Method:       "GET",
 				PathTemplate: "/p",
@@ -56,8 +57,8 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing EventTime",
-			input: RequestFact{
-				EventID:      validUUIDv7,
+			input: &RequestFact{
+				EventId:      validUUIDv7,
 				Service:      "service-a",
 				Method:       "GET",
 				PathTemplate: "/users",
@@ -68,9 +69,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing Service",
-			input: RequestFact{
-				EventID:      validUUIDv7,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
 				Method:       "GET",
 				PathTemplate: "/users",
 				StatusCode:   200,
@@ -80,9 +81,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing Method",
-			input: RequestFact{
-				EventID:      validUUIDv7,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
 				Service:      "service-a",
 				PathTemplate: "/users",
 				StatusCode:   200,
@@ -92,9 +93,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing PathTemplate",
-			input: RequestFact{
-				EventID:    validUUIDv7,
-				EventTime:  time.Now(),
+			input: &RequestFact{
+				EventId:    validUUIDv7,
+				EventTime:  timestamppb.Now(),
 				Service:    "service-a",
 				Method:     "GET",
 				StatusCode: 200,
@@ -104,9 +105,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Query Params in Path",
-			input: RequestFact{
-				EventID:      validUUIDv7,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
 				Service:      "service-a",
 				Method:       "GET",
 				PathTemplate: "/users?id=123",
@@ -117,9 +118,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "High Cardinality Path (UUID)",
-			input: RequestFact{
-				EventID:      validUUIDv7,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
 				Service:      "service-a",
 				Method:       "GET",
 				PathTemplate: "/users/52380628-863e-4390-8e12-254245645511",
@@ -130,9 +131,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "High Cardinality Path (Raw ID)",
-			input: RequestFact{
-				EventID:      validUUIDv7,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
 				Service:      "service-a",
 				Method:       "GET",
 				PathTemplate: "/users/123456",
@@ -143,9 +144,9 @@ func TestRequestFact_Validate(t *testing.T) {
 		},
 		{
 			name: "Invalid Status Code",
-			input: RequestFact{
-				EventID:      validUUIDv7,
-				EventTime:    time.Now(),
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
 				Service:      "s",
 				Method:       "G",
 				PathTemplate: "/p",
@@ -158,7 +159,7 @@ func TestRequestFact_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.input.Validate()
+			err := ValidateRequestFact(tt.input)
 			if tt.expectErr {
 				if err == nil {
 					t.Errorf("Expected error for %s, got nil", tt.name)

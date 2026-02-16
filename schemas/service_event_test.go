@@ -3,7 +3,8 @@ package schemas
 import (
 	"strings"
 	"testing"
-	"time" // Added for time.Now() in the new test
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // validUUIDv7 and invalidUUIDv4 are shared from request_fact_test.go
@@ -11,18 +12,18 @@ import (
 func TestServiceEvent_Validate(t *testing.T) {
 	tests := []struct {
 		name      string
-		input     ServiceEvent
+		input     *ServiceEvent
 		expectErr bool
 		errMsg    string
 	}{
 		{
 			name: "Valid Event",
-			input: ServiceEvent{
-				EventID:   validUUIDv7,
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
 				Service:   "payment-service",
 				EventType: "payment_processed",
-				EntityID:  ptr("pay-123"),
+				EntityId:  "pay-123",
 				Properties: map[string]string{
 					"currency": "USD",
 					"amount":   "100.00",
@@ -32,8 +33,8 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing EventID",
-			input: ServiceEvent{
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
 			},
@@ -42,9 +43,9 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Invalid UUIDv7 (v4)",
-			input: ServiceEvent{
-				EventID:   invalidUUIDv4,
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventId:   invalidUUIDv4,
+				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
 			},
@@ -53,8 +54,8 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing EventTime",
-			input: ServiceEvent{
-				EventID:   validUUIDv7,
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
 				Service:   "s",
 				EventType: "e",
 			},
@@ -63,9 +64,9 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing Service",
-			input: ServiceEvent{
-				EventID:   validUUIDv7,
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
 				EventType: "e",
 			},
 			expectErr: true,
@@ -73,9 +74,9 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Missing EventType",
-			input: ServiceEvent{
-				EventID:   validUUIDv7,
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
 				Service:   "s",
 			},
 			expectErr: true,
@@ -83,9 +84,9 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Invalid EventType (CamelCase)",
-			input: ServiceEvent{
-				EventID:   validUUIDv7,
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "UserCreated",
 			},
@@ -94,9 +95,9 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Nested JSON in Properties",
-			input: ServiceEvent{
-				EventID:   validUUIDv7,
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
 				Properties: map[string]string{
@@ -108,9 +109,9 @@ func TestServiceEvent_Validate(t *testing.T) {
 		},
 		{
 			name: "Large Property Value",
-			input: ServiceEvent{
-				EventID:   validUUIDv7,
-				EventTime: time.Now(),
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
 				Properties: map[string]string{
@@ -124,7 +125,7 @@ func TestServiceEvent_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.input.Validate()
+			err := ValidateServiceEvent(tt.input)
 			if tt.expectErr {
 				if err == nil {
 					t.Errorf("Expected error for %s, got nil", tt.name)

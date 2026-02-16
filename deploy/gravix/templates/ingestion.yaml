@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ingestion
+  labels:
+    app: ingestion
+spec:
+  replicas: {{ .Values.ingestion.replicaCount }}
+  selector:
+    matchLabels:
+      app: ingestion
+  template:
+    metadata:
+      labels:
+        app: ingestion
+    spec:
+      containers:
+        - name: ingestion
+          image: "{{ .Values.ingestion.image.repository }}:{{ .Values.ingestion.image.tag }}"
+          imagePullPolicy: {{ .Values.ingestion.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.ingestion.service.port }}
+          env:
+            - name: API_KEY
+              value: {{ .Values.global.apiKey | quote }}
+            - name: S3_ENDPOINT
+              value: {{ .Values.global.storage.endpoint | quote }}
+            - name: S3_REGION
+              value: {{ .Values.global.storage.region | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.global.storage.bucket | quote }}
+            - name: S3_ACCESS_KEY
+              value: {{ .Values.global.storage.accessKey | quote }}
+            - name: S3_SECRET_KEY
+              value: {{ .Values.global.storage.secretKey | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.ingestion.persistence.mountPath }}
+          resources:
+            {{- toYaml .Values.ingestion.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.ingestion.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-ingestion-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ingestion
+spec:
+  type: {{ .Values.ingestion.service.type }}
+  ports:
+    - port: {{ .Values.ingestion.service.port }}
+      targetPort: {{ .Values.ingestion.service.port }}
+  selector:
+    app: ingestion
+---
+{{- if .Values.ingestion.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-ingestion-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.ingestion.persistence.size }}
+{{- end }}
