@@ -2,7 +2,7 @@
 
 Gravix is a **real-time service health monitoring system** designed for high-scale, low-latency observability. It ingests raw request events, aggregates them into metrics (Latency, Error Rate), and visualizes them on a live dashboard.
 
-![Dashboard Screenshot](https://raw.githubusercontent.com/lgreene/gravix-dashboards/main/docs/dashboard.png)
+![Dashboard Screenshot](docs/images/dashboard.png)
 
 ## 🚀 Quick Start
 
@@ -31,13 +31,13 @@ open http://localhost:4000
 
 ```mermaid
 graph LR
-    A[Load Generator] -->|POST /api/v1/facts| B[Ingestion Service]
-    B -->|Write JSONL| C[Local Disk / S3]
-    C -->|ETL Cron| D[Rollup Job (Go)]
-    D -->|Write Parquet| E[Data Warehouse]
-    F[Trino] -->|Query| E
-    G[Cube.js] -->|Aggregates| F
-    H[Dashboard] -->|API| G
+    A[Load Generator] -- "POST /api/v1/facts" --> B[Ingestion Service]
+    B -- "Write JSONL" --> C[Local Disk / S3]
+    C -- "ETL Cron" --> D[Rollup Job (Go)]
+    D -- "Write Parquet" --> E[Data Warehouse]
+    F[Trino] -- "Query" --> E
+    G[Cube.js] -- "Aggregates" --> F
+    H[Dashboard] -- "API" --> G
 ```
 
 ## 📚 Documentation
