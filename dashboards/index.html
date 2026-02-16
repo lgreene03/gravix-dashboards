@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravix Service Health</title>
+
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --text-primary: #0f172a;
+            --text-secondary: #64748b;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --brand-color: #3b82f6;
+            --error-color: #ef4444;
+            --success-color: #22c55e;
+            --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: #1e293b;
+            color: white;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 32px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand-icon {
+            width: 24px;
+            height: 24px;
+            background: var(--brand-color);
+            border-radius: 6px;
+        }
+
+        .nav-link {
+            padding: 12px 16px;
+            color: #94a3b8;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 4px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .nav-link:hover,
+        .nav-link.active {
+            background: #334155;
+            color: white;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            padding: 32px;
+            overflow-y: auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+
+        .page-title h1 {
+            font-size: 1.875rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .page-title p {
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 12px;
+            background: #ecfdf5;
+            color: #047857;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            border: 1px solid #d1fae5;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            }
+        }
+
+        /* Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 24px;
+        }
+
+        /* Card */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .card-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .card-subtitle {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .chart-wrapper {
+            height: 300px;
+            position: relative;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            border-radius: 12px;
+            display: none;
+            /* Hidden by default */
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--brand-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .last-updated {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            text-align: right;
+        }
+    </style>
+</head>
+
+<body>
+
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-icon"></div>
+            Gravix
+        </div>
+        <nav>
+            <a href="#" class="nav-link active">Overview</a>
+            <a href="#" class="nav-link">Transports</a>
+            <a href="#" class="nav-link">Ingestion</a>
+            <a href="#" class="nav-link">Processing</a>
+            <a href="#" class="nav-link">Settings</a>
+        </nav>
+    </aside>
+
+    <main class="main-content">
+        <div class="header">
+            <div class="page-title">
+                <h1>Service Health</h1>
+                <p>Real-time metrics from production services</p>
+            </div>
+            <div style="display: flex; gap: 16px; align-items: center;">
+                <select id="serviceFilter" class="filter-input">
+                    <option value="">All Services</option>
+                </select>
+                <input type="date" id="dateFilter" class="filter-input">
+                <div class="status-badge">
+                    <span class="status-dot"></span>
+                    Live System
+                </div>
+                <div id="lastUpdated" class="last-updated" style="margin-top: 0; min-width: 150px;">Updating...</div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <!-- Error Rate Card -->
+            <div class="card">
+                <div class="loading-overlay" id="loading-error">
+                    <div class="loading-spinner"></div>
+                </div>
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Error Rate (5xx)</div>
+                        <div class="card-subtitle">Percentage of requests resulting in server errors</div>
+                    </div>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="errorRateChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Latency Card -->
+            <div class="card">
+                <div class="loading-overlay" id="loading-latency">
+                    <div class="loading-spinner"></div>
+                </div>
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">P95 Latency</div>
+                        <div class="card-subtitle">95th percentile response time (ms)</div>
+                    </div>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- CONFIGURATION ---
+        const CUBE_API_URL = "http://localhost:4000/cubejs-api/v1/load";
+        const REFRESH_INTERVAL_MS = 60000; // 1 minute auto-refresh
+
+        // --- CHART DEFAULTS ---
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        Chart.defaults.color = '#64748b';
+        Chart.defaults.scale.grid.color = '#f1f5f9';
+        Chart.defaults.plugins.tooltip.backgroundColor = '#1e293b';
+        Chart.defaults.plugins.tooltip.padding = 10;
+        Chart.defaults.plugins.tooltip.cornerRadius = 8;
+
+        let charts = {}; // Store chart instances
+        let availableServices = new Set();
+
+        // --- DATA FETCHING ---
+        async function fetchCubeData(measures, filters = []) {
+            try {
+                const query = {
+                    measures: measures,
+                    dimensions: ["RequestMetricsMinute.bucketStart"],
+                    order: { "RequestMetricsMinute.bucketStart": "asc" },
+                    filters: filters
+                };
+
+                const response = await fetch(CUBE_API_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query: query })
+                });
+
+                if (!response.ok) {
+                    console.error("Cube API Error:", await response.text());
+                    return [];
+                }
+
+                const result = await response.json();
+
+                // Handle both Cube response formats
+                let data = [];
+                if (result.data) data = result.data;
+                else if (result.results && result.results[0]) data = result.results[0].data;
+
+                return data;
+
+            } catch (e) {
+                console.error("Fetch failed:", e);
+                return [];
+            }
+        }
+
+        async function fetchServices() {
+            try {
+                const response = await fetch(CUBE_API_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        query: {
+                            dimensions: ["RequestMetricsMinute.service"],
+                            order: { "RequestMetricsMinute.service": "asc" }
+                        }
+                    })
+                });
+                const result = await response.json();
+                let data = [];
+                if (result.data) data = result.data;
+                else if (result.results && result.results[0]) data = result.results[0].data;
+
+                const select = document.getElementById('serviceFilter');
+                // Clear existing options except first
+                while (select.options.length > 1) select.remove(1);
+
+                data.forEach(row => {
+                    const service = row["RequestMetricsMinute.service"];
+                    if (service && !availableServices.has(service)) {
+                        availableServices.add(service);
+                        const option = document.createElement("option");
+                        option.value = service;
+                        option.text = service;
+                        select.appendChild(option);
+                    }
+                });
+
+            } catch (e) { console.error("Failed to fetch services", e); }
+        }
+
+        // --- RENDERING ---
+        async function updateDashboard() {
+            // Filters
+            const service = document.getElementById('serviceFilter').value;
+            const date = document.getElementById('dateFilter').value;
+
+            const filters = [];
+            if (service) {
+                filters.push({
+                    member: "RequestMetricsMinute.service",
+                    operator: "equals",
+                    values: [service]
+                });
+            }
+            if (date) {
+                // Approximate generic day filter (Cube specific string filter)
+                // Since bucketStart is a string for MVP, simple regex match or string comparison is safest if standard time filter not used
+                // But Trino/Cube time filter is better if type is string. Let's use 'contains' for simple ISO date string match
+                // or strict range if we had proper time. 
+                // Because bucketStart is string "YYYY-MM-DD HH:MM:SS", "contains" YYYY-MM-DD works.
+                filters.push({
+                    member: "RequestMetricsMinute.bucketStart",
+                    operator: "contains",
+                    values: [date]
+                });
+            }
+
+            // Show loading states if first load
+            if (!charts['errorRate']) document.getElementById('loading-error').style.display = 'flex';
+            if (!charts['latency']) document.getElementById('loading-latency').style.display = 'flex';
+
+            const lastUpdatedEl = document.getElementById('lastUpdated');
+            lastUpdatedEl.textContent = 'Fetching data...';
+
+            try {
+                // 1. Fetch Data
+                const [errorData, latencyData] = await Promise.all([
+                    fetchCubeData(["RequestMetricsMinute.errorRate"], filters),
+                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters)
+                ]);
+
+                // 2. Process Data
+                const errorLabels = errorData.map(d => d["RequestMetricsMinute.bucketStart"]);
+                const errorValues = errorData.map(d => d["RequestMetricsMinute.errorRate"]);
+
+                const latencyLabels = latencyData.map(d => d["RequestMetricsMinute.bucketStart"]);
+                const latencyValues = latencyData.map(d => d["RequestMetricsMinute.p95Latency"]);
+
+                // 3. Update/Create Charts
+                updateChart('errorRate', 'errorRateChart', 'Error Rate', errorLabels, errorValues, {
+                    borderColor: '#ef4444',
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    yMax: 1.0,
+                    yTitle: 'Rate'
+                });
+
+                updateChart('latency', 'latencyChart', 'Latency (ms)', latencyLabels, latencyValues, {
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    yTitle: 'ms'
+                });
+
+                // Update timestamp
+                const now = new Date();
+                lastUpdatedEl.textContent = 'Last updated: ' + now.toLocaleTimeString();
+
+            } catch (err) {
+                console.error("Dashboard update failed:", err);
+                lastUpdatedEl.textContent = 'Update failed';
+            } finally {
+                // Hide loading
+                document.getElementById('loading-error').style.display = 'none';
+                document.getElementById('loading-latency').style.display = 'none';
+            }
+        }
+
+        function updateChart(key, canvasId, label, labels, data, options) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+
+            // Create gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+            gradient.addColorStop(0, options.backgroundColor);
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+            if (charts[key]) {
+                charts[key].data.labels = labels;
+                charts[key].data.datasets[0].data = data;
+                charts[key].update();
+            } else {
+                charts[key] = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: label,
+                            data: data,
+                            borderColor: options.borderColor,
+                            backgroundColor: gradient,
+                            fill: true,
+                            tension: 0.4, // Smoother curve
+                            pointRadius: 0, // Clean look, show on hover
+                            pointHoverRadius: 6,
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false,
+                        },
+                        scales: {
+                            x: {
+                                display: true,
+                                grid: { display: false },
+                                ticks: { maxTicksLimit: 8 }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                max: options.yMax,
+                                border: { display: false },
+                                title: { display: !!options.yTitle, text: options.yTitle }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false }
+                        }
+                    }
+                });
+            }
+        }
+
+        // --- INIT ---
+        // Set default date to today
+        document.getElementById('dateFilter').valueAsDate = new Date();
+
+        fetchServices().then(() => {
+            updateDashboard();
+        });
+
+        // Listeners
+        document.getElementById('serviceFilter').addEventListener('change', updateDashboard);
+        document.getElementById('dateFilter').addEventListener('change', updateDashboard);
+
+        setInterval(updateDashboard, REFRESH_INTERVAL_MS);
+
+    </script>
+</body>
+
+</html>

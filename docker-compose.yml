@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    container_name: gravix-ingestion
+    restart: always
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./data:/app/data
+    command: [ "./ingestion-service", "--base-dir", "/app/data" ]
+    environment:
+      - API_KEY=secret-token-123
+
+  trino:
+    image: trinodb/trino:351
+    container_name: gravix-trino
+    ports:
+      - "8081:8080" # Trino UI
+    volumes:
+      - ./storage/trino/config:/etc/trino
+      - ./storage/trino/catalog:/etc/trino/catalog
+      - ./data/warehouse:/data/warehouse
+      - ./data/raw:/data/raw
+  cube:
+    image: cubejs/cube:latest
+    container_name: gravix-cube
+    ports:
+      - "4000:4000"
+    environment:
+      - CUBEJS_DB_TYPE=trino
+      - CUBEJS_DB_HOST=gravix-trino
+      - CUBEJS_DB_PORT=8080
+      - CUBEJS_DB_PRESTO_CATALOG=gravix
+      - CUBEJS_DB_NAME=raw
+      - CUBEJS_DB_USER=trino
+      - CUBEJS_DEV_MODE=true
+    volumes:
+      - ./cube/cube.js:/cube/conf/cube.js
+      - ./cube/model:/cube/conf/model
+    depends_on:
+      - trino
+
+  load-generator:
+    build:
+      context: .
+      dockerfile: services/load_generator/Dockerfile
+    container_name: gravix-load-generator
+    command: ["./load-generator", "--target", "http://ingestion:8080/api/v1/facts", "--api-key", "secret-token-123", "--qps", "5", "--concurrency", "2"]
+    depends_on:
+      - ingestion
