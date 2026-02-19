@@ -1,0 +1,81 @@
+{{- if .Values.storage.cube.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-cube
+  labels:
+    app: cube
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cube
+  template:
+    metadata:
+      labels:
+        app: cube
+    spec:
+      containers:
+        - name: cube
+          image: "{{ .Values.storage.cube.image.repository }}:{{ .Values.storage.cube.image.tag }}"
+          ports:
+            - containerPort: 4000
+          env:
+            - name: CUBEJS_DB_TYPE
+              value: "trino"
+            - name: CUBEJS_DB_HOST
+              value: "{{ .Release.Name }}-trino"
+            - name: CUBEJS_DB_PORT
+              value: "8080"
+            - name: CUBEJS_DB_PRESTO_CATALOG
+              value: "gravix"
+            - name: CUBEJS_DB_NAME
+              value: "raw"
+            - name: CUBEJS_DB_USER
+              value: "trino"
+            - name: CUBEJS_DEV_MODE
+              value: "true"
+            {{- if .Values.global.cubeApiSecret }}
+            - name: CUBEJS_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: cube-api-secret
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /readyz
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-cube
+spec:
+  ports:
+    - port: 4000
+      targetPort: 4000
+  selector:
+    app: cube
+{{- end }}

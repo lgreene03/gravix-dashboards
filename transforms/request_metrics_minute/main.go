@@ -2,23 +2,24 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-
-	"bytes"
-	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/montanaflynn/stats"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -68,6 +69,7 @@ type MetricRow struct {
 	ErrorRate    float64 `json:"error_rate" parquet:"error_rate"`
 	P50LatencyMs float64 `json:"p50_latency_ms" parquet:"p50_latency_ms"`
 	P95LatencyMs float64 `json:"p95_latency_ms" parquet:"p95_latency_ms"`
+	P99LatencyMs float64 `json:"p99_latency_ms" parquet:"p99_latency_ms"`
 	EventDay     string  `json:"event_day" parquet:"event_day"`
 }
 
@@ -82,6 +84,30 @@ type Aggregator struct {
 	Latencies []float64
 	Requests  int64
 	Errors    int64
+}
+
+// acquireLock creates an exclusive lock file to prevent concurrent rollup runs.
+// Returns the lock file (caller must close+remove) or an error if already locked.
+func acquireLock(dir string) (*os.File, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create lock dir: %w", err)
+	}
+	lockPath := filepath.Join(dir, ".rollup.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("rollup already running (lock file exists: %s)", lockPath)
+		}
+		return nil, fmt.Errorf("failed to acquire lock: %w", err)
+	}
+	fmt.Fprintf(f, "pid=%d started=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	return f, nil
+}
+
+func releaseLock(f *os.File) {
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
 }
 
 func main() {
@@ -99,6 +125,13 @@ func main() {
 	flag.StringVar(&endDay, "end-day", "", "End day for backfill (YYYY-MM-DD, inclusive)")
 
 	flag.Parse()
+
+	// Acquire exclusive lock to prevent concurrent runs
+	lockFile, err := acquireLock(outputDir)
+	if err != nil {
+		log.Fatalf("Cannot start rollup: %v", err)
+	}
+	defer releaseLock(lockFile)
 
 	// Determine list of days to process (similar logic as before, just update processing to loop over hours too if needed)
 	// For MVP simplicity, we will assume "Day" granularity processing which re-computes *all hours* in that day.
@@ -283,6 +316,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 	for key, agg := range aggs {
 		p50, _ := stats.Percentile(agg.Latencies, 50)
 		p95, _ := stats.Percentile(agg.Latencies, 95)
+		p99, _ := stats.Percentile(agg.Latencies, 99)
 
 		rate := 0.0
 		if agg.Requests > 0 {
@@ -300,6 +334,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 			ErrorRate:    rate,
 			P50LatencyMs: p50,
 			P95LatencyMs: p95,
+			P99LatencyMs: p99,
 		})
 	}
 
@@ -316,7 +351,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 	destKey := fmt.Sprintf("%s/metrics_%s_%s.parquet", outputPrefix, idx, dayStr)
 
 	var buf bytes.Buffer
-	writer := parquet.NewGenericWriter[MetricRow](&buf)
+	writer := parquet.NewGenericWriter[MetricRow](&buf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
 	if _, err := writer.Write(metrics); err != nil {
 		return err
 	}

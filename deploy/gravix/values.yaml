@@ -2,20 +2,23 @@
 # This is a YAML-formatted file.
 
 global:
-  apiKey: "secret-token-123"
+  # IMPORTANT: Override these in a separate values file or --set flags.
+  # Do NOT commit real secrets here.
+  apiKey: "change-me-to-a-real-secret"
+  cubeApiSecret: ""
   storage:
     endpoint: "http://gravix-minio:9000"
     region: "us-east-1"
     bucket: "gravix"
     accessKey: "admin"
-    secretKey: "password123"
+    secretKey: "change-me-to-a-real-secret"
 
 ingestion:
   enabled: true
   replicaCount: 1
   image:
     repository: gravix-ingestion
-    tag: latest
+    tag: "0.1.0"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -37,7 +40,7 @@ loadGenerator:
   replicaCount: 1
   image:
     repository: gravix-load-generator
-    tag: latest
+    tag: "0.1.0"
     pullPolicy: IfNotPresent
   config:
     qps: 5
@@ -47,23 +50,56 @@ rollupJob:
   enabled: true
   image:
     repository: gravix-rollup
-    tag: latest
+    tag: "0.1.0"
     pullPolicy: IfNotPresent
   schedule: "*/5 * * * *" # Every 5 minutes
+
+retentionJob:
+  enabled: true
+  image:
+    repository: gravix-rollup
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  schedule: "0 3 * * *" # Daily at 03:00 UTC
+  retentionDays: 30
 
 storage:
   minio:
     enabled: true
     image:
       repository: minio/minio
-      tag: latest
+      tag: "RELEASE.2024-03-15T01-07-19Z"
+    persistence:
+      enabled: true
+      size: 10Gi
   trino:
     enabled: true
     image:
       repository: trinodb/trino
-      tag: 351
+      tag: "451"
   cube:
     enabled: true
     image:
       repository: cubejs/cube
-      tag: latest
+      tag: "v0.35"
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: gravix.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+        - path: /api
+          pathType: Prefix
+          service: ingestion
+  tls: []
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70

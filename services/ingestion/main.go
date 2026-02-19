@@ -2,14 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +24,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+const maxBodyBytes = 1 << 20 // 1 MB max request body
+
+// writeErrorJSON writes a structured JSON error response.
+func writeErrorJSON(w http.ResponseWriter, code int, errMsg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": errMsg,
+		"code":  code,
+	})
+}
 
 var (
 	ingestionRequestsTotal = prometheus.NewCounterVec(
@@ -51,6 +68,60 @@ func init() {
 	prometheus.MustRegister(ingestionBatchSizeBytes)
 	prometheus.MustRegister(prometheus.NewBuildInfoCollector())
 	prometheus.MustRegister(ingestionFsyncDurationSeconds)
+}
+
+// RateLimiter implements a simple token-bucket rate limiter.
+// It allows up to 'rate' requests per second with a burst capacity.
+type RateLimiter struct {
+	tokens    atomic.Int64
+	rate      int64 // tokens added per second
+	maxTokens int64 // burst capacity
+}
+
+func NewRateLimiter(ratePerSecond, burst int64) *RateLimiter {
+	rl := &RateLimiter{
+		rate:      ratePerSecond,
+		maxTokens: burst,
+	}
+	rl.tokens.Store(burst)
+	go rl.refill()
+	return rl
+}
+
+func (rl *RateLimiter) refill() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		current := rl.tokens.Load()
+		newTokens := current + rl.rate
+		if newTokens > rl.maxTokens {
+			newTokens = rl.maxTokens
+		}
+		rl.tokens.Store(newTokens)
+	}
+}
+
+// Allow returns true if a request is permitted, consuming one token.
+func (rl *RateLimiter) Allow() bool {
+	for {
+		current := rl.tokens.Load()
+		if current <= 0 {
+			return false
+		}
+		if rl.tokens.CompareAndSwap(current, current-1) {
+			return true
+		}
+	}
+}
+
+func rateLimitMiddleware(rl *RateLimiter, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !rl.Allow() {
+			writeErrorJSON(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
+			return
+		}
+		next(w, r)
+	}
 }
 
 // DurableSink provides fsync-backed appends and async background uploads.
@@ -224,12 +295,14 @@ func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 	defer f.Close()
 
 	if err := ds.store.Put(ds.ctx, destKey, f); err != nil {
-		log.Printf("Error uploading %s to storage: %v", sourcePath, err)
-		return
+		log.Printf("Error uploading %s to storage (file preserved for retry): %v", sourcePath, err)
+		return // Do NOT delete the local file — it will be retried on next startup scan
 	}
 
-	// Success! Delete the local batch
-	os.Remove(sourcePath)
+	// Upload succeeded — safe to delete the local batch
+	if err := os.Remove(sourcePath); err != nil {
+		log.Printf("Warning: uploaded %s but failed to remove local file: %v", sourcePath, err)
+	}
 	log.Printf("Uploaded %s to storage key %s", sourcePath, destKey)
 }
 
@@ -308,9 +381,13 @@ func main() {
 	}
 	defer sink.Close()
 
-	// Wrap handlers with auth middleware
-	http.Handle("/api/v1/facts", authMiddleware(apiKey, handleFacts(sink)))
-	http.Handle("/api/v1/events", authMiddleware(apiKey, handleEvents(sink)))
+	// Rate limiter: 100 requests/sec with burst of 200
+	rl := NewRateLimiter(100, 200)
+
+	// Wrap handlers with rate limiting + auth middleware
+	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMiddleware(apiKey, handleFacts(sink))))
+	http.Handle("/api/v1/facts/batch", rateLimitMiddleware(rl, authMiddleware(apiKey, handleBatchFacts(sink))))
+	http.Handle("/api/v1/events", rateLimitMiddleware(rl, authMiddleware(apiKey, handleEvents(sink))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -331,10 +408,32 @@ func main() {
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
+	srv := &http.Server{
+		Addr:         addr,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Graceful shutdown: listen for SIGINT/SIGTERM
+	shutdownCh := make(chan os.Signal, 1)
+	signal.Notify(shutdownCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-shutdownCh
+		log.Printf("Received %v, draining connections (10s)...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("HTTP shutdown error: %v", err)
+		}
+	}()
+
 	log.Printf("Starting ingestion service on %s...", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+	log.Println("Server stopped gracefully.")
 }
 
 // authMiddleware checks for X-API-Key header if apiKey is configured
@@ -343,7 +442,7 @@ func authMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 		if apiKey != "" {
 			reqKey := r.Header.Get("X-API-Key")
 			if reqKey != apiKey {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				writeErrorJSON(w, http.StatusUnauthorized, "invalid or missing X-API-Key header")
 				return
 			}
 		}
@@ -351,86 +450,191 @@ func authMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requireJSON checks Content-Type header contains application/json.
+// Returns true if valid, false (and writes 415 response) if invalid.
+func requireJSON(w http.ResponseWriter, r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	if ct == "" || !strings.Contains(ct, "application/json") {
+		writeErrorJSON(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return false
+	}
+	return true
+}
+
 func handleFacts(sink *DurableSink) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
 			return
 		}
+		if !requireJSON(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(w, "Failed to read body", http.StatusInternalServerError)
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "request body too large (max 1MB)")
 			return
 		}
 		defer r.Body.Close()
 
 		fact, err := schemas.ParseRequestFact(body)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Invalid RequestFact: %v", err), http.StatusBadRequest)
+			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid RequestFact: %v", err))
 			return
 		}
 
-		// Use protojson to maintain consistent format and snake_case keys
-		marshalOpts := protojson.MarshalOptions{
-			UseProtoNames: true,
-		}
+		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
 		cleanData, err := marshalOpts.Marshal(fact)
 		if err != nil {
-			http.Error(w, "Internal error during marshal", http.StatusInternalServerError)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to marshal fact")
 			return
 		}
 
 		if err := sink.Write("request_facts", cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
 			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500").Inc()
-			http.Error(w, "Internal error", http.StatusInternalServerError)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist fact")
 			return
 		}
 
 		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201").Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
-		w.WriteHeader(http.StatusCreated) // 201 Created (Durable)
+		w.WriteHeader(http.StatusCreated)
 	}
+}
+
+// handleBatchFacts handles JSONL (newline-delimited JSON) payloads with multiple facts per request.
+func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
+			return
+		}
+		if !requireJSON(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "request body too large (max 1MB)")
+			return
+		}
+		defer r.Body.Close()
+
+		lines := splitJSONL(body)
+		if len(lines) == 0 {
+			writeErrorJSON(w, http.StatusBadRequest, "empty request body")
+			return
+		}
+
+		accepted := 0
+		var errors []string
+		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
+
+		for i, line := range lines {
+			if len(line) == 0 {
+				continue
+			}
+
+			fact, err := schemas.ParseRequestFact(line)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("line %d: %v", i+1, err))
+				continue
+			}
+
+			cleanData, err := marshalOpts.Marshal(fact)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("line %d: marshal error", i+1))
+				continue
+			}
+
+			if err := sink.Write("request_facts", cleanData); err != nil {
+				log.Printf("Sink write error (batch line %d): %v", i+1, err)
+				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist facts")
+				return
+			}
+			accepted++
+		}
+
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200").Inc()
+		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(body)))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		resp := map[string]interface{}{
+			"accepted": accepted,
+			"rejected": len(errors),
+		}
+		if len(errors) > 0 {
+			resp["errors"] = errors
+		}
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// splitJSONL splits a byte slice on newlines, returning non-empty lines.
+func splitJSONL(data []byte) [][]byte {
+	var lines [][]byte
+	start := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			line := data[start:i]
+			if len(line) > 0 {
+				lines = append(lines, line)
+			}
+			start = i + 1
+		}
+	}
+	// Last line (may not end with newline)
+	if start < len(data) {
+		line := data[start:]
+		if len(line) > 0 {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func handleEvents(sink *DurableSink) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
 			return
 		}
+		if !requireJSON(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(w, "Failed to read body", http.StatusInternalServerError)
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "request body too large (max 1MB)")
 			return
 		}
 		defer r.Body.Close()
 
 		event, err := schemas.ParseServiceEvent(body)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Invalid ServiceEvent: %v", err), http.StatusBadRequest)
+			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid ServiceEvent: %v", err))
 			return
 		}
 
-		// Use protojson to maintain consistent format and snake_case keys
-		marshalOpts := protojson.MarshalOptions{
-			UseProtoNames: true,
-		}
+		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
 		cleanData, err := marshalOpts.Marshal(event)
 		if err != nil {
-			http.Error(w, "Internal error during marshal", http.StatusInternalServerError)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to marshal event")
 			return
 		}
 
 		if err := sink.Write("service_events", cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
 			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500").Inc()
-			http.Error(w, "Internal error", http.StatusInternalServerError)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist event")
 			return
 		}
 
 		ingestionRequestsTotal.WithLabelValues("/api/v1/events", "201").Inc()
 		ingestionBatchSizeBytes.WithLabelValues("service_events").Observe(float64(len(cleanData)))
-		w.WriteHeader(http.StatusCreated) // 201 Created (Durable)
+		w.WriteHeader(http.StatusCreated)
 	}
 }

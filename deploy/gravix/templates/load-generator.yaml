@@ -1,9 +1,12 @@
+{{- if .Values.loadGenerator.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}-load-generator
   labels:
     app: load-generator
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   replicas: {{ .Values.loadGenerator.replicaCount }}
   selector:
@@ -22,9 +25,14 @@ spec:
           args:
             - "--target"
             - "http://{{ .Release.Name }}-ingestion:{{ .Values.ingestion.service.port }}/api/v1/facts"
-            - "--api-key"
-            - "{{ .Values.global.apiKey }}"
             - "--qps"
             - "{{ .Values.loadGenerator.config.qps }}"
             - "--concurrency"
             - "{{ .Values.loadGenerator.config.concurrency }}"
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: api-key
+{{- end }}

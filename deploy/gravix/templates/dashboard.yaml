@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-dashboard-config
+  labels:
+    app: dashboard
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  # Inject runtime config so the dashboard knows where the Cube.js API lives
+  config.js: |
+    window.GRAVIX_CONFIG = {
+      cubeApiUrl: "http://{{ .Release.Name }}-cube:4000/cubejs-api/v1/load",
+      refreshIntervalMs: 60000,
+      staleThresholdMs: 600000
+    };
+  nginx.conf: |
+    server {
+        listen 8000;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        location /healthz {
+            access_log off;
+            return 200 "ok\n";
+            add_header Content-Type text/plain;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-dashboard
+  labels:
+    app: dashboard
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: nginx.conf
+            - name: dashboard-config
+              mountPath: /usr/share/nginx/html/config.js
+              subPath: config.js
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 50m
+              memory: 32Mi
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ .Release.Name }}-dashboard-config
+        - name: dashboard-config
+          configMap:
+            name: {{ .Release.Name }}-dashboard-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-dashboard
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: dashboard

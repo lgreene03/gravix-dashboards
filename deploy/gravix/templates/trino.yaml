@@ -1,0 +1,133 @@
+{{- if .Values.storage.trino.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-trino-config
+  labels:
+    app: trino
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=true
+    http-server.http.port=8080
+    query.max-memory=1GB
+    query.max-total-memory-per-node=1GB
+    query.max-memory-per-node=800MB
+    discovery-server.enabled=true
+    discovery.uri=http://localhost:8080
+  node.properties: |
+    node.environment=production
+    node.id=ffffffff-ffff-ffff-ffff-ffffffffffff
+    node.data-dir=/data/trino
+  jvm.config: |
+    -server
+    -Xmx2G
+    -XX:MinRAMPercentage=50
+    -XX:MaxRAMPercentage=100
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+UseGCOverheadLimit
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:+ExitOnOutOfMemoryError
+  gravix.properties: |
+    connector.name=hive-hadoop2
+    hive.metastore=file
+    hive.metastore.catalog.dir=/data/warehouse
+    hive.non-managed-table-writes-enabled=true
+    hive.allow-drop-table=true
+    hive.s3.endpoint={{ .Values.global.storage.endpoint }}
+    hive.s3.aws-access-key={{ .Values.global.storage.accessKey }}
+    hive.s3.aws-secret-key={{ .Values.global.storage.secretKey }}
+    hive.s3.path-style-access=true
+    hive.s3.ssl.enabled=false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-trino
+  labels:
+    app: trino
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trino
+  template:
+    metadata:
+      labels:
+        app: trino
+    spec:
+      containers:
+        - name: trino
+          image: "{{ .Values.storage.trino.image.repository }}:{{ .Values.storage.trino.image.tag }}"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino/config.properties
+              subPath: config.properties
+            - name: config
+              mountPath: /etc/trino/node.properties
+              subPath: node.properties
+            - name: config
+              mountPath: /etc/trino/jvm.config
+              subPath: jvm.config
+            - name: catalog
+              mountPath: /etc/trino/catalog/gravix.properties
+              subPath: gravix.properties
+            - name: warehouse
+              mountPath: /data/warehouse
+          livenessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "1"
+              memory: 3Gi
+            requests:
+              cpu: 250m
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-trino-config
+        - name: catalog
+          configMap:
+            name: {{ .Release.Name }}-trino-config
+        - name: warehouse
+          {{- if .Values.storage.minio.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-minio-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-trino
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: trino
+{{- end }}

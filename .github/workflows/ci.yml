@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Go module cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build all binaries
+        run: |
+          go build ./services/ingestion/
+          go build ./transforms/request_metrics_minute/
+          go build ./transforms/service_events_daily/
+          go build ./cmd/load_generator/
+          go build ./cmd/purge/
+
+      - name: Run tests
+        run: go test ./... -v -cover -count=1

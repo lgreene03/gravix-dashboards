@@ -4,6 +4,8 @@ metadata:
   name: {{ .Release.Name }}-ingestion
   labels:
     app: ingestion
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   replicas: {{ .Values.ingestion.replicaCount }}
   selector:
@@ -22,7 +24,10 @@ spec:
             - containerPort: {{ .Values.ingestion.service.port }}
           env:
             - name: API_KEY
-              value: {{ .Values.global.apiKey | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: api-key
             - name: S3_ENDPOINT
               value: {{ .Values.global.storage.endpoint | quote }}
             - name: S3_REGION
@@ -30,9 +35,31 @@ spec:
             - name: S3_BUCKET
               value: {{ .Values.global.storage.bucket | quote }}
             - name: S3_ACCESS_KEY
-              value: {{ .Values.global.storage.accessKey | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: s3-access-key
             - name: S3_SECRET_KEY
-              value: {{ .Values.global.storage.secretKey | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: s3-secret-key
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: {{ .Values.ingestion.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /live
+              port: {{ .Values.ingestion.service.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
           volumeMounts:
             - name: data
               mountPath: {{ .Values.ingestion.persistence.mountPath }}

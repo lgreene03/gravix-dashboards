@@ -43,8 +43,21 @@ CREATE TABLE gravix.raw.request_metrics_minute (
     error_rate DOUBLE,
     p50_latency_ms DOUBLE,
     p95_latency_ms DOUBLE,
+    p99_latency_ms DOUBLE,
     event_day VARCHAR
 ) WITH (
     format = 'PARQUET',
     external_location = '/data/warehouse/request_metrics_minute'
+);
+
+-- Service Events Daily Summary (Parquet from service_events_daily rollup)
+DROP TABLE IF EXISTS gravix.raw.service_events_daily;
+CREATE TABLE gravix.raw.service_events_daily (
+    event_day VARCHAR,
+    service VARCHAR,
+    event_type VARCHAR,
+    event_count BIGINT
+) WITH (
+    format = 'PARQUET',
+    external_location = '/data/warehouse/service_events_daily'
 );

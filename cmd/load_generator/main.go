@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -24,25 +26,39 @@ var (
 	methods    = []string{"GET", "POST", "PUT", "DELETE"}
 	paths      = []string{"/api/v1/login", "/api/v1/users/:id", "/api/v1/products", "/api/v1/cart/checkout"}
 	userAgents = []string{"Chrome", "Firefox", "Safari", "Edge", "Postman", "LoadGenerator"}
+	eventTypes = []string{"deploy_started", "deploy_completed", "restart", "scale_up", "scale_down", "health_check_failed"}
 )
 
 func main() {
 	var targetURL string
+	var eventsURL string
 	var apiKey string
 	var qps float64
 	var concurrency int
 	var duration time.Duration
 	var verbose bool
 
-	flag.StringVar(&targetURL, "target", "http://localhost:8090/api/v1/facts", "Target Ingestion Service URL")
-	flag.StringVar(&apiKey, "api-key", "", "API Key for Ingestion Service")
+	flag.StringVar(&targetURL, "target", "http://localhost:8090/api/v1/facts", "Target Ingestion Service URL for facts")
+	flag.StringVar(&eventsURL, "events-target", "", "Target Ingestion Service URL for service events (default: derived from --target)")
+	flag.StringVar(&apiKey, "api-key", "", "API Key for Ingestion Service (also reads API_KEY env var)")
 	flag.Float64Var(&qps, "qps", 5.0, "Average Queries Per Second (QPS) across all workers")
 	flag.IntVar(&concurrency, "concurrency", 1, "Number of concurrent workers")
 	flag.DurationVar(&duration, "duration", 0, "Duration to run (0 for infinite)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose logging")
 	flag.Parse()
 
+	// Fall back to API_KEY env var if --api-key not provided
+	if apiKey == "" {
+		apiKey = os.Getenv("API_KEY")
+	}
+
+	// Derive events URL from target if not explicitly set
+	if eventsURL == "" {
+		eventsURL = strings.Replace(targetURL, "/api/v1/facts", "/api/v1/events", 1)
+	}
+
 	log.Printf("Starting Load Generator for %s", targetURL)
+	log.Printf("Events target: %s", eventsURL)
 	log.Printf("Configuration: QPS=%.2f, Concurrency=%d, Duration=%v", qps, concurrency, duration)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,6 +95,13 @@ func main() {
 			runWorker(ctx, id, targetURL, apiKey, qpsPerWorker, verbose)
 		}(i)
 	}
+
+	// Service events worker: emit ~1 event every 30 seconds (deploy/restart/scale events)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runEventsWorker(ctx, eventsURL, apiKey, verbose)
+	}()
 
 	wg.Wait()
 	log.Println("Load Generator stopped.")
@@ -179,5 +202,76 @@ func generateRandomFact() *schemas.RequestFact {
 		StatusCode:      status,
 		LatencyMs:       latencyMs,
 		UserAgentFamily: ua,
+	}
+}
+
+func runEventsWorker(ctx context.Context, url, apiKey string, verbose bool) {
+	// Emit a service event every 15-45 seconds (random interval)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for {
+		interval := time.Duration(15+rand.Intn(30)) * time.Second
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+			sendEvent(ctx, client, url, apiKey, verbose)
+		}
+	}
+}
+
+func sendEvent(ctx context.Context, client *http.Client, url, apiKey string, verbose bool) {
+	event := generateRandomEvent()
+
+	payload, err := protojson.Marshal(event)
+	if err != nil {
+		log.Printf("Error marshaling event: %v", err)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payload))
+	if err != nil {
+		log.Printf("Error creating event request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if verbose {
+			log.Printf("Event request failed: %v", err)
+		}
+		return
+	}
+	defer resp.Body.Close()
+
+	if verbose {
+		log.Printf("Sent event %s (%s/%s): Status %d", event.EventId, event.Service, event.EventType, resp.StatusCode)
+	}
+}
+
+func generateRandomEvent() *schemas.ServiceEvent {
+	id, err := uuid.NewV7()
+	if err != nil {
+		id = uuid.New()
+	}
+
+	service := services[rand.Intn(len(services))]
+	eventType := eventTypes[rand.Intn(len(eventTypes))]
+
+	props := map[string]string{
+		"version":  fmt.Sprintf("1.%d.%d", rand.Intn(10), rand.Intn(100)),
+		"instance": fmt.Sprintf("%s-%d", service, rand.Intn(5)),
+	}
+
+	return &schemas.ServiceEvent{
+		EventId:    id.String(),
+		EventTime:  timestamppb.Now(),
+		Service:    service,
+		EventType:  eventType,
+		Properties: props,
 	}
 }
