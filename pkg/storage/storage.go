@@ -11,4 +11,5 @@ type ObjectStore interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Delete(ctx context.Context, key string) error
 	List(ctx context.Context, prefix string) ([]string, error)
+	Exists(ctx context.Context, key string) (bool, error)
 }

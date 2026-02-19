@@ -13,26 +13,37 @@ services:
       - ./data:/app/data
     command: [ "./ingestion-service", "--base-dir", "/app/data" ]
     environment:
-      - API_KEY=secret-token-123
+      - API_KEY=${API_KEY}
       - S3_ENDPOINT=http://minio:9000
-      - S3_REGION=us-east-1
-      - S3_BUCKET=gravix
-      - S3_ACCESS_KEY=admin
-      - S3_SECRET_KEY=password123
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET:-gravix}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   init-minio:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2024-03-13T23-51-57Z
     container_name: gravix-init-minio
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set myminio http://minio:9000 admin password123;
+      /usr/bin/mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
       /usr/bin/mc mb myminio/gravix;
       exit 0;
       "
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
 
   trino:
     image: trinodb/trino:351
@@ -44,8 +55,15 @@ services:
       - ./storage/trino/catalog:/etc/trino/catalog
       - ./data/warehouse:/data/warehouse
       - ./data/raw:/data/raw
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/v1/info"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   cube:
-    image: cubejs/cube:latest
+    image: cubejs/cube:v0.35
     container_name: gravix-cube
     ports:
       - "4000:4000"
@@ -57,51 +75,167 @@ services:
       - CUBEJS_DB_NAME=raw
       - CUBEJS_DB_USER=trino
       - CUBEJS_DEV_MODE=true
+      - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
     volumes:
       - ./cube/cube.js:/cube/conf/cube.js
       - ./cube/model:/cube/conf/model
     depends_on:
-      - trino
+      trino:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4000/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   load-generator:
     build:
       context: .
       dockerfile: services/load_generator/Dockerfile
     container_name: gravix-load-generator
-    command: ["./load-generator", "--target", "http://ingestion:8080/api/v1/facts", "--api-key", "secret-token-123", "--qps", "5", "--concurrency", "2"]
+    command: ["./load-generator", "--target", "http://ingestion:8080/api/v1/facts", "--api-key", "${API_KEY}", "--qps", "5", "--concurrency", "2"]
     depends_on:
-      - ingestion
+      ingestion:
+        condition: service_healthy
+
+  request-metrics-rollup:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-request-rollup
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Starting request-metrics rollup cron (every 5 minutes)..."
+        while true; do
+          echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Running request-metrics rollup..."
+          ./request-metrics-rollup \
+            -input-dir ./data/raw/request_facts \
+            -output-dir ./data/warehouse/request_metrics_minute || echo "Rollup failed, will retry next cycle"
+          sleep 300
+        done
+    volumes:
+      - ./data:/app/data
+    environment:
+      - S3_ENDPOINT=http://minio:9000
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET:-gravix}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  service-events-rollup:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-events-rollup
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Starting service-events rollup cron (every hour)..."
+        while true; do
+          echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Running service-events rollup..."
+          ./service-events-rollup \
+            -input-dir ./data/raw/service_events \
+            -output-dir ./data/warehouse/service_events_daily || echo "Rollup failed, will retry next cycle"
+          sleep 3600
+        done
+    volumes:
+      - ./data:/app/data
+    environment:
+      - S3_ENDPOINT=http://minio:9000
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET:-gravix}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  purge:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-purge
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Starting purge cron (daily at 03:00 UTC)..."
+        while true; do
+          CURRENT_HOUR=$(date -u +%H)
+          if [ "$$CURRENT_HOUR" = "03" ]; then
+            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Running data purge (30-day retention)..."
+            ./purge --retention-days 30 --data-dir /app/data || echo "Purge failed"
+            sleep 3600
+          fi
+          sleep 1800
+        done
+    volumes:
+      - ./data:/app/data
+    environment:
+      - S3_ENDPOINT=http://minio:9000
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET:-gravix}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+    depends_on:
+      minio:
+        condition: service_healthy
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.51.0
     container_name: gravix-prometheus
     volumes:
       - ./storage/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./storage/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
     ports:
       - "9090:9090"
     restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.4.0
     container_name: gravix-grafana
     ports:
       - "3000:3000"
     volumes:
       - ./storage/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2024-03-15T01-07-19Z
     container_name: gravix-minio
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=password123
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
     volumes:
       - ./data/minio:/data
     command: server /data --console-address ":9001"
     restart: always
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s

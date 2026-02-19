@@ -3,6 +3,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}-minio
+  labels:
+    app: minio
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   replicas: 1
   selector:
@@ -22,15 +26,42 @@ spec:
             - containerPort: 9001
           env:
             - name: MINIO_ROOT_USER
-              value: {{ .Values.global.storage.accessKey | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: s3-access-key
             - name: MINIO_ROOT_PASSWORD
-              value: {{ .Values.global.storage.secretKey | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: s3-secret-key
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           volumeMounts:
             - name: storage
               mountPath: /data
       volumes:
         - name: storage
+          {{- if .Values.storage.minio.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-minio-pvc
+          {{- else }}
           emptyDir: {}
+          {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -46,4 +77,17 @@ spec:
       name: console
   selector:
     app: minio
+---
+{{- if .Values.storage.minio.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-minio-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.storage.minio.persistence.size }}
+{{- end }}
 {{- end }}

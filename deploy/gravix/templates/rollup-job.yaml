@@ -1,9 +1,17 @@
+{{- if .Values.rollupJob.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ .Release.Name }}-rollup
+  labels:
+    app: rollup
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   schedule: {{ .Values.rollupJob.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       template:
@@ -12,10 +20,7 @@ spec:
             - name: rollup
               image: "{{ .Values.rollupJob.image.repository }}:{{ .Values.rollupJob.image.tag }}"
               imagePullPolicy: {{ .Values.rollupJob.image.pullPolicy }}
-              command: ["./rollup-job"]
-              args:
-                - "--process-time"
-                - "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+              command: ["./request-metrics-rollup"]
               env:
                 - name: S3_ENDPOINT
                   value: {{ .Values.global.storage.endpoint | quote }}
@@ -24,7 +29,14 @@ spec:
                 - name: S3_BUCKET
                   value: {{ .Values.global.storage.bucket | quote }}
                 - name: S3_ACCESS_KEY
-                  value: {{ .Values.global.storage.accessKey | quote }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-secrets
+                      key: s3-access-key
                 - name: S3_SECRET_KEY
-                  value: {{ .Values.global.storage.secretKey | quote }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-secrets
+                      key: s3-secret-key
           restartPolicy: OnFailure
+{{- end }}

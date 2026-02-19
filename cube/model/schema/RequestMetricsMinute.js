@@ -44,6 +44,12 @@ cube(`RequestMetricsMinute`, {
       sql: `p50_latency_ms`,
       type: `max`,
       title: `P50 Latency (Max)`
+    },
+
+    p99Latency: {
+      sql: `p99_latency_ms`,
+      type: `max`,
+      title: `P99 Latency (Max)`
     }
   },
 

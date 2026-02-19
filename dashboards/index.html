@@ -14,6 +14,108 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <style>
+        /* Auth Gate */
+        .auth-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #1e293b;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .auth-overlay.hidden {
+            display: none;
+        }
+
+        .auth-card {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            width: 380px;
+            text-align: center;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        .auth-card h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #0f172a;
+        }
+
+        .auth-card p {
+            color: #64748b;
+            margin-bottom: 24px;
+            font-size: 0.875rem;
+        }
+
+        .auth-card input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-family: inherit;
+            margin-bottom: 16px;
+            outline: none;
+        }
+
+        .auth-card input:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+        }
+
+        .auth-card button {
+            width: 100%;
+            padding: 12px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.2s;
+        }
+
+        .auth-card button:hover {
+            background: #2563eb;
+        }
+
+        .auth-error {
+            color: #ef4444;
+            font-size: 0.875rem;
+            margin-bottom: 12px;
+            display: none;
+        }
+
+        .auth-brand {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+
+        .auth-brand-icon {
+            width: 32px;
+            height: 32px;
+            background: #3b82f6;
+            border-radius: 8px;
+        }
+
+        .auth-brand span {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
         :root {
             --bg-color: #f8fafc;
             --text-primary: #0f172a;
@@ -129,21 +231,6 @@
             background: #10b981;
             border-radius: 50%;
             margin-right: 8px;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0% {
-                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
-            }
-
-            70% {
-                box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
-            }
-
-            100% {
-                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-            }
         }
 
         /* Grid */
@@ -245,6 +332,60 @@
             text-align: right;
         }
 
+        .stale-warning {
+            color: #b45309;
+            font-weight: 600;
+        }
+
+        /* Error Banner */
+        .error-banner {
+            display: none;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .error-banner.visible {
+            display: flex;
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: none;
+            text-align: center;
+            padding: 48px 24px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state.visible {
+            display: block;
+        }
+
+        .empty-state h3 {
+            color: var(--text-primary);
+            margin-bottom: 8px;
+            font-size: 1.125rem;
+        }
+
+        .empty-state pre {
+            display: block;
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 16px;
+            border-radius: 8px;
+            text-align: left;
+            margin-top: 16px;
+            font-size: 0.8rem;
+            overflow-x: auto;
+        }
+
         /* Table */
         .data-table {
             width: 100%;
@@ -326,6 +467,23 @@
 
 <body>
 
+    <!-- Auth Gate (shown only when CUBEJS_API_SECRET is configured) -->
+    <div id="authOverlay" class="auth-overlay hidden">
+        <div class="auth-card">
+            <div class="auth-brand">
+                <div class="auth-brand-icon"></div>
+                <span>Gravix</span>
+            </div>
+            <h2>Sign In</h2>
+            <p>Enter the dashboard password to continue.</p>
+            <div id="authError" class="auth-error">Invalid password. Please try again.</div>
+            <form id="authForm" onsubmit="return false;">
+                <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+                <button type="submit" id="authSubmit">Sign In</button>
+            </form>
+        </div>
+    </div>
+
     <aside class="sidebar">
         <div class="brand">
             <div class="brand-icon"></div>
@@ -349,28 +507,62 @@
                 </div>
                 <div id="default-header">
                     <h1>Service Health</h1>
-                    <p>Real-time metrics from production services</p>
+                    <p>Aggregated metrics from production services</p>
                 </div>
             </div>
-            <div style="display: flex; gap: 16px; align-items: center;">
+            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                 <select id="serviceFilter" class="filter-input">
                     <option value="">All Services</option>
                 </select>
-                <input type="date" id="dateFilter" class="filter-input">
+                <div style="display: flex; align-items: center; gap: 4px;">
+                    <input type="date" id="dateFrom" class="filter-input" title="From date">
+                    <span style="color: var(--text-secondary); font-size: 0.8rem;">to</span>
+                    <input type="date" id="dateTo" class="filter-input" title="To date">
+                </div>
                 <select id="compareFilter" class="filter-input">
                     <option value="">No Comparison</option>
                     <option value="day">Day-over-Day</option>
                     <option value="week">Week-over-Week</option>
                 </select>
-                <div class="status-badge">
-                    <span class="status-dot"></span>
-                    Live System
+                <div class="status-badge" id="statusBadge">
+                    Auto-refresh: 60s
                 </div>
                 <div id="lastUpdated" class="last-updated" style="margin-top: 0; min-width: 150px;">Updating...</div>
             </div>
         </div>
 
-        <div class="grid">
+        <div id="errorBanner" class="error-banner">
+            Cannot reach the data service. Check that Cube.js is running and accessible.
+        </div>
+
+        <div id="emptyState" class="empty-state">
+            <!-- Shown when filters are active but return no data -->
+            <div id="emptyFiltered" style="display:none;">
+                <h3>No data for selected filters</h3>
+                <p>Try adjusting your date range or service filter. The current selection returned no metrics.</p>
+                <button onclick="resetFilters()" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border);border-radius:8px;background:white;cursor:pointer;font-size:0.9rem;">Reset Filters</button>
+            </div>
+            <!-- Shown when no data exists at all (fresh install / onboarding) -->
+            <div id="emptyOnboard" style="display:none;">
+                <h3>No data available</h3>
+                <p>Gravix hasn't received any events yet. Send your first event:</p>
+                <pre>curl -X POST http://localhost:8090/api/v1/facts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "event_id": "'$(uuidgen | tr A-F a-f)'",
+    "event_time": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+    "service": "my-service",
+    "method": "GET",
+    "path_template": "/api/v1/health",
+    "status_code": 200,
+    "latency_ms": 42
+  }'</pre>
+                <p style="margin-top: 12px;">Then wait for the rollup job to aggregate metrics (runs every 5 minutes).</p>
+            </div>
+        </div>
+
+        <div id="dashboardGrid" class="grid">
             <!-- Error Rate Card -->
             <div class="card">
                 <div class="loading-overlay" id="loading-error">
@@ -403,6 +595,22 @@
                 </div>
             </div>
 
+            <!-- Throughput Card -->
+            <div class="card">
+                <div class="loading-overlay" id="loading-throughput">
+                    <div class="loading-spinner"></div>
+                </div>
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Throughput</div>
+                        <div class="card-subtitle">Requests per minute over time</div>
+                    </div>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="throughputChart"></canvas>
+                </div>
+            </div>
+
             <!-- Top Failing Endpoints Card -->
             <div class="card" style="grid-column: span 2;">
                 <div class="loading-overlay" id="loading-endpoints">
@@ -431,13 +639,115 @@
                     </table>
                 </div>
             </div>
+
+            <!-- Service Events Card -->
+            <div class="card" style="grid-column: span 2;">
+                <div class="loading-overlay" id="loading-events">
+                    <div class="loading-spinner"></div>
+                </div>
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Service Events</div>
+                        <div class="card-subtitle">Deploys, restarts, and lifecycle events by service</div>
+                    </div>
+                </div>
+                <div id="events-container">
+                    <div id="events-empty" class="empty-state" style="padding: 24px;">
+                        <p>No service events recorded for this date.</p>
+                    </div>
+                    <table class="data-table" id="events-table" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>Service</th>
+                                <th>Event Type</th>
+                                <th>Count</th>
+                            </tr>
+                        </thead>
+                        <tbody id="events-body">
+                            <!-- Rows injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </main>
 
     <script>
         // --- CONFIGURATION ---
-        const CUBE_API_URL = "http://localhost:4000/cubejs-api/v1/load";
-        const REFRESH_INTERVAL_MS = 60000; // 1 minute auto-refresh
+        // Override via window.GRAVIX_CONFIG before this script, or edit config.js
+        const GRAVIX_CONFIG = Object.assign({
+            cubeApiUrl: "http://localhost:4000/cubejs-api/v1/load",
+            refreshIntervalMs: 60000,
+            staleThresholdMs: 10 * 60 * 1000 // 10 minutes
+        }, window.GRAVIX_CONFIG || {});
+
+        const CUBE_API_URL = GRAVIX_CONFIG.cubeApiUrl;
+        const REFRESH_INTERVAL_MS = GRAVIX_CONFIG.refreshIntervalMs;
+
+        // --- AUTH GATE ---
+        // Probes Cube.js with a trivial query. If the API returns 403/401,
+        // the user must enter CUBEJS_API_SECRET to proceed.
+        // If no secret is configured (open mode), the gate is skipped entirely.
+        let dashboardApiToken = sessionStorage.getItem('gravix_token') || '';
+
+        async function checkAuthRequired() {
+            try {
+                const resp = await fetch(CUBE_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: { measures: [], dimensions: [], limit: 1 } })
+                });
+                if (resp.status === 403 || resp.status === 401) {
+                    return true; // Auth required
+                }
+                return false; // No auth needed
+            } catch (e) {
+                return false; // Can't reach API — let the error banner handle it
+            }
+        }
+
+        async function tryAuth(password) {
+            try {
+                const resp = await fetch(CUBE_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': password
+                    },
+                    body: JSON.stringify({ query: { measures: [], dimensions: [], limit: 1 } })
+                });
+                return resp.status !== 403 && resp.status !== 401;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function showAuthGate() {
+            document.getElementById('authOverlay').classList.remove('hidden');
+            document.getElementById('authPassword').focus();
+        }
+
+        function hideAuthGate() {
+            document.getElementById('authOverlay').classList.add('hidden');
+        }
+
+        document.getElementById('authForm').addEventListener('submit', async () => {
+            const password = document.getElementById('authPassword').value;
+            const errorEl = document.getElementById('authError');
+            errorEl.style.display = 'none';
+            document.getElementById('authSubmit').textContent = 'Verifying...';
+
+            const ok = await tryAuth(password);
+            if (ok) {
+                dashboardApiToken = password;
+                sessionStorage.setItem('gravix_token', password);
+                hideAuthGate();
+                initDashboard();
+            } else {
+                errorEl.style.display = 'block';
+                document.getElementById('authSubmit').textContent = 'Sign In';
+            }
+        });
 
         // --- CHART DEFAULTS ---
         Chart.defaults.font.family = "'Inter', sans-serif";
@@ -449,88 +759,133 @@
 
         let charts = {}; // Store chart instances
         let availableServices = new Set();
+        let lastSuccessfulUpdate = null;
+        let hasConnectionError = false;
 
         // --- DATA FETCHING ---
+        function cubeHeaders() {
+            const h = { "Content-Type": "application/json" };
+            if (dashboardApiToken) h["Authorization"] = dashboardApiToken;
+            return h;
+        }
+
         async function fetchCubeData(measures, filters = [], compareDateRange = null) {
-            try {
-                const query = {
-                    measures: measures,
-                    dimensions: ["RequestMetricsMinute.bucketStart"],
-                    order: { "RequestMetricsMinute.bucketStart": "asc" },
-                    filters: filters
-                };
+            const query = {
+                measures: measures,
+                dimensions: ["RequestMetricsMinute.bucketStart"],
+                order: { "RequestMetricsMinute.bucketStart": "asc" },
+                filters: filters
+            };
 
-                if (compareDateRange) {
-                    query.compareDateRange = compareDateRange;
-                }
-
-                const response = await fetch(CUBE_API_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ query: query })
-                });
-
-                if (!response.ok) {
-                    console.error("Cube API Error:", await response.text());
-                    return [];
-                }
-
-                const result = await response.json();
-
-                // Cube returns results[0].data normally, but with comparison it might be different.
-                // In latest Cube, compareDateRange returns a multi-series structure or separate results.
-                let data = [];
-                if (result.results && result.results[0]) data = result.results[0].data;
-                else if (result.data) data = result.data;
-
-                return data;
-
-            } catch (e) {
-                console.error("Fetch failed:", e);
-                return [];
+            if (compareDateRange) {
+                query.compareDateRange = compareDateRange;
             }
+
+            const response = await fetch(CUBE_API_URL, {
+                method: "POST",
+                headers: cubeHeaders(),
+                body: JSON.stringify({ query: query })
+            });
+
+            if (!response.ok) {
+                throw new Error("Cube API returned " + response.status);
+            }
+
+            const result = await response.json();
+            let data = [];
+            if (result.results && result.results[0]) data = result.results[0].data;
+            else if (result.data) data = result.data;
+
+            return data;
         }
 
         async function fetchServices() {
-            try {
-                const response = await fetch(CUBE_API_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        query: {
-                            dimensions: ["RequestMetricsMinute.service"],
-                            order: { "RequestMetricsMinute.service": "asc" }
-                        }
-                    })
-                });
-                const result = await response.json();
-                let data = [];
-                if (result.data) data = result.data;
-                else if (result.results && result.results[0]) data = result.results[0].data;
-
-                const select = document.getElementById('serviceFilter');
-                // Clear existing options except first
-                while (select.options.length > 1) select.remove(1);
-
-                data.forEach(row => {
-                    const service = row["RequestMetricsMinute.service"];
-                    if (service && !availableServices.has(service)) {
-                        availableServices.add(service);
-                        const option = document.createElement("option");
-                        option.value = service;
-                        option.text = service;
-                        select.appendChild(option);
+            const response = await fetch(CUBE_API_URL, {
+                method: "POST",
+                headers: cubeHeaders(),
+                body: JSON.stringify({
+                    query: {
+                        dimensions: ["RequestMetricsMinute.service"],
+                        order: { "RequestMetricsMinute.service": "asc" }
                     }
-                });
+                })
+            });
+            const result = await response.json();
+            let data = [];
+            if (result.data) data = result.data;
+            else if (result.results && result.results[0]) data = result.results[0].data;
 
-            } catch (e) { console.error("Failed to fetch services", e); }
+            const select = document.getElementById('serviceFilter');
+            while (select.options.length > 1) select.remove(1);
+
+            data.forEach(row => {
+                const service = row["RequestMetricsMinute.service"];
+                if (service && !availableServices.has(service)) {
+                    availableServices.add(service);
+                    const option = document.createElement("option");
+                    option.value = service;
+                    option.text = service;
+                    select.appendChild(option);
+                }
+            });
+        }
+
+        // --- UI STATE HELPERS ---
+        function showError(show) {
+            const banner = document.getElementById('errorBanner');
+            banner.classList.toggle('visible', show);
+            hasConnectionError = show;
+        }
+
+        function hasActiveFilters() {
+            const service = document.getElementById('serviceFilter').value;
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+            const today = new Date().toISOString().split('T')[0];
+            // Filters are "active" if a service is selected or dates differ from today
+            return !!service || (dateFrom && dateFrom !== today) || (dateTo && dateTo !== today);
+        }
+
+        function showEmpty(show) {
+            document.getElementById('emptyState').classList.toggle('visible', show);
+            document.getElementById('dashboardGrid').style.display = show ? 'none' : 'grid';
+            if (show) {
+                const filtered = hasActiveFilters();
+                document.getElementById('emptyFiltered').style.display = filtered ? 'block' : 'none';
+                document.getElementById('emptyOnboard').style.display = filtered ? 'none' : 'block';
+            }
+        }
+
+        function resetFilters() {
+            document.getElementById('serviceFilter').value = '';
+            document.getElementById('dateFrom').valueAsDate = new Date();
+            document.getElementById('dateTo').valueAsDate = new Date();
+            saveFiltersToHash();
+            updateDashboard();
+        }
+
+        function updateFreshnessDisplay() {
+            const el = document.getElementById('lastUpdated');
+            if (!lastSuccessfulUpdate) {
+                el.textContent = 'No data yet';
+                el.className = 'last-updated';
+                return;
+            }
+            const ageMs = Date.now() - lastSuccessfulUpdate.getTime();
+            const timeStr = lastSuccessfulUpdate.toLocaleTimeString();
+            if (ageMs > GRAVIX_CONFIG.staleThresholdMs) {
+                el.innerHTML = 'Last updated: ' + timeStr + ' <span class="stale-warning">(stale)</span>';
+            } else {
+                el.textContent = 'Last updated: ' + timeStr;
+                el.className = 'last-updated';
+            }
         }
 
         // --- RENDERING ---
         async function updateDashboard() {
-            // Filters
             const service = document.getElementById('serviceFilter').value;
-            const date = document.getElementById('dateFilter').value;
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
             const compare = document.getElementById('compareFilter').value;
 
             const filters = [];
@@ -541,11 +896,24 @@
                     values: [service]
                 });
             }
-            if (date) {
+            if (dateFrom && dateTo && dateFrom !== dateTo) {
+                // Date range: from start of dateFrom to end of dateTo
+                filters.push({
+                    member: "RequestMetricsMinute.bucketStart",
+                    operator: "gte",
+                    values: [dateFrom + "T00:00:00"]
+                });
+                filters.push({
+                    member: "RequestMetricsMinute.bucketStart",
+                    operator: "lte",
+                    values: [dateTo + "T23:59:59"]
+                });
+            } else if (dateFrom) {
+                // Single day (from only, or from == to)
                 filters.push({
                     member: "RequestMetricsMinute.bucketStart",
                     operator: "contains",
-                    values: [date]
+                    values: [dateFrom]
                 });
             }
             if (currentDrilldownPath) {
@@ -560,32 +928,47 @@
             if (compare === 'day') compareDateRange = ['1 day ago', 'today'];
             if (compare === 'week') compareDateRange = ['7 days ago', 'today'];
 
+            // Save filter state to URL hash
+            saveFiltersToHash();
+
             // Show loading states if first load
             if (!charts['errorRate']) document.getElementById('loading-error').style.display = 'flex';
             if (!charts['latency']) document.getElementById('loading-latency').style.display = 'flex';
+            if (!charts['throughput']) document.getElementById('loading-throughput').style.display = 'flex';
             document.getElementById('loading-endpoints').style.display = 'flex';
 
             const lastUpdatedEl = document.getElementById('lastUpdated');
             lastUpdatedEl.textContent = 'Fetching data...';
 
             try {
-                // 1. Fetch Data
-                const [errorData, latencyData, endpointData] = await Promise.all([
+                const [errorData, latencyData, throughputData, endpointData] = await Promise.all([
                     fetchCubeData(["RequestMetricsMinute.errorRate"], filters, compareDateRange),
                     fetchCubeData(["RequestMetricsMinute.p95Latency"], filters, compareDateRange),
-                    // For the table, we want totals per endpoint, not a time-series
+                    fetchCubeData(["RequestMetricsMinute.requestCount"], filters, compareDateRange),
                     fetchEndPointsData(filters)
                 ]);
 
+                // Connection succeeded — clear any error banner
+                showError(false);
+
+                // Check if all data is empty
+                const totalData = errorData.length + latencyData.length + throughputData.length + endpointData.length;
+                if (totalData === 0) {
+                    showEmpty(true);
+                    lastSuccessfulUpdate = new Date();
+                    updateFreshnessDisplay();
+                    return;
+                }
+                showEmpty(false);
+
                 renderEndpointsTable(endpointData);
 
-                // 2. Process Data
                 const processSeries = (data, measure) => {
                     if (compareDateRange) {
                         const current = data.filter(d => d["RequestMetricsMinute.compareDateRange"] === "Current");
                         const previous = data.filter(d => d["RequestMetricsMinute.compareDateRange"] === "Previous");
                         return {
-                            labels: current.map(d => d["RequestMetricsMinute.bucketStart"].split(' ')[1]), // Just time for comparison
+                            labels: current.map(d => d["RequestMetricsMinute.bucketStart"].split(' ')[1]),
                             values: {
                                 current: current.map(d => d[measure]),
                                 previous: previous.map(d => d[measure])
@@ -600,8 +983,8 @@
 
                 const errorRes = processSeries(errorData, "RequestMetricsMinute.errorRate");
                 const latencyRes = processSeries(latencyData, "RequestMetricsMinute.p95Latency");
+                const throughputRes = processSeries(throughputData, "RequestMetricsMinute.requestCount");
 
-                // 3. Update/Create Charts
                 updateChart('errorRate', 'errorRateChart', 'Error Rate', errorRes.labels, errorRes.values, {
                     borderColor: '#ef4444',
                     backgroundColor: 'rgba(239, 68, 68, 0.1)',
@@ -615,17 +998,24 @@
                     yTitle: 'ms'
                 });
 
-                // Update timestamp
-                const now = new Date();
-                lastUpdatedEl.textContent = 'Last updated: ' + now.toLocaleTimeString();
+                updateChart('throughput', 'throughputChart', 'Requests', throughputRes.labels, throughputRes.values, {
+                    borderColor: '#22c55e',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    yTitle: 'count'
+                });
+
+                lastSuccessfulUpdate = new Date();
+                updateFreshnessDisplay();
 
             } catch (err) {
                 console.error("Dashboard update failed:", err);
-                lastUpdatedEl.textContent = 'Update failed';
+                showError(true);
+                updateFreshnessDisplay();
             } finally {
-                // Hide loading
                 document.getElementById('loading-error').style.display = 'none';
                 document.getElementById('loading-latency').style.display = 'none';
+                document.getElementById('loading-throughput').style.display = 'none';
+                document.getElementById('loading-endpoints').style.display = 'none';
             }
         }
 
@@ -706,40 +1096,103 @@
             }
         }
 
-        // --- INIT ---
-        // Set default date to today
-        document.getElementById('dateFilter').valueAsDate = new Date();
+        // --- URL HASH STATE ---
+        function saveFiltersToHash() {
+            const params = new URLSearchParams();
+            const service = document.getElementById('serviceFilter').value;
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+            const compare = document.getElementById('compareFilter').value;
+            if (service) params.set('service', service);
+            if (dateFrom) params.set('from', dateFrom);
+            if (dateTo && dateTo !== dateFrom) params.set('to', dateTo);
+            if (compare) params.set('compare', compare);
+            if (currentDrilldownPath) params.set('path', currentDrilldownPath);
+            const hash = params.toString();
+            if (hash) {
+                history.replaceState(null, '', '#' + hash);
+            } else {
+                history.replaceState(null, '', location.pathname);
+            }
+        }
 
-        fetchServices().then(() => {
-            updateDashboard();
-        });
+        function loadFiltersFromHash() {
+            const hash = location.hash.slice(1);
+            if (!hash) return;
+            const params = new URLSearchParams(hash);
+            if (params.has('service')) document.getElementById('serviceFilter').value = params.get('service');
+            if (params.has('from')) document.getElementById('dateFrom').value = params.get('from');
+            if (params.has('to')) document.getElementById('dateTo').value = params.get('to');
+            // Legacy: support old 'date' param
+            if (params.has('date') && !params.has('from')) document.getElementById('dateFrom').value = params.get('date');
+            if (params.has('compare')) document.getElementById('compareFilter').value = params.get('compare');
+            if (params.has('path')) {
+                currentDrilldownPath = params.get('path');
+                document.getElementById('default-header').style.display = 'none';
+                document.getElementById('drilldown-nav').style.display = 'flex';
+                document.getElementById('currentServiceTitle').textContent = currentDrilldownPath;
+            }
+        }
+
+        // --- INIT ---
+        document.getElementById('dateFrom').valueAsDate = new Date();
+        document.getElementById('dateTo').valueAsDate = new Date();
+
+        function initDashboard() {
+            loadFiltersFromHash(); // Restore from URL before first fetch
+            fetchServices()
+                .then(() => {
+                    loadFiltersFromHash(); // Re-apply after services list is populated
+                    updateDashboard();
+                })
+                .catch(() => {
+                    showError(true);
+                    document.getElementById('lastUpdated').textContent = 'Connection failed';
+                });
+        }
+
+        // Check if auth is required, show gate or proceed
+        (async function() {
+            const needsAuth = await checkAuthRequired();
+            if (needsAuth && !dashboardApiToken) {
+                showAuthGate();
+            } else if (needsAuth && dashboardApiToken) {
+                // Validate stored token
+                const valid = await tryAuth(dashboardApiToken);
+                if (valid) {
+                    initDashboard();
+                } else {
+                    sessionStorage.removeItem('gravix_token');
+                    dashboardApiToken = '';
+                    showAuthGate();
+                }
+            } else {
+                initDashboard();
+            }
+        })();
 
         // Listeners
         document.getElementById('serviceFilter').addEventListener('change', updateDashboard);
-        document.getElementById('dateFilter').addEventListener('change', updateDashboard);
+        document.getElementById('dateFrom').addEventListener('change', updateDashboard);
+        document.getElementById('dateTo').addEventListener('change', updateDashboard);
         document.getElementById('compareFilter').addEventListener('change', updateDashboard);
 
         async function fetchEndPointsData(filters) {
-            try {
-                const query = {
-                    measures: ["RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount", "RequestMetricsMinute.errorRate"],
-                    dimensions: ["RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"],
-                    order: { "RequestMetricsMinute.errorCount": "desc" },
-                    filters: filters,
-                    limit: 10
-                };
+            const query = {
+                measures: ["RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount", "RequestMetricsMinute.errorRate"],
+                dimensions: ["RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"],
+                order: { "RequestMetricsMinute.errorCount": "desc" },
+                filters: filters,
+                limit: 10
+            };
 
-                const response = await fetch(CUBE_API_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ query: query })
-                });
-                const result = await response.json();
-                return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
-            } catch (e) {
-                console.error("Endpoint fetch failed", e);
-                return [];
-            }
+            const response = await fetch(CUBE_API_URL, {
+                method: "POST",
+                headers: cubeHeaders(),
+                body: JSON.stringify({ query: query })
+            });
+            const result = await response.json();
+            return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
         }
 
         function renderEndpointsTable(data) {
@@ -791,7 +1244,105 @@
             updateDashboard();
         };
 
+        // --- SERVICE EVENTS ---
+        async function fetchServiceEvents(filters) {
+            const eventFilters = [];
+            const service = document.getElementById('serviceFilter').value;
+            if (service) {
+                eventFilters.push({
+                    member: "ServiceEventsDaily.service",
+                    operator: "equals",
+                    values: [service]
+                });
+            }
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+            if (dateFrom && dateTo && dateFrom !== dateTo) {
+                eventFilters.push({
+                    member: "ServiceEventsDaily.eventDay",
+                    operator: "gte",
+                    values: [dateFrom]
+                });
+                eventFilters.push({
+                    member: "ServiceEventsDaily.eventDay",
+                    operator: "lte",
+                    values: [dateTo]
+                });
+            } else if (dateFrom) {
+                eventFilters.push({
+                    member: "ServiceEventsDaily.eventDay",
+                    operator: "equals",
+                    values: [dateFrom]
+                });
+            }
+
+            const query = {
+                measures: ["ServiceEventsDaily.eventCount"],
+                dimensions: ["ServiceEventsDaily.service", "ServiceEventsDaily.eventType"],
+                order: { "ServiceEventsDaily.eventCount": "desc" },
+                filters: eventFilters,
+                limit: 20
+            };
+
+            const response = await fetch(CUBE_API_URL, {
+                method: "POST",
+                headers: cubeHeaders(),
+                body: JSON.stringify({ query: query })
+            });
+
+            if (!response.ok) return [];
+            const result = await response.json();
+            return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
+        }
+
+        function renderServiceEvents(data) {
+            const table = document.getElementById('events-table');
+            const empty = document.getElementById('events-empty');
+            const body = document.getElementById('events-body');
+            body.innerHTML = '';
+
+            if (!data || data.length === 0) {
+                table.style.display = 'none';
+                empty.style.display = 'block';
+                return;
+            }
+
+            table.style.display = 'table';
+            empty.style.display = 'none';
+
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                const eventType = row["ServiceEventsDaily.eventType"] || "unknown";
+                const badgeClass = eventType.includes("deploy") ? "badge-success" : "badge-error";
+                tr.innerHTML = `
+                    <td><strong>${row["ServiceEventsDaily.service"]}</strong></td>
+                    <td><span class="${badgeClass}">${eventType}</span></td>
+                    <td>${row["ServiceEventsDaily.eventCount"]}</td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
+        // Extend updateDashboard to also fetch events
+        const _originalUpdateDashboard = updateDashboard;
+        updateDashboard = async function() {
+            await _originalUpdateDashboard();
+            // Fetch service events separately (non-blocking to main dashboard)
+            try {
+                document.getElementById('loading-events').style.display = 'flex';
+                const eventsData = await fetchServiceEvents();
+                renderServiceEvents(eventsData);
+            } catch (err) {
+                console.warn("Service events fetch failed:", err);
+                renderServiceEvents([]);
+            } finally {
+                document.getElementById('loading-events').style.display = 'none';
+            }
+        };
+
         setInterval(updateDashboard, REFRESH_INTERVAL_MS);
+        // Update freshness display every 30s to catch stale data between refreshes
+        setInterval(updateFreshnessDisplay, 30000);
     </script>
 </body>
 
