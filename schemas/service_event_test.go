@@ -121,6 +121,38 @@ func TestServiceEvent_Validate(t *testing.T) {
 			expectErr: true,
 			errMsg:    "max length",
 		},
+		{
+			name: "Empty Service String",
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
+				Service:   "",
+				EventType: "deploy_started",
+			},
+			expectErr: true,
+			errMsg:    "service is required",
+		},
+		{
+			name: "Empty EventType String",
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
+				Service:   "s",
+				EventType: "",
+			},
+			expectErr: true,
+			errMsg:    "event_type is required",
+		},
+		{
+			name: "Valid Event With No Properties",
+			input: &ServiceEvent{
+				EventId:   validUUIDv7,
+				EventTime: timestamppb.Now(),
+				Service:   "api-service",
+				EventType: "health_check",
+			},
+			expectErr: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 
     <style>
         /* Auth Gate */
@@ -540,7 +540,7 @@
             <div id="emptyFiltered" style="display:none;">
                 <h3>No data for selected filters</h3>
                 <p>Try adjusting your date range or service filter. The current selection returned no metrics.</p>
-                <button onclick="resetFilters()" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border);border-radius:8px;background:white;cursor:pointer;font-size:0.9rem;">Reset Filters</button>
+                <button onclick="resetFilters()" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border-color);border-radius:8px;background:white;cursor:pointer;font-size:0.9rem;">Reset Filters</button>
             </div>
             <!-- Shown when no data exists at all (fresh install / onboarding) -->
             <div id="emptyOnboard" style="display:none;">
@@ -761,6 +761,14 @@
         let availableServices = new Set();
         let lastSuccessfulUpdate = null;
         let hasConnectionError = false;
+
+        // --- SECURITY: HTML escape helper to prevent XSS ---
+        function escapeHtml(str) {
+            if (str == null) return '';
+            const div = document.createElement('div');
+            div.textContent = String(str);
+            return div.innerHTML;
+        }
 
         // --- DATA FETCHING ---
         function cubeHeaders() {
@@ -1144,6 +1152,9 @@
                 .then(() => {
                     loadFiltersFromHash(); // Re-apply after services list is populated
                     updateDashboard();
+                    // Start auto-refresh only after dashboard is initialized
+                    setInterval(updateDashboard, REFRESH_INTERVAL_MS);
+                    setInterval(updateFreshnessDisplay, 30000);
                 })
                 .catch(() => {
                     showError(true);
@@ -1204,13 +1215,19 @@
                 const errorRate = (row["RequestMetricsMinute.errorRate"] * 100).toFixed(2);
                 const rateBadge = row["RequestMetricsMinute.errorRate"] > 0.01 ? 'badge-error' : 'badge-success';
 
+                const pathVal = escapeHtml(row["RequestMetricsMinute.pathTemplate"]);
+                const methodVal = escapeHtml(row["RequestMetricsMinute.method"]);
+                const reqCount = escapeHtml(row["RequestMetricsMinute.requestCount"]);
+                const errCount = escapeHtml(row["RequestMetricsMinute.errorCount"]);
                 tr.innerHTML = `
-                    <td><a href="#" class="path-link" data-path="${row["RequestMetricsMinute.pathTemplate"]}">${row["RequestMetricsMinute.pathTemplate"]}</a></td>
-                    <td><code>${row["RequestMetricsMinute.method"]}</code></td>
-                    <td>${row["RequestMetricsMinute.requestCount"]}</td>
-                    <td>${row["RequestMetricsMinute.errorCount"]}</td>
+                    <td><a href="#" class="path-link">${pathVal}</a></td>
+                    <td><code>${methodVal}</code></td>
+                    <td>${reqCount}</td>
+                    <td>${errCount}</td>
                     <td><span class="${rateBadge}">${errorRate}%</span></td>
                 `;
+                // Set data-path safely via DOM API to prevent attribute injection
+                tr.querySelector('.path-link').dataset.path = row["RequestMetricsMinute.pathTemplate"];
                 body.appendChild(tr);
             });
 
@@ -1315,9 +1332,9 @@
                 const eventType = row["ServiceEventsDaily.eventType"] || "unknown";
                 const badgeClass = eventType.includes("deploy") ? "badge-success" : "badge-error";
                 tr.innerHTML = `
-                    <td><strong>${row["ServiceEventsDaily.service"]}</strong></td>
-                    <td><span class="${badgeClass}">${eventType}</span></td>
-                    <td>${row["ServiceEventsDaily.eventCount"]}</td>
+                    <td><strong>${escapeHtml(row["ServiceEventsDaily.service"])}</strong></td>
+                    <td><span class="${badgeClass}">${escapeHtml(eventType)}</span></td>
+                    <td>${escapeHtml(row["ServiceEventsDaily.eventCount"])}</td>
                 `;
                 body.appendChild(tr);
             });
@@ -1340,9 +1357,8 @@
             }
         };
 
-        setInterval(updateDashboard, REFRESH_INTERVAL_MS);
-        // Update freshness display every 30s to catch stale data between refreshes
-        setInterval(updateFreshnessDisplay, 30000);
+        // Auto-refresh intervals are now started inside initDashboard() to avoid
+        // firing during the auth gate.
     </script>
 </body>
 

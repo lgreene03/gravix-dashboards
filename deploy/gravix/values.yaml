@@ -76,9 +76,10 @@ storage:
     enabled: true
     image:
       repository: trinodb/trino
-      tag: "451"
+      tag: "351"
   cube:
     enabled: true
+    devMode: false  # Set to true only for local development
     image:
       repository: cubejs/cube
       tag: "v0.35"

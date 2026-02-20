@@ -1,5 +1,7 @@
 # Gravix
 
+[![CI](https://github.com/lgreene03/gravix-dashboards/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/gravix-dashboards/actions/workflows/ci.yml)
+
 Gravix is a low-cost, data-first observability system for HTTP service health monitoring. It ingests raw request events (facts), aggregates them into minute-level metrics, and visualizes them on a dashboard.
 
 **What it is:** A self-hosted alternative for teams that need basic service health visibility (latency percentiles, error rates, throughput) without the cost and complexity of full observability platforms.

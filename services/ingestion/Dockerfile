@@ -7,10 +7,12 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o ingestion-service ./services/ingestion
 
-FROM alpine:3.18
+FROM alpine:3.21
+RUN addgroup -S gravix && adduser -S gravix -G gravix
 WORKDIR /app
 COPY --from=builder /app/ingestion-service .
-RUN mkdir -p /app/data/raw
+RUN mkdir -p /app/data/raw && chown -R gravix:gravix /app/data
+USER gravix
 
 # Expose port
 EXPOSE 8080
