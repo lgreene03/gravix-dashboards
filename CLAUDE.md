@@ -54,7 +54,7 @@ helm install gravix ./deploy/gravix
 | Grafana | http://localhost:3000 |
 | MinIO Console | http://localhost:9001 |
 
-Local API key (dev only): `secret-token-123`
+Local API key: set in `.env` (see `.env.example`)
 
 ## Architecture
 

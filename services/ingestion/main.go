@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -441,7 +442,7 @@ func authMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if apiKey != "" {
 			reqKey := r.Header.Get("X-API-Key")
-			if reqKey != apiKey {
+			if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiKey)) != 1 {
 				writeErrorJSON(w, http.StatusUnauthorized, "invalid or missing X-API-Key header")
 				return
 			}

@@ -1,0 +1,14 @@
+# Build artifacts
+data/
+dashboards/
+storage/
+deploy/
+.git/
+.github/
+.env
+.env.*
+*.md
+bin/
+load_generator
+ingestion-service
+rollup-job

@@ -1,8 +1,14 @@
 # Binaries
-ingestion-service
-load-generator
-sink-writer
-rollup-job
+/ingestion-service
+/ingestion
+/load-generator
+/load_generator
+/sink-writer
+/rollup-job
+/request_metrics_minute
+/service_events_daily
+/purge
+bin/
 *.o
 *.a
 

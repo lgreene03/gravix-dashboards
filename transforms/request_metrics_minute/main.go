@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,6 +90,7 @@ type Aggregator struct {
 
 // acquireLock creates an exclusive lock file to prevent concurrent rollup runs.
 // Returns the lock file (caller must close+remove) or an error if already locked.
+// If a stale lock from a dead process is found, it is automatically cleaned up.
 func acquireLock(dir string) (*os.File, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create lock dir: %w", err)
@@ -96,12 +99,50 @@ func acquireLock(dir string) (*os.File, error) {
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil, fmt.Errorf("rollup already running (lock file exists: %s)", lockPath)
+			// Check if the lock holder is still alive
+			if isLockStale(lockPath) {
+				log.Printf("Removing stale lock file %s (owner process is dead)", lockPath)
+				os.Remove(lockPath)
+				// Retry once after removing stale lock
+				f, err = os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+				if err != nil {
+					return nil, fmt.Errorf("failed to acquire lock after stale cleanup: %w", err)
+				}
+			} else {
+				return nil, fmt.Errorf("rollup already running (lock file exists: %s)", lockPath)
+			}
+		} else {
+			return nil, fmt.Errorf("failed to acquire lock: %w", err)
 		}
-		return nil, fmt.Errorf("failed to acquire lock: %w", err)
 	}
 	fmt.Fprintf(f, "pid=%d started=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
 	return f, nil
+}
+
+// isLockStale reads the PID from a lock file and checks if the process is alive.
+func isLockStale(lockPath string) bool {
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return true // Can't read → treat as stale
+	}
+	line := strings.TrimSpace(string(data))
+	// Parse "pid=12345 started=..."
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return true
+	}
+	pidStr := strings.TrimPrefix(parts[0], "pid=")
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return true
+	}
+	// Signal 0 checks if process exists without sending a signal
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return true
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err != nil // If signal fails, process is dead → stale
 }
 
 func releaseLock(f *os.File) {
@@ -297,16 +338,14 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 	// Output Object: warehouse/request_metrics_minute/metrics_<uuid>_<day>.parquet
 	outputPrefix := strings.TrimPrefix(outputDir, "./data/")
 
-	// Idempotency: Clear previous objects for this day
-	// (List + Delete)
-	existing, _ := store.List(ctx, outputPrefix)
-	for _, k := range existing {
-		if strings.Contains(k, dayStr) {
-			store.Delete(ctx, k)
-		}
-	}
-
 	if len(aggs) == 0 {
+		// Idempotency: clear stale output even when no new data
+		existing, _ := store.List(ctx, outputPrefix)
+		for _, k := range existing {
+			if strings.Contains(k, dayStr) {
+				store.Delete(ctx, k)
+			}
+		}
 		log.Printf("No data found for %s, partition cleared.", dayStr)
 		return nil
 	}
@@ -359,8 +398,19 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		return err
 	}
 
+	// Write new file FIRST, then delete old files (write-then-swap).
+	// This ensures that if we crash between write and delete, stale data
+	// remains instead of no data at all.
 	if err := store.Put(ctx, destKey, bytes.NewReader(buf.Bytes())); err != nil {
 		return fmt.Errorf("failed to upload metrics: %w", err)
+	}
+
+	// Idempotency: remove previous objects for this day (now safe -- new file exists)
+	existing, _ := store.List(ctx, outputPrefix)
+	for _, k := range existing {
+		if strings.Contains(k, dayStr) && k != destKey {
+			store.Delete(ctx, k)
+		}
 	}
 
 	log.Printf("Uploaded %d metrics rows to %s", len(metrics), destKey)

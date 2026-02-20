@@ -36,7 +36,7 @@ spec:
             - name: CUBEJS_DB_USER
               value: "trino"
             - name: CUBEJS_DEV_MODE
-              value: "true"
+              value: "{{ .Values.storage.cube.devMode | default false }}"
             {{- if .Values.global.cubeApiSecret }}
             - name: CUBEJS_API_SECRET
               valueFrom:

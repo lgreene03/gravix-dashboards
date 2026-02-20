@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +22,29 @@ import (
 
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 )
+
+// failingStore is a mock ObjectStore where Put always returns an error.
+type failingStore struct{}
+
+func (f *failingStore) Put(_ context.Context, _ string, _ io.Reader) error {
+	return errors.New("simulated S3 upload failure")
+}
+
+func (f *failingStore) Get(_ context.Context, _ string) (io.ReadCloser, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *failingStore) Delete(_ context.Context, _ string) error {
+	return errors.New("not implemented")
+}
+
+func (f *failingStore) List(_ context.Context, _ string) ([]string, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *failingStore) Exists(_ context.Context, _ string) (bool, error) {
+	return false, errors.New("not implemented")
+}
 
 // newUUIDv7 generates a fresh UUIDv7 string for test data.
 func newUUIDv7(t *testing.T) string {
@@ -436,5 +464,42 @@ func TestSplitJSONL_EmptyLines(t *testing.T) {
 	lines := splitJSONL(input)
 	if len(lines) != 2 {
 		t.Errorf("expected 2 non-empty lines, got %d", len(lines))
+	}
+}
+
+// TestUploadFailure_PreservesLocalFile is a regression test for the S3 upload
+// data-loss bug. When store.Put() fails, the local batch file MUST be preserved
+// so it can be retried later (e.g. on the next startupScan).
+func TestUploadFailure_PreservesLocalFile(t *testing.T) {
+	bufDir := t.TempDir()
+
+	// Create a DurableSink backed by a store that always fails on Put
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ds := &DurableSink{
+		bufferDir:   bufDir,
+		store:       &failingStore{},
+		activeFiles: make(map[string]*os.File),
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+
+	// Simulate a rotated batch file waiting for upload
+	topicDir := filepath.Join(bufDir, "request_facts")
+	if err := os.MkdirAll(topicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	batchPath := filepath.Join(topicDir, "batch_test_12345.jsonl")
+	if err := os.WriteFile(batchPath, []byte(`{"event":"test"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt upload — should fail but NOT delete the file
+	ds.uploadFile("request_facts", batchPath, time.Now().UTC())
+
+	// Verify the local file still exists
+	if _, err := os.Stat(batchPath); os.IsNotExist(err) {
+		t.Fatal("REGRESSION: local batch file was deleted after upload failure — data loss bug!")
 	}
 }
