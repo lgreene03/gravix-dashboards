@@ -189,10 +189,6 @@ func TestValidateServiceEvent_InvalidEventID(t *testing.T) {
 	}
 }
 
-func ptr(s string) *string {
-	return &s
-}
-
 func TestParseServiceEvent_Valid(t *testing.T) {
 	validJSON := `{
 		"event_id": "018b3e34-5b6c-7e8f-9a0b-1c2d3e4f5a6b",

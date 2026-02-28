@@ -22,6 +22,7 @@ import (
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -67,7 +68,7 @@ var (
 func init() {
 	prometheus.MustRegister(ingestionRequestsTotal)
 	prometheus.MustRegister(ingestionBatchSizeBytes)
-	prometheus.MustRegister(prometheus.NewBuildInfoCollector())
+	prometheus.MustRegister(collectors.NewBuildInfoCollector())
 	prometheus.MustRegister(ingestionFsyncDurationSeconds)
 }
 
