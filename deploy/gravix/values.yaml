@@ -2,16 +2,46 @@
 # This is a YAML-formatted file.
 
 global:
-  # IMPORTANT: Override these in a separate values file or --set flags.
-  # Do NOT commit real secrets here.
-  apiKey: "change-me-to-a-real-secret"
+  # REQUIRED: Override these in a separate values file or --set flags.
+  # Deploy will fail if these are left empty.
+  apiKey: ""
   cubeApiSecret: ""
+
+  # Container registry configuration.
+  # For GHCR: ghcr.io/<org>/gravix
+  # For ECR:  <account>.dkr.ecr.<region>.amazonaws.com/gravix
+  imageRegistry: ""
+
+  # Pull secrets for private registries.
+  # Create with: kubectl create secret docker-registry gravix-registry \
+  #   --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+  imagePullSecrets: []
+  #  - name: gravix-registry
+
   storage:
     endpoint: "http://gravix-minio:9000"
     region: "us-east-1"
     bucket: "gravix"
-    accessKey: "admin"
-    secretKey: "change-me-to-a-real-secret"
+    accessKey: ""
+    secretKey: ""
+
+# External Secrets Operator integration.
+# When enabled, secrets are pulled from an external provider (AWS Secrets Manager,
+# HashiCorp Vault, GCP Secret Manager) instead of being passed via Helm values.
+# Requires: External Secrets Operator installed in the cluster.
+externalSecrets:
+  enabled: false
+  # refreshInterval: "1h"        # How often to sync secrets from the provider
+  # secretStoreRef:
+  #   name: "gravix-secret-store" # Name of the ClusterSecretStore/SecretStore
+  #   kind: "ClusterSecretStore"
+  # remoteBase: "gravix/prod"     # Base path/prefix in the secret provider
+  # property: false               # Set true if secrets are stored as JSON properties in a single key
+
+# Network policy enforcement. Requires a CNI that supports NetworkPolicy
+# (Calico, Cilium, etc.). Safe to enable — no-op if CNI doesn't support it.
+networkPolicies:
+  enabled: false
 
 ingestion:
   enabled: true
@@ -34,6 +64,7 @@ ingestion:
     enabled: true
     size: 1Gi
     mountPath: /app/data
+    # storageClass: ""  # Use cluster default if empty. Set to "gp3" (AWS), "pd-ssd" (GCP), etc.
 
 loadGenerator:
   enabled: true
@@ -63,6 +94,11 @@ retentionJob:
   schedule: "0 3 * * *" # Daily at 03:00 UTC
   retentionDays: 30
 
+dashboard:
+  image:
+    repository: nginx
+    tag: "1.25-alpine"
+
 storage:
   minio:
     enabled: true
@@ -72,6 +108,7 @@ storage:
     persistence:
       enabled: true
       size: 10Gi
+      # storageClass: ""  # Use cluster default if empty
   trino:
     enabled: true
     image:
@@ -83,6 +120,15 @@ storage:
     image:
       repository: cubejs/cube
       tag: "v0.35"
+
+# cert-manager ClusterIssuer for automatic TLS certificates.
+# Requires: cert-manager installed in the cluster.
+# See: https://cert-manager.io/docs/installation/
+certManager:
+  enabled: false
+  # email: ""                     # REQUIRED when enabled — Let's Encrypt contact email
+  # issuerName: "letsencrypt-prod" # Name of the ClusterIssuer to create
+  # solver: []                    # Custom ACME solver config (defaults to HTTP-01 via ingress)
 
 ingress:
   enabled: false
@@ -99,8 +145,52 @@ ingress:
           service: ingestion
   tls: []
 
+# Monitoring and observability.
+# Requires: Prometheus Operator (kube-prometheus-stack) installed in the cluster.
+# Without the operator, pods still expose /metrics via annotation-based scraping.
+monitoring:
+  # ServiceMonitor CRDs — auto-discovered by Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    # interval: "15s"                # Scrape interval
+    # scrapeTimeout: "10s"           # Scrape timeout
+    # labels: {}                     # Additional labels for Prometheus selector matching
+    # metricRelabelings: []          # Metric relabeling rules
+
+  # PrometheusRule CRD — alert rules managed by Prometheus Operator
+  prometheusRule:
+    enabled: false
+    # labels: {}                     # Additional labels for Prometheus selector matching
+
+  # Grafana dashboard provisioning via ConfigMap
+  grafana:
+    dashboards:
+      enabled: false
+      # annotations: {}              # Extra annotations for the dashboard ConfigMap
+
 autoscaling:
   enabled: false
   minReplicas: 2
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
+
+# Namespace resource limits. Enable in production to prevent runaway consumption.
+resourceQuota:
+  enabled: false
+  cpu: "4"            # Total CPU requests across all pods
+  memory: "8Gi"       # Total memory requests across all pods
+  limitsCpu: "8"      # Total CPU limits
+  limitsMemory: "16Gi"  # Total memory limits
+  pvcs: "5"           # Max PersistentVolumeClaims
+  pods: "30"          # Max pods in namespace
+
+# S3/MinIO data backup. Creates point-in-time snapshots of raw/ and warehouse/
+# prefixes. Backups are stored in the same bucket under a backups/ prefix
+# (or in a separate destinationBucket for cross-region DR).
+backup:
+  enabled: false
+  schedule: "0 2 * * *"          # Daily at 02:00 UTC (before retention at 03:00)
+  retentionDays: 7               # Keep backup snapshots for 7 days
+  # prefix: "backups"            # S3 prefix for backup snapshots
+  # destinationBucket: ""        # Separate bucket for cross-region DR
+  # activeDeadlineSeconds: 3600  # Max runtime for backup job

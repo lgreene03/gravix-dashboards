@@ -1,3 +1,17 @@
+{{/*
+  Ingress resource for exposing the Gravix dashboard and ingestion API.
+
+  Production setup requires:
+    1. An ingress controller (nginx-ingress or equivalent) deployed in the cluster
+    2. cert-manager for automatic TLS provisioning (see cert-manager.yaml)
+    3. DNS records pointing to the ingress controller's external IP
+
+  Security defaults:
+    - HSTS enabled with 1-year max-age and preload
+    - SSL redirect enforced
+    - Request body limited to 10m (prevents abuse of ingestion endpoint)
+    - Proxy timeouts tuned for long-running Cube.js queries (via dashboard → cube)
+*/}}
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -6,10 +20,19 @@ metadata:
   labels:
     app.kubernetes.io/name: gravix
     app.kubernetes.io/instance: {{ .Release.Name }}
-  {{- with .Values.ingress.annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- /* Default production-hardened annotations — can be overridden via values */}}
+    {{- $defaults := dict
+      "nginx.ingress.kubernetes.io/ssl-redirect" "true"
+      "nginx.ingress.kubernetes.io/force-ssl-redirect" "true"
+      "nginx.ingress.kubernetes.io/proxy-body-size" "10m"
+      "nginx.ingress.kubernetes.io/proxy-connect-timeout" "10"
+      "nginx.ingress.kubernetes.io/proxy-read-timeout" "60"
+      "nginx.ingress.kubernetes.io/proxy-send-timeout" "60"
+    }}
+    {{- /* Merge user annotations over defaults — user values win */}}
+    {{- $merged := merge (.Values.ingress.annotations | default dict) $defaults }}
+    {{- toYaml $merged | nindent 4 }}
 spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}

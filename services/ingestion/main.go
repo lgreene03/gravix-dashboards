@@ -77,12 +77,14 @@ type RateLimiter struct {
 	tokens    atomic.Int64
 	rate      int64 // tokens added per second
 	maxTokens int64 // burst capacity
+	stopCh    chan struct{}
 }
 
 func NewRateLimiter(ratePerSecond, burst int64) *RateLimiter {
 	rl := &RateLimiter{
 		rate:      ratePerSecond,
 		maxTokens: burst,
+		stopCh:    make(chan struct{}),
 	}
 	rl.tokens.Store(burst)
 	go rl.refill()
@@ -92,14 +94,28 @@ func NewRateLimiter(ratePerSecond, burst int64) *RateLimiter {
 func (rl *RateLimiter) refill() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		current := rl.tokens.Load()
-		newTokens := current + rl.rate
-		if newTokens > rl.maxTokens {
-			newTokens = rl.maxTokens
+	for {
+		select {
+		case <-rl.stopCh:
+			return
+		case <-ticker.C:
+			for {
+				current := rl.tokens.Load()
+				newTokens := current + rl.rate
+				if newTokens > rl.maxTokens {
+					newTokens = rl.maxTokens
+				}
+				if current == newTokens || rl.tokens.CompareAndSwap(current, newTokens) {
+					break
+				}
+			}
 		}
-		rl.tokens.Store(newTokens)
 	}
+}
+
+// Close stops the rate limiter's background goroutine.
+func (rl *RateLimiter) Close() {
+	close(rl.stopCh)
 }
 
 // Allow returns true if a request is permitted, consuming one token.
@@ -132,6 +148,7 @@ type DurableSink struct {
 
 	activeFiles map[string]*os.File
 	mu          sync.Mutex
+	uploadWg    sync.WaitGroup // tracks in-flight upload goroutines
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -156,6 +173,9 @@ func NewDurableSink(bufferDir string, store storage.ObjectStore) (*DurableSink, 
 
 	// Background: File Rotation & Upload Loop
 	go ds.backgroundRotationLoop()
+
+	// Background: Periodic retry for failed uploads
+	go ds.retryLoop()
 
 	return ds, nil
 }
@@ -202,14 +222,85 @@ func (ds *DurableSink) Write(topic string, data []byte) error {
 	return nil
 }
 
+// WriteBatch writes multiple records to the buffer in a single fsync call.
+func (ds *DurableSink) WriteBatch(topic string, records [][]byte) error {
+	if len(records) == 0 {
+		return nil
+	}
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	f, ok := ds.activeFiles[topic]
+	if !ok {
+		topicDir := filepath.Join(ds.bufferDir, topic)
+		if err := os.MkdirAll(topicDir, 0755); err != nil {
+			return fmt.Errorf("failed to create topic buffer dir: %w", err)
+		}
+		path := filepath.Join(topicDir, "current.jsonl")
+		var err error
+		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to open buffer file %s: %w", path, err)
+		}
+		ds.activeFiles[topic] = f
+	}
+
+	// Write all records, then fsync once
+	for _, data := range records {
+		if _, err := f.Write(data); err != nil {
+			return fmt.Errorf("write error: %w", err)
+		}
+		if _, err := f.Write([]byte("\n")); err != nil {
+			return fmt.Errorf("newline write error: %w", err)
+		}
+	}
+
+	syncStart := time.Now()
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("fsync error: %w", err)
+	}
+	ingestionFsyncDurationSeconds.WithLabelValues(topic).Observe(time.Since(syncStart).Seconds())
+
+	return nil
+}
+
 func (ds *DurableSink) Close() error {
 	ds.cancel()
+	// Final rotation to flush any buffered data before shutdown
+	ds.rotateAll()
+	// Wait for all in-flight uploads to finish (with timeout)
+	done := make(chan struct{})
+	go func() {
+		ds.uploadWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Println("All uploads completed before shutdown.")
+	case <-time.After(15 * time.Second):
+		log.Println("Warning: timed out waiting for uploads to finish during shutdown.")
+	}
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	for _, f := range ds.activeFiles {
 		f.Close()
 	}
 	return nil
+}
+
+// retryLoop periodically scans for failed uploads and retries them.
+func (ds *DurableSink) retryLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ds.ctx.Done():
+			return
+		case <-ticker.C:
+			ds.startupScan()
+		}
+	}
 }
 
 // backgroundRotationLoop runs every minute to rotate active files
@@ -278,7 +369,11 @@ func (ds *DurableSink) rotateTopic(topic string) {
 	}
 
 	// 3. Trigger Upload (Async from the lock, but we call it here for MVP simplicity)
-	go ds.uploadFile(topic, batchPath, time.Now().UTC())
+	ds.uploadWg.Add(1)
+	go func() {
+		defer ds.uploadWg.Done()
+		ds.uploadFile(topic, batchPath, time.Now().UTC())
+	}()
 }
 
 // uploadFile uploads the local batch to the object store
@@ -343,10 +438,9 @@ func main() {
 
 	apiKey := os.Getenv("API_KEY")
 	if apiKey == "" {
-		log.Println("WARNING: API_KEY environment variable not set. Authentication disabled.")
-	} else {
-		log.Println("API Key authentication enabled.")
+		log.Fatal("FATAL: API_KEY environment variable is required. Set API_KEY to enable the ingestion service.")
 	}
+	log.Println("API Key authentication enabled.")
 
 	bufferDir := filepath.Join(*baseDir, "buffer")
 	rawDir := filepath.Join(*baseDir, "raw")
@@ -384,6 +478,7 @@ func main() {
 
 	// Rate limiter: 100 requests/sec with burst of 200
 	rl := NewRateLimiter(100, 200)
+	defer rl.Close()
 
 	// Wrap handlers with rate limiting + auth middleware
 	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMiddleware(apiKey, handleFacts(sink))))
@@ -410,10 +505,11 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", *port)
 	srv := &http.Server{
-		Addr:         addr,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:           addr,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB max header size
 	}
 
 	// Graceful shutdown: listen for SIGINT/SIGTERM
@@ -437,15 +533,13 @@ func main() {
 	log.Println("Server stopped gracefully.")
 }
 
-// authMiddleware checks for X-API-Key header if apiKey is configured
+// authMiddleware checks for X-API-Key header. API key is always required.
 func authMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if apiKey != "" {
-			reqKey := r.Header.Get("X-API-Key")
-			if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiKey)) != 1 {
-				writeErrorJSON(w, http.StatusUnauthorized, "invalid or missing X-API-Key header")
-				return
-			}
+		reqKey := r.Header.Get("X-API-Key")
+		if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiKey)) != 1 {
+			writeErrorJSON(w, http.StatusUnauthorized, "invalid or missing X-API-Key header")
+			return
 		}
 		next(w, r)
 	}
@@ -529,7 +623,7 @@ func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		accepted := 0
+		var validRecords [][]byte
 		var errors []string
 		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
 
@@ -550,13 +644,19 @@ func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
 				continue
 			}
 
-			if err := sink.Write("request_facts", cleanData); err != nil {
-				log.Printf("Sink write error (batch line %d): %v", i+1, err)
+			validRecords = append(validRecords, cleanData)
+		}
+
+		// Write all valid records in a single batch (one fsync)
+		if len(validRecords) > 0 {
+			if err := sink.WriteBatch("request_facts", validRecords); err != nil {
+				log.Printf("Sink batch write error: %v", err)
 				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist facts")
 				return
 			}
-			accepted++
 		}
+
+		accepted := len(validRecords)
 
 		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200").Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(body)))

@@ -1,0 +1,108 @@
+name: Release
+
+# Creates a GitHub Release with changelog when a semver tag is pushed.
+# The CI workflow handles building and tagging images with the semver version.
+#
+# Usage:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# This triggers:
+#   1. CI workflow → builds images tagged with 1.0.0 and 1.0
+#   2. This workflow → creates GitHub Release with auto-generated notes
+#   3. Deploy workflow can then be manually triggered with tag "1.0.0"
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: ${VERSION}"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -2 | tail -1)
+
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$GITHUB_REF_NAME" ]; then
+            echo "First release — no previous tag found"
+            RANGE="HEAD"
+          else
+            echo "Changes since ${PREV_TAG}"
+            RANGE="${PREV_TAG}..${GITHUB_REF_NAME}"
+          fi
+
+          # Generate changelog grouped by type
+          {
+            echo "## What's Changed"
+            echo ""
+
+            # Features
+            FEATS=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^feat" 2>/dev/null || true)
+            if [ -n "$FEATS" ]; then
+              echo "### Features"
+              echo "$FEATS"
+              echo ""
+            fi
+
+            # Bug fixes
+            FIXES=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^fix" 2>/dev/null || true)
+            if [ -n "$FIXES" ]; then
+              echo "### Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+
+            # Other changes
+            OTHER=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^feat" --grep="^fix" --invert-grep 2>/dev/null || true)
+            if [ -n "$OTHER" ]; then
+              echo "### Other Changes"
+              echo "$OTHER"
+              echo ""
+            fi
+
+            echo "## Deployment"
+            echo ""
+            echo '```bash'
+            echo "# Deploy to staging"
+            echo "gh workflow run deploy.yml -f environment=staging -f image_tag=${{ steps.version.outputs.version }}"
+            echo ""
+            echo "# Deploy to production (after staging verification)"
+            echo "gh workflow run deploy.yml -f environment=production -f image_tag=${{ steps.version.outputs.version }}"
+            echo '```'
+            echo ""
+            echo "## Container Images"
+            echo ""
+            echo "| Image | Tag |"
+            echo "|-------|-----|"
+            echo "| \`ghcr.io/${{ github.repository }}-ingestion\` | \`${{ steps.version.outputs.version }}\` |"
+            echo "| \`ghcr.io/${{ github.repository }}-rollup\` | \`${{ steps.version.outputs.version }}\` |"
+            echo "| \`ghcr.io/${{ github.repository }}-load-generator\` | \`${{ steps.version.outputs.version }}\` |"
+          } > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Gravix ${{ github.ref_name }}"
+          body_path: /tmp/release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          generate_release_notes: false

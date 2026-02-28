@@ -233,20 +233,43 @@ func TestHandleEvents_MissingContentType(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_NoKeyConfigured(t *testing.T) {
+func TestAuthMiddleware_EmptyKeyRejectsAll(t *testing.T) {
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
 
+	// With fail-closed auth, an empty configured key still requires matching
+	handler := authMiddleware("", next)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-API-Key", "some-key")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if called {
+		t.Error("handler should NOT be called when configured key is empty and request has a non-empty key")
+	}
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_EmptyKeyAllowsEmptyRequest(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Empty key matches empty request header (both are empty byte slices)
 	handler := authMiddleware("", next)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 	handler(rr, req)
 
 	if !called {
-		t.Error("expected handler to be called when no API key is configured")
+		t.Error("expected handler to be called when both configured and request keys are empty")
 	}
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rr.Code)

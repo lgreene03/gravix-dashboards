@@ -1,0 +1,197 @@
+{{/*
+  RBAC roles enforce least-privilege secret access.
+  Each service account can only read the specific secret keys it needs.
+  This prevents lateral movement if a pod is compromised.
+
+  Note: These roles grant access to the Gravix secret object only.
+  automountServiceAccountToken is false on all SAs, so pods cannot
+  use the K8s API unless explicitly overridden.
+*/}}
+
+# ─── Ingestion: needs api-key + s3 credentials ───
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-ingestion-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Release.Name }}-secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-ingestion-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-ingestion-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-ingestion
+
+# ─── Jobs (rollup, events-rollup, retention): need s3 credentials ───
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-jobs-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Release.Name }}-secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-jobs-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-jobs-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-jobs
+
+# ─── Cube.js: needs cube-api-secret (optional) ───
+{{- if .Values.storage.cube.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-cube-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Release.Name }}-secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-cube-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-cube-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-cube
+{{- end }}
+
+# ─── Trino: needs s3 credentials (via init container) ───
+{{- if .Values.storage.trino.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-trino-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Release.Name }}-secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-trino-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-trino-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-trino
+{{- end }}
+
+# ─── MinIO: needs s3 credentials for root user ───
+{{- if .Values.storage.minio.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-minio-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Release.Name }}-secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-minio-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-minio-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-minio
+{{- end }}
+
+# ─── Load Generator: needs api-key ───
+{{- if .Values.loadGenerator.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-load-generator-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Release.Name }}-secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-load-generator-secrets
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-load-generator-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-load-generator
+{{- end }}

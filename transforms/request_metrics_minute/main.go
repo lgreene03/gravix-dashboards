@@ -41,11 +41,18 @@ var (
 		},
 		[]string{"day"},
 	)
+	rollupLastSuccessTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "rollup_last_success_timestamp_seconds",
+			Help: "Unix timestamp of the last successful rollup run.",
+		},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(rollupProcessedEventsTotal)
 	prometheus.MustRegister(rollupDurationSeconds)
+	prometheus.MustRegister(rollupLastSuccessTimestamp)
 }
 
 func startMetricsServer(addr string) *http.Server {
@@ -232,12 +239,16 @@ func main() {
 	}
 
 	for _, day := range days {
-		if err := processDay(context.Background(), day, store, inputDir, outputDir); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		if err := processDay(ctx, day, store, inputDir, outputDir); err != nil {
+			cancel()
 			log.Printf("Failed to process day %s: %v", day.Format("2006-01-02"), err)
 			os.Exit(1)
 		}
+		cancel()
 	}
 
+	rollupLastSuccessTimestamp.SetToCurrentTime()
 	log.Println("Job complete. Waiting for Prometheus scrape...")
 	time.Sleep(5 * time.Second) // Grace period for scraper
 	srv.Close()

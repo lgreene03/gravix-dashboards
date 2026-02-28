@@ -5,9 +5,17 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o load-generator ./cmd/load_generator
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o load-generator ./cmd/load_generator
 
 FROM alpine:3.21
+
+# OCI image labels for provenance and registry metadata
+LABEL org.opencontainers.image.title="gravix-load-generator" \
+      org.opencontainers.image.description="Gravix synthetic load generator for testing and demos" \
+      org.opencontainers.image.source="https://github.com/gravix/gravix" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Gravix"
+
 RUN addgroup -S gravix && adduser -S gravix -G gravix
 WORKDIR /app
 COPY --from=builder /app/load-generator .

@@ -3,10 +3,17 @@ package schemas
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/google/uuid"
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 	"google.golang.org/protobuf/encoding/protojson"
+)
+
+// Pre-compiled regexes for validation hot path.
+var (
+	uuidRegex  = regexp.MustCompile(`[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}`)
+	rawIDRegex = regexp.MustCompile(`/[0-9]{4,}/?`)
 )
 
 // RequestFact aliases the generated Protobuf type for convenience and to avoid breaking existing code.
@@ -66,7 +73,7 @@ func ValidateRequestFact(f *RequestFact) error {
 	}
 
 	// Constraint: NO Query Params in PathTemplate
-	if regexp.MustCompile(`\?`).MatchString(f.PathTemplate) {
+	if strings.Contains(f.PathTemplate, "?") {
 		return fmt.Errorf("path_template must not contain query parameters")
 	}
 
@@ -92,17 +99,12 @@ func ValidateRequestFact(f *RequestFact) error {
 	return nil
 }
 
-// Helper to detect raw UUIDs in path using regex
+// containsUUID detects raw UUIDs in path using pre-compiled regex.
 func containsUUID(path string) bool {
-	// Regex for standard UUID 8-4-4-4-12
-	uuidRegex := regexp.MustCompile(`[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}`)
 	return uuidRegex.MatchString(path)
 }
 
-// Helper to detect likely raw numeric IDs (e.g., /users/12345)
+// containsRawID detects likely raw numeric IDs (e.g., /users/12345).
 func containsRawID(path string) bool {
-	// Matches segments that are purely digits and > 3 chars
-	// Assuming small status codes or versions (v1) are fine, but "123456" is likely an ID.
-	idRegex := regexp.MustCompile(`/[0-9]{4,}/?`)
-	return idRegex.MatchString(path)
+	return rawIDRegex.MatchString(path)
 }

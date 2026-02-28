@@ -1,0 +1,345 @@
+{{/*
+  NetworkPolicies enforce the same isolation as docker-compose networks:
+    frontend: dashboard, cube (only receive traffic from ingress/dashboard)
+    backend:  ingestion, trino, minio, rollup jobs (internal only)
+
+  Default-deny ingress AND egress + explicit allow rules per service.
+  Egress rules allow DNS resolution (kube-dns on port 53) plus only the
+  specific services each pod needs to reach.
+*/}}
+{{- if .Values.networkPolicies.enabled }}
+
+# ─── Default deny all ingress AND egress in the namespace ───
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+# ─── Allow DNS for all pods (required for service discovery) ───
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-dns
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+# ─── Ingestion: accept from ingress controller and load-generator only ───
+# Egress: → MinIO/S3 (port 9000) for file uploads
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-ingestion-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: ingestion
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # From ingress controller (external traffic)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: {{ .Values.ingestion.service.port }}
+          protocol: TCP
+    # From load-generator (if enabled, same namespace)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: load-generator
+      ports:
+        - port: {{ .Values.ingestion.service.port }}
+          protocol: TCP
+  egress:
+    {{- if .Values.storage.minio.enabled }}
+    # To MinIO (in-cluster)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - port: 9000
+          protocol: TCP
+    {{- else }}
+    # To external S3 (HTTPS)
+    - to: []
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+
+# ─── Dashboard: accept from ingress controller only ───
+# Egress: → Cube.js (port 4000) for API proxy
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-dashboard-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8000
+          protocol: TCP
+  egress:
+    {{- if .Values.storage.cube.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: cube
+      ports:
+        - port: 4000
+          protocol: TCP
+    {{- end }}
+
+# ─── Cube.js: accept from dashboard (nginx proxy) only ───
+# Egress: → Trino (port 8080) for SQL queries
+{{- if .Values.storage.cube.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-cube-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: cube
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: dashboard
+      ports:
+        - port: 4000
+          protocol: TCP
+  egress:
+    {{- if .Values.storage.trino.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: trino
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
+{{- end }}
+
+# ─── Trino: accept from cube and rollup jobs only ───
+# Egress: → MinIO/S3 for reading Parquet files
+{{- if .Values.storage.trino.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-trino-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: trino
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: cube
+        - podSelector:
+            matchLabels:
+              app: rollup
+        - podSelector:
+            matchLabels:
+              app: events-rollup
+        - podSelector:
+            matchLabels:
+              app: retention
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    {{- if .Values.storage.minio.enabled }}
+    # To MinIO (in-cluster)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - port: 9000
+          protocol: TCP
+    {{- else }}
+    # To external S3 (HTTPS)
+    - to: []
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+{{- end }}
+
+# ─── MinIO: accept from ingestion, rollup jobs, trino only ───
+# Egress: none needed (storage is a sink)
+{{- if .Values.storage.minio.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-minio-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: minio
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ingestion
+        - podSelector:
+            matchLabels:
+              app: rollup
+        - podSelector:
+            matchLabels:
+              app: events-rollup
+        - podSelector:
+            matchLabels:
+              app: retention
+        - podSelector:
+            matchLabels:
+              app: trino
+      ports:
+        - port: 9000
+          protocol: TCP
+        - port: 9001
+          protocol: TCP
+{{- end }}
+
+# ─── Rollup Jobs: no inbound needed ───
+# Egress: → Trino (port 8080) + MinIO/S3 for reading raw data and writing Parquet
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-jobs-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [rollup, events-rollup, retention]
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.storage.minio.enabled }}
+    # To MinIO (in-cluster)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - port: 9000
+          protocol: TCP
+    {{- else }}
+    # To external S3 (HTTPS)
+    - to: []
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.storage.trino.enabled }}
+    # To Trino for query-based rollups
+    - to:
+        - podSelector:
+            matchLabels:
+              app: trino
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
+
+# ─── Load Generator: no inbound needed ───
+# Egress: → Ingestion API only
+{{- if .Values.loadGenerator.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-load-generator-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: load-generator
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: ingestion
+      ports:
+        - port: {{ .Values.ingestion.service.port }}
+          protocol: TCP
+{{- end }}
+
+{{- end }}

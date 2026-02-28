@@ -173,6 +173,22 @@ func TestServiceEvent_Validate(t *testing.T) {
 	}
 }
 
+func TestValidateServiceEvent_InvalidEventID(t *testing.T) {
+	event := &ServiceEvent{
+		EventId:   "not-a-uuid-at-all",
+		EventTime: timestamppb.Now(),
+		Service:   "svc",
+		EventType: "deploy_started",
+	}
+	err := ValidateServiceEvent(event)
+	if err == nil {
+		t.Fatal("expected error for unparseable event_id")
+	}
+	if !strings.Contains(err.Error(), "event_id invalid") {
+		t.Errorf("expected 'event_id invalid', got: %v", err)
+	}
+}
+
 func ptr(s string) *string {
 	return &s
 }

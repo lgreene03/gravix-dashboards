@@ -1,0 +1,172 @@
+{{- if .Values.backup.enabled }}
+#
+# S3/MinIO data backup CronJob.
+#
+# Creates point-in-time snapshots of the Gravix data bucket by copying
+# objects to a backup prefix (same bucket) or a separate backup bucket.
+#
+# Backup strategy:
+#   - Daily snapshots of raw/ and warehouse/ prefixes
+#   - Retention of backup snapshots controlled by backup.retentionDays
+#   - Uses the same S3 credentials as the main application
+#
+# For cross-region DR, configure backup.destinationBucket to a bucket
+# in a different region and set up S3 cross-region replication externally.
+#
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-backup
+  labels:
+    app: backup
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds | default 3600 }}
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: backup
+            app.kubernetes.io/name: gravix
+            app.kubernetes.io/instance: {{ .Release.Name }}
+          annotations:
+            prometheus.io/scrape: "false"
+        spec:
+          serviceAccountName: {{ .Release.Name }}-jobs
+          {{- include "gravix.imagePullSecrets" . | nindent 10 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+          containers:
+            - name: backup
+              image: "amazon/aws-cli:2.15.0"
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+
+                  TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+                  SOURCE_BUCKET="{{ .Values.global.storage.bucket }}"
+                  {{- if .Values.backup.destinationBucket }}
+                  DEST_BUCKET="{{ .Values.backup.destinationBucket }}"
+                  {{- else }}
+                  DEST_BUCKET="${SOURCE_BUCKET}"
+                  {{- end }}
+                  BACKUP_PREFIX="{{ .Values.backup.prefix | default "backups" }}"
+                  RETENTION_DAYS="{{ .Values.backup.retentionDays | default 7 }}"
+
+                  echo "=== Gravix Backup ==="
+                  echo "Timestamp:    ${TIMESTAMP}"
+                  echo "Source:       s3://${SOURCE_BUCKET}"
+                  echo "Destination:  s3://${DEST_BUCKET}/${BACKUP_PREFIX}/${TIMESTAMP}/"
+                  echo "Retention:    ${RETENTION_DAYS} days"
+                  echo ""
+
+                  {{- if and (not .Values.backup.destinationBucket) (not (hasPrefix "https://s3" .Values.global.storage.endpoint)) }}
+                  # MinIO: use --endpoint-url
+                  ENDPOINT_FLAG="--endpoint-url {{ .Values.global.storage.endpoint }}"
+                  {{- else }}
+                  ENDPOINT_FLAG=""
+                  {{- end }}
+
+                  # ── Snapshot raw data ──
+                  echo "Backing up raw/ ..."
+                  aws s3 sync "s3://${SOURCE_BUCKET}/raw/" \
+                    "s3://${DEST_BUCKET}/${BACKUP_PREFIX}/${TIMESTAMP}/raw/" \
+                    ${ENDPOINT_FLAG} \
+                    --no-progress \
+                    --only-show-errors \
+                    2>&1 || echo "WARNING: raw/ backup had errors"
+
+                  # ── Snapshot warehouse data ──
+                  echo "Backing up warehouse/ ..."
+                  aws s3 sync "s3://${SOURCE_BUCKET}/warehouse/" \
+                    "s3://${DEST_BUCKET}/${BACKUP_PREFIX}/${TIMESTAMP}/warehouse/" \
+                    ${ENDPOINT_FLAG} \
+                    --no-progress \
+                    --only-show-errors \
+                    2>&1 || echo "WARNING: warehouse/ backup had errors"
+
+                  # ── Write manifest ──
+                  echo "Writing backup manifest..."
+                  MANIFEST=$(cat <<MANIFEST_EOF
+                  {
+                    "timestamp": "${TIMESTAMP}",
+                    "source_bucket": "${SOURCE_BUCKET}",
+                    "destination_bucket": "${DEST_BUCKET}",
+                    "prefix": "${BACKUP_PREFIX}/${TIMESTAMP}",
+                    "retention_days": ${RETENTION_DAYS},
+                    "created_by": "gravix-backup-cronjob"
+                  }
+                  MANIFEST_EOF
+                  )
+                  echo "${MANIFEST}" | aws s3 cp - \
+                    "s3://${DEST_BUCKET}/${BACKUP_PREFIX}/${TIMESTAMP}/manifest.json" \
+                    ${ENDPOINT_FLAG} \
+                    --content-type "application/json" \
+                    2>&1
+
+                  # ── Prune old backups ──
+                  echo ""
+                  echo "Pruning backups older than ${RETENTION_DAYS} days..."
+                  CUTOFF=$(date -u -d "${RETENTION_DAYS} days ago" +%Y%m%d 2>/dev/null || \
+                           date -u -v-${RETENTION_DAYS}d +%Y%m%d 2>/dev/null || \
+                           echo "00000000")
+
+                  if [ "${CUTOFF}" != "00000000" ]; then
+                    aws s3 ls "s3://${DEST_BUCKET}/${BACKUP_PREFIX}/" \
+                      ${ENDPOINT_FLAG} 2>/dev/null | \
+                    awk '{print $NF}' | tr -d '/' | \
+                    while read -r SNAP; do
+                      SNAP_DATE=$(echo "${SNAP}" | cut -c1-8)
+                      if [ "${SNAP_DATE}" \< "${CUTOFF}" ]; then
+                        echo "  Removing old backup: ${SNAP}"
+                        aws s3 rm "s3://${DEST_BUCKET}/${BACKUP_PREFIX}/${SNAP}/" \
+                          ${ENDPOINT_FLAG} \
+                          --recursive --quiet 2>&1 || true
+                      fi
+                    done
+                    echo "Pruning complete."
+                  else
+                    echo "WARNING: Could not determine cutoff date, skipping pruning."
+                  fi
+
+                  echo ""
+                  echo "=== Backup complete: ${BACKUP_PREFIX}/${TIMESTAMP} ==="
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-secrets
+                      key: s3-access-key
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-secrets
+                      key: s3-secret-key
+                - name: AWS_DEFAULT_REGION
+                  value: {{ .Values.global.storage.region | quote }}
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+          restartPolicy: OnFailure
+{{- end }}

@@ -1,0 +1,211 @@
+# Production values override for Gravix.
+#
+# Usage:
+#   helm install gravix deploy/gravix \
+#     -f deploy/gravix/values-prod.yaml \
+#     --set global.apiKey=<secret> \
+#     --set global.cubeApiSecret=<secret> \
+#     --set global.storage.accessKey=<secret> \
+#     --set global.storage.secretKey=<secret>
+#
+# Or better — use External Secrets Operator and leave secrets empty here.
+
+global:
+  # Container registry — update to match your GHCR org or private registry.
+  # Example: ghcr.io/your-org/gravix
+  imageRegistry: "ghcr.io/your-org/gravix"
+
+  # Pull secret for private registry.
+  # Create with:
+  #   kubectl create secret docker-registry gravix-registry \
+  #     --docker-server=ghcr.io \
+  #     --docker-username=<github-user> \
+  #     --docker-password=<github-pat> \
+  #     -n gravix-prod
+  imagePullSecrets:
+    - name: gravix-registry
+
+  storage:
+    # For managed S3 — replace MinIO endpoint with real S3.
+    # AWS:   https://s3.us-east-1.amazonaws.com
+    # GCP:   https://storage.googleapis.com
+    # MinIO: http://gravix-minio:9000  (if self-hosting)
+    endpoint: "https://s3.us-east-1.amazonaws.com"
+    region: "us-east-1"
+    bucket: "gravix-prod"
+    # Injected via External Secrets or --set flags. Never commit real values.
+    accessKey: ""
+    secretKey: ""
+
+# ─── External Secrets Operator ───
+# Recommended for production: secrets are pulled from an external provider
+# at runtime and never stored in Helm values or git.
+#
+# Prerequisites:
+#   1. Install ESO: helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
+#   2. Create a ClusterSecretStore pointing to your provider (AWS SM, Vault, etc.)
+#   3. Store secrets at the remoteBase path in your provider:
+#      gravix/prod/api-key, gravix/prod/s3-access-key, gravix/prod/s3-secret-key
+#
+# When enabled, you do NOT need to pass --set global.apiKey=... etc.
+externalSecrets:
+  enabled: false  # Set to true once ESO and ClusterSecretStore are configured
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: "gravix-secret-store"  # Must match your ClusterSecretStore name
+    kind: "ClusterSecretStore"
+  remoteBase: "gravix/prod"      # Base path in your secret provider
+
+# ─── Network Policies ───
+# Enforces service isolation: ingestion ← ingress only, trino ← cube/rollup only, etc.
+# Requires a CNI with NetworkPolicy support (Calico, Cilium).
+networkPolicies:
+  enabled: true
+
+# ─── Ingestion ───
+ingestion:
+  replicaCount: 2
+  image:
+    repository: gravix-ingestion
+    tag: "0.1.0"       # Pin to a specific SHA tag in production: sha-abc1234
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  persistence:
+    storageClass: "gp3"  # AWS EBS gp3. Change for your cloud: pd-ssd (GCP), managed-premium (Azure)
+
+# ─── Load Generator — DISABLED in production ───
+loadGenerator:
+  enabled: false
+
+# ─── Rollup Jobs ───
+rollupJob:
+  image:
+    repository: gravix-rollup
+    tag: "0.1.0"       # Pin to same SHA as ingestion
+    pullPolicy: IfNotPresent
+
+retentionJob:
+  image:
+    repository: gravix-rollup
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+# ─── Dashboard ───
+dashboard:
+  image:
+    repository: nginx
+    tag: "1.25-alpine"
+
+# ─── Storage ───
+storage:
+  minio:
+    # Disable MinIO when using managed S3.
+    enabled: false
+  trino:
+    enabled: true
+    image:
+      repository: trinodb/trino
+      tag: "435"       # Production-grade Trino version
+  cube:
+    enabled: true
+    devMode: false     # CRITICAL: must be false in production
+    image:
+      repository: cubejs/cube
+      tag: "v0.35"
+
+# ─── cert-manager (Automatic TLS) ───
+# Creates ClusterIssuer resources for Let's Encrypt.
+# Prerequisite: cert-manager must be installed in the cluster.
+#   helm install cert-manager jetstack/cert-manager \
+#     --namespace cert-manager --create-namespace \
+#     --set crds.enabled=true
+certManager:
+  enabled: true
+  email: "ops@example.com"  # REQUIRED — Replace with your team email for expiry notifications
+  issuerName: "letsencrypt-prod"
+
+# ─── Ingress with TLS ───
+# The ingress template merges these annotations with secure defaults
+# (ssl-redirect, force-ssl-redirect, proxy timeouts, body-size limit).
+# User values here take precedence over defaults.
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Rate limiting — adjust based on expected traffic
+    nginx.ingress.kubernetes.io/rate-limit-connections: "100"
+    nginx.ingress.kubernetes.io/rate-limit-rps: "50"
+    # HSTS via ingress controller (supplements nginx-level header)
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+  hosts:
+    - host: gravix.example.com    # Replace with your domain
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+        - path: /api
+          pathType: Prefix
+          service: ingestion
+  tls:
+    - secretName: gravix-tls
+      hosts:
+        - gravix.example.com      # Replace with your domain
+
+# ─── Monitoring & Observability ───
+# Requires: kube-prometheus-stack installed in the cluster.
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace
+#
+# ServiceMonitors replace static prometheus.yml scrape configs.
+# PrometheusRules replace the file-based alert_rules.yml.
+# Grafana dashboards are provisioned via sidecar ConfigMap auto-discovery.
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: "15s"
+    scrapeTimeout: "10s"
+    # Match the Prometheus Operator's serviceMonitorSelector if customized.
+    # Default kube-prometheus-stack selects all ServiceMonitors.
+    labels: {}
+  prometheusRule:
+    enabled: true
+    # Match the Prometheus Operator's ruleSelector if customized.
+    labels: {}
+  grafana:
+    dashboards:
+      enabled: true
+
+# ─── Autoscaling ───
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# ─── Namespace Resource Limits ───
+# Prevents runaway resource consumption. Adjust based on cluster capacity.
+resourceQuota:
+  enabled: true
+  cpu: "8"
+  memory: "16Gi"
+  limitsCpu: "16"
+  limitsMemory: "32Gi"
+  pvcs: "5"
+  pods: "30"
+
+# ─── Backups ───
+# Daily snapshots of raw/ and warehouse/ data.
+# Schedule runs at 02:00 UTC, before retention purge at 03:00 UTC.
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionDays: 14              # Keep 2 weeks of backup snapshots
+  # destinationBucket: ""        # Set to a cross-region bucket for DR

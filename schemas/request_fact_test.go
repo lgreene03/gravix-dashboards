@@ -305,3 +305,90 @@ func TestRequestFact_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRequestFact_InvalidEventID(t *testing.T) {
+	fact := &RequestFact{
+		EventId:      "not-a-uuid-at-all",
+		EventTime:    timestamppb.Now(),
+		Service:      "svc",
+		Method:       "GET",
+		PathTemplate: "/p",
+		StatusCode:   200,
+	}
+	err := ValidateRequestFact(fact)
+	if err == nil {
+		t.Fatal("expected error for unparseable event_id")
+	}
+	if !strings.Contains(err.Error(), "event_id invalid") {
+		t.Errorf("expected 'event_id invalid', got: %v", err)
+	}
+}
+
+func TestValidateRequestFact_ZeroEventTime(t *testing.T) {
+	// Go's zero time is 0001-01-01T00:00:00Z which is epoch -62135596800
+	fact := &RequestFact{
+		EventId:      validUUIDv7,
+		EventTime:    &timestamppb.Timestamp{Seconds: -62135596800, Nanos: 0},
+		Service:      "svc",
+		Method:       "GET",
+		PathTemplate: "/p",
+		StatusCode:   200,
+	}
+	err := ValidateRequestFact(fact)
+	if err == nil {
+		t.Fatal("expected error for zero event_time")
+	}
+	if !strings.Contains(err.Error(), "event_time is invalid") {
+		t.Errorf("expected 'event_time is invalid', got: %v", err)
+	}
+}
+
+func TestParseRequestFact_Valid(t *testing.T) {
+	json := `{
+		"eventId": "` + validUUIDv7 + `",
+		"eventTime": "2024-01-15T10:30:00Z",
+		"service": "auth-service",
+		"method": "POST",
+		"pathTemplate": "/login",
+		"statusCode": 200,
+		"latencyMs": 45
+	}`
+	fact, err := ParseRequestFact([]byte(json))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fact.Service != "auth-service" {
+		t.Errorf("expected service 'auth-service', got '%s'", fact.Service)
+	}
+	if fact.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d", fact.StatusCode)
+	}
+}
+
+func TestParseRequestFact_InvalidJSON(t *testing.T) {
+	_, err := ParseRequestFact([]byte(`{not valid json`))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "protojson unmarshal error") {
+		t.Errorf("expected protojson unmarshal error, got: %v", err)
+	}
+}
+
+func TestParseRequestFact_ValidationError(t *testing.T) {
+	// Valid JSON but fails validation (missing service)
+	json := `{
+		"eventId": "` + validUUIDv7 + `",
+		"eventTime": "2024-01-15T10:30:00Z",
+		"method": "GET",
+		"pathTemplate": "/p",
+		"statusCode": 200
+	}`
+	_, err := ParseRequestFact([]byte(json))
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "validation error") {
+		t.Errorf("expected 'validation error', got: %v", err)
+	}
+}

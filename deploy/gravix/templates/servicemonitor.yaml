@@ -1,0 +1,50 @@
+{{/*
+  ServiceMonitor resources for Prometheus Operator.
+
+  These tell Prometheus how to discover and scrape Gravix services
+  automatically, replacing the static scrape_configs in prometheus.yml.
+
+  Prerequisites:
+    1. Install Prometheus Operator (e.g., via kube-prometheus-stack):
+       helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+         --namespace monitoring --create-namespace
+
+    2. Ensure the Prometheus instance is configured to select ServiceMonitors
+       from the Gravix namespace (serviceMonitorSelector / serviceMonitorNamespaceSelector).
+
+  When monitoring.serviceMonitor.enabled is false, pods still expose /metrics
+  and can be scraped via annotation-based discovery (prometheus.io/scrape).
+*/}}
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+
+# ─── Ingestion Service Monitor ───
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-ingestion
+  labels:
+    app: ingestion
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: ingestion
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "15s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      {{- if .Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml .Values.monitoring.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end }}
+
+{{- end }}

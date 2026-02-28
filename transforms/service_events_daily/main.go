@@ -155,10 +155,13 @@ func main() {
 	}
 
 	for _, day := range days {
-		if err := processDay(context.Background(), day, store, inputDir, outputDir); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		if err := processDay(ctx, day, store, inputDir, outputDir); err != nil {
+			cancel()
 			log.Printf("Failed to process day %s: %v", day.Format("2006-01-02"), err)
 			os.Exit(1)
 		}
+		cancel()
 	}
 
 	log.Println("Service events rollup complete.")

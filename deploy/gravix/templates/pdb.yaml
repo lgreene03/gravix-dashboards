@@ -1,0 +1,70 @@
+{{/*
+  PodDisruptionBudgets ensure availability during node drains and cluster upgrades.
+  Only created when replicaCount > 1 (otherwise PDB blocks all evictions).
+*/}}
+
+{{- if gt (int .Values.ingestion.replicaCount) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-ingestion-pdb
+  labels:
+    app: ingestion
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ingestion
+{{- end }}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-dashboard-pdb
+  labels:
+    app: dashboard
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dashboard
+
+{{- if .Values.storage.trino.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-trino-pdb
+  labels:
+    app: trino
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: trino
+{{- end }}
+
+{{- if .Values.storage.cube.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-cube-pdb
+  labels:
+    app: cube
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: cube
+{{- end }}

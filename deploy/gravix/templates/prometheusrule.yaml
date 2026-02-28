@@ -1,0 +1,154 @@
+{{/*
+  PrometheusRule resources for Prometheus Operator.
+
+  Ports the alert rules from storage/prometheus/alert_rules.yml into a
+  Kubernetes CRD that Prometheus Operator manages natively.
+
+  Prerequisites: Prometheus Operator installed (same as ServiceMonitor).
+*/}}
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-alerts
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    # ─── Ingestion Alerts ───
+    - name: gravix_ingestion
+      rules:
+        - alert: IngestionHighErrorRate
+          expr: |
+            sum(rate(ingestion_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(ingestion_requests_total[5m]))
+            > 0.05
+          for: 5m
+          labels:
+            severity: warning
+            service: ingestion
+          annotations:
+            summary: "Ingestion error rate above 5%"
+            description: "The ingestion service is returning >5% server errors over the last 5 minutes."
+            runbook_url: "https://github.com/{{ "{{ .Release.Name }}" }}/wiki/runbooks/ingestion-high-error-rate"
+
+        - alert: IngestionDown
+          expr: up{job="ingestion"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            service: ingestion
+          annotations:
+            summary: "Ingestion service is down"
+            description: "The ingestion service has been unreachable for 2 minutes."
+
+        - alert: IngestionHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(ingestion_fsync_duration_seconds_bucket[5m])) by (le)
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            service: ingestion
+          annotations:
+            summary: "Ingestion fsync latency P95 above 500ms"
+            description: "Disk write latency is elevated, which may indicate storage issues."
+
+    # ─── Rollup Alerts ───
+    - name: gravix_rollup
+      rules:
+        - alert: RollupStaleData
+          expr: |
+            time() - max(rollup_last_success_timestamp_seconds) > 600
+          for: 10m
+          labels:
+            severity: warning
+            service: rollup
+          annotations:
+            summary: "Rollup job may be stalled"
+            description: "No rollup job has completed successfully in the last 10 minutes."
+
+        - alert: RollupSlowExecution
+          expr: rollup_duration_seconds > 120
+          for: 0m
+          labels:
+            severity: warning
+            service: rollup
+          annotations:
+            summary: "Rollup job took over 2 minutes"
+            description: "A rollup job execution exceeded 120s, which may indicate growing data volume."
+
+    # ─── Infrastructure Alerts ───
+    - name: gravix_infrastructure
+      rules:
+        - alert: HighMemoryUsage
+          expr: process_resident_memory_bytes{job="ingestion"} > 512 * 1024 * 1024
+          for: 5m
+          labels:
+            severity: warning
+            service: ingestion
+          annotations:
+            summary: "Ingestion service memory above 512MB"
+            description: "The ingestion service memory usage is elevated."
+
+        - alert: HighGoroutineCount
+          expr: go_goroutines{job="ingestion"} > 1000
+          for: 5m
+          labels:
+            severity: warning
+            service: ingestion
+          annotations:
+            summary: "Ingestion goroutine count above 1000"
+            description: "High goroutine count may indicate a goroutine leak."
+
+    # ─── SLO Alerts (production-grade) ───
+    - name: gravix_slo
+      rules:
+        # Availability SLO: ingestion should be up 99.9% of the time
+        - alert: IngestionAvailabilitySLOBreach
+          expr: |
+            avg_over_time(up{job="ingestion"}[1h]) < 0.999
+          for: 5m
+          labels:
+            severity: critical
+            service: ingestion
+          annotations:
+            summary: "Ingestion availability below 99.9% SLO"
+            description: "Ingestion service availability has dropped below the 99.9% SLO target over the last hour."
+
+        # Latency SLO: 99% of fsync operations should complete within 1 second
+        - alert: IngestionLatencySLOBreach
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(ingestion_fsync_duration_seconds_bucket[30m])) by (le)
+            ) > 1.0
+          for: 10m
+          labels:
+            severity: warning
+            service: ingestion
+          annotations:
+            summary: "Ingestion P99 fsync latency above 1s SLO"
+            description: "P99 disk write latency has exceeded the 1s SLO target over the last 30 minutes."
+
+        # Error budget: sustained error rate burns through the monthly error budget
+        - alert: IngestionErrorBudgetBurn
+          expr: |
+            sum(rate(ingestion_requests_total{status=~"5.."}[1h]))
+            /
+            sum(rate(ingestion_requests_total[1h]))
+            > 0.01
+          for: 30m
+          labels:
+            severity: warning
+            service: ingestion
+          annotations:
+            summary: "Ingestion error budget burn rate elevated"
+            description: "The ingestion error rate has been above 1% for 30 minutes, burning through the monthly error budget."
+
+{{- end }}

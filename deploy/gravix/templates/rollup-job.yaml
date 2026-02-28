@@ -14,12 +14,29 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 600
       template:
+        metadata:
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "9090"
+            prometheus.io/path: "/metrics"
         spec:
+          serviceAccountName: {{ .Release.Name }}-jobs
+          {{- include "gravix.imagePullSecrets" . | nindent 10 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
           containers:
             - name: rollup
-              image: "{{ .Values.rollupJob.image.repository }}:{{ .Values.rollupJob.image.tag }}"
+              image: {{ include "gravix.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.rollupJob.image.repository "tag" .Values.rollupJob.image.tag) | quote }}
               imagePullPolicy: {{ .Values.rollupJob.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               command: ["./request-metrics-rollup"]
               env:
                 - name: S3_ENDPOINT
@@ -38,5 +55,12 @@ spec:
                     secretKeyRef:
                       name: {{ .Release.Name }}-secrets
                       key: s3-secret-key
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
           restartPolicy: OnFailure
 {{- end }}

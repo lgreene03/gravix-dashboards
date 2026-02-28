@@ -1,0 +1,571 @@
+{{/*
+  Grafana dashboard provisioning via ConfigMap.
+
+  When monitoring.grafana.dashboards.enabled is true, the Gravix Health
+  dashboard JSON is packaged as a ConfigMap with the standard Grafana
+  sidecar label (grafana_dashboard: "1"). The kube-prometheus-stack
+  Grafana sidecar watches for these ConfigMaps and auto-loads them.
+
+  Prerequisites:
+    - Grafana deployed with sidecar.dashboards.enabled=true
+      (default in kube-prometheus-stack)
+    - Sidecar configured to watch ConfigMaps with label grafana_dashboard: "1"
+      in the Gravix namespace (or all namespaces)
+
+  The dashboard JSON is the same as storage/grafana/provisioning/dashboards/gravix_health.json
+  used in docker-compose, ensuring consistency between dev and prod environments.
+*/}}
+{{- if .Values.monitoring.grafana.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-dashboard
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    # Standard label for Grafana sidecar dashboard discovery
+    grafana_dashboard: "1"
+  {{- with .Values.monitoring.grafana.dashboards.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  gravix-health.json: |
+    {
+        "annotations": {
+            "list": [
+                {
+                    "builtIn": 1,
+                    "datasource": "-- Grafana --",
+                    "enable": true,
+                    "hide": true,
+                    "iconColor": "rgba(0, 211, 255, 1)",
+                    "name": "Annotations & Alerts",
+                    "type": "dashboard"
+                }
+            ]
+        },
+        "editable": false,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 0,
+        "links": [],
+        "liveNow": false,
+        "panels": [
+            {
+                "collapsed": false,
+                "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+                "id": 20,
+                "title": "Ingestion Service",
+                "type": "row"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "palette-classic" },
+                        "custom": {
+                            "axisLabel": "Requests/sec",
+                            "axisPlacement": "auto",
+                            "drawStyle": "line",
+                            "fillOpacity": 10,
+                            "lineWidth": 2,
+                            "pointSize": 5,
+                            "showPoints": "auto",
+                            "spanNulls": false,
+                            "stacking": { "group": "A", "mode": "none" }
+                        },
+                        "mappings": [],
+                        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+                        "unit": "reqps"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+                "id": 2,
+                "options": {
+                    "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+                    "tooltip": { "mode": "multi", "sort": "desc" }
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "sum(rate(ingestion_requests_total[1m])) by (path, status)",
+                        "legendFormat": "{{ "{{path}} [{{status}}]" }}",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Ingestion Rate by Path & Status",
+                "type": "timeseries"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "palette-classic" },
+                        "custom": {
+                            "axisLabel": "Latency (s)",
+                            "drawStyle": "line",
+                            "fillOpacity": 10,
+                            "lineWidth": 2,
+                            "pointSize": 5,
+                            "showPoints": "auto",
+                            "spanNulls": false
+                        },
+                        "mappings": [],
+                        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.1 }] },
+                        "unit": "s"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+                "id": 4,
+                "options": {
+                    "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+                    "tooltip": { "mode": "multi", "sort": "desc" }
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "histogram_quantile(0.99, sum(rate(ingestion_fsync_duration_seconds_bucket[5m])) by (le, topic))",
+                        "legendFormat": "p99 {{ "{{topic}}" }}",
+                        "refId": "A"
+                    },
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "histogram_quantile(0.50, sum(rate(ingestion_fsync_duration_seconds_bucket[5m])) by (le, topic))",
+                        "legendFormat": "p50 {{ "{{topic}}" }}",
+                        "refId": "B"
+                    }
+                ],
+                "title": "Fsync Latency (p50 / p99)",
+                "type": "timeseries"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "palette-classic" },
+                        "custom": {
+                            "axisLabel": "Bytes",
+                            "drawStyle": "line",
+                            "fillOpacity": 10,
+                            "lineWidth": 2,
+                            "pointSize": 5,
+                            "showPoints": "auto",
+                            "spanNulls": false
+                        },
+                        "mappings": [],
+                        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+                        "unit": "bytes"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+                "id": 6,
+                "options": {
+                    "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+                    "tooltip": { "mode": "multi", "sort": "desc" }
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "histogram_quantile(0.5, sum(rate(ingestion_batch_size_bytes_bucket[5m])) by (le, topic))",
+                        "legendFormat": "p50 {{ "{{topic}}" }}",
+                        "refId": "A"
+                    },
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "histogram_quantile(0.95, sum(rate(ingestion_batch_size_bytes_bucket[5m])) by (le, topic))",
+                        "legendFormat": "p95 {{ "{{topic}}" }}",
+                        "refId": "B"
+                    }
+                ],
+                "title": "Ingest Batch Size (p50 / p95)",
+                "type": "timeseries"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "thresholds" },
+                        "mappings": [],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                { "color": "green", "value": null },
+                                { "color": "yellow", "value": 50 },
+                                { "color": "red", "value": 100 }
+                            ]
+                        },
+                        "unit": "reqps"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 4, "w": 6, "x": 0, "y": 9 },
+                "id": 10,
+                "options": {
+                    "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                    "showThresholdLabels": false,
+                    "showThresholdMarkers": true
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "sum(rate(ingestion_requests_total[1m]))",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Current Ingestion Rate",
+                "type": "gauge"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "thresholds" },
+                        "mappings": [],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                { "color": "green", "value": null },
+                                { "color": "yellow", "value": 0.01 },
+                                { "color": "red", "value": 0.05 }
+                            ]
+                        },
+                        "unit": "percentunit"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 4, "w": 6, "x": 6, "y": 9 },
+                "id": 11,
+                "options": {
+                    "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                    "showThresholdLabels": false,
+                    "showThresholdMarkers": true
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "sum(rate(ingestion_requests_total{status=~\"4..|5..\"}[5m])) / sum(rate(ingestion_requests_total[5m]))",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Ingestion Error Rate",
+                "type": "gauge"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "thresholds" },
+                        "mappings": [
+                            { "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } }, "type": "value" }
+                        ],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                { "color": "red", "value": null },
+                                { "color": "green", "value": 1 }
+                            ]
+                        }
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 4, "w": 6, "x": 12, "y": 9 },
+                "id": 12,
+                "options": {
+                    "colorMode": "background",
+                    "graphMode": "none",
+                    "justifyMode": "center",
+                    "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                    "textMode": "value"
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "up{job=\"ingestion\"}",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Ingestion Service Status",
+                "type": "stat"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "thresholds" },
+                        "mappings": [],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                { "color": "green", "value": null },
+                                { "color": "yellow", "value": 100000000 },
+                                { "color": "red", "value": 500000000 }
+                            ]
+                        },
+                        "unit": "bytes"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 4, "w": 6, "x": 18, "y": 9 },
+                "id": 13,
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "justifyMode": "auto",
+                    "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                    "textMode": "auto"
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "process_resident_memory_bytes{job=\"ingestion\"}",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Ingestion Memory Usage",
+                "type": "stat"
+            },
+            {
+                "collapsed": false,
+                "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+                "id": 21,
+                "title": "Rollup ETL Job",
+                "type": "row"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "palette-classic" },
+                        "custom": {
+                            "axisLabel": "Events",
+                            "drawStyle": "bars",
+                            "fillOpacity": 80,
+                            "lineWidth": 1,
+                            "pointSize": 5,
+                            "showPoints": "never",
+                            "stacking": { "group": "A", "mode": "normal" }
+                        },
+                        "mappings": [],
+                        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+                "id": 14,
+                "options": {
+                    "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+                    "tooltip": { "mode": "multi", "sort": "desc" }
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "sum(increase(rollup_processed_events_total[5m])) by (service)",
+                        "legendFormat": "{{ "{{service}}" }}",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Rollup Events Processed by Service",
+                "type": "timeseries"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "palette-classic" },
+                        "custom": {
+                            "axisLabel": "Duration (s)",
+                            "drawStyle": "line",
+                            "fillOpacity": 10,
+                            "lineWidth": 2,
+                            "pointSize": 5,
+                            "showPoints": "always",
+                            "spanNulls": false
+                        },
+                        "mappings": [],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                { "color": "green", "value": null },
+                                { "color": "yellow", "value": 30 },
+                                { "color": "red", "value": 120 }
+                            ]
+                        },
+                        "unit": "s"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+                "id": 15,
+                "options": {
+                    "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+                    "tooltip": { "mode": "multi", "sort": "desc" }
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "rollup_duration_seconds",
+                        "legendFormat": "day={{ "{{day}}" }}",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Rollup Duration by Day",
+                "type": "timeseries"
+            },
+            {
+                "collapsed": false,
+                "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+                "id": 22,
+                "title": "Infrastructure",
+                "type": "row"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "thresholds" },
+                        "mappings": [
+                            { "options": { "0": { "color": "red", "text": "DOWN" }, "1": { "color": "green", "text": "UP" } }, "type": "value" }
+                        ],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                { "color": "red", "value": null },
+                                { "color": "green", "value": 1 }
+                            ]
+                        }
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 4, "w": 24, "x": 0, "y": 23 },
+                "id": 16,
+                "options": {
+                    "colorMode": "background",
+                    "graphMode": "none",
+                    "justifyMode": "center",
+                    "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                    "textMode": "value_and_name"
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "up",
+                        "legendFormat": "{{ "{{job}}" }}",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Service Health",
+                "type": "stat"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "continuous-GrYlRd" },
+                        "custom": {
+                            "axisLabel": "Seconds",
+                            "drawStyle": "line",
+                            "fillOpacity": 10,
+                            "lineWidth": 2,
+                            "showPoints": "auto",
+                            "spanNulls": false
+                        },
+                        "mappings": [],
+                        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+                        "unit": "s"
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+                "id": 17,
+                "options": {
+                    "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+                    "tooltip": { "mode": "multi", "sort": "desc" }
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job))",
+                        "legendFormat": "p99 {{ "{{job}}" }}",
+                        "refId": "A"
+                    }
+                ],
+                "title": "HTTP Request Latency (p99) by Service",
+                "type": "timeseries"
+            },
+            {
+                "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                "fieldConfig": {
+                    "defaults": {
+                        "color": { "mode": "palette-classic" },
+                        "custom": {
+                            "axisLabel": "Goroutines",
+                            "drawStyle": "line",
+                            "fillOpacity": 10,
+                            "lineWidth": 2,
+                            "showPoints": "auto",
+                            "spanNulls": false
+                        },
+                        "mappings": [],
+                        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+                    },
+                    "overrides": []
+                },
+                "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
+                "id": 18,
+                "options": {
+                    "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+                    "tooltip": { "mode": "multi", "sort": "desc" }
+                },
+                "targets": [
+                    {
+                        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+                        "expr": "go_goroutines{job=\"ingestion\"}",
+                        "legendFormat": "ingestion",
+                        "refId": "A"
+                    }
+                ],
+                "title": "Go Goroutines",
+                "type": "timeseries"
+            }
+        ],
+        "refresh": "30s",
+        "schemaVersion": 36,
+        "style": "dark",
+        "tags": [
+            "gravix",
+            "observability"
+        ],
+        "templating": {
+            "list": [
+                {
+                    "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+                    "hide": 0,
+                    "includeAll": false,
+                    "label": "Data Source",
+                    "multi": false,
+                    "name": "datasource",
+                    "options": [],
+                    "query": "prometheus",
+                    "queryValue": "",
+                    "refresh": 1,
+                    "regex": "",
+                    "skipUrlSync": false,
+                    "type": "datasource"
+                }
+            ]
+        },
+        "time": {
+            "from": "now-30m",
+            "to": "now"
+        },
+        "timepicker": {},
+        "timezone": "",
+        "title": "Gravix Health",
+        "uid": "gravix-health",
+        "version": 3,
+        "weekStart": ""
+    }
+{{- end }}
