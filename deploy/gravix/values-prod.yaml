@@ -159,6 +159,30 @@ ingress:
       hosts:
         - gravix.example.com      # Replace with your domain
 
+# ─── Monitoring & Observability ───
+# Requires: kube-prometheus-stack installed in the cluster.
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace
+#
+# ServiceMonitors replace static prometheus.yml scrape configs.
+# PrometheusRules replace the file-based alert_rules.yml.
+# Grafana dashboards are provisioned via sidecar ConfigMap auto-discovery.
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: "15s"
+    scrapeTimeout: "10s"
+    # Match the Prometheus Operator's serviceMonitorSelector if customized.
+    # Default kube-prometheus-stack selects all ServiceMonitors.
+    labels: {}
+  prometheusRule:
+    enabled: true
+    # Match the Prometheus Operator's ruleSelector if customized.
+    labels: {}
+  grafana:
+    dashboards:
+      enabled: true
+
 # ─── Autoscaling ───
 autoscaling:
   enabled: true

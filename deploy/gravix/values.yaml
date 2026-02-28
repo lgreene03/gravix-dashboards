@@ -145,6 +145,29 @@ ingress:
           service: ingestion
   tls: []
 
+# Monitoring and observability.
+# Requires: Prometheus Operator (kube-prometheus-stack) installed in the cluster.
+# Without the operator, pods still expose /metrics via annotation-based scraping.
+monitoring:
+  # ServiceMonitor CRDs — auto-discovered by Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    # interval: "15s"                # Scrape interval
+    # scrapeTimeout: "10s"           # Scrape timeout
+    # labels: {}                     # Additional labels for Prometheus selector matching
+    # metricRelabelings: []          # Metric relabeling rules
+
+  # PrometheusRule CRD — alert rules managed by Prometheus Operator
+  prometheusRule:
+    enabled: false
+    # labels: {}                     # Additional labels for Prometheus selector matching
+
+  # Grafana dashboard provisioning via ConfigMap
+  grafana:
+    dashboards:
+      enabled: false
+      # annotations: {}              # Extra annotations for the dashboard ConfigMap
+
 autoscaling:
   enabled: false
   minReplicas: 2

@@ -16,6 +16,11 @@ spec:
     spec:
       activeDeadlineSeconds: 1800
       template:
+        metadata:
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "9090"
+            prometheus.io/path: "/metrics"
         spec:
           serviceAccountName: {{ .Release.Name }}-jobs
           {{- include "gravix.imagePullSecrets" . | nindent 10 }}

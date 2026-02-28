@@ -15,6 +15,10 @@ spec:
     metadata:
       labels:
         app: ingestion
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.ingestion.service.port }}"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: {{ .Release.Name }}-ingestion
       {{- include "gravix.imagePullSecrets" . | nindent 6 }}
@@ -32,7 +36,8 @@ spec:
             capabilities:
               drop: ["ALL"]
           ports:
-            - containerPort: {{ .Values.ingestion.service.port }}
+            - name: http
+              containerPort: {{ .Values.ingestion.service.port }}
           env:
             - name: API_KEY
               valueFrom:
@@ -89,10 +94,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}-ingestion
+  labels:
+    app: ingestion
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   type: {{ .Values.ingestion.service.type }}
   ports:
-    - port: {{ .Values.ingestion.service.port }}
+    - name: http
+      port: {{ .Values.ingestion.service.port }}
       targetPort: {{ .Values.ingestion.service.port }}
   selector:
     app: ingestion
