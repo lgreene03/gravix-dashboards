@@ -99,7 +99,7 @@ jobs:
           go build -o bin/load-generator ./cmd/load_generator/
           go build -o bin/purge ./cmd/purge/
 
-  helm-lint:
+  helm-validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,12 +107,54 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
-      - name: Lint Helm chart
+      - name: Lint Helm chart (dev values)
         run: |
           helm lint deploy/gravix \
             --set global.apiKey=test-key-at-least-16ch \
             --set global.storage.accessKey=test-access-key \
             --set global.storage.secretKey=test-secret-at-least-16ch
+
+      - name: Lint Helm chart (prod values)
+        run: |
+          helm lint deploy/gravix \
+            -f deploy/gravix/values-prod.yaml \
+            --set global.apiKey=test-key-at-least-16ch \
+            --set global.storage.accessKey=test-access-key \
+            --set global.storage.secretKey=test-secret-at-least-16ch \
+            --set certManager.email=test@example.com
+
+      - name: Template render (dev)
+        run: |
+          helm template gravix deploy/gravix \
+            --set global.apiKey=test-key-at-least-16ch \
+            --set global.storage.accessKey=test-access-key \
+            --set global.storage.secretKey=test-secret-at-least-16ch \
+            > /dev/null
+
+      - name: Template render (prod)
+        run: |
+          helm template gravix deploy/gravix \
+            -f deploy/gravix/values-prod.yaml \
+            --set global.apiKey=test-key-at-least-16ch \
+            --set global.storage.accessKey=test-access-key \
+            --set global.storage.secretKey=test-secret-at-least-16ch \
+            --set certManager.email=test@example.com \
+            > /dev/null
+
+      - name: Verify resource count (prod)
+        run: |
+          COUNT=$(helm template gravix deploy/gravix \
+            -f deploy/gravix/values-prod.yaml \
+            --set global.apiKey=test-key-at-least-16ch \
+            --set global.storage.accessKey=test-access-key \
+            --set global.storage.secretKey=test-secret-at-least-16ch \
+            --set certManager.email=test@example.com \
+            2>/dev/null | grep -c '^kind:')
+          echo "Production resource count: ${COUNT}"
+          if [ "$COUNT" -lt 40 ]; then
+            echo "::error::Expected at least 40 resources, got ${COUNT}"
+            exit 1
+          fi
 
   docker-lint:
     runs-on: ubuntu-latest

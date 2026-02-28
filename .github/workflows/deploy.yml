@@ -1,0 +1,279 @@
+name: Deploy
+
+# Triggered after CI completes on main (images are built and scanned),
+# or manually via workflow_dispatch for ad-hoc deployments.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: "Image tag to deploy (e.g., sha-abc1234 or 1.0.0)"
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+  HELM_CHART: deploy/gravix
+  RELEASE_NAME: gravix
+
+jobs:
+  # ─── Determine deployment parameters ───
+  prepare:
+    runs-on: ubuntu-latest
+    # Only run if CI succeeded (workflow_run) or manual trigger (workflow_dispatch)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    outputs:
+      environment: ${{ steps.params.outputs.environment }}
+      image_tag: ${{ steps.params.outputs.image_tag }}
+      sha_short: ${{ steps.params.outputs.sha_short }}
+    steps:
+      - name: Determine deployment parameters
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+            echo "sha_short=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            # Auto-deploy to staging after CI passes on main
+            SHA_SHORT=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+            echo "environment=staging" >> "$GITHUB_OUTPUT"
+            echo "image_tag=sha-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+            echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ─── Helm diff preview (dry-run) ───
+  diff:
+    runs-on: ubuntu-latest
+    needs: prepare
+    environment: ${{ needs.prepare.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install Helm Diff plugin
+        run: helm plugin install https://github.com/databus23/helm-diff
+
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set kubeconfig
+        run: echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+
+      - name: Helm diff (what will change)
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          NAMESPACE="${{ needs.prepare.outputs.environment == 'production' && 'gravix-prod' || 'gravix-staging' }}"
+          VALUES_FILE="${{ needs.prepare.outputs.environment == 'production' && 'deploy/gravix/values-prod.yaml' || 'deploy/gravix/values.yaml' }}"
+          IMAGE_TAG="${{ needs.prepare.outputs.image_tag }}"
+
+          helm diff upgrade ${{ env.RELEASE_NAME }} ${{ env.HELM_CHART }} \
+            -f "${VALUES_FILE}" \
+            --namespace "${NAMESPACE}" \
+            --set ingestion.image.tag="${IMAGE_TAG}" \
+            --set rollupJob.image.tag="${IMAGE_TAG}" \
+            --set retentionJob.image.tag="${IMAGE_TAG}" \
+            --allow-unreleased \
+            --three-way-merge \
+            2>&1 || true
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f /tmp/kubeconfig
+
+  # ─── Deploy to staging ───
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [prepare, diff]
+    if: needs.prepare.outputs.environment == 'staging'
+    environment:
+      name: staging
+      url: https://gravix-staging.example.com
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set kubeconfig
+        run: echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+
+      - name: Create namespace if not exists
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: kubectl create namespace gravix-staging --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy to staging
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          IMAGE_TAG="${{ needs.prepare.outputs.image_tag }}"
+
+          helm upgrade --install ${{ env.RELEASE_NAME }} ${{ env.HELM_CHART }} \
+            --namespace gravix-staging \
+            --set ingestion.image.tag="${IMAGE_TAG}" \
+            --set rollupJob.image.tag="${IMAGE_TAG}" \
+            --set retentionJob.image.tag="${IMAGE_TAG}" \
+            --set global.imageRegistry="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}" \
+            --wait \
+            --timeout 5m \
+            --atomic
+
+      - name: Verify deployment
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          echo "=== Deployment status ==="
+          kubectl -n gravix-staging rollout status deployment/${{ env.RELEASE_NAME }}-ingestion --timeout=120s
+          kubectl -n gravix-staging rollout status deployment/${{ env.RELEASE_NAME }}-dashboard --timeout=60s
+
+          echo ""
+          echo "=== Pod health ==="
+          kubectl -n gravix-staging get pods -l app.kubernetes.io/instance=${{ env.RELEASE_NAME }}
+
+          echo ""
+          echo "=== Ingestion readiness ==="
+          kubectl -n gravix-staging wait --for=condition=ready pod \
+            -l app=ingestion --timeout=120s
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f /tmp/kubeconfig
+
+  # ─── Smoke test staging ───
+  smoke-test:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set kubeconfig
+        run: echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+
+      - name: Run smoke tests
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          # Port-forward to ingestion service
+          kubectl -n gravix-staging port-forward svc/${{ env.RELEASE_NAME }}-ingestion 8080:8080 &
+          PF_PID=$!
+          sleep 3
+
+          echo "=== Health check ==="
+          curl -sf http://localhost:8080/live || { echo "Liveness check failed"; kill $PF_PID; exit 1; }
+          curl -sf http://localhost:8080/ready || { echo "Readiness check failed"; kill $PF_PID; exit 1; }
+
+          echo ""
+          echo "=== Metrics endpoint ==="
+          curl -sf http://localhost:8080/metrics | head -5 || { echo "Metrics check failed"; kill $PF_PID; exit 1; }
+
+          echo ""
+          echo "All smoke tests passed"
+          kill $PF_PID
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f /tmp/kubeconfig
+
+  # ─── Deploy to production (manual gate) ───
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [prepare, diff]
+    if: needs.prepare.outputs.environment == 'production'
+    environment:
+      name: production
+      url: https://gravix.example.com
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set kubeconfig
+        run: echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+
+      - name: Create namespace if not exists
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: kubectl create namespace gravix-prod --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy to production
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          IMAGE_TAG="${{ needs.prepare.outputs.image_tag }}"
+
+          helm upgrade --install ${{ env.RELEASE_NAME }} ${{ env.HELM_CHART }} \
+            -f deploy/gravix/values-prod.yaml \
+            --namespace gravix-prod \
+            --set ingestion.image.tag="${IMAGE_TAG}" \
+            --set rollupJob.image.tag="${IMAGE_TAG}" \
+            --set retentionJob.image.tag="${IMAGE_TAG}" \
+            --set certManager.email="${{ secrets.CERT_MANAGER_EMAIL }}" \
+            --wait \
+            --timeout 10m \
+            --atomic
+
+      - name: Verify deployment
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+        run: |
+          echo "=== Deployment status ==="
+          kubectl -n gravix-prod rollout status deployment/${{ env.RELEASE_NAME }}-ingestion --timeout=180s
+          kubectl -n gravix-prod rollout status deployment/${{ env.RELEASE_NAME }}-dashboard --timeout=60s
+
+          echo ""
+          echo "=== Pod health ==="
+          kubectl -n gravix-prod get pods -l app.kubernetes.io/instance=${{ env.RELEASE_NAME }}
+
+          echo ""
+          echo "=== Ingestion readiness ==="
+          kubectl -n gravix-prod wait --for=condition=ready pod \
+            -l app=ingestion --timeout=180s
+
+          echo ""
+          echo "=== HPA status ==="
+          kubectl -n gravix-prod get hpa
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f /tmp/kubeconfig
