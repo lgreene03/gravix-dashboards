@@ -1,5 +1,11 @@
 version: '3.8'
 
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
 services:
   ingestion:
     build:
@@ -28,6 +34,10 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
 
   init-minio:
     image: minio/mc:RELEASE.2024-03-13T23-51-57Z
@@ -40,19 +50,23 @@ services:
       "
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env}
     depends_on:
       minio:
         condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.25
+    networks:
+      - backend
 
   trino:
     image: trinodb/trino:351
     container_name: gravix-trino
     ports:
-      - "8081:8080" # Trino UI
+      - "127.0.0.1:8081:8080" # Trino UI — localhost only
     environment:
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-admin}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-change-me-to-a-real-secret}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?S3_ACCESS_KEY is required - set it in .env}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:?S3_SECRET_KEY is required - set it in .env}
     volumes:
       - ./storage/trino/config:/etc/trino
       - ./storage/trino/catalog:/etc/trino/catalog.tpl:ro
@@ -64,7 +78,9 @@ services:
       - |
         mkdir -p /etc/trino/catalog
         for f in /etc/trino/catalog.tpl/*; do
-          envsubst < "$$f" > "/etc/trino/catalog/$$(basename $$f)"
+          sed -e "s|\$${S3_ACCESS_KEY}|$$S3_ACCESS_KEY|g" \
+              -e "s|\$${S3_SECRET_KEY}|$$S3_SECRET_KEY|g" \
+              "$$f" > "/etc/trino/catalog/$$(basename $$f)"
         done
         exec /usr/lib/trino/bin/run-trino
     healthcheck:
@@ -73,6 +89,10 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    mem_limit: 3g
+    cpus: 1.0
+    networks:
+      - backend
 
   cube:
     image: cubejs/cube:v0.35
@@ -86,7 +106,7 @@ services:
       - CUBEJS_DB_PRESTO_CATALOG=gravix
       - CUBEJS_DB_NAME=raw
       - CUBEJS_DB_USER=trino
-      - CUBEJS_DEV_MODE=true
+      - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
     volumes:
       - ./cube/cube.js:/cube/conf/cube.js
@@ -100,6 +120,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - frontend
+      - backend
 
   dashboard:
     image: nginx:1.25-alpine
@@ -117,16 +142,26 @@ services:
     depends_on:
       cube:
         condition: service_healthy
+    mem_limit: 64m
+    cpus: 0.25
+    networks:
+      - frontend
 
   load-generator:
     build:
       context: .
       dockerfile: services/load_generator/Dockerfile
     container_name: gravix-load-generator
-    command: ["./load-generator", "--target", "http://ingestion:8080/api/v1/facts", "--api-key", "${API_KEY}", "--qps", "5", "--concurrency", "2"]
+    command: ["./load-generator", "--target", "http://ingestion:8080/api/v1/facts", "--qps", "5", "--concurrency", "2"]
+    environment:
+      - API_KEY=${API_KEY}
     depends_on:
       ingestion:
         condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.25
+    networks:
+      - backend
 
   request-metrics-rollup:
     build:
@@ -156,6 +191,10 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
 
   service-events-rollup:
     build:
@@ -185,6 +224,10 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
 
   purge:
     build:
@@ -216,6 +259,10 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.25
+    networks:
+      - backend
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -224,19 +271,23 @@ services:
       - ./storage/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./storage/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090" # localhost only
     restart: always
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
       interval: 10s
       timeout: 3s
       retries: 3
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
 
   grafana:
     image: grafana/grafana:10.4.0
     container_name: gravix-grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000" # localhost only
     volumes:
       - ./storage/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
@@ -248,16 +299,20 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - backend
 
   minio:
     image: minio/minio:RELEASE.2024-03-15T01-07-19Z
     container_name: gravix-minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"  # localhost only
+      - "127.0.0.1:9001:9001"  # localhost only
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set it in .env}
     volumes:
       - ./data/minio:/data
     command: server /data --console-address ":9001"
@@ -268,3 +323,7 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend

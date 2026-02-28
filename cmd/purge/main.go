@@ -68,13 +68,18 @@ func main() {
 		log.Printf("Error purging warehouse/request_metrics_minute: %v", err)
 	}
 
-	total := rawDeleted + eventDeleted + warehouseDeleted
+	evtWarehouseDeleted, err := purgeOldData(ctx, store, "warehouse/service_events_daily", cutoffStr, dryRun)
+	if err != nil {
+		log.Printf("Error purging warehouse/service_events_daily: %v", err)
+	}
+
+	total := rawDeleted + eventDeleted + warehouseDeleted + evtWarehouseDeleted
 	action := "deleted"
 	if dryRun {
 		action = "would delete"
 	}
-	log.Printf("Purge complete: %s %d files (raw facts: %d, raw events: %d, warehouse: %d)",
-		action, total, rawDeleted, eventDeleted, warehouseDeleted)
+	log.Printf("Purge complete: %s %d files (raw facts: %d, raw events: %d, warehouse metrics: %d, warehouse events: %d)",
+		action, total, rawDeleted, eventDeleted, warehouseDeleted, evtWarehouseDeleted)
 }
 
 // purgeOldData lists all keys under a prefix and deletes those containing dates older than the cutoff.

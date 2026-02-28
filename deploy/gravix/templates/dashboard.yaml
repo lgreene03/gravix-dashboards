@@ -10,7 +10,7 @@ data:
   # Inject runtime config so the dashboard knows where the Cube.js API lives
   config.js: |
     window.GRAVIX_CONFIG = {
-      cubeApiUrl: "http://{{ .Release.Name }}-cube:4000/cubejs-api/v1/load",
+      cubeApiUrl: "/cubejs-api/v1/load",
       refreshIntervalMs: 60000,
       staleThresholdMs: 600000
     };
@@ -21,14 +21,61 @@ data:
         root /usr/share/nginx/html;
         index index.html;
 
+        # ── Security headers ──
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+        # HSTS — enforce HTTPS for 1 year, include subdomains, allow preload list
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+
+        # Content Security Policy — restrict resource loading to same origin + Cube API
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+        # Prevent MIME type sniffing on downloads
+        add_header X-Download-Options "noopen" always;
+
+        # ── Gzip compression ──
+        gzip on;
+        gzip_types text/plain text/css application/json application/javascript text/xml;
+        gzip_min_length 256;
+
+        # ── Static asset caching ──
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+            expires 7d;
+            add_header Cache-Control "public, immutable";
+        }
+
         location / {
             try_files $uri $uri/ /index.html;
+        }
+
+        location /cubejs-api/ {
+            proxy_pass http://{{ .Release.Name }}-cube:4000/cubejs-api/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # Timeouts for potentially slow Cube.js queries
+            proxy_connect_timeout 10s;
+            proxy_read_timeout 60s;
+            proxy_send_timeout 60s;
         }
 
         location /healthz {
             access_log off;
             return 200 "ok\n";
             add_header Content-Type text/plain;
+        }
+
+        # Deny access to hidden files
+        location ~ /\. {
+            deny all;
+            access_log off;
+            log_not_found off;
         }
     }
 ---
@@ -50,9 +97,20 @@ spec:
       labels:
         app: dashboard
     spec:
+      serviceAccountName: {{ .Release.Name }}-dashboard
+      {{- include "gravix.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        fsGroup: 101
       containers:
         - name: dashboard
-          image: nginx:1.25-alpine
+          image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8000
           volumeMounts:
@@ -62,6 +120,12 @@ spec:
             - name: dashboard-config
               mountPath: /usr/share/nginx/html/config.js
               subPath: config.js
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
           livenessProbe:
             httpGet:
               path: /healthz
@@ -88,6 +152,12 @@ spec:
         - name: dashboard-config
           configMap:
             name: {{ .Release.Name }}-dashboard-config
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

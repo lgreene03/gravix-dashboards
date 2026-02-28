@@ -14,12 +14,24 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 1800
       template:
         spec:
+          serviceAccountName: {{ .Release.Name }}-jobs
+          {{- include "gravix.imagePullSecrets" . | nindent 10 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
           containers:
             - name: purge
-              image: "{{ .Values.retentionJob.image.repository }}:{{ .Values.retentionJob.image.tag }}"
+              image: {{ include "gravix.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.retentionJob.image.repository "tag" .Values.retentionJob.image.tag) | quote }}
               imagePullPolicy: {{ .Values.retentionJob.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               command: ["./purge"]
               args:
                 - "--retention-days"
@@ -41,5 +53,12 @@ spec:
                     secretKeyRef:
                       name: {{ .Release.Name }}-secrets
                       key: s3-secret-key
+              resources:
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           restartPolicy: OnFailure
 {{- end }}

@@ -62,10 +62,21 @@ spec:
       labels:
         app: trino
     spec:
+      serviceAccountName: {{ .Release.Name }}-trino
+      {{- include "gravix.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
       initContainers:
         - name: render-catalog
           image: busybox:1.36
-          command: ['sh', '-c', 'envsubst < /tpl/gravix.properties.tpl > /catalog/gravix.properties']
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ['sh', '-c', 'sed -e "s|\${S3_ACCESS_KEY}|$S3_ACCESS_KEY|g" -e "s|\${S3_SECRET_KEY}|$S3_SECRET_KEY|g" /tpl/gravix.properties.tpl > /catalog/gravix.properties']
           env:
             - name: S3_ACCESS_KEY
               valueFrom:
@@ -86,6 +97,11 @@ spec:
       containers:
         - name: trino
           image: "{{ .Values.storage.trino.image.repository }}:{{ .Values.storage.trino.image.tag }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8080
           volumeMounts:
@@ -100,8 +116,6 @@ spec:
               subPath: jvm.config
             - name: catalog-rendered
               mountPath: /etc/trino/catalog
-            - name: warehouse
-              mountPath: /data/warehouse
           livenessProbe:
             httpGet:
               path: /v1/info
@@ -131,13 +145,6 @@ spec:
             name: {{ .Release.Name }}-trino-config
         - name: catalog-rendered
           emptyDir: {}
-        - name: warehouse
-          {{- if .Values.storage.minio.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ .Release.Name }}-minio-pvc
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
 ---
 apiVersion: v1
 kind: Service

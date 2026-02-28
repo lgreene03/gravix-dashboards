@@ -16,10 +16,21 @@ spec:
       labels:
         app: ingestion
     spec:
+      serviceAccountName: {{ .Release.Name }}-ingestion
+      {{- include "gravix.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
       containers:
         - name: ingestion
-          image: "{{ .Values.ingestion.image.repository }}:{{ .Values.ingestion.image.tag }}"
+          image: {{ include "gravix.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.ingestion.image.repository "tag" .Values.ingestion.image.tag) | quote }}
           imagePullPolicy: {{ .Values.ingestion.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: {{ .Values.ingestion.service.port }}
           env:
@@ -54,7 +65,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /live
+              path: /ready
               port: {{ .Values.ingestion.service.port }}
             initialDelaySeconds: 3
             periodSeconds: 5
@@ -91,9 +102,16 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ .Release.Name }}-ingestion-pvc
+  labels:
+    app: ingestion
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   accessModes:
     - ReadWriteOnce
+  {{- if .Values.ingestion.persistence.storageClass }}
+  storageClassName: {{ .Values.ingestion.persistence.storageClass | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.ingestion.persistence.size }}

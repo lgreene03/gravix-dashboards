@@ -1,0 +1,39 @@
+Gravix has been deployed successfully!
+
+=== Service Endpoints ===
+
+Dashboard:   kubectl port-forward svc/{{ .Release.Name }}-dashboard 8000:8000
+Ingestion:   kubectl port-forward svc/{{ .Release.Name }}-ingestion {{ .Values.ingestion.service.port }}:{{ .Values.ingestion.service.port }}
+Cube.js:     kubectl port-forward svc/{{ .Release.Name }}-cube 4000:4000
+{{- if .Values.storage.trino.enabled }}
+Trino:       kubectl port-forward svc/{{ .Release.Name }}-trino 8080:8080
+{{- end }}
+{{- if .Values.storage.minio.enabled }}
+MinIO:       kubectl port-forward svc/{{ .Release.Name }}-minio 9000:9000
+MinIO UI:    kubectl port-forward svc/{{ .Release.Name }}-minio 9001:9001
+{{- end }}
+
+=== Health Checks ===
+
+  Ingestion liveness:   GET /live
+  Ingestion readiness:  GET /ready
+  Dashboard:            GET /healthz
+  Cube.js:              GET /readyz
+  Trino:                GET /v1/info
+  MinIO:                GET /minio/health/live
+
+=== Quick Test ===
+
+Send a test event:
+
+  export API_KEY=$(kubectl get secret {{ .Release.Name }}-secrets -o jsonpath='{.data.api-key}' | base64 -d)
+  curl -X POST http://localhost:{{ .Values.ingestion.service.port }}/api/v1/facts \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: $API_KEY" \
+    -d '{"event_id":"018b3e34-5b6c-7e8f-9a0b-1c2d3e4f5a6b","event_time":"{{ now | date "2006-01-02T15:04:05Z" }}","service":"test","method":"GET","path_template":"/health","status_code":200,"latency_ms":42}'
+
+=== Scheduled Jobs ===
+
+  Request Metrics Rollup: {{ .Values.rollupJob.schedule }}
+  Events Rollup:          0 * * * * (hourly)
+  Data Retention Purge:   {{ .Values.retentionJob.schedule }} ({{ .Values.retentionJob.retentionDays }}-day retention)

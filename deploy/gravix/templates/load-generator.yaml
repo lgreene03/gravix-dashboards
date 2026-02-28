@@ -17,10 +17,21 @@ spec:
       labels:
         app: load-generator
     spec:
+      serviceAccountName: {{ .Release.Name }}-load-generator
+      {{- include "gravix.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
       containers:
         - name: load-generator
-          image: "{{ .Values.loadGenerator.image.repository }}:{{ .Values.loadGenerator.image.tag }}"
+          image: {{ include "gravix.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.loadGenerator.image.repository "tag" .Values.loadGenerator.image.tag) | quote }}
           imagePullPolicy: {{ .Values.loadGenerator.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           command: ["./load-generator"]
           args:
             - "--target"
