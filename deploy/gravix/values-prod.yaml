@@ -200,3 +200,12 @@ resourceQuota:
   limitsMemory: "32Gi"
   pvcs: "5"
   pods: "30"
+
+# ─── Backups ───
+# Daily snapshots of raw/ and warehouse/ data.
+# Schedule runs at 02:00 UTC, before retention purge at 03:00 UTC.
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionDays: 14              # Keep 2 weeks of backup snapshots
+  # destinationBucket: ""        # Set to a cross-region bucket for DR

@@ -183,3 +183,14 @@ resourceQuota:
   limitsMemory: "16Gi"  # Total memory limits
   pvcs: "5"           # Max PersistentVolumeClaims
   pods: "30"          # Max pods in namespace
+
+# S3/MinIO data backup. Creates point-in-time snapshots of raw/ and warehouse/
+# prefixes. Backups are stored in the same bucket under a backups/ prefix
+# (or in a separate destinationBucket for cross-region DR).
+backup:
+  enabled: false
+  schedule: "0 2 * * *"          # Daily at 02:00 UTC (before retention at 03:00)
+  retentionDays: 7               # Keep backup snapshots for 7 days
+  # prefix: "backups"            # S3 prefix for backup snapshots
+  # destinationBucket: ""        # Separate bucket for cross-region DR
+  # activeDeadlineSeconds: 3600  # Max runtime for backup job
