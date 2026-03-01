@@ -29,7 +29,7 @@
 | **New Relic** | Per GB ingested ($0.30/GB after free tier) | $50-200/mo | Generous free tier (100GB/mo), full platform | Costs spike with volume, complex |
 | **Grafana Cloud** | Usage-based (free tier + $8/host) | $80-160/mo | Open ecosystem, Prometheus-native | Requires PromQL knowledge, operational overhead |
 | **Self-hosted Prom/Grafana** | Infrastructure only | $50-100/mo (EC2) | Free software, full control | High ops burden, scaling is painful |
-| **Gravix** | Per events/month | **$29-249/mo** | Simple, cheap, no agents, no lock-in | No traces, no logs, no real-time |
+| **Gravix** | Per events/month | **$29-499/mo** | Simple, cheap, no agents, no lock-in | No traces, no logs, no real-time |
 
 ### Where Gravix Wins
 
@@ -123,18 +123,16 @@ At 5 QPS average per customer (typical small-to-mid team):
 
 Storage is essentially free. Even at 100 QPS, storage costs are under $3/mo per customer.
 
-### Scaling Bottleneck: Trino
+### Scaling Bottleneck: Trino → DuckDB Migration
 
-Trino is the most expensive component (3 GB memory minimum) and does not horizontally scale in the current architecture. Options as customer count grows:
+Trino is the most expensive component (3 GB memory minimum) and does not horizontally scale in the current architecture. At Phase 5 (Month 10-14), **all customers** migrate to embedded DuckDB:
 
-| Approach | Pros | Cons | Cost Impact |
-|----------|------|------|------------|
-| **Shared single Trino** (current) | Simple, cheap | Query contention at scale | Included in node cost |
-| **Trino per tenant group** (5-10 tenants each) | Better isolation | 3 GB memory per group | +$70/mo per group |
-| **AWS Athena (serverless)** | Zero management, auto-scales | Per-query pricing, higher latency | ~$5/TB scanned |
-| **DuckDB embedded** | No separate process, fast | Single-node only, no multi-tenant | Near-zero |
+| Query Engine | Pros | Cons | Cost Impact |
+|-------------|------|------|------------|
+| **Trino** (Phase 1-4) | Mature, SQL-standard | 3 GB memory, separate process, query contention | ~$70/mo (node capacity) |
+| **DuckDB** (Phase 5+) | No separate process, reads Parquet from S3 directly, fast for small-to-medium scans | Single-node only | Near-zero |
 
-**Recommendation**: Start with shared Trino. Migrate shared tier to DuckDB at Phase 5 (Month 10-14). Retain Trino/Athena for Enterprise dedicated compute.
+**Approach**: One architecture for all customers. Start with shared Trino. Full cutover to DuckDB at Phase 5 — Trino is removed entirely from the stack. No per-customer engine selection, no dedicated compute tiers.
 
 ### Cost Evolution by Phase
 
@@ -145,11 +143,11 @@ As the product evolves through the 6-phase roadmap (see [PRODUCT_ROADMAP.md](../
 | **1: SaaS Foundation** | 1-2 | RDS db.t4g.micro, SES, Route53 | +$13/mo | $177/mo |
 | **2: Analytics & Alerting** | 3-5 | SES increase (alert emails) | +$5/mo | $182/mo |
 | **3: Developer Experience** | 5-7 | CloudFront (docs site) | +$2/mo | $184/mo |
-| **4: Enterprise Readiness** | 7-10 | Cognito, dedicated Trino (per Enterprise) | +$3-73/mo | $187-257/mo |
-| **5: Scale & Performance** | 10-14 | ElastiCache Redis; DuckDB replaces shared Trino | -$58 to +$176/mo | $129-433/mo |
-| **6: Platform** | 14-18 | API Gateway (optional) | +$1-5/mo | $130-438/mo |
+| **4: Enterprise Readiness** | 7-10 | Cognito | +$3/mo | $187/mo |
+| **5: Scale & Performance** | 10-14 | ElastiCache Redis; DuckDB replaces Trino (full cutover) | -$58/mo | $129/mo |
+| **6: Platform** | 14-18 | API Gateway (optional) | +$1-5/mo | $130-134/mo |
 
-Key insight: **Phase 5 can reduce costs** — replacing shared Trino with embedded DuckDB eliminates the 3Gi memory footprint (~$70/mo savings). Multi-region deployment is the main cost driver at scale (+$164/mo per additional region).
+Key insight: **Phase 5 reduces costs for everyone** — replacing Trino with embedded DuckDB eliminates the 3Gi memory footprint (~$70/mo savings). One architecture, no per-customer infrastructure. Multi-region deployment is the main cost driver at scale (+$164/mo per additional region).
 
 ---
 
@@ -165,7 +163,7 @@ Price by events ingested (not hosts, not seats). This aligns cost with value —
 | **Starter** | 10M | ~4 | $29/mo | $2.90/M events |
 | **Pro** | 50M | ~19 | $99/mo | $1.98/M events |
 | **Business** | 200M | ~77 | $249/mo | $1.25/M events |
-| **Enterprise** | Custom | Custom | Custom | ~$1.00/M events |
+| **Enterprise** | 500M | ~193 | $499/mo | $1.00/M events |
 
 ### Why Events, Not Hosts
 
@@ -196,9 +194,9 @@ Pricing tiers expand as the product matures:
 |----------|----------------|---------|
 | Month 1-2 | Free, Starter ($29), Pro ($99) | Launch tiers. Validate PMF. |
 | Month 3-6 | + Business ($249) | Add after alerting ships (Phase 2). |
-| Month 7-10 | + Enterprise ($500+ custom) | RBAC/SSO unlock enterprise sales. Annual billing at 10% discount. |
+| Month 7-10 | + Enterprise ($499) | RBAC/SSO unlock enterprise sales. Annual billing at 10% discount. |
 | Month 10-14 | Overage charges introduced | $1.50/M events (Starter), $1.25/M (Pro), $1.00/M (Business). Annual discount increases to 15%. |
-| Month 14-18 | Add-on pricing | White-label (+$100-200/mo), data export (+$50/mo). Enterprise add-ons only. |
+| Month 14-18 | Add-on pricing | Data export (+$50/mo). Enterprise add-on. |
 
 ### Per-Tenant Rate Limits by Plan
 
@@ -208,7 +206,7 @@ Pricing tiers expand as the product matures:
 | Starter | 20 req/s | 10M | 5 |
 | Pro | 100 req/s | 50M | 20 |
 | Business | 500 req/s | 200M | Unlimited |
-| Enterprise | Custom | Custom | Unlimited + SSO |
+| Enterprise | 1,000 req/s | 500M | Unlimited + SSO |
 
 ---
 
@@ -216,36 +214,38 @@ Pricing tiers expand as the product matures:
 
 ### Cost of Goods Sold (COGS) per Customer
 
+All customers run on the same shared infrastructure — Enterprise differentiates on features (RBAC, SSO, audit logs), not dedicated compute.
+
 | Plan | Revenue | Infra COGS | Gross Profit | Gross Margin |
 |------|---------|------------|-------------|-------------|
 | **Starter** ($29/mo) | $29 | $5-8 | $21-24 | 72-83% |
 | **Pro** ($99/mo) | $99 | $12-20 | $79-87 | 80-88% |
 | **Business** ($249/mo) | $249 | $25-45 | $204-224 | 82-90% |
-| **Enterprise** ($500+/mo) | $500+ | $73-120 | $380-430+ | 76-86% |
+| **Enterprise** ($499/mo) | $499 | $25-45 | $454-474 | 91-95% |
 
-COGS includes: proportional share of compute, S3 storage, S3 API calls, ALB, EKS control plane, data transfer. Enterprise COGS includes dedicated Trino instance ($70/mo) and Cognito SSO ($2.75/mo).
+COGS includes: proportional share of compute, S3 storage, S3 API calls, ALB, EKS control plane, data transfer. Enterprise COGS is similar to Business since all customers share the same infrastructure — Enterprise margins are significantly higher because revenue is higher on the same cost base.
 
 ### COGS Evolution by Phase
 
-As the platform matures, per-customer COGS decreases and gross margins improve — particularly at Phase 5 when DuckDB replaces Trino for shared-tier customers:
+As the platform matures, per-customer COGS decreases and gross margins improve — particularly at Phase 5 when DuckDB replaces Trino for **all customers**:
 
-| Phase | Shared Tier COGS (Pro) | Enterprise COGS | Blended Gross Margin | Key Cost Driver |
-|-------|----------------------|-----------------|---------------------|----------------|
-| **1: SaaS Foundation** | $12-20 | — | 72-85% | Trino 3Gi memory overhead |
-| **2: Analytics & Alerting** | $12-20 | — | 75-85% | SES alert emails (+$5/mo shared) |
-| **3: Developer Experience** | $12-20 | — | 78-87% | Customer count improves fixed-cost spread |
-| **4: Enterprise Readiness** | $12-20 | $73-120 | 80-88% | Dedicated Trino (+$70/mo per Enterprise) |
-| **5: Scale & Performance** | $5-10 | $73-120 | 85-92% | DuckDB eliminates shared Trino (-$70/mo) |
-| **6: Platform** | $5-10 | $73-120 | 85-92% | Marginal cost of add-ons near zero |
+| Phase | COGS per Customer (Pro) | Gross Margin | Key Cost Driver |
+|-------|------------------------|-------------|----------------|
+| **1: SaaS Foundation** | $12-20 | 72-85% | Trino 3Gi memory overhead |
+| **2: Analytics & Alerting** | $12-20 | 75-85% | SES alert emails (+$5/mo shared) |
+| **3: Developer Experience** | $12-20 | 78-87% | Customer count improves fixed-cost spread |
+| **4: Enterprise Readiness** | $12-20 | 80-88% | Cognito adds ~$3/mo shared (minimal) |
+| **5: Scale & Performance** | $5-10 | 88-94% | DuckDB full cutover eliminates Trino (-$70/mo) |
+| **6: Platform** | $5-10 | 88-94% | Marginal cost of add-ons near zero |
 
-Phase 5 is the critical margin inflection point: replacing shared Trino (3Gi memory, dedicated process) with embedded DuckDB (reads Parquet from S3 directly, no separate process) reduces per-customer compute COGS by approximately 40-50%.
+Phase 5 is the critical margin inflection point: replacing Trino (3Gi memory, dedicated process) with embedded DuckDB (reads Parquet from S3 directly, no separate process) reduces per-customer compute COGS by approximately 40-50%. **All customers benefit equally** — one architecture, one migration.
 
 ### Key Metrics
 
 | Metric | Target (Phase 1-3) | Target (Phase 4-6) |
 |--------|--------------------|--------------------|
-| Gross margin | 75-85% | 85-92% |
-| Infrastructure cost per customer | $5-45/mo | $5-120/mo (Enterprise higher, shared lower) |
+| Gross margin | 75-85% | 88-94% |
+| Infrastructure cost per customer | $5-45/mo | $5-10/mo (same for all tiers) |
 | Customer acquisition cost (CAC) | $0 (open-source funnel) | $50-200 (content + SDKs) |
 | LTV at 12-mo retention | $350 (S), $1,190 (P), $2,990 (B) | $350 (S), $1,190 (P), $2,990 (B), $6,000+ (E) |
 | Break-even customers | ~15-20 (Pro mix) | ~8-10 (with Enterprise) |
@@ -253,14 +253,13 @@ Phase 5 is the critical margin inflection point: replacing shared Trino (3Gi mem
 
 ### Fixed vs Variable Costs
 
-| Cost Type | Components | Phase 1-3 | Phase 4-6 |
+| Cost Type | Components | Phase 1-4 | Phase 5-6 |
 |-----------|-----------|-----------|-----------|
-| **Fixed** | EKS control plane, ALB, base node | ~$177/mo | ~$130-190/mo |
+| **Fixed** | EKS control plane, ALB, base node | ~$187/mo | ~$129/mo |
 | **Variable** | S3 storage, S3 API calls, additional nodes | ~$0.15-5/customer | ~$0.10-3/customer |
 | **Step-function** | Additional EC2 nodes (every ~20 customers) | ~$70-140/step | ~$30-70/step (DuckDB) |
-| **Enterprise-fixed** | Dedicated Trino, Cognito, per-tenant infra | — | ~$73/Enterprise customer |
 
-The high fixed cost ($164-177/mo EKS + base node) means the first 5-10 customers are critical to reach profitability. After Phase 5 DuckDB migration, fixed costs drop and shared-tier marginal costs approach near-zero.
+No per-customer infrastructure costs. All customers share the same stack. Enterprise customers pay more for features, but their infra COGS is identical to Business customers. The high fixed cost ($164-187/mo EKS + base node) means the first 5-10 customers are critical to reach profitability. After Phase 5 DuckDB migration, fixed costs drop to ~$129/mo and marginal costs approach near-zero.
 
 ---
 
@@ -298,13 +297,11 @@ Customer C ─┘   (tenant header)  └─ S3: gravix-prod/tenants/gamma/raw/
 
 **Estimated effort**: 2-4 weeks of engineering work.
 
-### Phase 2: Dedicated Compute (Enterprise)
+### Design Principle: One Architecture for All
 
-For Enterprise customers needing isolation guarantees:
-- Dedicated Trino instance (3 GB memory reserved)
-- Dedicated S3 bucket
-- Dedicated ingestion namespace
-- SLA-backed query performance
+Enterprise customers run on the **same shared infrastructure** as all other plans. There is no dedicated compute, no per-customer query engines, no per-customer S3 buckets. Enterprise differentiates on **features** (RBAC, SSO, audit logs, higher rate limits, team namespaces), not infrastructure.
+
+This keeps the platform simple to operate, deploy, and scale — one Helm chart, one set of monitoring, one upgrade path.
 
 ---
 
@@ -344,7 +341,7 @@ Aligned with the 6-phase product roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_RO
 
 ### Phase 4: Enterprise Sales Motion (Month 7-10)
 
-- Launch Enterprise tier ($500+ custom) — RBAC, SSO, audit logs
+- Launch Enterprise tier ($499) — RBAC, SSO, audit logs (same shared infra, premium features)
 - Annual billing option (10% discount for commitment)
 - SOC 2 Type II certification process
 - Direct enterprise sales outreach (CTO/VP Eng at 50-200 person companies)
@@ -366,7 +363,7 @@ Aligned with the 6-phase product roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_RO
 
 - Terraform provider drives GitOps-native Enterprise adoption
 - Marketplace integrations (PagerDuty, OpsGenie, Teams) expand use cases
-- White-label option for MSPs and platform teams (+$100-200/mo)
+- Tenant branding (Enterprise) — custom logo, colors, email templates (config-only, no separate infra)
 - Data export add-on (+$50/mo) for compliance-heavy customers
 - Public API enables third-party tooling
 - **Target**: 150-300 customers, 20-40 Enterprise
@@ -378,35 +375,37 @@ Aligned with the 6-phase product roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_RO
 
 ### Revenue Model (Phase-Aligned)
 
-| Month | Phase | Free | Starter ($29) | Pro ($99) | Business ($249) | Enterprise ($500+) | MRR |
+| Month | Phase | Free | Starter ($29) | Pro ($99) | Business ($249) | Enterprise ($499) | MRR |
 |-------|-------|------|---------------|-----------|----------------|-------------------|-----|
 | 2 | 1 | 5 | 2 | 0 | 0 | 0 | $58 |
 | 4 | 2 | 15 | 5 | 2 | 0 | 0 | $343 |
 | 6 | 2 | 30 | 8 | 5 | 1 | 0 | $976 |
-| 8 | 4 | 50 | 12 | 8 | 3 | 1 | $2,389 |
-| 10 | 4 | 70 | 15 | 12 | 5 | 2 | $3,868 |
-| 12 | 5 | 100 | 18 | 18 | 8 | 4 | $6,306 |
-| 14 | 5 | 130 | 20 | 25 | 12 | 7 | $9,555 |
-| 16 | 6 | 160 | 22 | 30 | 15 | 10 | $12,883 |
-| 18 | 6 | 200 | 25 | 35 | 18 | 15 | $17,710 |
+| 8 | 4 | 50 | 12 | 8 | 3 | 1 | $2,386 |
+| 10 | 4 | 70 | 15 | 12 | 5 | 2 | $3,866 |
+| 12 | 5 | 100 | 18 | 18 | 8 | 4 | $6,292 |
+| 14 | 5 | 130 | 20 | 25 | 12 | 7 | $9,536 |
+| 16 | 6 | 160 | 22 | 30 | 15 | 10 | $12,333 |
+| 18 | 6 | 200 | 25 | 35 | 18 | 15 | $16,157 |
 
-*Enterprise pricing averages $650/mo (mix of $500 base + add-ons). MRR excludes annual billing discounts and overage charges.*
+*Enterprise is a fixed $499/mo (same shared infrastructure as all tiers). MRR excludes annual billing discounts and overage charges.*
 
 ### Cost Model (Phase-Aligned)
 
-| Month | Phase | AWS Infra | Enterprise Dedicated | Domain/TLS/DNS | SOC 2/Compliance | Total Costs | Net (MRR - Costs) |
-|-------|-------|-----------|---------------------|---------------|-----------------|-------------|-------------------|
-| 2 | 1 | $177 | $0 | $15 | $0 | $192 | -$134 |
-| 4 | 2 | $182 | $0 | $15 | $0 | $197 | +$146 |
-| 6 | 2 | $182 | $0 | $15 | $0 | $197 | +$779 |
-| 8 | 4 | $190 | $70 | $15 | $500 | $775 | +$1,614 |
-| 10 | 4 | $190 | $140 | $15 | $500 | $845 | +$3,023 |
-| 12 | 5 | $135 | $280 | $15 | $500 | $930 | +$5,376 |
-| 14 | 5 | $135 | $490 | $15 | $500 | $1,140 | +$8,415 |
-| 16 | 6 | $140 | $700 | $15 | $500 | $1,355 | +$11,528 |
-| 18 | 6 | $140 | $1,050 | $15 | $500 | $1,705 | +$16,005 |
+One shared infrastructure for all customers — no per-customer dedicated compute.
 
-*Phase 5 (Month 12): shared infra drops from $190 to $135/mo after DuckDB migration eliminates Trino. SOC 2 costs amortize to ~$500/mo ($5-15K annually). Enterprise dedicated Trino at $70/mo per customer.*
+| Month | Phase | AWS Infra | Domain/TLS/DNS | SOC 2/Compliance | Total Costs | Net (MRR - Costs) |
+|-------|-------|-----------|---------------|-----------------|-------------|-------------------|
+| 2 | 1 | $177 | $15 | $0 | $192 | -$134 |
+| 4 | 2 | $182 | $15 | $0 | $197 | +$146 |
+| 6 | 2 | $182 | $15 | $0 | $197 | +$779 |
+| 8 | 4 | $187 | $15 | $500 | $702 | +$1,684 |
+| 10 | 4 | $187 | $15 | $500 | $702 | +$3,164 |
+| 12 | 5 | $129 | $15 | $500 | $644 | +$5,648 |
+| 14 | 5 | $129 | $15 | $500 | $644 | +$8,892 |
+| 16 | 6 | $134 | $15 | $500 | $649 | +$11,684 |
+| 18 | 6 | $134 | $15 | $500 | $649 | +$15,508 |
+
+*Phase 5 (Month 12): infra drops from $187 to $129/mo after DuckDB full cutover eliminates Trino for all customers. SOC 2 costs amortize to ~$500/mo ($5-15K annually). Node scaling adds ~$70-140/mo per step at ~20 customer increments (not shown — folded into AWS Infra as needed).*
 
 *Note: Does not include engineering salaries, marketing spend, or customer support costs. These are infrastructure-only projections.*
 
@@ -416,9 +415,9 @@ Aligned with the 6-phase product roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_RO
 |-----------|-------|-------------------|----------------------|---------------|
 | First dollar | 2 | $58 | $192 | -$134 |
 | Infra break-even | 4 | $743 | $586 | +$157 |
-| $5K MRR | 11 | $27,200 | $5,900 | +$21,300 |
-| $10K MRR | 14 | $58,600 | $9,800 | +$48,800 |
-| Month 18 total | 18 | $115,400 | $15,500 | +$99,900 |
+| $5K MRR | 11 | $25,500 | $4,800 | +$20,700 |
+| $10K MRR | 15 | $57,200 | $7,700 | +$49,500 |
+| Month 18 total | 18 | $105,000 | $10,500 | +$94,500 |
 
 ### Break-Even Analysis
 
@@ -427,9 +426,9 @@ Aligned with the 6-phase product roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_RO
 | All Starter ($29) customers | ~7 customers | Covers $192/mo Phase 1 infra |
 | 50/50 Starter/Pro mix | ~4 customers | Most likely early scenario |
 | With 1 Enterprise ($500) customer | ~2 additional shared customers | Enterprise covers most fixed costs |
-| Post-DuckDB (Phase 5+) | ~2-3 Pro customers | Reduced shared infra ($135/mo) |
+| Post-DuckDB (Phase 5+) | ~2 Pro customers | Reduced infra ($129/mo) |
 
-The product reaches infrastructure profitability at Month 4 (~$343 MRR vs $197 costs). Enterprise customers dramatically improve economics — a single Enterprise customer at $500/mo covers 60%+ of shared infrastructure costs.
+The product reaches infrastructure profitability at Month 4 (~$343 MRR vs $197 costs). Because all customers share the same infrastructure — no dedicated compute, no per-customer query engines — Enterprise customers have the highest margins of any tier (~91-95%). A single Enterprise customer at $500/mo covers 250%+ of shared infrastructure costs.
 
 ---
 
@@ -437,7 +436,7 @@ The product reaches infrastructure profitability at Month 4 (~$343 MRR vs $197 c
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|-----------|------------|
-| **Trino scaling bottleneck** | Can't serve 50+ tenants on single node | Medium | Plan Athena/DuckDB migration path |
+| **DuckDB single-node limit** | Single-node DuckDB may not handle 200+ tenants | Low | Parquet compaction, Redis cache, query optimization; revisit at scale |
 | **Grafana Cloud free tier** | Teams choose free over $29/mo | High | Differentiate on simplicity (no PromQL, 5-min setup) |
 | **Datadog cuts prices** | Pricing advantage erodes | Low | Stay 5-10x cheaper, focus on simplicity |
 | **Low switching costs** | Easy to churn | Medium | Build stickiness via dashboard customization, Slack integration |
@@ -456,11 +455,13 @@ The product reaches infrastructure profitability at Month 4 (~$343 MRR vs $197 c
 | 1: SaaS Foundation | Month 1-2 | 10 pw | 10 pw | Multi-tenancy, Stripe billing, onboarding |
 | 2: Analytics & Alerting | Month 3-5 | 10.5 pw | 20.5 pw | Path drill-down, threshold alerts, Slack |
 | 3: Developer Experience | Month 5-7 | 9.5 pw | 30 pw | Go/Python/Node SDKs, GitHub Action, CLI |
-| 4: Enterprise Readiness | Month 7-10 | 15 pw | 45 pw | RBAC, SSO (Cognito), audit logs, SOC 2 |
-| 5: Scale & Performance | Month 10-14 | 15 pw | 60 pw | DuckDB migration, multi-region, Redis cache |
-| 6: Platform | Month 14-18 | 15 pw | 75 pw | Custom dashboards, public API, Terraform provider |
+| 4: Enterprise Readiness | Month 7-10 | 12 pw | 42 pw | RBAC, SSO (Cognito), audit logs, SOC 2 |
+| 5: Scale & Performance | Month 10-14 | 12 pw | 54 pw | DuckDB full cutover, multi-region, Redis cache |
+| 6: Platform | Month 14-18 | 14.5 pw | 68.5 pw | Custom dashboards, public API, Terraform provider |
 
-**Total: ~75 person-weeks** (pw)
+**Total: ~68.5 person-weeks** (pw)
+
+*Reduced from ~75 pw by eliminating per-customer infrastructure work (dedicated Trino, Athena option, per-customer certs). One architecture for all customers.*
 
 ### Staffing Scenarios
 
@@ -472,15 +473,15 @@ The product reaches infrastructure profitability at Month 4 (~$343 MRR vs $197 c
 
 ### ROI Analysis
 
-At the conservative revenue projection ($17,710 MRR at Month 18 = $212K ARR):
+At the conservative revenue projection ($16,157 MRR at Month 18 = $194K ARR):
 
-| Scenario | 18-Month Investment | 18-Month Cumulative Revenue | ROI |
-|----------|--------------------|-----------------------------|-----|
-| Solo founder | ~$0 (time only) | $115K | ∞ (time vs money) |
-| 1 eng + 1 contractor | $96-144K | $115K | -20% to +20% (break-even) |
-| 2 full-time engineers | $225-315K | $115K | -49% to -63% (needs growth) |
+| Scenario | 18-Month Investment | 18-Month Cumulative Revenue | Cumulative Net | ROI |
+|----------|--------------------|-----------------------------|----------------|-----|
+| Solo founder | ~$0 (time only) | $105K | +$94.5K | ∞ (time vs money) |
+| 1 eng + 1 contractor | $96-144K | $105K | +$94.5K | -34% to -1% |
+| 2 full-time engineers | $225-315K | $105K | +$94.5K | -58% to -70% (needs growth) |
 
-The solo founder scenario is profitable from Month 4. The 2-engineer scenario requires reaching ~$25K MRR to justify the investment — achievable by Month 16-18 in the optimistic case.
+The solo founder scenario is profitable from Month 4. The single-architecture approach improves ROI — lower infra costs ($10.5K cumulative) and ~6.5 fewer engineering weeks means faster delivery and lower burn. No per-customer infrastructure to manage means ops stays simple as the customer base scales.
 
 ### Build Order Rationale
 
