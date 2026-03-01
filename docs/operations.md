@@ -1,6 +1,8 @@
-# Gravix Operations Runbook
+# Gravix Operations Runbook (Kubernetes)
 
-Day-to-day operational procedures for managing the Gravix observability platform.
+Day-to-day operational procedures for managing the Gravix observability platform in Kubernetes.
+
+> **Local operations**: For Docker Compose local development operations, see [06-operations.md](06-operations.md).
 
 ---
 
