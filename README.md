@@ -203,17 +203,38 @@ tests/e2e/                             # End-to-end pipeline tests
 
 ## Documentation
 
-- [System Truth](docs/00-system-truth.md) — Core architectural decisions and invariants
-- [API Reference](docs/07-api-reference.md) — How to send data to Gravix
-- [Operations Runbook](docs/06-operations.md) — Maintenance, troubleshooting, and recovery
+### Getting Started
+
+- [Development Guide](docs/development-guide.md) — Developer onboarding, local setup, test patterns, code conventions
+- [Deployment Guide](docs/deployment-guide.md) — Local, staging, and production deployment steps
+- [API Reference](docs/07-api-reference.md) — Endpoints, authentication, rate limiting, validation rules
+
+### Architecture & Design
+
+- [Architecture & Design](docs/architecture.md) — Comprehensive system architecture, components, data flow, design decisions
+- [System Truth](docs/00-system-truth.md) — Core invariants and non-negotiable principles
+- [Facts & Events](docs/01-facts-and-events.md) — Schema definitions and constraints
+- [Derived Metrics](docs/02-derived-metrics.md) — Metric computation rules
+- [Storage Layout](docs/03-storage-layout.md) — File formats and partitioning strategy
+- [Non-Goals](docs/04-non-goals.md) — What Gravix explicitly does not do
 - [MVP Scope](docs/05-mvp-scope.md) — Original project requirements and goals
+
+### Operations
+
+- [Local Operations](docs/06-operations.md) — Docker Compose maintenance and troubleshooting
+- [Kubernetes Operations](docs/operations.md) — Production K8s procedures, scaling, monitoring
+- [Disaster Recovery](docs/disaster-recovery.md) — RTO/RPO targets, recovery procedures for 6 scenarios
 
 ## Kubernetes Deployment
 
 ```bash
-helm install gravix ./deploy/gravix
+helm install gravix ./deploy/gravix \
+  --set global.apiKey="your-api-key" \
+  --set global.imageRegistry="ghcr.io/your-org/gravix-dashboards" \
+  --set global.storage.accessKey="your-access-key" \
+  --set global.storage.secretKey="your-secret-key"
 ```
 
-See [deploy/gravix/values.yaml](deploy/gravix/values.yaml) for configuration options.
+The Helm chart produces 49 production resources including Deployments, CronJobs, RBAC, NetworkPolicies, HPA, PDB, ServiceMonitors, and optional External Secrets integration.
 
-> **Note:** The Helm chart is scaffolded but not production-ready. For MVP, use Docker Compose.
+See [Deployment Guide](docs/deployment-guide.md) for full instructions and [deploy/gravix/values.yaml](deploy/gravix/values.yaml) for configuration options.

@@ -1,6 +1,8 @@
-# Operations Runbook
+# Local Operations Runbook (Docker Compose)
 
-This guide covers common operational tasks, maintenance procedures, and troubleshooting steps for the Gravix system.
+This guide covers common operational tasks, maintenance procedures, and troubleshooting steps for running Gravix locally with Docker Compose.
+
+> **Kubernetes operations**: For production Kubernetes operations, see [operations.md](operations.md).
 
 ## 1. System Management
 
@@ -31,13 +33,15 @@ docker-compose logs -f trino
 
 ### Data Retention (Cleanup)
 
-Run the cleanup script to delete raw and warehouse data older than 30 days.
+The purge container runs automatically at 03:00 UTC daily, deleting raw and warehouse data older than 30 days.
+
+To run manually:
 
 ```bash
-./scripts/cleanup_data.sh
+make purge
+# or
+go run ./cmd/purge/ --retention-days 30 --data-dir ./data
 ```
-
-*Recommendation: Add this to a daily cron job.*
 
 ### Manual Rollup (Backfill/Recovery)
 
@@ -76,13 +80,34 @@ go run transforms/request_metrics_minute/main.go \
 
 ### Trino "Hive Metastore" Errors
 
-If Trino fails to start or query tables, the metastore may be corrupted.
-**Fix**: Reset the Trino environment.
+If Trino fails to start or query tables, the metastore may be corrupted. Trino uses a writable metastore directory (`data/trino-metastore/`) separate from the S3 data.
+
+**Fix**: Reset the Trino metastore and re-initialize tables.
 
 ```bash
 docker-compose down
-rm -rf storage/trino/data  # (If mapped)
+rm -rf data/trino-metastore
 docker-compose up -d trino
+# Wait for Trino to become healthy (~60-90s), then re-initialize tables:
+docker-compose up -d init-trino
+# Or manually:
+make trino-init
+```
+
+### Generating Test Data
+
+Use the demo script to simulate realistic traffic from an "Acme Retail" e-commerce company:
+
+```bash
+./scripts/demo.sh              # Full demo: boot + traffic + verify
+./scripts/demo.sh --traffic    # Traffic only (services already running)
+./scripts/demo.sh --teardown   # Stop and clean up
+```
+
+Or use the load generator directly:
+
+```bash
+go run ./cmd/load_generator/ --qps 10 --concurrency 2
 ```
 
 ### Ingestion "Unauthorized"
@@ -90,7 +115,7 @@ docker-compose up -d trino
 Ensure your client is sending the correct API Key.
 
 - Header: `X-API-Key: <your-secret>`
-- Env Var: Check `API_KEY` in `docker-compose.yml`.
+- Env Var: Check `API_KEY` in your `.env` file.
 
 ## 4. Disaster Recovery
 

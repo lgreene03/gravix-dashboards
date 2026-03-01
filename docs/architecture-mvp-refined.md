@@ -1,3 +1,5 @@
+> **Note**: This document is superseded by [architecture.md](architecture.md) which provides the current comprehensive architecture reference. This file is preserved for historical context on early design decisions.
+
 # Architecture: Durable Batch with Time-Bounded Deduplication
 
 ## 1. Overview
