@@ -187,6 +187,12 @@
             gap: 12px;
         }
 
+        .nav-link.disabled {
+            opacity: 0.4;
+            cursor: default;
+            pointer-events: none;
+        }
+
         .nav-link:hover,
         .nav-link.active {
             background: #334155;
@@ -606,11 +612,11 @@
             Gravix
         </div>
         <nav aria-label="Main navigation" role="navigation">
-            <a href="#" class="nav-link active" aria-current="page">Overview</a>
-            <a href="#" class="nav-link">Transports</a>
-            <a href="#" class="nav-link">Ingestion</a>
-            <a href="#" class="nav-link">Processing</a>
-            <a href="#" class="nav-link">Settings</a>
+            <a href="#" class="nav-link active" data-page="overview" aria-current="page">Overview</a>
+            <a href="#" class="nav-link disabled" data-page="transports" title="Coming soon">Transports</a>
+            <a href="#" class="nav-link disabled" data-page="ingestion" title="Coming soon">Ingestion</a>
+            <a href="#" class="nav-link disabled" data-page="processing" title="Coming soon">Processing</a>
+            <a href="#" class="nav-link disabled" data-page="settings" title="Coming soon">Settings</a>
         </nav>
     </aside>
 
@@ -914,6 +920,12 @@
             });
 
             if (!response.ok) {
+                // 400 from Cube typically means Trino tables don't exist yet (no data).
+                // Treat as empty result rather than a connection error.
+                if (response.status === 400) {
+                    console.warn("Cube returned 400 — table may not exist yet (no rollup data)");
+                    return [];
+                }
                 throw new Error("Cube API returned " + response.status);
             }
 
@@ -926,16 +938,32 @@
         }
 
         async function fetchServices() {
-            const response = await fetch(CUBE_API_URL, {
-                method: "POST",
-                headers: cubeHeaders(),
-                body: JSON.stringify({
-                    query: {
-                        dimensions: ["RequestMetricsMinute.service"],
-                        order: { "RequestMetricsMinute.service": "asc" }
-                    }
-                })
-            });
+            let response;
+            try {
+                response = await fetch(CUBE_API_URL, {
+                    method: "POST",
+                    headers: cubeHeaders(),
+                    body: JSON.stringify({
+                        query: {
+                            dimensions: ["RequestMetricsMinute.service"],
+                            order: { "RequestMetricsMinute.service": "asc" }
+                        }
+                    })
+                });
+            } catch (e) {
+                console.warn("fetchServices network error:", e);
+                return; // Don't populate services, but don't throw
+            }
+
+            // If Cube returns 400 (table not found), treat as no services yet
+            if (!response.ok) {
+                if (response.status === 400) {
+                    console.warn("No metrics table yet — services list will be empty until first rollup");
+                } else {
+                    console.warn("fetchServices: Cube returned", response.status);
+                }
+                return;
+            }
             const result = await response.json();
             let data = [];
             if (result.data) data = result.data;
@@ -1485,6 +1513,24 @@
 
         // --- RESET FILTERS BUTTON ---
         document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
+
+        // --- NAV LINKS ---
+        document.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (link.classList.contains('disabled')) return;
+                document.querySelectorAll('.nav-link').forEach(l => {
+                    l.classList.remove('active');
+                    l.removeAttribute('aria-current');
+                });
+                link.classList.add('active');
+                link.setAttribute('aria-current', 'page');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                // Close mobile sidebar
+                document.getElementById('sidebar').classList.remove('open');
+                document.getElementById('sidebarBackdrop').classList.remove('open');
+            });
+        });
 
         // --- SIDEBAR TOGGLE (mobile) ---
         document.getElementById('sidebarToggle').addEventListener('click', () => {

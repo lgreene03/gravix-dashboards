@@ -59,6 +59,55 @@ services:
     networks:
       - backend
 
+  init-trino:
+    image: trinodb/trino:351
+    container_name: gravix-init-trino
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Waiting for Trino to accept connections..."
+        until trino --server trino:8080 --execute "SELECT 1" 2>/dev/null; do
+          sleep 5
+        done
+        echo "Trino is ready. Creating schema and tables..."
+        trino --server trino:8080 --execute "CREATE SCHEMA IF NOT EXISTS gravix.raw"
+        trino --server trino:8080 --execute "
+          CREATE TABLE IF NOT EXISTS gravix.raw.request_metrics_minute (
+            bucket_start VARCHAR,
+            service VARCHAR,
+            method VARCHAR,
+            path_template VARCHAR,
+            request_count BIGINT,
+            error_count BIGINT,
+            error_rate DOUBLE,
+            p50_latency_ms DOUBLE,
+            p95_latency_ms DOUBLE,
+            p99_latency_ms DOUBLE,
+            event_day VARCHAR
+          ) WITH (
+            format = 'PARQUET',
+            external_location = 's3a://gravix/warehouse/request_metrics_minute/'
+          )"
+        trino --server trino:8080 --execute "
+          CREATE TABLE IF NOT EXISTS gravix.raw.service_events_daily (
+            event_day VARCHAR,
+            service VARCHAR,
+            event_type VARCHAR,
+            event_count BIGINT
+          ) WITH (
+            format = 'PARQUET',
+            external_location = 's3a://gravix/warehouse/service_events_daily/'
+          )"
+        echo "Trino tables initialized."
+    depends_on:
+      trino:
+        condition: service_started
+    mem_limit: 512m
+    cpus: 0.25
+    networks:
+      - backend
+
   trino:
     image: trinodb/trino:351
     container_name: gravix-trino
@@ -70,7 +119,7 @@ services:
     volumes:
       - ./storage/trino/config:/etc/trino
       - ./storage/trino/catalog:/etc/trino/catalog.tpl:ro
-      - ./data/warehouse:/data/warehouse:ro
+      - ./data/trino-metastore:/data/metastore
       - ./data/raw:/data/raw:ro
     entrypoint:
       - /bin/sh
@@ -84,11 +133,11 @@ services:
         done
         exec /usr/lib/trino/bin/run-trino
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/v1/info"]
-      interval: 15s
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 12
+      start_period: 45s
     mem_limit: 3g
     cpus: 1.0
     networks:
@@ -115,7 +164,7 @@ services:
       trino:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4000/readyz"]
+      test: ["CMD", "node", "-e", "const http = require('http'); http.get('http://localhost:4000/readyz', r => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -135,7 +184,7 @@ services:
       - ./dashboards:/usr/share/nginx/html:ro
       - ./storage/dashboard/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8000/healthz"]
       interval: 10s
       timeout: 3s
       retries: 3
