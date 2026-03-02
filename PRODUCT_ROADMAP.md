@@ -203,7 +203,7 @@ Phase 1 (multi-tenancy, API keys for SDK auth).
 
 **Theme:** "Platform for Everyone"
 **Goal:** RBAC, SSO, audit logs, compliance — unlock Enterprise sales at $500+/mo.
-**Effort:** ~15 person-weeks
+**Effort:** ~12 person-weeks
 
 ### Features
 
@@ -228,11 +228,7 @@ Logical grouping within a tenant. A tenant (company) can have multiple teams, ea
 - Effort: 2 person-weeks
 
 #### 4.6 Per-Tenant Rate Limiting
-Replace the global 100 req/s rate limiter with per-tenant token buckets sized to plan tier. Starter: 20 req/s, Pro: 100 req/s, Business: 500 req/s, Enterprise: custom.
-- Effort: 1.5 person-weeks
-
-#### 4.7 Dedicated Compute (Enterprise)
-Enterprise customers get a dedicated Trino instance (3Gi memory reserved) for query isolation and performance guarantees. Configured via Helm values overlay per tenant.
+Replace the global 100 req/s rate limiter with per-tenant token buckets sized to plan tier. Starter: 20 req/s, Pro: 100 req/s, Business: 500 req/s, Enterprise: 1,000 req/s.
 - Effort: 1.5 person-weeks
 
 ### Infrastructure Impact
@@ -240,15 +236,14 @@ Enterprise customers get a dedicated Trino instance (3Gi memory reserved) for qu
 | New Service | Cost |
 |------------|------|
 | AWS Cognito (~500 MAU) | $2.75/mo |
-| Dedicated Trino per Enterprise customer | +$70/mo per customer |
 | SOC 2 compliance firm | $5-15K initial (one-time) |
-| **Total additional (variable)** | **$3-73/mo** |
+| **Total additional** | **~$3/mo** |
 
-Cumulative fixed infra: **~$187-257/mo** (depends on Enterprise customer count)
+Cumulative fixed infra: **~$187/mo**
 
 ### Pricing
 
-Introduce **Enterprise tier** (custom pricing, $500+/mo minimum). RBAC and SSO are Enterprise-only. Audit logs available at Business ($249) and above. Launch annual billing with 10% discount.
+Introduce **Enterprise tier** ($500+/mo). Enterprise differentiates on **features** (RBAC, SSO, audit logs, team namespaces, higher rate limits), not separate infrastructure — everyone runs on the same shared stack. Audit logs available at Business ($249) and above. Launch annual billing with 10% discount.
 
 ### Revenue Target
 
@@ -263,40 +258,32 @@ Phase 1 (multi-tenancy), Phase 2 (alerting for alert policy management).
 ## Phase 5: Scale & Performance (Month 10-14)
 
 **Theme:** "Remove the Ceiling"
-**Goal:** Eliminate the Trino single-node bottleneck. Reduce shared-tier COGS. Enable global deployment.
-**Effort:** ~15 person-weeks
+**Goal:** Replace Trino with DuckDB for all customers. Reduce COGS. Enable global deployment.
+**Effort:** ~12 person-weeks
 
 ### Features
 
-#### 5.1 DuckDB Migration (Shared Tier)
-Replace Trino with embedded DuckDB for shared-tier customers. DuckDB reads Parquet from S3 directly with no separate process and no 3Gi memory overhead. Cube.js supports DuckDB as a data source. The existing Cube models need minimal SQL changes.
+#### 5.1 DuckDB Full Migration
+Replace Trino with embedded DuckDB for **all customers** — no per-customer engine selection, no dedicated compute tiers. DuckDB reads Parquet from S3 directly with no separate process and no 3Gi memory overhead. Cube.js supports DuckDB as a data source. Existing Cube models need minimal SQL dialect changes. Trino is fully removed from the stack after migration.
 - Effort: 4 person-weeks
 
-#### 5.2 Trino Retained for Enterprise
-Enterprise customers with dedicated compute keep Trino for query isolation and performance guarantees. Optionally upgrade to Trino 435+.
+#### 5.2 Tiered Storage
+S3 lifecycle policies applied uniformly to all tenants: Standard for 0-7 days, Infrequent Access for 7-30 days (45% savings), Glacier for 30+ days (68% savings).
 - Effort: 1 person-week
 
-#### 5.3 AWS Athena Option
-For Enterprise customers wanting fully serverless querying. ~$5/TB scanned. With Parquet + ZSTD compression, a typical daily query scans ~5MB — costing $0.000025 per query. Even 1,000 queries/day = $0.75/mo.
+#### 5.3 Parquet Compaction
+Daily job to merge small Parquet files into target 128MB files. At scale with many tenants, file counts grow and fragment. Compaction reduces DuckDB query overhead.
 - Effort: 2 person-weeks
 
-#### 5.4 Tiered Storage
-S3 lifecycle policies: Standard for 0-7 days, Infrequent Access for 7-30 days (45% savings), Glacier for 30+ days (68% savings). Configurable per tenant.
-- Effort: 1 person-week
-
-#### 5.5 Parquet Compaction
-Daily job to merge small Parquet files into target 128MB files. At scale with many tenants, file counts grow and fragment. Compaction reduces query overhead for DuckDB/Trino/Athena.
-- Effort: 2 person-weeks
-
-#### 5.6 Cross-Region Replication
+#### 5.4 Cross-Region Replication
 S3 cross-region replication to a secondary region (us-west-2) for disaster recovery. Adds data durability without operational complexity.
 - Effort: 1 person-week
 
-#### 5.7 Redis Cache Layer
-ElastiCache (Redis) for Cube.js pre-aggregation cache. Dramatically improves dashboard load time for repeated queries. Reduces Trino/DuckDB query load.
+#### 5.5 Redis Cache Layer
+ElastiCache (Redis) for Cube.js pre-aggregation cache. Dramatically improves dashboard load time for repeated queries. Reduces DuckDB query load.
 - Effort: 2 person-weeks
 
-#### 5.8 Multi-Region Ingestion
+#### 5.6 Multi-Region Ingestion
 Deploy ingestion endpoints in us-west-2 and eu-west-1. Route via Route 53 geolocation routing. All data funnels to the primary S3 bucket. Provides lower-latency ingestion for global customers.
 - Effort: 2 person-weeks
 
@@ -304,14 +291,14 @@ Deploy ingestion endpoints in us-west-2 and eu-west-1. Route via Route 53 geoloc
 
 | Change | Cost Impact |
 |--------|------------|
-| DuckDB replaces shared Trino | **-$70/mo** (3Gi node freed) |
+| DuckDB replaces Trino (all customers) | **-$70/mo** (3Gi node freed) |
 | ElastiCache t4g.micro (Redis) | +$12/mo |
 | Cross-region S3 replication | +$0.02/GB transferred |
 | Multi-region ingestion (per region) | +$164/mo per region |
-| **Net (single-region, shared DuckDB)** | **-$58/mo** |
-| **Net (3-region, shared DuckDB)** | **+$270/mo** |
+| **Net (single-region)** | **-$58/mo** |
+| **Net (3-region)** | **+$270/mo** |
 
-Cumulative fixed infra: **$129-433/mo** (depends on region count)
+Cumulative fixed infra: **$129/mo** (single-region) to **$457/mo** (3-region)
 
 ### Pricing
 
@@ -323,15 +310,15 @@ $15,000-25,000 MRR
 
 ### Dependencies
 
-Phase 1 (multi-tenancy), Phase 4 (Enterprise tier for Athena/dedicated Trino options).
+Phase 1 (multi-tenancy).
 
 ---
 
 ## Phase 6: Platform (Month 14-18)
 
 **Theme:** "Ecosystem"
-**Goal:** Custom dashboards, public API, marketplace integrations, white-label — transform from product to platform.
-**Effort:** ~15 person-weeks
+**Goal:** Custom dashboards, public API, marketplace integrations, tenant branding — transform from product to platform.
+**Effort:** ~14.5 person-weeks
 
 ### Features
 
@@ -347,9 +334,9 @@ RESTful API for third-party tools to query Gravix metrics programmatically. Rate
 PagerDuty, OpsGenie, Microsoft Teams, and a generic webhook v2 (with templating). Each integration is an alert delivery channel.
 - Effort: 3 person-weeks (~0.75/integration)
 
-#### 6.4 White-Label (Enterprise)
-Custom branding (logo, colors, favicon, email templates) and custom domain (`monitoring.customer.com`). CSS variables + configurable theme. Requires cert-manager wildcard or per-customer certificate.
-- Effort: 2 person-weeks
+#### 6.4 Tenant Branding (Enterprise)
+Custom branding (logo, colors, favicon, email templates) per tenant. CSS variables + configurable theme stored in Postgres. No separate infrastructure — purely config-driven, same deployment serves all tenants.
+- Effort: 1.5 person-weeks
 
 #### 6.5 Terraform Provider
 `gravix_tenant`, `gravix_alert_policy`, `gravix_api_key` resources. Infrastructure-as-code for Enterprise teams managing monitoring configuration alongside their infrastructure.
@@ -370,11 +357,11 @@ Automated CSV or Parquet exports to a customer's own S3 bucket on a configurable
 | API Gateway (optional) | +$1-5/mo |
 | **Total additional** | **~$1-5/mo** |
 
-Cumulative fixed infra: **~$130-438/mo** (range depends on region count and Enterprise customers)
+Cumulative fixed infra: **~$130-460/mo** (depends on region count)
 
 ### Pricing
 
-White-label: Enterprise add-on (+$100-200/mo). Data export: Enterprise add-on (+$50/mo). Public API included in Pro and above. Custom dashboards available in all paid tiers. Terraform provider is free (drives Enterprise adoption).
+Tenant branding: Enterprise-only feature (included in Enterprise tier). Data export: Enterprise add-on (+$50/mo). Public API included in Pro and above. Custom dashboards available in all paid tiers. Terraform provider is free (drives Enterprise adoption).
 
 ### Revenue Target
 
@@ -393,11 +380,13 @@ Phase 2 (alerting for integration channels), Phase 4 (Enterprise tier, RBAC for 
 | Phase 1: SaaS Foundation | Month 1-2 | 10 pw | 10 pw |
 | Phase 2: Analytics & Alerting | Month 3-5 | 10.5 pw | 20.5 pw |
 | Phase 3: Developer Experience | Month 5-7 | 9.5 pw | 30 pw |
-| Phase 4: Enterprise Readiness | Month 7-10 | 15 pw | 45 pw |
-| Phase 5: Scale & Performance | Month 10-14 | 15 pw | 60 pw |
-| Phase 6: Platform | Month 14-18 | 15 pw | 75 pw |
+| Phase 4: Enterprise Readiness | Month 7-10 | 12 pw | 42 pw |
+| Phase 5: Scale & Performance | Month 10-14 | 12 pw | 54 pw |
+| Phase 6: Platform | Month 14-18 | 14.5 pw | 68.5 pw |
 
-**Total: ~75 person-weeks** = 18 months for 1 engineer, ~9 months for 2 engineers working in parallel.
+**Total: ~68.5 person-weeks** = ~17 months for 1 engineer, ~8.5 months for 2 engineers working in parallel.
+
+*Effort reduced from original 75 pw estimate by eliminating per-customer infrastructure (dedicated Trino, Athena option, per-customer certs). One architecture for all customers.*
 
 ---
 
@@ -408,6 +397,8 @@ Phase 2 (alerting for integration channels), Phase 4 (Enterprise tier, RBAC for 
 | 2 | Phase 1 complete | $150-500 | $177/mo |
 | 5 | Phase 2 complete | $1,500-2,500 | $182/mo |
 | 7 | Phase 3 complete | $3,000-5,000 | $184/mo |
-| 10 | Phase 4 complete | $8,000-15,000 | $187-257/mo |
-| 14 | Phase 5 complete | $15,000-25,000 | $129-433/mo |
-| 18 | Phase 6 complete | $25,000-40,000 | $130-438/mo |
+| 10 | Phase 4 complete | $8,000-15,000 | $187/mo |
+| 14 | Phase 5 complete | $15,000-25,000 | $129/mo |
+| 18 | Phase 6 complete | $25,000-40,000 | $130/mo |
+
+*All infra costs are single-region. Add ~$164/mo per additional region (Phase 5+).*
