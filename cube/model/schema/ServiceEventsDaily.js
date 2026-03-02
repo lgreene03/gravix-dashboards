@@ -1,5 +1,9 @@
+const serviceEventsSql = process.env.CUBEJS_DB_TYPE === 'duckdb'
+  ? `SELECT * FROM read_parquet('/cube/data/warehouse/service_events_daily/**/*.parquet', union_by_name=true)`
+  : `SELECT * FROM gravix.raw.service_events_daily`;
+
 cube(`ServiceEventsDaily`, {
-  sql: `SELECT * FROM gravix.raw.service_events_daily`,
+  sql: serviceEventsSql,
 
   joins: {
     // No joins for MVP

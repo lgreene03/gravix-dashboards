@@ -1,5 +1,9 @@
+const requestMetricsSql = process.env.CUBEJS_DB_TYPE === 'duckdb'
+  ? `SELECT * FROM read_parquet('/cube/data/warehouse/request_metrics_minute/**/*.parquet', union_by_name=true)`
+  : `SELECT * FROM gravix.raw.request_metrics_minute`;
+
 cube(`RequestMetricsMinute`, {
-  sql: `SELECT * FROM gravix.raw.request_metrics_minute`,
+  sql: requestMetricsSql,
 
   joins: {
     // No joins for MVP
