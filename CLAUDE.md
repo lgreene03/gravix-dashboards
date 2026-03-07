@@ -38,6 +38,9 @@ go build -o load-generator ./cmd/load_generator/
 # Regenerate protobuf code (requires protoc + protoc-gen-go)
 protoc --go_out=./gen --go_opt=paths=source_relative proto/gravix.proto
 
+# Seed tenant database (multi-tenant mode)
+go run ./cmd/seed_tenants/ -db ./data/gravix.db
+
 # Deploy to Kubernetes
 helm install gravix ./deploy/gravix
 ```

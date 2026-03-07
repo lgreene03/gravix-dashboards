@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -28,6 +29,29 @@ import (
 )
 
 const maxBodyBytes = 1 << 20 // 1 MB max request body
+
+// contextKey is a private type for context keys to avoid collisions.
+type contextKey string
+
+const tenantInfoKey contextKey = "tenantInfo"
+
+// getTenantID extracts the tenant ID from the request context.
+// Returns empty string in legacy (single-key) mode.
+func getTenantID(r *http.Request) string {
+	if info, ok := r.Context().Value(tenantInfoKey).(*tenantdb.APIKeyInfo); ok {
+		return info.TenantID
+	}
+	return ""
+}
+
+// topicForTenant returns the storage topic prefixed with tenant ID.
+// In legacy mode (empty tenantID), returns the base topic unchanged.
+func topicForTenant(tenantID, baseTopic string) string {
+	if tenantID == "" {
+		return baseTopic
+	}
+	return tenantID + "/" + baseTopic
+}
 
 // writeErrorJSON writes a structured JSON error response.
 func writeErrorJSON(w http.ResponseWriter, code int, errMsg string) {
@@ -437,11 +461,32 @@ func main() {
 	baseDir := flag.String("base-dir", "./data", "Base directory for buffer and raw storage")
 	flag.Parse()
 
+	// Auth mode: multi-tenant (TENANT_DB_PATH) or legacy (API_KEY)
+	var tdb tenantdb.DB
+	var authMW func(http.HandlerFunc) http.HandlerFunc
+
+	tenantDBPath := os.Getenv("TENANT_DB_PATH")
 	apiKey := os.Getenv("API_KEY")
-	if apiKey == "" {
-		log.Fatal("FATAL: API_KEY environment variable is required. Set API_KEY to enable the ingestion service.")
+
+	if tenantDBPath != "" {
+		var err error
+		tdb, err = tenantdb.Open(tenantDBPath)
+		if err != nil {
+			log.Fatalf("FATAL: failed to open tenant database: %v", err)
+		}
+		defer tdb.Close()
+		authMW = func(next http.HandlerFunc) http.HandlerFunc {
+			return multiTenantAuthMiddleware(tdb.APIKeys(), next)
+		}
+		log.Printf("Multi-tenant auth enabled (db: %s)", tenantDBPath)
+	} else if apiKey != "" {
+		authMW = func(next http.HandlerFunc) http.HandlerFunc {
+			return authMiddleware(apiKey, next)
+		}
+		log.Println("Legacy single-key auth enabled.")
+	} else {
+		log.Fatal("FATAL: Set TENANT_DB_PATH (multi-tenant) or API_KEY (legacy) to enable authentication.")
 	}
-	log.Println("API Key authentication enabled.")
 
 	bufferDir := filepath.Join(*baseDir, "buffer")
 	rawDir := filepath.Join(*baseDir, "raw")
@@ -482,9 +527,9 @@ func main() {
 	defer rl.Close()
 
 	// Wrap handlers with rate limiting + auth middleware
-	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMiddleware(apiKey, handleFacts(sink))))
-	http.Handle("/api/v1/facts/batch", rateLimitMiddleware(rl, authMiddleware(apiKey, handleBatchFacts(sink))))
-	http.Handle("/api/v1/events", rateLimitMiddleware(rl, authMiddleware(apiKey, handleEvents(sink))))
+	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMW(handleFacts(sink))))
+	http.Handle("/api/v1/facts/batch", rateLimitMiddleware(rl, authMW(handleBatchFacts(sink))))
+	http.Handle("/api/v1/events", rateLimitMiddleware(rl, authMW(handleEvents(sink))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -546,6 +591,27 @@ func authMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// multiTenantAuthMiddleware validates API keys against the tenant database
+// and stores tenant info in the request context.
+func multiTenantAuthMiddleware(keyRepo tenantdb.APIKeyRepo, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reqKey := r.Header.Get("X-API-Key")
+		if reqKey == "" {
+			writeErrorJSON(w, http.StatusUnauthorized, "missing X-API-Key header")
+			return
+		}
+
+		info, err := keyRepo.ValidateKey(r.Context(), reqKey)
+		if err != nil {
+			writeErrorJSON(w, http.StatusUnauthorized, "invalid or missing X-API-Key header")
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), tenantInfoKey, info)
+		next(w, r.WithContext(ctx))
+	}
+}
+
 // requireJSON checks Content-Type header contains application/json.
 // Returns true if valid, false (and writes 415 response) if invalid.
 func requireJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -587,7 +653,8 @@ func handleFacts(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		if err := sink.Write("request_facts", cleanData); err != nil {
+		topic := topicForTenant(getTenantID(r), "request_facts")
+		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
 			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500").Inc()
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist fact")
@@ -649,8 +716,9 @@ func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
 		}
 
 		// Write all valid records in a single batch (one fsync)
+		topic := topicForTenant(getTenantID(r), "request_facts")
 		if len(validRecords) > 0 {
-			if err := sink.WriteBatch("request_facts", validRecords); err != nil {
+			if err := sink.WriteBatch(topic, validRecords); err != nil {
 				log.Printf("Sink batch write error: %v", err)
 				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist facts")
 				return
@@ -728,7 +796,8 @@ func handleEvents(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		if err := sink.Write("service_events", cleanData); err != nil {
+		topic := topicForTenant(getTenantID(r), "service_events")
+		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
 			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500").Inc()
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist event")
