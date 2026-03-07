@@ -73,7 +73,7 @@ func TestProcessDay_BasicAggregation(t *testing.T) {
 	key := fmt.Sprintf("raw/service_events/%s/10/batch_test.jsonl", day.Format("2006-01-02"))
 	writeEvents(t, store, key, events)
 
-	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily")
+	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily", "")
 	if err != nil {
 		t.Fatalf("processDay failed: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestProcessDay_Deduplication(t *testing.T) {
 	writeEvents(t, store, key1, []*gravixv1.ServiceEvent{event})
 	writeEvents(t, store, key2, []*gravixv1.ServiceEvent{duplicate})
 
-	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily")
+	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily", "")
 	if err != nil {
 		t.Fatalf("processDay failed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestProcessDay_EmptyInput(t *testing.T) {
 
 	day, _ := time.Parse("2006-01-02", "2025-01-15")
 
-	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily")
+	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily", "")
 	if err != nil {
 		t.Fatalf("processDay with empty input should not fail: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestProcessDay_Idempotency(t *testing.T) {
 	writeEvents(t, store, key, events)
 
 	// First run
-	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily")
+	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily", "")
 	if err != nil {
 		t.Fatalf("first processDay failed: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestProcessDay_Idempotency(t *testing.T) {
 	keys1, _ := store.List(context.Background(), "warehouse/service_events_daily")
 
 	// Second run (should overwrite, not duplicate)
-	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily")
+	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily", "")
 	if err != nil {
 		t.Fatalf("second processDay failed: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestProcessDay_CrossDayFilter(t *testing.T) {
 	key := fmt.Sprintf("raw/service_events/%s/10/batch_cross.jsonl", day.Format("2006-01-02"))
 	writeEvents(t, store, key, events)
 
-	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily")
+	err = processDay(context.Background(), day, store, "./data/raw/service_events", "./data/warehouse/service_events_daily", "")
 	if err != nil {
 		t.Fatalf("processDay failed: %v", err)
 	}

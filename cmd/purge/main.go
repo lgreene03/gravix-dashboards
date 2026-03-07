@@ -9,17 +9,24 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 )
 
 func main() {
 	var retentionDays int
 	var dryRun bool
 	var dataDir string
+	var tenantDBPath string
 
 	flag.IntVar(&retentionDays, "retention-days", 30, "Delete data older than this many days")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print files that would be deleted without actually deleting")
 	flag.StringVar(&dataDir, "data-dir", "./data", "Base data directory (used for local storage)")
+	flag.StringVar(&tenantDBPath, "tenant-db", "", "Path to tenant SQLite database (multi-tenant mode)")
 	flag.Parse()
+
+	if tenantDBPath == "" {
+		tenantDBPath = os.Getenv("TENANT_DB_PATH")
+	}
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 	cutoffStr := cutoff.Format("2006-01-02")
@@ -51,35 +58,62 @@ func main() {
 		}
 	}
 
-	// Purge raw JSONL data
-	rawDeleted, err := purgeOldData(ctx, store, "raw/request_facts", cutoffStr, dryRun)
-	if err != nil {
-		log.Printf("Error purging raw/request_facts: %v", err)
+	// Build list of prefixes to purge
+	type purgeTarget struct {
+		raw              string
+		rawEvents        string
+		warehouseMetrics string
+		warehouseEvents  string
 	}
 
-	eventDeleted, err := purgeOldData(ctx, store, "raw/service_events", cutoffStr, dryRun)
-	if err != nil {
-		log.Printf("Error purging raw/service_events: %v", err)
+	var targets []purgeTarget
+
+	if tenantDBPath != "" {
+		tdb, err := tenantdb.Open(tenantDBPath)
+		if err != nil {
+			log.Fatalf("Failed to open tenant database: %v", err)
+		}
+		defer tdb.Close()
+
+		tenants, err := tdb.Tenants().List(ctx)
+		if err != nil {
+			log.Fatalf("Failed to list tenants: %v", err)
+		}
+
+		for _, t := range tenants {
+			targets = append(targets, purgeTarget{
+				raw:              fmt.Sprintf("raw/%s/request_facts", t.ID),
+				rawEvents:        fmt.Sprintf("raw/%s/service_events", t.ID),
+				warehouseMetrics: fmt.Sprintf("warehouse/%s/request_metrics_minute", t.ID),
+				warehouseEvents:  fmt.Sprintf("warehouse/%s/service_events_daily", t.ID),
+			})
+		}
+		log.Printf("Multi-tenant mode: purging %d tenants", len(targets))
+	} else {
+		targets = append(targets, purgeTarget{
+			raw:              "raw/request_facts",
+			rawEvents:        "raw/service_events",
+			warehouseMetrics: "warehouse/request_metrics_minute",
+			warehouseEvents:  "warehouse/service_events_daily",
+		})
 	}
 
-	// Purge warehouse Parquet data
-	warehouseDeleted, err := purgeOldData(ctx, store, "warehouse/request_metrics_minute", cutoffStr, dryRun)
-	if err != nil {
-		log.Printf("Error purging warehouse/request_metrics_minute: %v", err)
+	var total int
+	for _, t := range targets {
+		for _, prefix := range []string{t.raw, t.rawEvents, t.warehouseMetrics, t.warehouseEvents} {
+			deleted, err := purgeOldData(ctx, store, prefix, cutoffStr, dryRun)
+			if err != nil {
+				log.Printf("Error purging %s: %v", prefix, err)
+			}
+			total += deleted
+		}
 	}
 
-	evtWarehouseDeleted, err := purgeOldData(ctx, store, "warehouse/service_events_daily", cutoffStr, dryRun)
-	if err != nil {
-		log.Printf("Error purging warehouse/service_events_daily: %v", err)
-	}
-
-	total := rawDeleted + eventDeleted + warehouseDeleted + evtWarehouseDeleted
 	action := "deleted"
 	if dryRun {
 		action = "would delete"
 	}
-	log.Printf("Purge complete: %s %d files (raw facts: %d, raw events: %d, warehouse metrics: %d, warehouse events: %d)",
-		action, total, rawDeleted, eventDeleted, warehouseDeleted, evtWarehouseDeleted)
+	log.Printf("Purge complete: %s %d files total", action, total)
 }
 
 // purgeOldData lists all keys under a prefix and deletes those containing dates older than the cutoff.

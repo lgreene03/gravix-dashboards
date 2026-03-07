@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/montanaflynn/stats"
 	"github.com/parquet-go/parquet-go"
@@ -69,6 +70,7 @@ func startMetricsServer(addr string) *http.Server {
 
 // MetricRow represents a 1-minute bucket for a specific service/path/method tuple.
 type MetricRow struct {
+	TenantID     string  `json:"tenant_id" parquet:"tenant_id"`
 	BucketStart  string  `json:"bucket_start" parquet:"bucket_start"`
 	Service      string  `json:"service" parquet:"service"`
 	Method       string  `json:"method" parquet:"method"`
@@ -161,6 +163,7 @@ func releaseLock(f *os.File) {
 func main() {
 	var inputDir, outputDir string
 	var processingTime, startDay, endDay string
+	var tenantDBPath string
 
 	flag.StringVar(&inputDir, "input-dir", "./data/raw/request_facts", "Path to raw facts (JSONL)")
 	flag.StringVar(&outputDir, "output-dir", "./data/warehouse/request_metrics_minute", "Path to output metrics (Parquet)")
@@ -172,7 +175,15 @@ func main() {
 	flag.StringVar(&startDay, "start-day", "", "Start day for backfill (YYYY-MM-DD)")
 	flag.StringVar(&endDay, "end-day", "", "End day for backfill (YYYY-MM-DD, inclusive)")
 
+	// Multi-tenant mode
+	flag.StringVar(&tenantDBPath, "tenant-db", "", "Path to tenant SQLite database (multi-tenant mode)")
+
 	flag.Parse()
+
+	// Also check env var for tenant DB (for docker-compose compatibility)
+	if tenantDBPath == "" {
+		tenantDBPath = os.Getenv("TENANT_DB_PATH")
+	}
 
 	// Acquire exclusive lock to prevent concurrent runs
 	lockFile, err := acquireLock(outputDir)
@@ -180,10 +191,6 @@ func main() {
 		log.Fatalf("Cannot start rollup: %v", err)
 	}
 	defer releaseLock(lockFile)
-
-	// Determine list of days to process (similar logic as before, just update processing to loop over hours too if needed)
-	// For MVP simplicity, we will assume "Day" granularity processing which re-computes *all hours* in that day.
-	// This fits the "Batch" philosophy. Correctness > Simplicity > Performance.
 
 	var days []time.Time
 
@@ -232,20 +239,65 @@ func main() {
 	} else {
 		log.Printf("Initializing Local Storage...")
 		var err error
-		store, err = storage.NewLocalStore("./data") // Fallback to current dir if not provided
+		store, err = storage.NewLocalStore("./data")
 		if err != nil {
 			log.Fatalf("Failed to initialize local store: %v", err)
 		}
 	}
 
-	for _, day := range days {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		if err := processDay(ctx, day, store, inputDir, outputDir); err != nil {
-			cancel()
-			log.Printf("Failed to process day %s: %v", day.Format("2006-01-02"), err)
-			os.Exit(1)
+	// Build list of tenant configs to process
+	type tenantConfig struct {
+		tenantID  string
+		inputDir  string
+		outputDir string
+	}
+
+	var configs []tenantConfig
+
+	if tenantDBPath != "" {
+		tdb, err := tenantdb.Open(tenantDBPath)
+		if err != nil {
+			log.Fatalf("Failed to open tenant database: %v", err)
 		}
-		cancel()
+		defer tdb.Close()
+
+		tenants, err := tdb.Tenants().List(context.Background())
+		if err != nil {
+			log.Fatalf("Failed to list tenants: %v", err)
+		}
+
+		for _, t := range tenants {
+			if t.Status != "active" {
+				continue
+			}
+			configs = append(configs, tenantConfig{
+				tenantID:  t.ID,
+				inputDir:  fmt.Sprintf("./data/raw/%s/request_facts", t.ID),
+				outputDir: fmt.Sprintf("./data/warehouse/%s/request_metrics_minute", t.ID),
+			})
+		}
+		log.Printf("Multi-tenant mode: processing %d active tenants", len(configs))
+	} else {
+		configs = append(configs, tenantConfig{
+			tenantID:  "",
+			inputDir:  inputDir,
+			outputDir: outputDir,
+		})
+	}
+
+	for _, cfg := range configs {
+		if cfg.tenantID != "" {
+			log.Printf("Processing tenant %s...", cfg.tenantID)
+		}
+		for _, day := range days {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			if err := processDay(ctx, day, store, cfg.inputDir, cfg.outputDir, cfg.tenantID); err != nil {
+				cancel()
+				log.Printf("Failed to process day %s for tenant %s: %v", day.Format("2006-01-02"), cfg.tenantID, err)
+				os.Exit(1)
+			}
+			cancel()
+		}
 	}
 
 	rollupLastSuccessTimestamp.SetToCurrentTime()
@@ -259,7 +311,7 @@ func main() {
 // It performs deduplication across the entire day to ensure correctness if events skew across hour boundaries (within reason).
 // But effectively, we partition output by Day/Hour too if needed, or just by Day.
 // Given Hive supports Day partitioning, let's output by Day.
-func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, inputDir, outputDir string) error {
+func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, inputDir, outputDir, tenantID string) error {
 	dayStr := day.UTC().Format("2006-01-02")
 
 	// Input Prefix: raw/request_facts/YYYY-MM-DD/
@@ -374,6 +426,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		}
 
 		metrics = append(metrics, MetricRow{
+			TenantID:     tenantID,
 			BucketStart:  key.BucketStart.Format("2006-01-02 15:04:05"),
 			Service:      key.Service,
 			Method:       key.Method,

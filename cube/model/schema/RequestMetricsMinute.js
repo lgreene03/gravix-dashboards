@@ -1,5 +1,10 @@
-const requestMetricsSql = process.env.CUBEJS_DB_TYPE === 'duckdb'
-  ? `SELECT * FROM read_parquet('/cube/data/warehouse/request_metrics_minute/**/*.parquet', union_by_name=true)`
+const isDuckDB = process.env.CUBEJS_DB_TYPE === 'duckdb';
+const isMultiTenant = !!process.env.TENANT_DB_PATH;
+
+const requestMetricsSql = isDuckDB
+  ? isMultiTenant
+    ? `SELECT * FROM read_parquet('/cube/data/warehouse/*/request_metrics_minute/**/*.parquet', union_by_name=true)`
+    : `SELECT * FROM read_parquet('/cube/data/warehouse/request_metrics_minute/**/*.parquet', union_by_name=true)`
   : `SELECT * FROM gravix.raw.request_metrics_minute`;
 
 cube(`RequestMetricsMinute`, {
@@ -58,6 +63,12 @@ cube(`RequestMetricsMinute`, {
   },
 
   dimensions: {
+    tenantId: {
+      sql: `tenant_id`,
+      type: `string`,
+      title: `Tenant ID`
+    },
+
     bucketStart: {
       sql: `bucket_start`,
       type: `string`,
