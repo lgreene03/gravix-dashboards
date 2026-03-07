@@ -587,7 +587,7 @@
     <!-- Skip to main content link for keyboard navigation -->
     <a href="#dashboardGrid" class="skip-link" id="skipLink">Skip to dashboard</a>
 
-    <!-- Auth Gate (shown only when CUBEJS_API_SECRET is configured) -->
+    <!-- Auth Gate -->
     <div id="authOverlay" class="auth-overlay hidden">
         <div class="auth-card">
             <div class="auth-brand">
@@ -595,9 +595,10 @@
                 <span>Gravix</span>
             </div>
             <h2>Sign In</h2>
-            <p>Enter the dashboard password to continue.</p>
-            <div id="authError" class="auth-error">Invalid password. Please try again.</div>
+            <p id="authPrompt">Enter your credentials to continue.</p>
+            <div id="authError" class="auth-error">Invalid credentials. Please try again.</div>
             <form id="authForm" onsubmit="return false;">
+                <input type="email" id="authEmail" placeholder="Email" autocomplete="email" style="display:none; margin-bottom: 8px;">
                 <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
                 <button type="submit" id="authSubmit">Sign In</button>
             </form>
@@ -799,43 +800,53 @@
         // Override via window.GRAVIX_CONFIG before this script, or edit config.js
         const GRAVIX_CONFIG = Object.assign({
             cubeApiUrl: "http://localhost:4000/cubejs-api/v1/load",
+            gatewayUrl: "",  // e.g. "http://localhost:8091" for multi-tenant mode
             refreshIntervalMs: 60000,
             staleThresholdMs: 10 * 60 * 1000 // 10 minutes
         }, window.GRAVIX_CONFIG || {});
 
         const CUBE_API_URL = GRAVIX_CONFIG.cubeApiUrl;
+        const GATEWAY_URL = GRAVIX_CONFIG.gatewayUrl;
         const REFRESH_INTERVAL_MS = GRAVIX_CONFIG.refreshIntervalMs;
+        const IS_MULTI_TENANT = !!GATEWAY_URL;
 
         // --- AUTH GATE ---
-        // Probes Cube.js with a trivial query. If the API returns 403/401,
-        // the user must enter CUBEJS_API_SECRET to proceed.
-        // If no secret is configured (open mode), the gate is skipped entirely.
         let dashboardApiToken = sessionStorage.getItem('gravix_token') || '';
 
         async function checkAuthRequired() {
+            // Multi-tenant mode: always require login
+            if (IS_MULTI_TENANT) return true;
+
+            // Legacy mode: probe Cube.js
             try {
                 const resp = await fetch(CUBE_API_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: { measures: [], dimensions: [], limit: 1 } })
                 });
-                if (resp.status === 403 || resp.status === 401) {
-                    return true; // Auth required
-                }
-                return false; // No auth needed
+                return resp.status === 403 || resp.status === 401;
             } catch (e) {
-                return false; // Can't reach API — let the error banner handle it
+                return false;
             }
         }
 
-        async function tryAuth(password) {
+        async function tryAuth(tokenOrPassword) {
+            if (IS_MULTI_TENANT) {
+                // Validate JWT by calling /api/gateway/me
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/me', {
+                        headers: { 'Authorization': 'Bearer ' + tokenOrPassword }
+                    });
+                    return resp.ok;
+                } catch (e) {
+                    return false;
+                }
+            }
+            // Legacy: probe Cube.js with password
             try {
                 const resp = await fetch(CUBE_API_URL, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': password
-                    },
+                    headers: { 'Content-Type': 'application/json', 'Authorization': tokenOrPassword },
                     body: JSON.stringify({ query: { measures: [], dimensions: [], limit: 1 } })
                 });
                 return resp.status !== 403 && resp.status !== 401;
@@ -846,7 +857,14 @@
 
         function showAuthGate() {
             document.getElementById('authOverlay').classList.remove('hidden');
-            document.getElementById('authPassword').focus();
+            if (IS_MULTI_TENANT) {
+                document.getElementById('authEmail').style.display = 'block';
+                document.getElementById('authPrompt').textContent = 'Enter your email and password to continue.';
+                document.getElementById('authEmail').focus();
+            } else {
+                document.getElementById('authPrompt').textContent = 'Enter the dashboard password to continue.';
+                document.getElementById('authPassword').focus();
+            }
         }
 
         function hideAuthGate() {
@@ -854,20 +872,48 @@
         }
 
         document.getElementById('authForm').addEventListener('submit', async () => {
-            const password = document.getElementById('authPassword').value;
             const errorEl = document.getElementById('authError');
             errorEl.style.display = 'none';
             document.getElementById('authSubmit').textContent = 'Verifying...';
 
-            const ok = await tryAuth(password);
-            if (ok) {
-                dashboardApiToken = password;
-                sessionStorage.setItem('gravix_token', password);
-                hideAuthGate();
-                initDashboard();
+            if (IS_MULTI_TENANT) {
+                // Multi-tenant: login via gateway
+                const email = document.getElementById('authEmail').value;
+                const password = document.getElementById('authPassword').value;
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password })
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        dashboardApiToken = data.token;
+                        sessionStorage.setItem('gravix_token', data.token);
+                        hideAuthGate();
+                        initDashboard();
+                    } else {
+                        errorEl.style.display = 'block';
+                        document.getElementById('authSubmit').textContent = 'Sign In';
+                    }
+                } catch (e) {
+                    errorEl.textContent = 'Cannot reach gateway service.';
+                    errorEl.style.display = 'block';
+                    document.getElementById('authSubmit').textContent = 'Sign In';
+                }
             } else {
-                errorEl.style.display = 'block';
-                document.getElementById('authSubmit').textContent = 'Sign In';
+                // Legacy: password auth
+                const password = document.getElementById('authPassword').value;
+                const ok = await tryAuth(password);
+                if (ok) {
+                    dashboardApiToken = password;
+                    sessionStorage.setItem('gravix_token', password);
+                    hideAuthGate();
+                    initDashboard();
+                } else {
+                    errorEl.style.display = 'block';
+                    document.getElementById('authSubmit').textContent = 'Sign In';
+                }
             }
         });
 
@@ -897,7 +943,11 @@
         // --- DATA FETCHING ---
         function cubeHeaders() {
             const h = { "Content-Type": "application/json" };
-            if (dashboardApiToken) h["Authorization"] = dashboardApiToken;
+            if (dashboardApiToken) {
+                h["Authorization"] = IS_MULTI_TENANT
+                    ? "Bearer " + dashboardApiToken
+                    : dashboardApiToken;
+            }
             return h;
         }
 
