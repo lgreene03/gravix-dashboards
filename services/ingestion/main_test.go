@@ -113,7 +113,7 @@ func setupSink(t *testing.T) *DurableSink {
 
 func TestHandleFacts_ValidPost(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink)
+	handler := handleFacts(sink, nil)
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -128,7 +128,7 @@ func TestHandleFacts_ValidPost(t *testing.T) {
 
 func TestHandleFacts_InvalidJSON(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink)
+	handler := handleFacts(sink, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(`{"bad json`))
 	req.Header.Set("Content-Type", "application/json")
@@ -149,7 +149,7 @@ func TestHandleFacts_InvalidJSON(t *testing.T) {
 
 func TestHandleFacts_MissingContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink)
+	handler := handleFacts(sink, nil)
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -164,7 +164,7 @@ func TestHandleFacts_MissingContentType(t *testing.T) {
 
 func TestHandleFacts_WrongContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink)
+	handler := handleFacts(sink, nil)
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -179,7 +179,7 @@ func TestHandleFacts_WrongContentType(t *testing.T) {
 
 func TestHandleFacts_MethodNotAllowed(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink)
+	handler := handleFacts(sink, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/facts", nil)
 	rr := httptest.NewRecorder()
@@ -192,7 +192,7 @@ func TestHandleFacts_MethodNotAllowed(t *testing.T) {
 
 func TestHandleEvents_ValidPost(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleEvents(sink)
+	handler := handleEvents(sink, nil)
 
 	body := validEventJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(body))
@@ -207,7 +207,7 @@ func TestHandleEvents_ValidPost(t *testing.T) {
 
 func TestHandleEvents_InvalidJSON(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleEvents(sink)
+	handler := handleEvents(sink, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(`not json`))
 	req.Header.Set("Content-Type", "application/json")
@@ -221,7 +221,7 @@ func TestHandleEvents_InvalidJSON(t *testing.T) {
 
 func TestHandleEvents_MissingContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleEvents(sink)
+	handler := handleEvents(sink, nil)
 
 	body := validEventJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(body))
@@ -360,7 +360,7 @@ func TestWriteErrorJSON(t *testing.T) {
 
 func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink)
+	handler := handleBatchFacts(sink, nil)
 
 	line1 := validFactJSON(t)
 	line2 := validFactJSON(t)
@@ -389,7 +389,7 @@ func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 
 func TestHandleBatchFacts_MixedValid(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink)
+	handler := handleBatchFacts(sink, nil)
 
 	validLine := validFactJSON(t)
 	body := validLine + "\n{bad json}\n"
@@ -415,7 +415,7 @@ func TestHandleBatchFacts_MixedValid(t *testing.T) {
 
 func TestHandleBatchFacts_EmptyBody(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink)
+	handler := handleBatchFacts(sink, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/batch", strings.NewReader(""))
 	req.Header.Set("Content-Type", "application/json")

@@ -527,9 +527,9 @@ func main() {
 	defer rl.Close()
 
 	// Wrap handlers with rate limiting + auth middleware
-	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMW(handleFacts(sink))))
-	http.Handle("/api/v1/facts/batch", rateLimitMiddleware(rl, authMW(handleBatchFacts(sink))))
-	http.Handle("/api/v1/events", rateLimitMiddleware(rl, authMW(handleEvents(sink))))
+	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMW(handleFacts(sink, tdb))))
+	http.Handle("/api/v1/facts/batch", rateLimitMiddleware(rl, authMW(handleBatchFacts(sink, tdb))))
+	http.Handle("/api/v1/events", rateLimitMiddleware(rl, authMW(handleEvents(sink, tdb))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -623,7 +623,7 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func handleFacts(sink *DurableSink) http.HandlerFunc {
+func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -653,13 +653,17 @@ func handleFacts(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		topic := topicForTenant(getTenantID(r), "request_facts")
+		tenantID := getTenantID(r)
+		topic := topicForTenant(tenantID, "request_facts")
 		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
 			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500").Inc()
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist fact")
 			return
 		}
+
+		// Increment event counter for billing (best-effort, non-blocking)
+		incrementEventCounter(tdb, tenantID, 1)
 
 		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201").Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
@@ -668,7 +672,7 @@ func handleFacts(sink *DurableSink) http.HandlerFunc {
 }
 
 // handleBatchFacts handles JSONL (newline-delimited JSON) payloads with multiple facts per request.
-func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
+func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -716,7 +720,8 @@ func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
 		}
 
 		// Write all valid records in a single batch (one fsync)
-		topic := topicForTenant(getTenantID(r), "request_facts")
+		tenantID := getTenantID(r)
+		topic := topicForTenant(tenantID, "request_facts")
 		if len(validRecords) > 0 {
 			if err := sink.WriteBatch(topic, validRecords); err != nil {
 				log.Printf("Sink batch write error: %v", err)
@@ -726,6 +731,11 @@ func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
 		}
 
 		accepted := len(validRecords)
+
+		// Increment event counter for billing (best-effort, non-blocking)
+		if accepted > 0 {
+			incrementEventCounter(tdb, tenantID, int64(accepted))
+		}
 
 		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200").Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(body)))
@@ -766,7 +776,7 @@ func splitJSONL(data []byte) [][]byte {
 	return lines
 }
 
-func handleEvents(sink *DurableSink) http.HandlerFunc {
+func handleEvents(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -796,7 +806,8 @@ func handleEvents(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		topic := topicForTenant(getTenantID(r), "service_events")
+		tenantID := getTenantID(r)
+		topic := topicForTenant(tenantID, "service_events")
 		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
 			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500").Inc()
@@ -804,8 +815,26 @@ func handleEvents(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
+		// Increment event counter for billing (best-effort, non-blocking)
+		incrementEventCounter(tdb, tenantID, 1)
+
 		ingestionRequestsTotal.WithLabelValues("/api/v1/events", "201").Inc()
 		ingestionBatchSizeBytes.WithLabelValues("service_events").Observe(float64(len(cleanData)))
 		w.WriteHeader(http.StatusCreated)
 	}
+}
+
+// incrementEventCounter increments the daily event counter for a tenant.
+// This is best-effort and non-blocking — billing metering should not
+// slow down or fail the ingestion hot path.
+func incrementEventCounter(tdb tenantdb.DB, tenantID string, count int64) {
+	if tdb == nil || tenantID == "" {
+		return
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	go func() {
+		if err := tdb.EventCounters().Increment(context.Background(), tenantID, today, count); err != nil {
+			log.Printf("Warning: failed to increment event counter for tenant %s: %v", tenantID, err)
+		}
+	}()
 }
