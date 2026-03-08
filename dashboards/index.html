@@ -594,14 +594,73 @@
                 <div class="auth-brand-icon"></div>
                 <span>Gravix</span>
             </div>
-            <h2>Sign In</h2>
+            <!-- Tab switcher (multi-tenant only) -->
+            <div id="authTabs" style="display:none; margin-bottom:20px;">
+                <div style="display:flex; border-bottom:1px solid #e2e8f0; margin-bottom:16px;">
+                    <button type="button" class="auth-tab active" data-tab="login" style="flex:1; padding:10px; border:none; background:none; font-family:inherit; font-weight:600; font-size:0.875rem; color:#3b82f6; border-bottom:2px solid #3b82f6; cursor:pointer;">Sign In</button>
+                    <button type="button" class="auth-tab" data-tab="signup" style="flex:1; padding:10px; border:none; background:none; font-family:inherit; font-weight:500; font-size:0.875rem; color:#64748b; border-bottom:2px solid transparent; cursor:pointer;">Create Account</button>
+                </div>
+            </div>
+            <h2 id="authTitle">Sign In</h2>
             <p id="authPrompt">Enter your credentials to continue.</p>
             <div id="authError" class="auth-error">Invalid credentials. Please try again.</div>
+            <!-- Login form -->
             <form id="authForm" onsubmit="return false;">
                 <input type="email" id="authEmail" placeholder="Email" autocomplete="email" style="display:none; margin-bottom: 8px;">
                 <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
                 <button type="submit" id="authSubmit">Sign In</button>
             </form>
+            <!-- Signup form (multi-tenant only) -->
+            <form id="signupForm" onsubmit="return false;" style="display:none;">
+                <input type="text" id="signupName" placeholder="Company Name" autocomplete="organization" style="margin-bottom:8px;">
+                <input type="email" id="signupEmail" placeholder="Email" autocomplete="email" style="margin-bottom:8px;">
+                <input type="password" id="signupPassword" placeholder="Password (min 8 chars)" autocomplete="new-password" style="margin-bottom:8px;">
+                <input type="password" id="signupPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password">
+                <button type="submit" id="signupSubmit">Create Account</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Onboarding Overlay (shown after first signup) -->
+    <div id="onboardingOverlay" class="auth-overlay hidden">
+        <div class="auth-card" style="width:480px; text-align:left;">
+            <div class="auth-brand" style="justify-content:flex-start; margin-bottom:16px;">
+                <div class="auth-brand-icon"></div>
+                <span>Welcome to Gravix</span>
+            </div>
+            <!-- Step 1: Copy API Key -->
+            <div id="onboardStep1" class="onboard-step">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                    <div style="width:24px; height:24px; background:#3b82f6; border-radius:50%; display:flex; align-items:center; justify-content:center; color:white; font-size:0.75rem; font-weight:700;">1</div>
+                    <h3 style="font-size:1rem; font-weight:600;">Copy your API key</h3>
+                </div>
+                <p style="color:#64748b; font-size:0.875rem; margin-bottom:12px;">This is your ingestion API key. Save it now — it won't be shown again.</p>
+                <div style="display:flex; gap:8px; margin-bottom:16px;">
+                    <code id="onboardApiKey" style="flex:1; background:#f1f5f9; padding:10px 12px; border-radius:6px; font-size:0.8rem; word-break:break-all; border:1px solid #e2e8f0;"></code>
+                    <button type="button" id="copyKeyBtn" style="padding:8px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; white-space:nowrap; font-family:inherit;">Copy</button>
+                </div>
+            </div>
+            <!-- Step 2: Send first event -->
+            <div id="onboardStep2" class="onboard-step">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                    <div style="width:24px; height:24px; background:#3b82f6; border-radius:50%; display:flex; align-items:center; justify-content:center; color:white; font-size:0.75rem; font-weight:700;">2</div>
+                    <h3 style="font-size:1rem; font-weight:600;">Send your first event</h3>
+                </div>
+                <p style="color:#64748b; font-size:0.875rem; margin-bottom:12px;">Copy this curl command to send a test event:</p>
+                <div style="position:relative; margin-bottom:16px;">
+                    <pre id="onboardCurl" style="background:#1e293b; color:#e2e8f0; padding:12px; border-radius:6px; font-size:0.75rem; overflow-x:auto; white-space:pre-wrap; word-break:break-all; line-height:1.5;"></pre>
+                    <button type="button" id="copyCurlBtn" style="position:absolute; top:8px; right:8px; padding:4px 10px; background:#334155; color:#94a3b8; border:none; border-radius:4px; font-size:0.7rem; cursor:pointer; font-family:inherit;">Copy</button>
+                </div>
+            </div>
+            <!-- Step 3: Verify -->
+            <div id="onboardStep3" class="onboard-step">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                    <div style="width:24px; height:24px; background:#3b82f6; border-radius:50%; display:flex; align-items:center; justify-content:center; color:white; font-size:0.75rem; font-weight:700;">3</div>
+                    <h3 style="font-size:1rem; font-weight:600;">Data will appear shortly</h3>
+                </div>
+                <p style="color:#64748b; font-size:0.875rem; margin-bottom:16px;">After sending events, metrics will appear on the dashboard within 5 minutes once the rollup job processes them.</p>
+            </div>
+            <button type="button" id="onboardDone" style="width:100%; padding:12px; background:#3b82f6; color:white; border:none; border-radius:8px; font-size:1rem; font-weight:600; cursor:pointer; font-family:inherit;">Go to Dashboard</button>
         </div>
     </div>
 
@@ -855,10 +914,14 @@
             }
         }
 
+        let currentAuthTab = 'login';
+        let onboardApiKeyValue = '';
+
         function showAuthGate() {
             document.getElementById('authOverlay').classList.remove('hidden');
             if (IS_MULTI_TENANT) {
                 document.getElementById('authEmail').style.display = 'block';
+                document.getElementById('authTabs').style.display = 'block';
                 document.getElementById('authPrompt').textContent = 'Enter your email and password to continue.';
                 document.getElementById('authEmail').focus();
             } else {
@@ -871,13 +934,44 @@
             document.getElementById('authOverlay').classList.add('hidden');
         }
 
+        // Tab switching
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const target = tab.dataset.tab;
+                currentAuthTab = target;
+                document.querySelectorAll('.auth-tab').forEach(t => {
+                    t.classList.remove('active');
+                    t.style.color = '#64748b';
+                    t.style.fontWeight = '500';
+                    t.style.borderBottom = '2px solid transparent';
+                });
+                tab.classList.add('active');
+                tab.style.color = '#3b82f6';
+                tab.style.fontWeight = '600';
+                tab.style.borderBottom = '2px solid #3b82f6';
+                document.getElementById('authError').style.display = 'none';
+
+                if (target === 'login') {
+                    document.getElementById('authForm').style.display = 'block';
+                    document.getElementById('signupForm').style.display = 'none';
+                    document.getElementById('authTitle').textContent = 'Sign In';
+                    document.getElementById('authPrompt').textContent = 'Enter your email and password to continue.';
+                } else {
+                    document.getElementById('authForm').style.display = 'none';
+                    document.getElementById('signupForm').style.display = 'block';
+                    document.getElementById('authTitle').textContent = 'Create Account';
+                    document.getElementById('authPrompt').textContent = 'Start monitoring your services for free.';
+                }
+            });
+        });
+
+        // Login form handler
         document.getElementById('authForm').addEventListener('submit', async () => {
             const errorEl = document.getElementById('authError');
             errorEl.style.display = 'none';
             document.getElementById('authSubmit').textContent = 'Verifying...';
 
             if (IS_MULTI_TENANT) {
-                // Multi-tenant: login via gateway
                 const email = document.getElementById('authEmail').value;
                 const password = document.getElementById('authPassword').value;
                 try {
@@ -893,6 +987,7 @@
                         hideAuthGate();
                         initDashboard();
                     } else {
+                        errorEl.textContent = 'Invalid email or password.';
                         errorEl.style.display = 'block';
                         document.getElementById('authSubmit').textContent = 'Sign In';
                     }
@@ -902,7 +997,6 @@
                     document.getElementById('authSubmit').textContent = 'Sign In';
                 }
             } else {
-                // Legacy: password auth
                 const password = document.getElementById('authPassword').value;
                 const ok = await tryAuth(password);
                 if (ok) {
@@ -915,6 +1009,103 @@
                     document.getElementById('authSubmit').textContent = 'Sign In';
                 }
             }
+        });
+
+        // Signup form handler
+        document.getElementById('signupForm').addEventListener('submit', async () => {
+            const errorEl = document.getElementById('authError');
+            errorEl.style.display = 'none';
+
+            const name = document.getElementById('signupName').value.trim();
+            const email = document.getElementById('signupEmail').value.trim();
+            const password = document.getElementById('signupPassword').value;
+            const confirm = document.getElementById('signupPasswordConfirm').value;
+
+            if (!name || !email || !password) {
+                errorEl.textContent = 'All fields are required.';
+                errorEl.style.display = 'block';
+                return;
+            }
+            if (password.length < 8) {
+                errorEl.textContent = 'Password must be at least 8 characters.';
+                errorEl.style.display = 'block';
+                return;
+            }
+            if (password !== confirm) {
+                errorEl.textContent = 'Passwords do not match.';
+                errorEl.style.display = 'block';
+                return;
+            }
+
+            document.getElementById('signupSubmit').textContent = 'Creating...';
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, email, password })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    dashboardApiToken = data.token;
+                    sessionStorage.setItem('gravix_token', data.token);
+                    hideAuthGate();
+                    // Show onboarding with API key
+                    showOnboarding(data.api_key);
+                } else {
+                    errorEl.textContent = data.error || 'Registration failed.';
+                    errorEl.style.display = 'block';
+                    document.getElementById('signupSubmit').textContent = 'Create Account';
+                }
+            } catch (e) {
+                errorEl.textContent = 'Cannot reach gateway service.';
+                errorEl.style.display = 'block';
+                document.getElementById('signupSubmit').textContent = 'Create Account';
+            }
+        });
+
+        // --- ONBOARDING ---
+        function showOnboarding(apiKey) {
+            onboardApiKeyValue = apiKey;
+            document.getElementById('onboardApiKey').textContent = apiKey;
+
+            // Build curl command
+            const ingestUrl = window.location.origin.replace(':8000', ':8090');
+            const curlCmd = `curl -X POST ${ingestUrl}/api/v1/facts \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: ${apiKey}" \\
+  -d '{
+    "event_id": "'"$(uuidgen | tr A-Z a-z)"'",
+    "event_time": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
+    "service": "my-api",
+    "method": "GET",
+    "path_template": "/api/v1/users/{id}",
+    "status_code": 200,
+    "latency_ms": 42,
+    "user_agent_family": "curl"
+  }'`;
+            document.getElementById('onboardCurl').textContent = curlCmd;
+
+            document.getElementById('onboardingOverlay').classList.remove('hidden');
+        }
+
+        // Copy helpers
+        document.getElementById('copyKeyBtn').addEventListener('click', () => {
+            navigator.clipboard.writeText(onboardApiKeyValue).then(() => {
+                document.getElementById('copyKeyBtn').textContent = 'Copied!';
+                setTimeout(() => { document.getElementById('copyKeyBtn').textContent = 'Copy'; }, 2000);
+            });
+        });
+
+        document.getElementById('copyCurlBtn').addEventListener('click', () => {
+            navigator.clipboard.writeText(document.getElementById('onboardCurl').textContent).then(() => {
+                document.getElementById('copyCurlBtn').textContent = 'Copied!';
+                setTimeout(() => { document.getElementById('copyCurlBtn').textContent = 'Copy'; }, 2000);
+            });
+        });
+
+        document.getElementById('onboardDone').addEventListener('click', () => {
+            document.getElementById('onboardingOverlay').classList.add('hidden');
+            initDashboard();
         });
 
         // --- CHART DEFAULTS ---

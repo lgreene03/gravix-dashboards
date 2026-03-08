@@ -44,6 +44,15 @@ func getTenantID(r *http.Request) string {
 	return ""
 }
 
+// getTenantPlan extracts the tenant's plan from the request context.
+// Returns empty string in legacy (single-key) mode.
+func getTenantPlan(r *http.Request) string {
+	if info, ok := r.Context().Value(tenantInfoKey).(*tenantdb.APIKeyInfo); ok {
+		return info.Plan
+	}
+	return ""
+}
+
 // topicForTenant returns the storage topic prefixed with tenant ID.
 // In legacy mode (empty tenantID), returns the base topic unchanged.
 func topicForTenant(tenantID, baseTopic string) string {
@@ -69,7 +78,7 @@ var (
 			Name: "ingestion_requests_total",
 			Help: "Total number of ingestion requests.",
 		},
-		[]string{"path", "status"},
+		[]string{"path", "status", "tenant"},
 	)
 	ingestionBatchSizeBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -159,6 +168,74 @@ func (rl *RateLimiter) Allow() bool {
 func rateLimitMiddleware(rl *RateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !rl.Allow() {
+			writeErrorJSON(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// planRateLimit returns the rate limit (requests/sec) and burst for a plan.
+func planRateLimit(plan string) (rate int64, burst int64) {
+	switch plan {
+	case "pro":
+		return 100, 200
+	case "starter":
+		return 50, 100
+	default: // free
+		return 10, 20
+	}
+}
+
+// TenantRateLimiter manages per-tenant rate limiters, creating them on
+// demand with rates based on each tenant's plan.
+type TenantRateLimiter struct {
+	mu       sync.Mutex
+	limiters map[string]*RateLimiter
+	// fallback is used in legacy (single-key) mode
+	fallback *RateLimiter
+}
+
+func NewTenantRateLimiter(fallbackRate, fallbackBurst int64) *TenantRateLimiter {
+	return &TenantRateLimiter{
+		limiters: make(map[string]*RateLimiter),
+		fallback: NewRateLimiter(fallbackRate, fallbackBurst),
+	}
+}
+
+// Allow checks the rate limit for the given tenant. In legacy mode
+// (empty tenantID), it falls back to the global limiter.
+func (trl *TenantRateLimiter) Allow(tenantID, plan string) bool {
+	if tenantID == "" {
+		return trl.fallback.Allow()
+	}
+
+	trl.mu.Lock()
+	rl, ok := trl.limiters[tenantID]
+	if !ok {
+		rate, burst := planRateLimit(plan)
+		rl = NewRateLimiter(rate, burst)
+		trl.limiters[tenantID] = rl
+	}
+	trl.mu.Unlock()
+
+	return rl.Allow()
+}
+
+func (trl *TenantRateLimiter) Close() {
+	trl.fallback.Close()
+	trl.mu.Lock()
+	defer trl.mu.Unlock()
+	for _, rl := range trl.limiters {
+		rl.Close()
+	}
+}
+
+func tenantRateLimitMiddleware(trl *TenantRateLimiter, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID := getTenantID(r)
+		plan := getTenantPlan(r)
+		if !trl.Allow(tenantID, plan) {
 			writeErrorJSON(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
 			return
 		}
@@ -522,14 +599,14 @@ func main() {
 	}
 	defer sink.Close()
 
-	// Rate limiter: 100 requests/sec with burst of 200
-	rl := NewRateLimiter(100, 200)
-	defer rl.Close()
+	// Per-tenant rate limiting (fallback 100/s for legacy mode)
+	trl := NewTenantRateLimiter(100, 200)
+	defer trl.Close()
 
-	// Wrap handlers with rate limiting + auth middleware
-	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMW(handleFacts(sink, tdb))))
-	http.Handle("/api/v1/facts/batch", rateLimitMiddleware(rl, authMW(handleBatchFacts(sink, tdb))))
-	http.Handle("/api/v1/events", rateLimitMiddleware(rl, authMW(handleEvents(sink, tdb))))
+	// Wrap handlers: auth first (sets tenant context), then rate limit, then handler
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, handleFacts(sink, tdb))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, handleBatchFacts(sink, tdb))))
+	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, handleEvents(sink, tdb))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -657,7 +734,7 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		topic := topicForTenant(tenantID, "request_facts")
 		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
-			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500").Inc()
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500", tenantID).Inc()
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist fact")
 			return
 		}
@@ -665,7 +742,7 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		// Increment event counter for billing (best-effort, non-blocking)
 		incrementEventCounter(tdb, tenantID, 1)
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201").Inc()
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
 		w.WriteHeader(http.StatusCreated)
 	}
@@ -737,7 +814,7 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			incrementEventCounter(tdb, tenantID, int64(accepted))
 		}
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200").Inc()
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(body)))
 
 		w.Header().Set("Content-Type", "application/json")
@@ -810,7 +887,7 @@ func handleEvents(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		topic := topicForTenant(tenantID, "service_events")
 		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
-			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500").Inc()
+			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500", tenantID).Inc()
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist event")
 			return
 		}
@@ -818,7 +895,7 @@ func handleEvents(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		// Increment event counter for billing (best-effort, non-blocking)
 		incrementEventCounter(tdb, tenantID, 1)
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/events", "201").Inc()
+		ingestionRequestsTotal.WithLabelValues("/api/v1/events", "201", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("service_events").Observe(float64(len(cleanData)))
 		w.WriteHeader(http.StatusCreated)
 	}
