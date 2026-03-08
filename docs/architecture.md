@@ -18,7 +18,7 @@ foundational constraints, see `docs/00-system-truth.md`.
 4. [Ingestion Service](#ingestion-service)
 5. [Storage Layer](#storage-layer)
 6. [Rollup ETL](#rollup-etl)
-7. [Query Engine (Trino)](#query-engine-trino)
+7. [Query Engine (DuckDB / Trino)](#query-engine-duckdb--trino)
 8. [Semantic Layer (Cube.js)](#semantic-layer-cubejs)
 9. [Dashboard](#dashboard)
 10. [Monitoring & Alerting](#monitoring--alerting)
@@ -61,7 +61,7 @@ Clients
 Ingestion Service (HTTP/JSONL)
   |
   v
-MinIO / S3  (raw facts as JSONL, partitioned by date/hour)
+Local Disk / S3  (raw facts as JSONL, partitioned by date/hour)
   |
   v
 Rollup ETL Jobs (Go)
@@ -72,7 +72,7 @@ Rollup ETL Jobs (Go)
 Parquet files (warehouse/, ZSTD compressed)
   |
   v
-Trino (SQL query engine, reads Parquet via S3A)
+DuckDB (embedded in Cube.js, reads Parquet directly)
   |
   v
 Cube.js (semantic layer, measures & dimensions)
@@ -80,7 +80,7 @@ Cube.js (semantic layer, measures & dimensions)
   v
 Dashboard (static HTML/JS, Chart.js)
 
-Monitoring sidecar:  Prometheus  -->  Grafana
+Optional monitoring:  Prometheus  -->  Grafana
 ```
 
 Key characteristics of this pipeline:
@@ -88,9 +88,13 @@ Key characteristics of this pipeline:
 - **Append-only ingestion.** Facts are immutable once written.
 - **Batch transformation.** CronJobs aggregate facts into Parquet on a fixed
   schedule. There is no streaming path.
-- **Decoupled query layer.** Trino reads Parquet files directly; Cube.js
-  provides a semantic abstraction over Trino; the dashboard consumes the
+- **Decoupled query layer.** DuckDB reads Parquet files directly from disk
+  or S3; Cube.js provides a semantic abstraction; the dashboard consumes the
   Cube.js API. Each layer can evolve independently.
+- **Two deployment modes.** The bootstrap stack (`docker-compose.bootstrap.yml`)
+  uses DuckDB + local disk (~800 MB RAM). The full stack (`docker-compose.yml`)
+  adds Trino, MinIO, and monitoring (~7.8 GB RAM). Cube.js models auto-detect
+  the engine via `CUBEJS_DB_TYPE`.
 
 ---
 
@@ -99,15 +103,16 @@ Key characteristics of this pipeline:
 | Component | Technology | Location | Purpose |
 |-----------|-----------|----------|---------|
 | Ingestion | Go HTTP server | `services/ingestion/` | Validate, buffer, and upload facts to object storage |
-| Storage | MinIO / S3 | `pkg/storage/` | `ObjectStore` interface with local and S3 backends |
+| Storage | Local disk / S3 | `pkg/storage/` | `ObjectStore` interface with local and S3 backends |
 | Request Rollup | Go CronJob | `transforms/request_metrics_minute/` | Aggregate request facts into per-minute Parquet metrics |
 | Events Rollup | Go CronJob | `transforms/service_events_daily/` | Aggregate service events into daily Parquet summaries |
 | Purge | Go CronJob | `cmd/purge/` | Enforce 30-day retention policy |
-| Query Engine | Trino 351 | `storage/trino/` | SQL engine over Parquet via Hive metastore |
+| Query Engine (default) | DuckDB (embedded) | `cube/model/` | Embedded SQL engine, reads Parquet directly |
+| Query Engine (full stack) | Trino 351 | `storage/trino/` | Separate SQL engine over Parquet via Hive metastore |
 | Semantic Layer | Cube.js v0.35 | `cube/model/` | Measures, dimensions, and pre-aggregation definitions |
 | Dashboard | HTML/JS + Chart.js | `dashboards/` | Static SPA for visualization |
 | Load Generator | Go | `cmd/load_generator/` | Synthetic traffic for development and testing |
-| Monitoring | Prometheus + Grafana | `storage/prometheus/` | Metrics collection, dashboards, and alerting |
+| Monitoring | Prometheus + Grafana | `storage/prometheus/` | Metrics collection, dashboards, and alerting (optional) |
 
 ---
 
@@ -286,29 +291,47 @@ See `docs/02-derived-metrics.md` for the full derived-metrics specification.
 
 ---
 
-## Query Engine (Trino)
+## Query Engine (DuckDB / Trino)
+
+Gravix supports two query engines, selected via the `CUBEJS_DB_TYPE`
+environment variable. The Cube.js models auto-detect which engine is active
+and adjust their SQL accordingly.
+
+### DuckDB (Default — Bootstrap Stack)
+
+**Embedded in Cube.js.** No separate process, no JVM, ~300 MB memory overhead.
+
+- Reads Parquet files directly from disk using `read_parquet()` globs.
+- Used in `docker-compose.bootstrap.yml` (the default deployment).
+- Configured via `CUBEJS_DB_TYPE=duckdb` and
+  `CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:`.
+
+**DuckDB table references (in Cube.js models):**
+
+| read_parquet glob | Source |
+|-------------------|--------|
+| `/cube/data/warehouse/request_metrics_minute/**/*.parquet` | `warehouse/request_metrics_minute/` |
+| `/cube/data/warehouse/service_events_daily/**/*.parquet` | `warehouse/service_events_daily/` |
+
+### Trino (Full Stack)
 
 **Source:** `storage/trino/`
 
-Gravix uses Trino 351 with a Hive file-based metastore to provide SQL access
-over the Parquet warehouse files.
-
-### Configuration
+Available in `docker-compose.yml` for larger deployments. Trino 351 with a
+Hive file-based metastore provides SQL access over Parquet via S3A.
 
 - Reads Parquet files via the S3A protocol (`s3a://gravix/warehouse/...`).
-- Uses a separate writable metastore directory (`/data/metastore`) for schema
-  metadata.
-- An `init-trino` init container bootstraps the schema and creates external
-  tables on startup.
+- Uses a separate writable metastore directory (`/data/metastore`).
+- An `init-trino` init container bootstraps the schema on startup.
 
-### Tables
+**Trino table references:**
 
 | Fully Qualified Name | Source |
 |----------------------|--------|
 | `gravix.raw.request_metrics_minute` | `warehouse/request_metrics_minute/` |
 | `gravix.raw.service_events_daily` | `warehouse/service_events_daily/` |
 
-### Column Types
+### Column Types (both engines)
 
 - `VARCHAR` for string fields (service, method, path_template, event_type).
 - `BIGINT` for counts (request_count, error_count, event_count).
@@ -320,8 +343,11 @@ over the Parquet warehouse files.
 
 **Source:** `cube/model/`
 
-Cube.js v0.35 provides a semantic layer between Trino and the dashboard. It
-defines measures, dimensions, and pre-aggregation rules.
+Cube.js v0.35 provides a semantic layer between the query engine (DuckDB or
+Trino) and the dashboard. It defines measures, dimensions, and pre-aggregation
+rules. The Cube models auto-detect the active engine via `CUBEJS_DB_TYPE` and
+use the appropriate SQL syntax (`read_parquet()` for DuckDB, catalog paths for
+Trino).
 
 ### RequestMetricsMinute Cube
 
@@ -474,6 +500,11 @@ See `docs/01-facts-and-events.md` for full schema details.
 
 **Source:** `deploy/gravix/`
 
+> **Bootstrap alternative:** For low-cost deployments (Phase 0-3), use
+> `docker-compose.bootstrap.yml` instead of Kubernetes. The bootstrap stack
+> runs the full pipeline on a single VPS with ~800 MB RAM. See
+> [PRODUCT_ROADMAP.md](../PRODUCT_ROADMAP.md#phase-0-bootstrap-0-20mo--week-0).
+
 The Helm chart produces 49 production resources across 21+ template types.
 
 ### Workloads
@@ -560,7 +591,7 @@ dispatch for production.
 |----------|-----------|
 | Facts, not metrics | Immutable, append-only storage; metrics are recomputable derivatives that can be regenerated at any time |
 | Batch processing over streaming | Historical correctness is more important than latency; batch is operationally simpler |
-| Parquet + Trino | Columnar compression reduces storage cost; standard SQL prevents vendor lock-in; no schema drift |
+| Parquet + DuckDB (default) | Columnar compression reduces storage cost; embedded engine eliminates 3 GB Trino overhead; standard SQL prevents vendor lock-in |
 | Durable sink (fsync before ACK) | Ensures every acknowledged fact survives service restarts; no data loss window |
 | Token-bucket rate limiting | Lock-free via atomic operations; tolerates traffic bursts without blocking |
 | UUIDv7 event IDs | Time-ordered UUIDs enable efficient deduplication and chronological scanning |

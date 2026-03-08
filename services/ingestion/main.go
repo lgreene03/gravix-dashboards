@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -28,6 +29,38 @@ import (
 )
 
 const maxBodyBytes = 1 << 20 // 1 MB max request body
+
+// contextKey is a private type for context keys to avoid collisions.
+type contextKey string
+
+const tenantInfoKey contextKey = "tenantInfo"
+
+// getTenantID extracts the tenant ID from the request context.
+// Returns empty string in legacy (single-key) mode.
+func getTenantID(r *http.Request) string {
+	if info, ok := r.Context().Value(tenantInfoKey).(*tenantdb.APIKeyInfo); ok {
+		return info.TenantID
+	}
+	return ""
+}
+
+// getTenantPlan extracts the tenant's plan from the request context.
+// Returns empty string in legacy (single-key) mode.
+func getTenantPlan(r *http.Request) string {
+	if info, ok := r.Context().Value(tenantInfoKey).(*tenantdb.APIKeyInfo); ok {
+		return info.Plan
+	}
+	return ""
+}
+
+// topicForTenant returns the storage topic prefixed with tenant ID.
+// In legacy mode (empty tenantID), returns the base topic unchanged.
+func topicForTenant(tenantID, baseTopic string) string {
+	if tenantID == "" {
+		return baseTopic
+	}
+	return tenantID + "/" + baseTopic
+}
 
 // writeErrorJSON writes a structured JSON error response.
 func writeErrorJSON(w http.ResponseWriter, code int, errMsg string) {
@@ -45,7 +78,7 @@ var (
 			Name: "ingestion_requests_total",
 			Help: "Total number of ingestion requests.",
 		},
-		[]string{"path", "status"},
+		[]string{"path", "status", "tenant"},
 	)
 	ingestionBatchSizeBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -135,6 +168,74 @@ func (rl *RateLimiter) Allow() bool {
 func rateLimitMiddleware(rl *RateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !rl.Allow() {
+			writeErrorJSON(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// planRateLimit returns the rate limit (requests/sec) and burst for a plan.
+func planRateLimit(plan string) (rate int64, burst int64) {
+	switch plan {
+	case "pro":
+		return 100, 200
+	case "starter":
+		return 50, 100
+	default: // free
+		return 10, 20
+	}
+}
+
+// TenantRateLimiter manages per-tenant rate limiters, creating them on
+// demand with rates based on each tenant's plan.
+type TenantRateLimiter struct {
+	mu       sync.Mutex
+	limiters map[string]*RateLimiter
+	// fallback is used in legacy (single-key) mode
+	fallback *RateLimiter
+}
+
+func NewTenantRateLimiter(fallbackRate, fallbackBurst int64) *TenantRateLimiter {
+	return &TenantRateLimiter{
+		limiters: make(map[string]*RateLimiter),
+		fallback: NewRateLimiter(fallbackRate, fallbackBurst),
+	}
+}
+
+// Allow checks the rate limit for the given tenant. In legacy mode
+// (empty tenantID), it falls back to the global limiter.
+func (trl *TenantRateLimiter) Allow(tenantID, plan string) bool {
+	if tenantID == "" {
+		return trl.fallback.Allow()
+	}
+
+	trl.mu.Lock()
+	rl, ok := trl.limiters[tenantID]
+	if !ok {
+		rate, burst := planRateLimit(plan)
+		rl = NewRateLimiter(rate, burst)
+		trl.limiters[tenantID] = rl
+	}
+	trl.mu.Unlock()
+
+	return rl.Allow()
+}
+
+func (trl *TenantRateLimiter) Close() {
+	trl.fallback.Close()
+	trl.mu.Lock()
+	defer trl.mu.Unlock()
+	for _, rl := range trl.limiters {
+		rl.Close()
+	}
+}
+
+func tenantRateLimitMiddleware(trl *TenantRateLimiter, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID := getTenantID(r)
+		plan := getTenantPlan(r)
+		if !trl.Allow(tenantID, plan) {
 			writeErrorJSON(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
 			return
 		}
@@ -437,11 +538,32 @@ func main() {
 	baseDir := flag.String("base-dir", "./data", "Base directory for buffer and raw storage")
 	flag.Parse()
 
+	// Auth mode: multi-tenant (TENANT_DB_PATH) or legacy (API_KEY)
+	var tdb tenantdb.DB
+	var authMW func(http.HandlerFunc) http.HandlerFunc
+
+	tenantDBPath := os.Getenv("TENANT_DB_PATH")
 	apiKey := os.Getenv("API_KEY")
-	if apiKey == "" {
-		log.Fatal("FATAL: API_KEY environment variable is required. Set API_KEY to enable the ingestion service.")
+
+	if tenantDBPath != "" {
+		var err error
+		tdb, err = tenantdb.Open(tenantDBPath)
+		if err != nil {
+			log.Fatalf("FATAL: failed to open tenant database: %v", err)
+		}
+		defer tdb.Close()
+		authMW = func(next http.HandlerFunc) http.HandlerFunc {
+			return multiTenantAuthMiddleware(tdb.APIKeys(), next)
+		}
+		log.Printf("Multi-tenant auth enabled (db: %s)", tenantDBPath)
+	} else if apiKey != "" {
+		authMW = func(next http.HandlerFunc) http.HandlerFunc {
+			return authMiddleware(apiKey, next)
+		}
+		log.Println("Legacy single-key auth enabled.")
+	} else {
+		log.Fatal("FATAL: Set TENANT_DB_PATH (multi-tenant) or API_KEY (legacy) to enable authentication.")
 	}
-	log.Println("API Key authentication enabled.")
 
 	bufferDir := filepath.Join(*baseDir, "buffer")
 	rawDir := filepath.Join(*baseDir, "raw")
@@ -477,14 +599,14 @@ func main() {
 	}
 	defer sink.Close()
 
-	// Rate limiter: 100 requests/sec with burst of 200
-	rl := NewRateLimiter(100, 200)
-	defer rl.Close()
+	// Per-tenant rate limiting (fallback 100/s for legacy mode)
+	trl := NewTenantRateLimiter(100, 200)
+	defer trl.Close()
 
-	// Wrap handlers with rate limiting + auth middleware
-	http.Handle("/api/v1/facts", rateLimitMiddleware(rl, authMiddleware(apiKey, handleFacts(sink))))
-	http.Handle("/api/v1/facts/batch", rateLimitMiddleware(rl, authMiddleware(apiKey, handleBatchFacts(sink))))
-	http.Handle("/api/v1/events", rateLimitMiddleware(rl, authMiddleware(apiKey, handleEvents(sink))))
+	// Wrap handlers: auth first (sets tenant context), then rate limit, then handler
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, handleFacts(sink, tdb))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, handleBatchFacts(sink, tdb))))
+	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, handleEvents(sink, tdb))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -546,6 +668,27 @@ func authMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// multiTenantAuthMiddleware validates API keys against the tenant database
+// and stores tenant info in the request context.
+func multiTenantAuthMiddleware(keyRepo tenantdb.APIKeyRepo, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reqKey := r.Header.Get("X-API-Key")
+		if reqKey == "" {
+			writeErrorJSON(w, http.StatusUnauthorized, "missing X-API-Key header")
+			return
+		}
+
+		info, err := keyRepo.ValidateKey(r.Context(), reqKey)
+		if err != nil {
+			writeErrorJSON(w, http.StatusUnauthorized, "invalid or missing X-API-Key header")
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), tenantInfoKey, info)
+		next(w, r.WithContext(ctx))
+	}
+}
+
 // requireJSON checks Content-Type header contains application/json.
 // Returns true if valid, false (and writes 415 response) if invalid.
 func requireJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -557,7 +700,7 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func handleFacts(sink *DurableSink) http.HandlerFunc {
+func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -587,21 +730,26 @@ func handleFacts(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		if err := sink.Write("request_facts", cleanData); err != nil {
+		tenantID := getTenantID(r)
+		topic := topicForTenant(tenantID, "request_facts")
+		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
-			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500").Inc()
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500", tenantID).Inc()
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist fact")
 			return
 		}
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201").Inc()
+		// Increment event counter for billing (best-effort, non-blocking)
+		incrementEventCounter(tdb, tenantID, 1)
+
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
 		w.WriteHeader(http.StatusCreated)
 	}
 }
 
 // handleBatchFacts handles JSONL (newline-delimited JSON) payloads with multiple facts per request.
-func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
+func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -649,8 +797,10 @@ func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
 		}
 
 		// Write all valid records in a single batch (one fsync)
+		tenantID := getTenantID(r)
+		topic := topicForTenant(tenantID, "request_facts")
 		if len(validRecords) > 0 {
-			if err := sink.WriteBatch("request_facts", validRecords); err != nil {
+			if err := sink.WriteBatch(topic, validRecords); err != nil {
 				log.Printf("Sink batch write error: %v", err)
 				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist facts")
 				return
@@ -659,7 +809,12 @@ func handleBatchFacts(sink *DurableSink) http.HandlerFunc {
 
 		accepted := len(validRecords)
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200").Inc()
+		// Increment event counter for billing (best-effort, non-blocking)
+		if accepted > 0 {
+			incrementEventCounter(tdb, tenantID, int64(accepted))
+		}
+
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(body)))
 
 		w.Header().Set("Content-Type", "application/json")
@@ -698,7 +853,7 @@ func splitJSONL(data []byte) [][]byte {
 	return lines
 }
 
-func handleEvents(sink *DurableSink) http.HandlerFunc {
+func handleEvents(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -728,15 +883,35 @@ func handleEvents(sink *DurableSink) http.HandlerFunc {
 			return
 		}
 
-		if err := sink.Write("service_events", cleanData); err != nil {
+		tenantID := getTenantID(r)
+		topic := topicForTenant(tenantID, "service_events")
+		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
-			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500").Inc()
+			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500", tenantID).Inc()
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist event")
 			return
 		}
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/events", "201").Inc()
+		// Increment event counter for billing (best-effort, non-blocking)
+		incrementEventCounter(tdb, tenantID, 1)
+
+		ingestionRequestsTotal.WithLabelValues("/api/v1/events", "201", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("service_events").Observe(float64(len(cleanData)))
 		w.WriteHeader(http.StatusCreated)
 	}
+}
+
+// incrementEventCounter increments the daily event counter for a tenant.
+// This is best-effort and non-blocking — billing metering should not
+// slow down or fail the ingestion hot path.
+func incrementEventCounter(tdb tenantdb.DB, tenantID string, count int64) {
+	if tdb == nil || tenantID == "" {
+		return
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	go func() {
+		if err := tdb.EventCounters().Increment(context.Background(), tenantID, today, count); err != nil {
+			log.Printf("Warning: failed to increment event counter for tenant %s: %v", tenantID, err)
+		}
+	}()
 }

@@ -90,7 +90,7 @@ func TestProcessDay_BasicAggregation(t *testing.T) {
 	outputDir := "./data/warehouse/request_metrics_minute"
 	inputDir := "./data/raw/request_facts"
 
-	err = processDay(context.Background(), day, store, inputDir, outputDir)
+	err = processDay(context.Background(), day, store, inputDir, outputDir, "")
 	if err != nil {
 		t.Fatalf("processDay failed: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestProcessDay_Deduplication(t *testing.T) {
 	outputDir := "./data/warehouse/request_metrics_minute"
 	inputDir := "./data/raw/request_facts"
 
-	err = processDay(context.Background(), day, store, inputDir, outputDir)
+	err = processDay(context.Background(), day, store, inputDir, outputDir, "")
 	if err != nil {
 		t.Fatalf("processDay failed: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestProcessDay_EmptyInput(t *testing.T) {
 	inputDir := "./data/raw/request_facts"
 
 	// processDay with no input data should succeed (no-op)
-	err = processDay(context.Background(), day, store, inputDir, outputDir)
+	err = processDay(context.Background(), day, store, inputDir, outputDir, "")
 	if err != nil {
 		t.Fatalf("processDay with empty input should not fail: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestProcessDay_WrongDayFiltered(t *testing.T) {
 	outputDir := "./data/warehouse/request_metrics_minute"
 	inputDir := "./data/raw/request_facts"
 
-	err = processDay(context.Background(), day, store, inputDir, outputDir)
+	err = processDay(context.Background(), day, store, inputDir, outputDir, "")
 	if err != nil {
 		t.Fatalf("processDay failed: %v", err)
 	}

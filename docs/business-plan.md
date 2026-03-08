@@ -55,7 +55,43 @@ These constraints are architectural, not roadmap items. They keep the product si
 
 ## 3. Infrastructure Cost Model
 
-All costs based on AWS us-east-1 pricing. Gravix runs on Kubernetes (EKS) with S3 for storage.
+### Bootstrap Tier ($0-20/mo) — Phase 0-3
+
+Before spending on AWS, Gravix runs on a single cheap VPS using the bootstrap stack (`docker-compose.bootstrap.yml`). DuckDB replaces Trino; local disk replaces MinIO.
+
+| Component | Bootstrap Stack | Full AWS Stack |
+|-----------|----------------|---------------|
+| Query engine | DuckDB (embedded, ~300MB) | Trino (3GB JVM) |
+| Object storage | Local disk | MinIO / S3 |
+| Monitoring | None (add later) | Prometheus + Grafana |
+| Total RAM | ~800MB | ~7.8GB |
+
+**Bootstrap hosting options:**
+
+| Hosting | Monthly Cost | RAM | Notes |
+|---------|-------------|-----|-------|
+| Oracle Cloud Always Free | $0 | 24 GB ARM | Best free option |
+| Hetzner CX22 | €4 (~$4) | 4 GB | Cheapest paid VPS |
+| DigitalOcean Basic | $6 | 1 GB | Tight but workable |
+| AWS t3.small | $15 | 2 GB | If AWS-preferred |
+
+**Bootstrap-era add-ons (Phase 1-3):**
+
+| Service | Monthly Cost | When Needed |
+|---------|-------------|-------------|
+| Managed Postgres (Neon free / Supabase free / RDS db.t4g.micro) | $0-12 | Phase 1 (tenant metadata) |
+| SES (transactional email) | ~$0.50 | Phase 1 (onboarding) |
+| Route 53 hosted zone | $0.50 | Phase 1 (DNS) |
+| Domain registration | ~$12/yr ($1/mo) | Phase 1 |
+| CloudFront (docs site) | ~$2 | Phase 3 |
+
+**Total bootstrap-era cost: $0-20/mo** (Phase 0), scaling to **$13-33/mo** (Phase 1-3) depending on hosting choice and managed DB selection.
+
+**Upgrade trigger:** Migrate to AWS EKS at ~Phase 4 when Enterprise customers justify the cost (~$3K+ MRR, ~50+ customers).
+
+### AWS Full Stack Pricing (Phase 4+)
+
+All costs based on AWS us-east-1 pricing. Gravix runs on Kubernetes (EKS) with S3 for storage and DuckDB as the query engine (no Trino).
 
 ### AWS Component Pricing (current rates)
 
@@ -76,16 +112,17 @@ All costs based on AWS us-east-1 pricing. Gravix runs on Kubernetes (EKS) with S
 
 Based on actual Helm chart values (`values-prod.yaml`):
 
-**Per-Customer Resource Footprint (shared infrastructure):**
+**Per-Customer Resource Footprint (shared infrastructure, DuckDB):**
 
 | Component | CPU Request | Memory Request | CPU Limit | Memory Limit | Notes |
 |-----------|-------------|---------------|-----------|-------------|-------|
 | Ingestion (shared, 2 replicas) | 500m | 512 Mi | 2 | 2 Gi | Scales via HPA |
-| Trino (shared, 1 replica) | 250m | 1 Gi | 1 | 3 Gi | Memory-intensive query engine |
-| Cube.js (shared, 1 replica) | 100m | 256 Mi | 500m | 512 Mi | Semantic layer |
+| Cube.js + DuckDB (shared, 1 replica) | 200m | 512 Mi | 1 | 1 Gi | DuckDB embedded, no separate process |
 | Dashboard (shared, 1 replica) | 50m | 32 Mi | 100m | 64 Mi | Static nginx |
 | Rollup CronJobs (4 jobs) | 350m | 448 Mi | 1.75 | 1.79 Gi | Run periodically, not always |
-| **Total (steady-state)** | **~1.1 CPU** | **~2.4 Gi** | **~5.35 CPU** | **~8.5 Gi** | Excluding CronJob burst |
+| **Total (steady-state)** | **~0.95 CPU** | **~1.5 Gi** | **~4.85 CPU** | **~5 Gi** | Excluding CronJob burst |
+
+*DuckDB replaces Trino (Phase 0), saving ~1 Gi steady-state memory and eliminating the 3 Gi memory-intensive JVM process.*
 
 ### Infrastructure Tiers
 
@@ -123,31 +160,39 @@ At 5 QPS average per customer (typical small-to-mid team):
 
 Storage is essentially free. Even at 100 QPS, storage costs are under $3/mo per customer.
 
-### Scaling Bottleneck: Trino → DuckDB Migration
+### Query Engine: DuckDB (from Day 1)
 
-Trino is the most expensive component (3 GB memory minimum) and does not horizontally scale in the current architecture. At Phase 5 (Month 10-14), **all customers** migrate to embedded DuckDB:
+DuckDB is the query engine from Phase 0 onward. It was chosen over Trino to minimize memory requirements and eliminate operational overhead:
 
 | Query Engine | Pros | Cons | Cost Impact |
 |-------------|------|------|------------|
-| **Trino** (Phase 1-4) | Mature, SQL-standard | 3 GB memory, separate process, query contention | ~$70/mo (node capacity) |
-| **DuckDB** (Phase 5+) | No separate process, reads Parquet from S3 directly, fast for small-to-medium scans | Single-node only | Near-zero |
+| **DuckDB** (Phase 0+) | No separate process, reads Parquet directly, fast for small-to-medium scans, ~300MB embedded | Single-node only, newer ecosystem | Near-zero |
+| **Trino** (available in full stack) | Mature, SQL-standard, horizontal scaling | 3 GB memory, separate JVM process, query contention | ~$70/mo (node capacity) |
 
-**Approach**: One architecture for all customers. Start with shared Trino. Full cutover to DuckDB at Phase 5 — Trino is removed entirely from the stack. No per-customer engine selection, no dedicated compute tiers.
+**Approach**: DuckDB is the default for all customers from day one. The Cube.js models auto-detect the engine via `CUBEJS_DB_TYPE` env var, so switching to Trino is a config change if needed at extreme scale. No per-customer engine selection, no dedicated compute tiers.
+
+### Scaling Path
+
+At Phase 5 (50+ tenants), DuckDB performance is optimized via connection pooling, Parquet compaction, and Redis caching. Trino remains available in `docker-compose.yml` as a fallback if DuckDB single-node limits are hit, but this is not expected until 200+ concurrent tenants.
 
 ### Cost Evolution by Phase
 
-As the product evolves through the 6-phase roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_ROADMAP.md)), infrastructure costs change:
+As the product evolves through the 7-phase roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_ROADMAP.md)), infrastructure costs change:
 
-| Phase | Month | New AWS Services | Additional Cost | Cumulative Fixed Infra |
-|-------|-------|-----------------|-----------------|----------------------|
-| **1: SaaS Foundation** | 1-2 | RDS db.t4g.micro, SES, Route53 | +$13/mo | $177/mo |
-| **2: Analytics & Alerting** | 3-5 | SES increase (alert emails) | +$5/mo | $182/mo |
-| **3: Developer Experience** | 5-7 | CloudFront (docs site) | +$2/mo | $184/mo |
-| **4: Enterprise Readiness** | 7-10 | Cognito | +$3/mo | $187/mo |
-| **5: Scale & Performance** | 10-14 | ElastiCache Redis; DuckDB replaces Trino (full cutover) | -$58/mo | $129/mo |
-| **6: Platform** | 14-18 | API Gateway (optional) | +$1-5/mo | $130-134/mo |
+| Phase | Month | Infrastructure | Additional Cost | Cumulative Infra |
+|-------|-------|---------------|-----------------|-----------------|
+| **0: Bootstrap** | Week 0 | VPS + DuckDB (no Trino, no MinIO) | $0-20/mo | **$0-20/mo** |
+| **1: SaaS Foundation** | 1-2 | + Managed Postgres, SES, Route53 | +$13/mo | **$13-33/mo** |
+| **2: Analytics & Alerting** | 3-5 | + SES increase (alert emails) | +$5/mo | **$18-38/mo** |
+| **3: Developer Experience** | 5-7 | + CloudFront (docs site) | +$2/mo | **$20-40/mo** |
+| **4: Enterprise Readiness** | 7-10 | Migrate to AWS EKS + Cognito | step up | **$187/mo** |
+| **5: Scale & Performance** | 10-14 | + ElastiCache Redis | +$12/mo | **$199/mo** |
+| **6: Platform** | 14-18 | + API Gateway (optional) | +$1-5/mo | **$200-204/mo** |
 
-Key insight: **Phase 5 reduces costs for everyone** — replacing Trino with embedded DuckDB eliminates the 3Gi memory footprint (~$70/mo savings). One architecture, no per-customer infrastructure. Multi-region deployment is the main cost driver at scale (+$164/mo per additional region).
+Key insights:
+- **Phase 0-3 runs under $40/mo** on a cheap VPS with DuckDB and local disk. No AWS spend required until Enterprise customers justify EKS.
+- **Phase 4 is the step-up** — migrating to AWS EKS when MRR supports it (~$3K+). DuckDB is already the query engine, so no migration needed.
+- **Multi-region deployment** (Phase 5+) is the main cost driver at scale (+$164/mo per additional region).
 
 ---
 
@@ -227,18 +272,19 @@ COGS includes: proportional share of compute, S3 storage, S3 API calls, ALB, EKS
 
 ### COGS Evolution by Phase
 
-As the platform matures, per-customer COGS decreases and gross margins improve — particularly at Phase 5 when DuckDB replaces Trino for **all customers**:
+DuckDB is the query engine from Phase 0. Per-customer COGS improves as the customer base grows across a shared, low-cost infrastructure:
 
 | Phase | COGS per Customer (Pro) | Gross Margin | Key Cost Driver |
 |-------|------------------------|-------------|----------------|
-| **1: SaaS Foundation** | $12-20 | 72-85% | Trino 3Gi memory overhead |
-| **2: Analytics & Alerting** | $12-20 | 75-85% | SES alert emails (+$5/mo shared) |
-| **3: Developer Experience** | $12-20 | 78-87% | Customer count improves fixed-cost spread |
-| **4: Enterprise Readiness** | $12-20 | 80-88% | Cognito adds ~$3/mo shared (minimal) |
-| **5: Scale & Performance** | $5-10 | 88-94% | DuckDB full cutover eliminates Trino (-$70/mo) |
+| **0: Bootstrap** | $2-5 | 85-95% | Cheap VPS shared across early customers |
+| **1: SaaS Foundation** | $3-8 | 82-92% | Managed Postgres + SES add small shared cost |
+| **2: Analytics & Alerting** | $3-8 | 85-92% | Customer count improves fixed-cost spread |
+| **3: Developer Experience** | $2-6 | 88-94% | More customers, same infrastructure |
+| **4: Enterprise Readiness** | $8-15 | 80-88% | EKS migration increases base cost |
+| **5: Scale & Performance** | $5-10 | 88-94% | Redis cache, more customers per node |
 | **6: Platform** | $5-10 | 88-94% | Marginal cost of add-ons near zero |
 
-Phase 5 is the critical margin inflection point: replacing Trino (3Gi memory, dedicated process) with embedded DuckDB (reads Parquet from S3 directly, no separate process) reduces per-customer compute COGS by approximately 40-50%. **All customers benefit equally** — one architecture, one migration.
+**Phase 0-3 has the best unit economics** because the bootstrap stack costs near-zero. Phase 4 (EKS migration) temporarily increases per-customer COGS but is justified by Enterprise revenue ($499/mo). By Phase 5-6, customer density and Redis caching restore margins to 88-94%.
 
 ### Key Metrics
 
@@ -253,13 +299,15 @@ Phase 5 is the critical margin inflection point: replacing Trino (3Gi memory, de
 
 ### Fixed vs Variable Costs
 
-| Cost Type | Components | Phase 1-4 | Phase 5-6 |
-|-----------|-----------|-----------|-----------|
-| **Fixed** | EKS control plane, ALB, base node | ~$187/mo | ~$129/mo |
-| **Variable** | S3 storage, S3 API calls, additional nodes | ~$0.15-5/customer | ~$0.10-3/customer |
-| **Step-function** | Additional EC2 nodes (every ~20 customers) | ~$70-140/step | ~$30-70/step (DuckDB) |
+| Cost Type | Components | Phase 0-3 (Bootstrap) | Phase 4-6 (AWS) |
+|-----------|-----------|----------------------|-----------------|
+| **Fixed** | VPS or EKS + ALB + base node | ~$0-20/mo | ~$187-199/mo |
+| **Variable** | Disk/S3 storage, API calls | ~$0.05-1/customer | ~$0.10-3/customer |
+| **Step-function** | Larger VPS or additional EC2 nodes | ~$5-15/step (VPS) | ~$30-70/step (EC2) |
 
-No per-customer infrastructure costs. All customers share the same stack. Enterprise customers pay more for features, but their infra COGS is identical to Business customers. The high fixed cost ($164-187/mo EKS + base node) means the first 5-10 customers are critical to reach profitability. After Phase 5 DuckDB migration, fixed costs drop to ~$129/mo and marginal costs approach near-zero.
+No per-customer infrastructure costs. All customers share the same stack. Enterprise customers pay more for features, but their infra COGS is identical to Business customers.
+
+The bootstrap stack's near-zero fixed cost ($0-20/mo) means **even the first paying customer generates profit**. The Phase 4 migration to AWS EKS increases fixed costs to ~$187/mo but is only triggered when MRR supports it (~$3K+, ~50 customers).
 
 ---
 
@@ -274,26 +322,25 @@ The current architecture serves one deployment per environment. To offer SaaS, w
 **Shared infrastructure, isolated data:**
 
 ```
-Customer A ─┐                    ┌─ S3: gravix-prod/tenants/acme/raw/
-Customer B ─┼─→ Shared Ingestion ├─ S3: gravix-prod/tenants/beta/raw/
-Customer C ─┘   (tenant header)  └─ S3: gravix-prod/tenants/gamma/raw/
+Customer A ─┐                    ┌─ data/tenants/acme/raw/   (bootstrap: local disk)
+Customer B ─┼─→ Shared Ingestion ├─ data/tenants/beta/raw/   (or S3 at scale)
+Customer C ─┘   (tenant header)  └─ data/tenants/gamma/raw/
                      │
               Shared Rollup (per-tenant prefix)
                      │
-              Shared Trino (per-tenant schema)
+              Shared DuckDB (embedded in Cube.js, reads per-tenant Parquet)
                      │
-              Shared Cube.js (tenant context)
+              Shared Cube.js (tenant context via securityContext)
                      │
               Shared Dashboard (tenant login)
 ```
 
 **Changes needed:**
-1. **Ingestion**: Add `X-Tenant-ID` header, route to per-tenant S3 prefix
+1. **Ingestion**: Add `X-Tenant-ID` header, route to per-tenant storage prefix
 2. **Rollup**: Process per-tenant data independently
-3. **Trino**: One schema per tenant (`gravix.tenant_acme.request_metrics_minute`)
-4. **Cube.js**: Tenant context injection (security context)
-5. **Dashboard**: Login + tenant-scoped queries
-6. **Authentication**: API key per tenant, dashboard auth per tenant
+3. **Cube.js**: Tenant context injection via `securityContext` + DuckDB `read_parquet` with tenant path prefix
+4. **Dashboard**: Login + tenant-scoped queries
+5. **Authentication**: API key per tenant, dashboard auth per tenant
 
 **Estimated effort**: 2-4 weeks of engineering work.
 
@@ -391,21 +438,22 @@ Aligned with the 6-phase product roadmap (see [PRODUCT_ROADMAP.md](../PRODUCT_RO
 
 ### Cost Model (Phase-Aligned)
 
-One shared infrastructure for all customers — no per-customer dedicated compute.
+One shared infrastructure for all customers — bootstrap stack (Phase 0-3) then AWS EKS (Phase 4+).
 
-| Month | Phase | AWS Infra | Domain/TLS/DNS | SOC 2/Compliance | Total Costs | Net (MRR - Costs) |
-|-------|-------|-----------|---------------|-----------------|-------------|-------------------|
-| 2 | 1 | $177 | $15 | $0 | $192 | -$134 |
-| 4 | 2 | $182 | $15 | $0 | $197 | +$146 |
-| 6 | 2 | $182 | $15 | $0 | $197 | +$779 |
+| Month | Phase | Infra | Domain/TLS/DNS | SOC 2/Compliance | Total Costs | Net (MRR - Costs) |
+|-------|-------|-------|---------------|-----------------|-------------|-------------------|
+| 0 | 0 | $4 | $1 | $0 | $5 | -$5 |
+| 2 | 1 | $33 | $1 | $0 | $34 | +$24 |
+| 4 | 2 | $38 | $1 | $0 | $39 | +$304 |
+| 6 | 2 | $38 | $1 | $0 | $39 | +$937 |
 | 8 | 4 | $187 | $15 | $500 | $702 | +$1,684 |
 | 10 | 4 | $187 | $15 | $500 | $702 | +$3,164 |
-| 12 | 5 | $129 | $15 | $500 | $644 | +$5,648 |
-| 14 | 5 | $129 | $15 | $500 | $644 | +$8,892 |
-| 16 | 6 | $134 | $15 | $500 | $649 | +$11,684 |
-| 18 | 6 | $134 | $15 | $500 | $649 | +$15,508 |
+| 12 | 5 | $199 | $15 | $500 | $714 | +$5,578 |
+| 14 | 5 | $199 | $15 | $500 | $714 | +$8,822 |
+| 16 | 6 | $204 | $15 | $500 | $719 | +$11,614 |
+| 18 | 6 | $204 | $15 | $500 | $719 | +$15,438 |
 
-*Phase 5 (Month 12): infra drops from $187 to $129/mo after DuckDB full cutover eliminates Trino for all customers. SOC 2 costs amortize to ~$500/mo ($5-15K annually). Node scaling adds ~$70-140/mo per step at ~20 customer increments (not shown — folded into AWS Infra as needed).*
+*Phase 0-3 (Month 0-7): Bootstrap stack on cheap VPS (~$4-38/mo). Phase 4 (Month 8): Migrate to AWS EKS when Enterprise customers justify the cost. SOC 2 costs amortize to ~$500/mo ($5-15K annually). Node scaling adds ~$30-70/mo per step at ~20 customer increments (not shown).*
 
 *Note: Does not include engineering salaries, marketing spend, or customer support costs. These are infrastructure-only projections.*
 
@@ -413,22 +461,27 @@ One shared infrastructure for all customers — no per-customer dedicated comput
 
 | Milestone | Month | Cumulative Revenue | Cumulative Infra Costs | Cumulative Net |
 |-----------|-------|-------------------|----------------------|---------------|
-| First dollar | 2 | $58 | $192 | -$134 |
-| Infra break-even | 4 | $743 | $586 | +$157 |
-| $5K MRR | 11 | $25,500 | $4,800 | +$20,700 |
-| $10K MRR | 15 | $57,200 | $7,700 | +$49,500 |
-| Month 18 total | 18 | $105,000 | $10,500 | +$94,500 |
+| Bootstrap deployed | 0 | $0 | $5 | -$5 |
+| First dollar | 2 | $58 | $73 | -$15 |
+| Infra break-even | 3 | $300 | $112 | +$188 |
+| $5K MRR | 11 | $25,500 | $3,700 | +$21,800 |
+| $10K MRR | 15 | $57,200 | $6,800 | +$50,400 |
+| Month 18 total | 18 | $105,000 | $9,600 | +$95,400 |
+
+*The bootstrap stack saves ~$900 in cumulative infra costs over the first 7 months vs starting on AWS EKS.*
 
 ### Break-Even Analysis
 
 | Scenario | Break-Even Point | Notes |
 |----------|-----------------|-------|
-| All Starter ($29) customers | ~7 customers | Covers $192/mo Phase 1 infra |
-| 50/50 Starter/Pro mix | ~4 customers | Most likely early scenario |
-| With 1 Enterprise ($500) customer | ~2 additional shared customers | Enterprise covers most fixed costs |
-| Post-DuckDB (Phase 5+) | ~2 Pro customers | Reduced infra ($129/mo) |
+| Bootstrap stack (Phase 0-3) | ~1 Starter customer | $29 MRR covers $5-34/mo infra |
+| All Starter ($29) on AWS | ~7 customers | Covers $192/mo Phase 4 infra |
+| 50/50 Starter/Pro mix on AWS | ~4 customers | Most likely Phase 4+ scenario |
+| With 1 Enterprise ($500) customer | ~1 additional customer | Enterprise covers most fixed costs |
 
-The product reaches infrastructure profitability at Month 4 (~$343 MRR vs $197 costs). Because all customers share the same infrastructure — no dedicated compute, no per-customer query engines — Enterprise customers have the highest margins of any tier (~91-95%). A single Enterprise customer at $500/mo covers 250%+ of shared infrastructure costs.
+The bootstrap stack reaches infrastructure profitability with **a single paying customer** ($29/mo vs $5-34/mo infra). This changes the economics dramatically: instead of needing 4-7 customers to break even on $192/mo AWS costs, the first dollar is profitable.
+
+After migrating to AWS EKS (Phase 4, ~Month 8), break-even requires ~4 customers at the Starter/Pro mix. By that point, MRR should be $2,000+ with 50+ customers, so the migration is well-funded.
 
 ---
 
@@ -452,16 +505,17 @@ The product reaches infrastructure profitability at Month 4 (~$343 MRR vs $197 c
 
 | Phase | Timeline | Effort | Cumulative | Key Deliverables |
 |-------|----------|--------|-----------|-----------------|
-| 1: SaaS Foundation | Month 1-2 | 10 pw | 10 pw | Multi-tenancy, Stripe billing, onboarding |
-| 2: Analytics & Alerting | Month 3-5 | 10.5 pw | 20.5 pw | Path drill-down, threshold alerts, Slack |
-| 3: Developer Experience | Month 5-7 | 9.5 pw | 30 pw | Go/Python/Node SDKs, GitHub Action, CLI |
-| 4: Enterprise Readiness | Month 7-10 | 12 pw | 42 pw | RBAC, SSO (Cognito), audit logs, SOC 2 |
-| 5: Scale & Performance | Month 10-14 | 12 pw | 54 pw | DuckDB full cutover, multi-region, Redis cache |
-| 6: Platform | Month 14-18 | 14.5 pw | 68.5 pw | Custom dashboards, public API, Terraform provider |
+| 0: Bootstrap | Week 0 | 0.5 pw | 0.5 pw | DuckDB, bootstrap compose, local disk storage |
+| 1: SaaS Foundation | Month 1-2 | 10 pw | 10.5 pw | Multi-tenancy, Stripe billing, onboarding |
+| 2: Analytics & Alerting | Month 3-5 | 10.5 pw | 21 pw | Path drill-down, threshold alerts, Slack |
+| 3: Developer Experience | Month 5-7 | 9.5 pw | 30.5 pw | Go/Python/Node SDKs, GitHub Action, CLI |
+| 4: Enterprise Readiness | Month 7-10 | 12 pw | 42.5 pw | RBAC, SSO (Cognito), audit logs, SOC 2 |
+| 5: Scale & Performance | Month 10-14 | 8 pw | 50.5 pw | DuckDB tuning, multi-region, Redis cache |
+| 6: Platform | Month 14-18 | 14.5 pw | 65 pw | Custom dashboards, public API, Terraform provider |
 
-**Total: ~68.5 person-weeks** (pw)
+**Total: ~65 person-weeks** (pw)
 
-*Reduced from ~75 pw by eliminating per-customer infrastructure work (dedicated Trino, Athena option, per-customer certs). One architecture for all customers.*
+*Reduced from ~68.5 pw by moving DuckDB to Phase 0 (saves 4 pw from Phase 5). Bootstrap runs under $20/mo for 6+ months before any AWS spend is needed.*
 
 ### Staffing Scenarios
 
@@ -477,21 +531,22 @@ At the conservative revenue projection ($16,157 MRR at Month 18 = $194K ARR):
 
 | Scenario | 18-Month Investment | 18-Month Cumulative Revenue | Cumulative Net | ROI |
 |----------|--------------------|-----------------------------|----------------|-----|
-| Solo founder | ~$0 (time only) | $105K | +$94.5K | ∞ (time vs money) |
-| 1 eng + 1 contractor | $96-144K | $105K | +$94.5K | -34% to -1% |
-| 2 full-time engineers | $225-315K | $105K | +$94.5K | -58% to -70% (needs growth) |
+| Solo founder | ~$0 (time only) | $105K | +$95.4K | ∞ (time vs money) |
+| 1 eng + 1 contractor | $96-144K | $105K | +$95.4K | -33% to +0% |
+| 2 full-time engineers | $225-315K | $105K | +$95.4K | -57% to -69% (needs growth) |
 
-The solo founder scenario is profitable from Month 4. The single-architecture approach improves ROI — lower infra costs ($10.5K cumulative) and ~6.5 fewer engineering weeks means faster delivery and lower burn. No per-customer infrastructure to manage means ops stays simple as the customer base scales.
+The solo founder scenario is profitable from **Month 2** (bootstrap stack costs $5-34/mo vs $58 MRR). The bootstrap approach improves ROI over starting on AWS — cumulative infra costs are ~$9.6K (vs ~$10.5K starting on AWS), and the first 7 months of near-zero infra spend means cash-flow positive earlier.
 
 ### Build Order Rationale
 
 Phases are sequenced for maximum revenue impact per engineering week:
 
-1. **Phase 1 first** — no revenue without multi-tenancy (prerequisite for everything)
-2. **Phase 2 second** — alerting is the #1 feature request that converts free→paid and Starter→Pro
-3. **Phase 3 third** — SDKs reduce time-to-value and drive organic adoption (growth multiplier)
-4. **Phase 4 fourth** — Enterprise tier requires RBAC/SSO but generates 5-10x revenue per customer
-5. **Phase 5 fifth** — DuckDB migration improves margins but doesn't unlock new revenue directly
+0. **Phase 0 first** — run the entire stack under $20/mo. DuckDB upfront means no costly Trino migration later
+1. **Phase 1 second** — no revenue without multi-tenancy (prerequisite for everything)
+2. **Phase 2 third** — alerting is the #1 feature request that converts free→paid and Starter→Pro
+3. **Phase 3 fourth** — SDKs reduce time-to-value and drive organic adoption (growth multiplier)
+4. **Phase 4 fifth** — Enterprise tier requires RBAC/SSO but generates 5-10x revenue per customer; triggers AWS migration
+5. **Phase 5 sixth** — DuckDB performance tuning and caching at scale
 6. **Phase 6 last** — platform features build ecosystem moat but require large customer base to justify
 
 ---
@@ -510,10 +565,12 @@ Phases are sequenced for maximum revenue impact per engineering week:
 
 ## Appendix: Data Sources
 
+- Bootstrap resource requirements from `docker-compose.bootstrap.yml` (6 services, ~800 MB total memory)
+- Full stack resource requirements from `docker-compose.yml` (11 services, ~7.8 GB total memory)
 - Infrastructure resource requirements from `deploy/gravix/values.yaml` and `deploy/gravix/values-prod.yaml`
-- Local resource requirements from `docker-compose.yml` (13 services, 7 GB total memory)
 - AWS pricing for us-east-1 (EC2, S3, EKS, ALB, EBS, data transfer, Cognito, ElastiCache)
+- VPS pricing from Hetzner, Oracle Cloud, DigitalOcean (March 2026)
 - Datadog pricing from datadoghq.com/pricing (March 2026): $15-23/host infra, $31-40/host APM
 - Non-goals and competitive positioning from `docs/04-non-goals.md`
-- 6-phase product roadmap from `PRODUCT_ROADMAP.md` (effort, infra costs, timelines)
-- DuckDB cost savings analysis based on Trino 3Gi memory footprint vs embedded DuckDB zero-overhead model
+- 7-phase product roadmap from `PRODUCT_ROADMAP.md` (Phase 0 bootstrap + Phases 1-6)
+- DuckDB as default query engine from Phase 0 — replaces Trino upfront, not as a migration

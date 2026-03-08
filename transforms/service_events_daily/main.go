@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
@@ -24,6 +25,7 @@ import (
 
 // EventSummaryRow represents a daily summary of service events by type.
 type EventSummaryRow struct {
+	TenantID   string `json:"tenant_id" parquet:"tenant_id"`
 	EventDay   string `json:"event_day" parquet:"event_day"`
 	Service    string `json:"service" parquet:"service"`
 	EventType  string `json:"event_type" parquet:"event_type"`
@@ -96,13 +98,19 @@ func releaseLock(f *os.File) {
 func main() {
 	var inputDir, outputDir string
 	var startDay, endDay, processingTime string
+	var tenantDBPath string
 
 	flag.StringVar(&inputDir, "input-dir", "./data/raw/service_events", "Path to raw service events (JSONL)")
 	flag.StringVar(&outputDir, "output-dir", "./data/warehouse/service_events_daily", "Path to output summary (Parquet)")
 	flag.StringVar(&processingTime, "process-time", "", "Single day to process (RFC3339)")
 	flag.StringVar(&startDay, "start-day", "", "Start day for backfill (YYYY-MM-DD)")
 	flag.StringVar(&endDay, "end-day", "", "End day for backfill (YYYY-MM-DD, inclusive)")
+	flag.StringVar(&tenantDBPath, "tenant-db", "", "Path to tenant SQLite database (multi-tenant mode)")
 	flag.Parse()
+
+	if tenantDBPath == "" {
+		tenantDBPath = os.Getenv("TENANT_DB_PATH")
+	}
 
 	lockFile, err := acquireLock(outputDir)
 	if err != nil {
@@ -154,20 +162,64 @@ func main() {
 		}
 	}
 
-	for _, day := range days {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		if err := processDay(ctx, day, store, inputDir, outputDir); err != nil {
-			cancel()
-			log.Printf("Failed to process day %s: %v", day.Format("2006-01-02"), err)
-			os.Exit(1)
+	type tenantConfig struct {
+		tenantID  string
+		inputDir  string
+		outputDir string
+	}
+
+	var configs []tenantConfig
+
+	if tenantDBPath != "" {
+		tdb, err := tenantdb.Open(tenantDBPath)
+		if err != nil {
+			log.Fatalf("Failed to open tenant database: %v", err)
 		}
-		cancel()
+		defer tdb.Close()
+
+		tenants, err := tdb.Tenants().List(context.Background())
+		if err != nil {
+			log.Fatalf("Failed to list tenants: %v", err)
+		}
+
+		for _, t := range tenants {
+			if t.Status != "active" {
+				continue
+			}
+			configs = append(configs, tenantConfig{
+				tenantID:  t.ID,
+				inputDir:  fmt.Sprintf("./data/raw/%s/service_events", t.ID),
+				outputDir: fmt.Sprintf("./data/warehouse/%s/service_events_daily", t.ID),
+			})
+		}
+		log.Printf("Multi-tenant mode: processing %d active tenants", len(configs))
+	} else {
+		configs = append(configs, tenantConfig{
+			tenantID:  "",
+			inputDir:  inputDir,
+			outputDir: outputDir,
+		})
+	}
+
+	for _, cfg := range configs {
+		if cfg.tenantID != "" {
+			log.Printf("Processing tenant %s...", cfg.tenantID)
+		}
+		for _, day := range days {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			if err := processDay(ctx, day, store, cfg.inputDir, cfg.outputDir, cfg.tenantID); err != nil {
+				cancel()
+				log.Printf("Failed to process day %s for tenant %s: %v", day.Format("2006-01-02"), cfg.tenantID, err)
+				os.Exit(1)
+			}
+			cancel()
+		}
 	}
 
 	log.Println("Service events rollup complete.")
 }
 
-func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, inputDir, outputDir string) error {
+func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, inputDir, outputDir, tenantID string) error {
 	dayStr := day.UTC().Format("2006-01-02")
 	inputPrefix := fmt.Sprintf("%s/%s", strings.TrimPrefix(inputDir, "./data/"), dayStr)
 
@@ -247,6 +299,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 	rows := make([]EventSummaryRow, 0, len(aggs))
 	for key, count := range aggs {
 		rows = append(rows, EventSummaryRow{
+			TenantID:   tenantID,
 			EventDay:   dayStr,
 			Service:    key.Service,
 			EventType:  key.EventType,
