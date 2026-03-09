@@ -1,6 +1,7 @@
 # Binaries
 /ingestion-service
 /ingestion
+/gateway
 /load-generator
 /load_generator
 /sink-writer
@@ -17,6 +18,12 @@ data/
 storage/trino/data/
 storage/cube/data/
 
+# Cube Store cache
+cube/.cubestore/
+
+# Debug artifacts
+cube_resp.json
+
 # OS
 .DS_Store
 Thumbs.db
@@ -28,3 +35,8 @@ Thumbs.db
 
 # Docker
 .env
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
