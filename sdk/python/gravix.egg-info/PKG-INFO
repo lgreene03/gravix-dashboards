@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: gravix
+Version: 0.1.0
+Summary: Python client for the Gravix observability platform
+License: MIT
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.20
+Provides-Extra: flask
+Requires-Dist: flask>=2.0; extra == "flask"
+Provides-Extra: fastapi
+Requires-Dist: fastapi>=0.68; extra == "fastapi"
+Requires-Dist: starlette>=0.14; extra == "fastapi"
+Provides-Extra: django
+Requires-Dist: django>=3.2; extra == "django"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: responses>=0.20; extra == "dev"

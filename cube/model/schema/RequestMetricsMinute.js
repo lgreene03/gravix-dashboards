@@ -71,7 +71,7 @@ cube(`RequestMetricsMinute`, {
 
     bucketStart: {
       sql: `bucket_start`,
-      type: `string`,
+      type: `time`,
       title: `Time`
     },
 
@@ -97,6 +97,28 @@ cube(`RequestMetricsMinute`, {
       sql: `path_template`,
       type: `string`,
       title: `Endpoint`
+    }
+  },
+
+  preAggregations: {
+    endpointDaily: {
+      measures: [requestCount, errorCount, p50Latency, p95Latency, p99Latency],
+      dimensions: [service, method, pathTemplate],
+      timeDimension: bucketStart,
+      granularity: `day`,
+      refreshKey: {
+        every: `5 minute`
+      }
+    },
+
+    metricsHourly: {
+      measures: [requestCount, errorCount, p50Latency, p95Latency, p99Latency],
+      dimensions: [service],
+      timeDimension: bucketStart,
+      granularity: `hour`,
+      refreshKey: {
+        every: `5 minute`
+      }
     }
   },
 

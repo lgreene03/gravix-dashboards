@@ -2,6 +2,8 @@ module github.com/lgreene/gravix-dashboards
 
 go 1.24.9
 
+require github.com/gravix-io/gravix-go v0.0.0
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.7
@@ -58,3 +60,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.46.1 // indirect
 )
+
+replace github.com/gravix-io/gravix-go => ./sdk/go

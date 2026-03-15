@@ -1,4 +1,4 @@
-.PHONY: build test test-race coverage up down clean lint lint-all purge trino-init helm-lint
+.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -6,6 +6,10 @@ build:
 	go build -o bin/service-events-rollup ./transforms/service_events_daily/
 	go build -o bin/load-generator ./cmd/load_generator/
 	go build -o bin/purge ./cmd/purge/
+	go build -o bin/gravix ./cmd/cli/
+
+build-cli:
+	go build -o bin/gravix ./cmd/cli/
 
 test:
 	go test ./... -v -cover
@@ -48,3 +52,7 @@ purge:
 
 trino-init:
 	bash storage/trino/run-queries.sh
+
+docs:
+	@echo "API docs: open docs/api-site/index.html in a browser"
+	@echo "OpenAPI spec: docs/openapi.yaml"

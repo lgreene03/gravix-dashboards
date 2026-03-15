@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gravix API Documentation</title>
+  <meta name="description" content="Interactive API reference for the Gravix ingestion service.">
+  <style>
+    body { margin: 0; padding: 0; }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+</head>
+<body>
+  <redoc
+    spec-url="../openapi.yaml"
+    hide-download-button="false"
+    theme='{
+      "colors": { "primary": { "main": "#5B4AE4" } },
+      "typography": {
+        "fontFamily": "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+        "headings": { "fontFamily": "Inter, sans-serif" },
+        "code": { "fontFamily": "JetBrains Mono, monospace" }
+      },
+      "sidebar": { "backgroundColor": "#1a1a2e" }
+    }'
+  ></redoc>
+  <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+</body>
+</html>

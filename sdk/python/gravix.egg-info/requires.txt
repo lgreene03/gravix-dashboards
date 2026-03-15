@@ -1,0 +1,15 @@
+requests>=2.20
+
+[dev]
+pytest>=7.0
+responses>=0.20
+
+[django]
+django>=3.2
+
+[fastapi]
+fastapi>=0.68
+starlette>=0.14
+
+[flask]
+flask>=2.0

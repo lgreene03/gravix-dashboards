@@ -1,0 +1,187 @@
+# Gravix Python SDK
+
+Python client library for the [Gravix](https://github.com/gravix-io/gravix) observability platform. Send HTTP request metrics and service lifecycle events with automatic batching, retry, and path sanitization.
+
+## Installation
+
+```bash
+pip install gravix
+```
+
+## Quick Start
+
+```python
+from gravix import GravixClient, RequestFact
+
+with GravixClient("http://localhost:8090", "your-api-key", service="my-api") as client:
+    # Record a request fact (batched automatically).
+    client.record_fact(RequestFact(
+        method="GET",
+        path_template="/api/v1/users/{id}",
+        status_code=200,
+        latency_ms=42,
+    ))
+```
+
+## Features
+
+### Automatic Batching
+
+Facts are buffered in memory and flushed to the batch API endpoint (`/api/v1/facts/batch`) either when the buffer reaches the configured size or on a timer interval.
+
+```python
+client = GravixClient(
+    "http://localhost:8090",
+    "your-api-key",
+    batch_size=200,          # flush every 200 facts (default: 100)
+    flush_interval=10.0,     # or every 10s (default: 5.0)
+)
+```
+
+Call `client.flush()` to force an immediate flush, or `client.close()` to flush and shut down. The client also works as a context manager.
+
+### Path Sanitization
+
+The SDK automatically replaces raw UUIDs, numeric IDs (4+ digits), and hex tokens in path templates with `{id}` placeholders. This prevents high-cardinality metric explosion.
+
+```python
+# Automatic: "/users/550e8400-e29b-41d4-a716-446655440000/orders"
+#         -> "/users/{id}/orders"
+
+# Disable if you handle sanitization yourself:
+client = GravixClient(url, key, auto_sanitize=False)
+```
+
+Use `sanitize_path(path)` directly for standalone sanitization:
+
+```python
+from gravix import sanitize_path
+
+sanitize_path("/api/v1/products/12345")
+# => "/api/v1/products/{id}"
+```
+
+### Retry with Backoff
+
+Failed requests are retried with exponential backoff and jitter. The client retries on:
+- `429 Too Many Requests` (respects `Retry-After` header)
+- `500`, `502`, `503`, `504` server errors
+
+It does **not** retry on `400` (validation error) or `401` (auth error).
+
+```python
+client = GravixClient(url, key, max_retries=5)  # default: 3, set 0 to disable
+```
+
+### Service Events
+
+Service events (deploys, restarts, scale operations) are sent synchronously since they are low-volume and time-sensitive.
+
+```python
+from gravix import ServiceEvent
+
+client.record_event(ServiceEvent(
+    service="my-api",
+    event_type="deploy_completed",
+    message="Deployed v1.2.3 to production",
+    properties={"version": "1.2.3", "branch": "main", "commit": "abc1234"},
+))
+```
+
+### Error Handling
+
+For batched facts, errors are delivered via the `on_error` callback:
+
+```python
+client = GravixClient(url, key,
+    on_error=lambda err: print(f"gravix batch error: {err}")
+)
+```
+
+For synchronous calls (`send_fact`, `record_event`), errors are raised directly. API errors are raised as `APIError` with the HTTP status code:
+
+```python
+from gravix import APIError
+
+try:
+    client.record_event(event)
+except APIError as e:
+    print(f"API error {e.status_code}: {e}")
+```
+
+## Framework Middleware
+
+### Flask
+
+```python
+from flask import Flask
+from gravix import GravixClient
+from gravix.middleware import flask_middleware
+
+app = Flask(__name__)
+client = GravixClient("http://localhost:8090", "your-api-key", service="my-app")
+flask_middleware(client)(app)
+```
+
+### FastAPI
+
+```python
+from fastapi import FastAPI
+from gravix import GravixClient
+from gravix.middleware import FastAPIMiddleware
+
+app = FastAPI()
+client = GravixClient("http://localhost:8090", "your-api-key", service="my-app")
+app.add_middleware(FastAPIMiddleware, client=client)
+```
+
+### Django
+
+```python
+# settings.py
+GRAVIX_CLIENT = GravixClient("http://localhost:8090", "your-api-key", service="my-app")
+
+MIDDLEWARE = [
+    DjangoMiddleware.factory(GRAVIX_CLIENT),
+    # ...
+]
+```
+
+## Configuration Reference
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `service` | `""` | Default service name for facts/events |
+| `batch_size` | `100` | Max facts buffered before auto-flush |
+| `flush_interval` | `5.0` | Max seconds between auto-flushes |
+| `auto_sanitize` | `True` | Auto-replace UUIDs/IDs in paths |
+| `max_retries` | `3` | Max retry attempts (0 = disable) |
+| `timeout` | `10.0` | HTTP request timeout in seconds |
+| `on_error` | `None` | Callback for batch flush errors |
+
+## Types
+
+### RequestFact
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `event_id` | `str` | Auto | UUIDv7 (auto-generated if empty) |
+| `event_time` | `str` | Auto | ISO 8601 timestamp (auto-generated if empty) |
+| `service` | `str` | Yes* | Service name (*falls back to constructor) |
+| `method` | `str` | Yes | HTTP method (GET, POST, etc.) |
+| `path_template` | `str` | Yes | URL path with `{id}` placeholders |
+| `status_code` | `int` | Yes | HTTP status code (100-599) |
+| `latency_ms` | `int` | Yes | Response time in milliseconds |
+| `user_agent_family` | `str` | No | User agent family |
+
+### ServiceEvent
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `event_id` | `str` | Auto | UUIDv7 (auto-generated) |
+| `event_time` | `str` | Auto | ISO 8601 timestamp (auto-generated) |
+| `service` | `str` | Yes | Service name |
+| `event_type` | `str` | Yes | Snake-case type (e.g., `deploy_completed`) |
+| `entity_id` | `str` | No | Related entity identifier |
+| `message` | `str` | No | Human-readable message |
+| `properties` | `dict` | No | Flat key-value metadata |

@@ -1,0 +1,31 @@
+{
+  "name": "@gravix/sdk",
+  "version": "0.1.0",
+  "description": "Node.js client for the Gravix observability platform",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test tests/*.test.js",
+    "pretest": "tsc"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

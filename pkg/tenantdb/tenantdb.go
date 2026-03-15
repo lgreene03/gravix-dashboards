@@ -96,11 +96,88 @@ type EventCounterRepo interface {
 	GetCount(ctx context.Context, tenantID, day string) (int64, error)
 }
 
+// NotificationChannel represents a notification delivery target (Slack webhook, generic webhook).
+type NotificationChannel struct {
+	ID        string
+	TenantID  string
+	Name      string
+	Type      string // slack, webhook
+	Config    string // JSON blob: {"webhook_url":"...", "auth_header":"..."}
+	Status    string // active
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// AlertRule represents a metric threshold alert rule.
+type AlertRule struct {
+	ID              string
+	TenantID        string
+	Name            string
+	Metric          string  // error_rate, p50_latency, p95_latency, p99_latency, throughput
+	Operator        string  // gt, lt
+	Threshold       float64
+	WindowMinutes   int
+	Service         string // empty = all services
+	PathTemplate    string // empty = all paths
+	ChannelID       string
+	CooldownMinutes int
+	Status          string // active, paused
+	LastTriggeredAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// AlertHistoryEntry represents a single alert firing event.
+type AlertHistoryEntry struct {
+	ID           string
+	RuleID       string
+	TenantID     string
+	Metric       string
+	Threshold    float64
+	ActualValue  float64
+	Service      string
+	PathTemplate string
+	Status       string // fired, resolved, error
+	Message      string
+	CreatedAt    time.Time
+}
+
+// NotificationChannelRepo manages notification channels.
+type NotificationChannelRepo interface {
+	Create(ctx context.Context, c *NotificationChannel) error
+	GetByID(ctx context.Context, id string) (*NotificationChannel, error)
+	Update(ctx context.Context, c *NotificationChannel) error
+	Delete(ctx context.Context, id string) error
+	ListByTenant(ctx context.Context, tenantID string) ([]*NotificationChannel, error)
+}
+
+// AlertRuleRepo manages alert rules.
+type AlertRuleRepo interface {
+	Create(ctx context.Context, r *AlertRule) error
+	GetByID(ctx context.Context, id string) (*AlertRule, error)
+	Update(ctx context.Context, r *AlertRule) error
+	Delete(ctx context.Context, id string) error
+	ListByTenant(ctx context.Context, tenantID string) ([]*AlertRule, error)
+	// ListActive returns all active rules for active tenants (used by evaluator).
+	ListActive(ctx context.Context) ([]*AlertRule, error)
+	UpdateLastTriggered(ctx context.Context, id string, t time.Time) error
+}
+
+// AlertHistoryRepo manages alert firing history.
+type AlertHistoryRepo interface {
+	Create(ctx context.Context, e *AlertHistoryEntry) error
+	ListByTenant(ctx context.Context, tenantID string, limit int) ([]*AlertHistoryEntry, error)
+	ListByRule(ctx context.Context, ruleID string, limit int) ([]*AlertHistoryEntry, error)
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
 	APIKeys() APIKeyRepo
 	Users() UserRepo
 	EventCounters() EventCounterRepo
+	NotificationChannels() NotificationChannelRepo
+	AlertRules() AlertRuleRepo
+	AlertHistory() AlertHistoryRepo
 	Close() error
 }

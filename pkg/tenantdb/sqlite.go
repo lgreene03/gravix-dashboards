@@ -58,6 +58,54 @@ CREATE TABLE IF NOT EXISTS event_counters (
 	count     INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (tenant_id, day)
 );
+
+CREATE TABLE IF NOT EXISTS notification_channels (
+	id         TEXT PRIMARY KEY,
+	tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+	name       TEXT NOT NULL,
+	type       TEXT NOT NULL,
+	config     TEXT NOT NULL DEFAULT '{}',
+	status     TEXT NOT NULL DEFAULT 'active',
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_notification_channels_tenant ON notification_channels(tenant_id);
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+	id                TEXT PRIMARY KEY,
+	tenant_id         TEXT NOT NULL REFERENCES tenants(id),
+	name              TEXT NOT NULL,
+	metric            TEXT NOT NULL,
+	operator          TEXT NOT NULL,
+	threshold         REAL NOT NULL,
+	window_minutes    INTEGER NOT NULL DEFAULT 5,
+	service           TEXT NOT NULL DEFAULT '',
+	path_template     TEXT NOT NULL DEFAULT '',
+	channel_id        TEXT NOT NULL REFERENCES notification_channels(id),
+	cooldown_minutes  INTEGER NOT NULL DEFAULT 15,
+	status            TEXT NOT NULL DEFAULT 'active',
+	last_triggered_at TEXT,
+	created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+	updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_tenant ON alert_rules(tenant_id);
+
+CREATE TABLE IF NOT EXISTS alert_history (
+	id            TEXT PRIMARY KEY,
+	rule_id       TEXT NOT NULL REFERENCES alert_rules(id),
+	tenant_id     TEXT NOT NULL REFERENCES tenants(id),
+	metric        TEXT NOT NULL,
+	threshold     REAL NOT NULL,
+	actual_value  REAL NOT NULL,
+	service       TEXT NOT NULL DEFAULT '',
+	path_template TEXT NOT NULL DEFAULT '',
+	status        TEXT NOT NULL DEFAULT 'fired',
+	message       TEXT NOT NULL DEFAULT '',
+	created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_alert_history_tenant ON alert_history(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_alert_history_rule ON alert_history(rule_id);
+CREATE INDEX IF NOT EXISTS idx_alert_history_created ON alert_history(created_at);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -99,6 +147,11 @@ func (s *SQLiteDB) Users() UserRepo     { return &sqliteUserRepo{db: s.db} }
 func (s *SQLiteDB) EventCounters() EventCounterRepo {
 	return &sqliteEventCounterRepo{db: s.db}
 }
+func (s *SQLiteDB) NotificationChannels() NotificationChannelRepo {
+	return &sqliteNotificationChannelRepo{db: s.db}
+}
+func (s *SQLiteDB) AlertRules() AlertRuleRepo   { return &sqliteAlertRuleRepo{db: s.db} }
+func (s *SQLiteDB) AlertHistory() AlertHistoryRepo { return &sqliteAlertHistoryRepo{db: s.db} }
 
 // --- Tenant Repo ---
 
@@ -430,4 +483,323 @@ func (r *sqliteEventCounterRepo) GetCount(ctx context.Context, tenantID, day str
 		return 0, nil
 	}
 	return count, err
+}
+
+// --- Notification Channel Repo ---
+
+type sqliteNotificationChannelRepo struct{ db *sql.DB }
+
+func (r *sqliteNotificationChannelRepo) Create(ctx context.Context, c *NotificationChannel) error {
+	if c.ID == "" {
+		c.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if c.Status == "" {
+		c.Status = "active"
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO notification_channels (id, tenant_id, name, type, config, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.TenantID, c.Name, c.Type, c.Config, c.Status, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("create notification channel: %w", err)
+	}
+	c.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	c.UpdatedAt = c.CreatedAt
+	return nil
+}
+
+func (r *sqliteNotificationChannelRepo) GetByID(ctx context.Context, id string) (*NotificationChannel, error) {
+	c := &NotificationChannel{}
+	var createdAt, updatedAt string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, name, type, config, status, created_at, updated_at
+		 FROM notification_channels WHERE id = ?`, id,
+	).Scan(&c.ID, &c.TenantID, &c.Name, &c.Type, &c.Config, &c.Status, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	c.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	c.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return c, nil
+}
+
+func (r *sqliteNotificationChannelRepo) Update(ctx context.Context, c *NotificationChannel) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE notification_channels SET name = ?, type = ?, config = ?, status = ?, updated_at = ?
+		 WHERE id = ?`,
+		c.Name, c.Type, c.Config, c.Status, now, c.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update notification channel: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("notification channel not found")
+	}
+	c.UpdatedAt, _ = time.Parse(time.RFC3339, now)
+	return nil
+}
+
+func (r *sqliteNotificationChannelRepo) Delete(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx,
+		`DELETE FROM notification_channels WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete notification channel: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("notification channel not found")
+	}
+	return nil
+}
+
+func (r *sqliteNotificationChannelRepo) ListByTenant(ctx context.Context, tenantID string) ([]*NotificationChannel, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, name, type, config, status, created_at, updated_at
+		 FROM notification_channels WHERE tenant_id = ? ORDER BY created_at`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var channels []*NotificationChannel
+	for rows.Next() {
+		c := &NotificationChannel{}
+		var createdAt, updatedAt string
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Type, &c.Config, &c.Status, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		c.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		c.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		channels = append(channels, c)
+	}
+	return channels, rows.Err()
+}
+
+// --- Alert Rule Repo ---
+
+type sqliteAlertRuleRepo struct{ db *sql.DB }
+
+func (r *sqliteAlertRuleRepo) Create(ctx context.Context, ar *AlertRule) error {
+	if ar.ID == "" {
+		ar.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if ar.Status == "" {
+		ar.Status = "active"
+	}
+	if ar.WindowMinutes == 0 {
+		ar.WindowMinutes = 5
+	}
+	if ar.CooldownMinutes == 0 {
+		ar.CooldownMinutes = 15
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO alert_rules (id, tenant_id, name, metric, operator, threshold,
+		 window_minutes, service, path_template, channel_id, cooldown_minutes, status,
+		 created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ar.ID, ar.TenantID, ar.Name, ar.Metric, ar.Operator, ar.Threshold,
+		ar.WindowMinutes, ar.Service, ar.PathTemplate, ar.ChannelID, ar.CooldownMinutes,
+		ar.Status, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("create alert rule: %w", err)
+	}
+	ar.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	ar.UpdatedAt = ar.CreatedAt
+	return nil
+}
+
+func (r *sqliteAlertRuleRepo) GetByID(ctx context.Context, id string) (*AlertRule, error) {
+	ar := &AlertRule{}
+	var createdAt, updatedAt string
+	var lastTriggered sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, name, metric, operator, threshold,
+		        window_minutes, service, path_template, channel_id, cooldown_minutes,
+		        status, last_triggered_at, created_at, updated_at
+		 FROM alert_rules WHERE id = ?`, id,
+	).Scan(&ar.ID, &ar.TenantID, &ar.Name, &ar.Metric, &ar.Operator, &ar.Threshold,
+		&ar.WindowMinutes, &ar.Service, &ar.PathTemplate, &ar.ChannelID, &ar.CooldownMinutes,
+		&ar.Status, &lastTriggered, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	ar.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	ar.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	if lastTriggered.Valid {
+		t, _ := time.Parse(time.RFC3339, lastTriggered.String)
+		ar.LastTriggeredAt = &t
+	}
+	return ar, nil
+}
+
+func (r *sqliteAlertRuleRepo) Update(ctx context.Context, ar *AlertRule) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE alert_rules SET name = ?, metric = ?, operator = ?, threshold = ?,
+		 window_minutes = ?, service = ?, path_template = ?, channel_id = ?,
+		 cooldown_minutes = ?, status = ?, updated_at = ?
+		 WHERE id = ?`,
+		ar.Name, ar.Metric, ar.Operator, ar.Threshold,
+		ar.WindowMinutes, ar.Service, ar.PathTemplate, ar.ChannelID,
+		ar.CooldownMinutes, ar.Status, now, ar.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update alert rule: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("alert rule not found")
+	}
+	ar.UpdatedAt, _ = time.Parse(time.RFC3339, now)
+	return nil
+}
+
+func (r *sqliteAlertRuleRepo) Delete(ctx context.Context, id string) error {
+	// Delete associated history first (FK constraint)
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM alert_history WHERE rule_id = ?`, id); err != nil {
+		return fmt.Errorf("delete alert history for rule: %w", err)
+	}
+	result, err := r.db.ExecContext(ctx, `DELETE FROM alert_rules WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete alert rule: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("alert rule not found")
+	}
+	return nil
+}
+
+func (r *sqliteAlertRuleRepo) ListByTenant(ctx context.Context, tenantID string) ([]*AlertRule, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, name, metric, operator, threshold,
+		        window_minutes, service, path_template, channel_id, cooldown_minutes,
+		        status, last_triggered_at, created_at, updated_at
+		 FROM alert_rules WHERE tenant_id = ? ORDER BY created_at`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return r.scanAlertRules(rows)
+}
+
+func (r *sqliteAlertRuleRepo) ListActive(ctx context.Context) ([]*AlertRule, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT ar.id, ar.tenant_id, ar.name, ar.metric, ar.operator, ar.threshold,
+		        ar.window_minutes, ar.service, ar.path_template, ar.channel_id, ar.cooldown_minutes,
+		        ar.status, ar.last_triggered_at, ar.created_at, ar.updated_at
+		 FROM alert_rules ar
+		 JOIN tenants t ON ar.tenant_id = t.id
+		 WHERE ar.status = 'active' AND t.status = 'active'
+		 ORDER BY ar.tenant_id, ar.created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return r.scanAlertRules(rows)
+}
+
+func (r *sqliteAlertRuleRepo) UpdateLastTriggered(ctx context.Context, id string, t time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE alert_rules SET last_triggered_at = ? WHERE id = ?`,
+		t.UTC().Format(time.RFC3339), id)
+	return err
+}
+
+func (r *sqliteAlertRuleRepo) scanAlertRules(rows *sql.Rows) ([]*AlertRule, error) {
+	var rules []*AlertRule
+	for rows.Next() {
+		ar := &AlertRule{}
+		var createdAt, updatedAt string
+		var lastTriggered sql.NullString
+		if err := rows.Scan(&ar.ID, &ar.TenantID, &ar.Name, &ar.Metric, &ar.Operator, &ar.Threshold,
+			&ar.WindowMinutes, &ar.Service, &ar.PathTemplate, &ar.ChannelID, &ar.CooldownMinutes,
+			&ar.Status, &lastTriggered, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		ar.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		ar.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		if lastTriggered.Valid {
+			t, _ := time.Parse(time.RFC3339, lastTriggered.String)
+			ar.LastTriggeredAt = &t
+		}
+		rules = append(rules, ar)
+	}
+	return rules, rows.Err()
+}
+
+// --- Alert History Repo ---
+
+type sqliteAlertHistoryRepo struct{ db *sql.DB }
+
+func (r *sqliteAlertHistoryRepo) Create(ctx context.Context, e *AlertHistoryEntry) error {
+	if e.ID == "" {
+		e.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO alert_history (id, rule_id, tenant_id, metric, threshold, actual_value,
+		 service, path_template, status, message, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.RuleID, e.TenantID, e.Metric, e.Threshold, e.ActualValue,
+		e.Service, e.PathTemplate, e.Status, e.Message, now,
+	)
+	if err != nil {
+		return fmt.Errorf("create alert history: %w", err)
+	}
+	e.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	return nil
+}
+
+func (r *sqliteAlertHistoryRepo) ListByTenant(ctx context.Context, tenantID string, limit int) ([]*AlertHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, rule_id, tenant_id, metric, threshold, actual_value,
+		        service, path_template, status, message, created_at
+		 FROM alert_history WHERE tenant_id = ?
+		 ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return r.scanAlertHistory(rows)
+}
+
+func (r *sqliteAlertHistoryRepo) ListByRule(ctx context.Context, ruleID string, limit int) ([]*AlertHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, rule_id, tenant_id, metric, threshold, actual_value,
+		        service, path_template, status, message, created_at
+		 FROM alert_history WHERE rule_id = ?
+		 ORDER BY created_at DESC LIMIT ?`, ruleID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return r.scanAlertHistory(rows)
+}
+
+func (r *sqliteAlertHistoryRepo) scanAlertHistory(rows *sql.Rows) ([]*AlertHistoryEntry, error) {
+	var entries []*AlertHistoryEntry
+	for rows.Next() {
+		e := &AlertHistoryEntry{}
+		var createdAt string
+		if err := rows.Scan(&e.ID, &e.RuleID, &e.TenantID, &e.Metric, &e.Threshold,
+			&e.ActualValue, &e.Service, &e.PathTemplate, &e.Status, &e.Message, &createdAt); err != nil {
+			return nil, err
+		}
+		e.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }

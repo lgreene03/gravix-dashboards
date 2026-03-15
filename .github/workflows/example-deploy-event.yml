@@ -1,0 +1,77 @@
+name: Example – Send Deploy Event to Gravix
+
+# This workflow demonstrates how to use the Gravix Deploy Event action
+# to automatically record deploy lifecycle events in Gravix.
+#
+# To use this in your own repo, reference the action from your workflow:
+#   uses: gravix-io/gravix/.github/action@main
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Notify Gravix that a deploy has started.
+      - name: Send deploy_started event
+        uses: ./action
+        with:
+          api-key: ${{ secrets.GRAVIX_API_KEY }}
+          endpoint: ${{ secrets.GRAVIX_ENDPOINT }}
+          service: my-app
+          event-type: deploy_started
+          message: "Deploying ${{ github.sha }} to ${{ inputs.environment }}"
+          entity-id: "deployment/my-app-${{ github.run_id }}"
+          properties: |
+            commit=${{ github.sha }}
+            branch=${{ github.ref_name }}
+            environment=${{ inputs.environment }}
+            actor=${{ github.actor }}
+            run_id=${{ github.run_id }}
+
+      # 2. Your actual deploy steps go here.
+      - name: Deploy (placeholder)
+        run: echo "Deploying to ${{ inputs.environment }}..."
+
+      # 3. Notify Gravix that the deploy completed successfully.
+      - name: Send deploy_completed event
+        if: success()
+        uses: ./action
+        with:
+          api-key: ${{ secrets.GRAVIX_API_KEY }}
+          endpoint: ${{ secrets.GRAVIX_ENDPOINT }}
+          service: my-app
+          event-type: deploy_completed
+          message: "Successfully deployed ${{ github.sha }} to ${{ inputs.environment }}"
+          entity-id: "deployment/my-app-${{ github.run_id }}"
+          properties: |
+            commit=${{ github.sha }}
+            branch=${{ github.ref_name }}
+            environment=${{ inputs.environment }}
+
+      # 4. If deploy fails, record the failure.
+      - name: Send deploy_failed event
+        if: failure()
+        uses: ./action
+        with:
+          api-key: ${{ secrets.GRAVIX_API_KEY }}
+          endpoint: ${{ secrets.GRAVIX_ENDPOINT }}
+          service: my-app
+          event-type: deploy_failed
+          message: "Deploy of ${{ github.sha }} to ${{ inputs.environment }} failed"
+          entity-id: "deployment/my-app-${{ github.run_id }}"
+          properties: |
+            commit=${{ github.sha }}
+            environment=${{ inputs.environment }}
+            run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

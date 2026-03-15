@@ -1,0 +1,410 @@
+openapi: 3.0.3
+info:
+  title: Gravix Ingestion API
+  description: |
+    HTTP API for the Gravix observability platform.
+    Accepts request facts and service lifecycle events for aggregation and visualization.
+  version: 0.1.0
+  contact:
+    name: Gravix
+    url: https://github.com/gravix-io/gravix
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8090
+    description: Local development
+
+security:
+  - apiKeyAuth: []
+
+tags:
+  - name: Data
+    description: Ingest request facts and service events
+  - name: Health
+    description: Liveness, readiness, and metrics endpoints
+
+paths:
+  /api/v1/facts:
+    post:
+      operationId: ingestFact
+      summary: Ingest a single request fact
+      description: |
+        Records a single HTTP request observation. The fact is validated,
+        persisted to disk (fsync'd), and later rolled up into minute-level metrics.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestFact"
+            example:
+              event_id: "018f3a3b-2c5e-7a1d-8b4e-9f0a2c5b3d4e"
+              event_time: "2024-05-01T12:00:00Z"
+              service: "auth-service"
+              method: "POST"
+              path_template: "/api/v1/login"
+              status_code: 200
+              latency_ms: 125
+              user_agent_family: "Chrome"
+      responses:
+        "201":
+          description: Fact persisted to disk.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/facts/batch:
+    post:
+      operationId: ingestFactsBatch
+      summary: Ingest request facts in batch (JSONL)
+      description: |
+        Records multiple request facts in a single request using JSONL
+        (newline-delimited JSON) format. Each line is validated independently.
+        Valid facts are persisted; invalid lines are reported in the response.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: string
+              description: Newline-delimited JSON (JSONL). Each line is a RequestFact object.
+            example: |
+              {"event_id":"018f3a3b-0001-7000-8000-000000000001","event_time":"2024-05-01T12:00:00Z","service":"auth-service","method":"GET","path_template":"/api/health","status_code":200,"latency_ms":5}
+              {"event_id":"018f3a3b-0002-7000-8000-000000000002","event_time":"2024-05-01T12:00:01Z","service":"auth-service","method":"POST","path_template":"/api/v1/login","status_code":200,"latency_ms":125}
+      responses:
+        "200":
+          description: Batch processed. Check accepted/rejected counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResult"
+              example:
+                accepted: 2
+                rejected: 0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/events:
+    post:
+      operationId: ingestEvent
+      summary: Ingest a service lifecycle event
+      description: |
+        Records a service lifecycle event such as a deploy, restart, scale operation,
+        or health check failure. Events are persisted synchronously.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceEvent"
+            example:
+              event_id: "018f3a3b-3d7f-7b2e-9c5a-1a2b3c4d5e6f"
+              event_time: "2024-05-01T14:30:00Z"
+              service: "payment-service"
+              event_type: "deploy_completed"
+              message: "Deployed v1.2.3 to production"
+              properties:
+                version: "v1.2.3"
+                region: "us-east-1"
+      responses:
+        "201":
+          description: Event persisted to disk.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /live:
+    get:
+      operationId: liveness
+      summary: Liveness probe
+      description: Returns 200 if the service process is running. Used by Kubernetes liveness probes.
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: Service is alive.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: up
+
+  /ready:
+    get:
+      operationId: readiness
+      summary: Readiness probe
+      description: Returns 200 if the service is ready to accept traffic. Checks that the storage sink is initialized.
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: Service is ready.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ready
+        "503":
+          description: Service is not ready (sink not initialized).
+
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Returns Prometheus-formatted metrics including ingestion_requests_total,
+        ingestion_batch_size_bytes, ingestion_fsync_duration_seconds, and
+        standard Go runtime metrics.
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: Prometheus metrics in text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication. Set via the API_KEY environment variable on the server.
+
+  schemas:
+    RequestFact:
+      type: object
+      description: A single HTTP request observation.
+      required:
+        - event_id
+        - event_time
+        - service
+        - method
+        - path_template
+        - status_code
+        - latency_ms
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: UUIDv7 event identifier.
+          example: "018f3a3b-2c5e-7a1d-8b4e-9f0a2c5b3d4e"
+        event_time:
+          type: string
+          format: date-time
+          description: ISO 8601 / RFC 3339 timestamp.
+          example: "2024-05-01T12:00:00Z"
+        service:
+          type: string
+          description: Service name (non-empty).
+          example: "auth-service"
+        method:
+          type: string
+          description: HTTP method.
+          enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+          example: "POST"
+        path_template:
+          type: string
+          description: |
+            URL path with {id} placeholders. Must not contain query parameters,
+            raw UUIDs, or numeric IDs with 4+ digits.
+          example: "/api/v1/users/{id}"
+        status_code:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: HTTP status code.
+          example: 200
+        latency_ms:
+          type: integer
+          minimum: 0
+          description: Response time in milliseconds.
+          example: 125
+        user_agent_family:
+          type: string
+          description: Browser/client family (optional).
+          example: "Chrome"
+
+    ServiceEvent:
+      type: object
+      description: A service lifecycle event.
+      required:
+        - event_id
+        - event_time
+        - service
+        - event_type
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: UUIDv7 event identifier.
+          example: "018f3a3b-3d7f-7b2e-9c5a-1a2b3c4d5e6f"
+        event_time:
+          type: string
+          format: date-time
+          description: ISO 8601 / RFC 3339 timestamp.
+          example: "2024-05-01T14:30:00Z"
+        service:
+          type: string
+          description: Service name.
+          example: "payment-service"
+        event_type:
+          type: string
+          description: "Snake_case event type (pattern: ^[a-z]+(_[a-z0-9]+)*$)."
+          example: "deploy_completed"
+        entity_id:
+          type: string
+          description: Related entity identifier (optional).
+          example: "deployment/payment-v1.2.3"
+        message:
+          type: string
+          description: Human-readable message (optional).
+          example: "Deployed v1.2.3 to production"
+        properties:
+          type: object
+          additionalProperties:
+            type: string
+            maxLength: 1024
+          description: Flat key-value string metadata (optional).
+          example:
+            version: "v1.2.3"
+            region: "us-east-1"
+
+    BatchResult:
+      type: object
+      description: Result of a batch ingestion request.
+      required:
+        - accepted
+        - rejected
+      properties:
+        accepted:
+          type: integer
+          description: Number of facts successfully persisted.
+          example: 2
+        rejected:
+          type: integer
+          description: Number of facts that failed validation.
+          example: 1
+        errors:
+          type: array
+          items:
+            type: string
+          description: Validation error messages for rejected facts (omitted when rejected is 0).
+          example:
+            - "line 3: invalid RequestFact: event_id must be a valid UUIDv7"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - code
+      properties:
+        error:
+          type: string
+          description: Human-readable error description.
+          example: "validation failed: event_id must be a valid UUIDv7"
+        code:
+          type: integer
+          description: HTTP status code.
+          example: 400
+
+  responses:
+    BadRequest:
+      description: Validation failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "validation failed: path_template contains raw UUID"
+            code: 400
+
+    Unauthorized:
+      description: Missing or invalid API key.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "unauthorized"
+            code: 401
+
+    PayloadTooLarge:
+      description: Request body exceeds 1 MB limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "request body too large (max 1MB)"
+            code: 413
+
+    RateLimited:
+      description: Rate limit exceeded (100 req/s, burst 200).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "rate limit exceeded, try again later"
+            code: 429
+
+    InternalError:
+      description: Internal server error (disk write or marshal failure).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "internal server error"
+            code: 500

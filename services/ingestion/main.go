@@ -30,6 +30,41 @@ import (
 
 const maxBodyBytes = 1 << 20 // 1 MB max request body
 
+// DLQEntry represents a rejected fact stored in the dead letter queue.
+type DLQEntry struct {
+	Timestamp time.Time       `json:"timestamp"`
+	TenantID  string          `json:"tenant_id,omitempty"`
+	FactType  string          `json:"fact_type"`
+	Error     string          `json:"error"`
+	RawJSON   json.RawMessage `json:"raw_json"`
+}
+
+// writeDLQEntries marshals DLQ entries as JSONL and writes them to storage
+// under the dlq/ topic prefix. Runs async — errors are logged but not propagated.
+func writeDLQEntries(sink *DurableSink, tenantID, factType string, entries []DLQEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	var records [][]byte
+	for _, e := range entries {
+		data, err := json.Marshal(e)
+		if err != nil {
+			log.Printf("DLQ marshal error: %v", err)
+			continue
+		}
+		records = append(records, data)
+	}
+	if len(records) == 0 {
+		return
+	}
+	topic := topicForTenant(tenantID, "dlq/request_facts")
+	if err := sink.WriteBatch(topic, records); err != nil {
+		log.Printf("DLQ write error: %v", err)
+	} else {
+		log.Printf("DLQ: wrote %d entries for tenant=%q", len(records), tenantID)
+	}
+}
+
 // contextKey is a private type for context keys to avoid collisions.
 type contextKey string
 
@@ -717,8 +752,18 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
+		tenantID := getTenantID(r)
+
 		fact, err := schemas.ParseRequestFact(body)
 		if err != nil {
+			// Write rejected fact to DLQ (async, non-blocking)
+			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
+				Timestamp: time.Now().UTC(),
+				TenantID:  tenantID,
+				FactType:  "request_fact",
+				Error:     err.Error(),
+				RawJSON:   json.RawMessage(body),
+			}})
 			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid RequestFact: %v", err))
 			return
 		}
@@ -729,8 +774,6 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			writeErrorJSON(w, http.StatusInternalServerError, "failed to marshal fact")
 			return
 		}
-
-		tenantID := getTenantID(r)
 		topic := topicForTenant(tenantID, "request_facts")
 		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)
@@ -772,8 +815,12 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			return
 		}
 
+		tenantID := getTenantID(r)
+		now := time.Now().UTC()
+
 		var validRecords [][]byte
 		var errors []string
+		var dlqEntries []DLQEntry
 		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
 
 		for i, line := range lines {
@@ -783,13 +830,29 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 
 			fact, err := schemas.ParseRequestFact(line)
 			if err != nil {
-				errors = append(errors, fmt.Sprintf("line %d: %v", i+1, err))
+				errMsg := fmt.Sprintf("line %d: %v", i+1, err)
+				errors = append(errors, errMsg)
+				dlqEntries = append(dlqEntries, DLQEntry{
+					Timestamp: now,
+					TenantID:  tenantID,
+					FactType:  "request_fact",
+					Error:     errMsg,
+					RawJSON:   json.RawMessage(line),
+				})
 				continue
 			}
 
 			cleanData, err := marshalOpts.Marshal(fact)
 			if err != nil {
-				errors = append(errors, fmt.Sprintf("line %d: marshal error", i+1))
+				errMsg := fmt.Sprintf("line %d: marshal error", i+1)
+				errors = append(errors, errMsg)
+				dlqEntries = append(dlqEntries, DLQEntry{
+					Timestamp: now,
+					TenantID:  tenantID,
+					FactType:  "request_fact",
+					Error:     errMsg,
+					RawJSON:   json.RawMessage(line),
+				})
 				continue
 			}
 
@@ -797,7 +860,6 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		}
 
 		// Write all valid records in a single batch (one fsync)
-		tenantID := getTenantID(r)
 		topic := topicForTenant(tenantID, "request_facts")
 		if len(validRecords) > 0 {
 			if err := sink.WriteBatch(topic, validRecords); err != nil {
@@ -805,6 +867,11 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist facts")
 				return
 			}
+		}
+
+		// Write rejected facts to DLQ (async, non-blocking)
+		if len(dlqEntries) > 0 {
+			go writeDLQEntries(sink, tenantID, "request_fact", dlqEntries)
 		}
 
 		accepted := len(validRecords)

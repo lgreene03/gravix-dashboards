@@ -1,0 +1,53 @@
+name: "Gravix Deploy Event"
+description: "Send a deploy event to the Gravix observability platform from your CI/CD pipeline."
+author: "Gravix"
+
+branding:
+  icon: "activity"
+  color: "purple"
+
+inputs:
+  api-key:
+    description: "Gravix API key for authentication."
+    required: true
+  endpoint:
+    description: "Gravix ingestion service URL."
+    required: false
+    default: "http://localhost:8090"
+  service:
+    description: "Service name (e.g., auth-service, payment-api)."
+    required: true
+  event-type:
+    description: "Event type in snake_case (e.g., deploy_started, deploy_completed)."
+    required: false
+    default: "deploy_completed"
+  message:
+    description: "Human-readable event message."
+    required: false
+    default: ""
+  entity-id:
+    description: "Related entity identifier (e.g., deployment/my-app-v1.2.3)."
+    required: false
+    default: ""
+  properties:
+    description: |
+      Additional key=value properties, one per line.
+      Example:
+        properties: |
+          version=1.2.3
+          commit=abc1234
+          branch=main
+    required: false
+    default: ""
+
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  env:
+    GRAVIX_API_KEY: ${{ inputs.api-key }}
+    GRAVIX_ENDPOINT: ${{ inputs.endpoint }}
+    INPUT_SERVICE: ${{ inputs.service }}
+    INPUT_EVENT_TYPE: ${{ inputs.event-type }}
+    INPUT_MESSAGE: ${{ inputs.message }}
+    INPUT_ENTITY_ID: ${{ inputs.entity-id }}
+    INPUT_PROPERTIES: ${{ inputs.properties }}

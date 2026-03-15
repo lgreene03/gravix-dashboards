@@ -26,7 +26,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: #1e293b;
+            background: var(--sidebar-bg);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -38,7 +38,7 @@
         }
 
         .auth-card {
-            background: white;
+            background: var(--card-bg);
             padding: 40px;
             border-radius: 16px;
             width: 380px;
@@ -50,11 +50,11 @@
             font-size: 1.5rem;
             font-weight: 700;
             margin-bottom: 8px;
-            color: #0f172a;
+            color: var(--text-primary);
         }
 
         .auth-card p {
-            color: #64748b;
+            color: var(--text-secondary);
             margin-bottom: 24px;
             font-size: 0.875rem;
         }
@@ -62,16 +62,18 @@
         .auth-card input {
             width: 100%;
             padding: 12px 16px;
-            border: 1px solid #e2e8f0;
+            border: 1px solid var(--border-color);
             border-radius: 8px;
             font-size: 1rem;
             font-family: inherit;
             margin-bottom: 16px;
             outline: none;
+            background: var(--input-bg);
+            color: var(--text-primary);
         }
 
         .auth-card input:focus {
-            border-color: #3b82f6;
+            border-color: var(--brand-color);
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
         }
 
@@ -118,7 +120,7 @@
         .auth-brand span {
             font-size: 1.5rem;
             font-weight: 700;
-            color: #0f172a;
+            color: var(--text-primary);
         }
 
         :root {
@@ -131,6 +133,69 @@
             --error-color: #ef4444;
             --success-color: #22c55e;
             --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            --sidebar-bg: #1e293b;
+            --sidebar-hover: #334155;
+            --loading-bg: rgba(255, 255, 255, 0.8);
+            --table-hover: #f8fafc;
+            --input-bg: #ffffff;
+            --badge-success-bg: #dcfce7;
+            --badge-success-text: #15803d;
+            --badge-error-bg: #fee2e2;
+            --badge-error-text: #b91c1c;
+            --badge-info-bg: #dbeafe;
+            --badge-info-text: #1d4ed8;
+            --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08);
+            --shadow-heavy: 0 25px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #0f172a;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --card-bg: #1e293b;
+            --border-color: #334155;
+            --brand-color: #60a5fa;
+            --error-color: #f87171;
+            --success-color: #4ade80;
+            --sidebar-bg: #020617;
+            --sidebar-hover: #1e293b;
+            --loading-bg: rgba(15, 23, 42, 0.8);
+            --table-hover: #1e293b;
+            --input-bg: #1e293b;
+            --badge-success-bg: #14532d;
+            --badge-success-text: #86efac;
+            --badge-error-bg: #450a0a;
+            --badge-error-text: #fca5a5;
+            --badge-info-bg: #1e3a5f;
+            --badge-info-text: #93c5fd;
+            --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+            --shadow-heavy: 0 25px 50px rgba(0, 0, 0, 0.6);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg-color: #0f172a;
+                --text-primary: #f1f5f9;
+                --text-secondary: #94a3b8;
+                --card-bg: #1e293b;
+                --border-color: #334155;
+                --brand-color: #60a5fa;
+                --error-color: #f87171;
+                --success-color: #4ade80;
+                --sidebar-bg: #020617;
+                --sidebar-hover: #1e293b;
+                --loading-bg: rgba(15, 23, 42, 0.8);
+                --table-hover: #1e293b;
+                --input-bg: #1e293b;
+                --badge-success-bg: #14532d;
+                --badge-success-text: #86efac;
+                --badge-error-bg: #450a0a;
+                --badge-error-text: #fca5a5;
+                --badge-info-bg: #1e3a5f;
+                --badge-info-text: #93c5fd;
+                --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+                --shadow-heavy: 0 25px 50px rgba(0, 0, 0, 0.6);
+            }
         }
 
         * {
@@ -150,7 +215,7 @@
         /* Sidebar */
         .sidebar {
             width: 260px;
-            background: #1e293b;
+            background: var(--sidebar-bg);
             color: white;
             padding: 24px;
             display: flex;
@@ -195,7 +260,7 @@
 
         .nav-link:hover,
         .nav-link.active {
-            background: #334155;
+            background: var(--sidebar-hover);
             color: white;
         }
 
@@ -228,12 +293,12 @@
             display: inline-flex;
             align-items: center;
             padding: 6px 12px;
-            background: #ecfdf5;
-            color: #047857;
+            background: var(--badge-success-bg);
+            color: var(--badge-success-text);
             border-radius: 9999px;
             font-size: 0.875rem;
             font-weight: 600;
-            border: 1px solid #d1fae5;
+            border: 1px solid var(--border-color);
         }
 
         .status-dot {
@@ -257,7 +322,7 @@
             border: 1px solid var(--border-color);
             border-radius: 12px;
             padding: 24px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            box-shadow: var(--shadow-card);
         }
 
         .card-header {
@@ -282,7 +347,7 @@
             padding: 8px 12px;
             border-radius: 8px;
             border: 1px solid var(--border-color);
-            background: white;
+            background: var(--input-bg);
             font-family: inherit;
             color: var(--text-primary);
             font-size: 0.875rem;
@@ -307,7 +372,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(255, 255, 255, 0.8);
+            background: var(--loading-bg);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -419,7 +484,7 @@
         }
 
         .data-table tr:hover {
-            background: #f8fafc;
+            background: var(--table-hover);
         }
 
         .path-link {
@@ -433,8 +498,8 @@
         }
 
         .badge-error {
-            background: #fee2e2;
-            color: #b91c1c;
+            background: var(--badge-error-bg);
+            color: var(--badge-error-text);
             padding: 2px 8px;
             border-radius: 4px;
             font-size: 0.75rem;
@@ -442,8 +507,17 @@
         }
 
         .badge-success {
-            background: #dcfce7;
-            color: #15803d;
+            background: var(--badge-success-bg);
+            color: var(--badge-success-text);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge-info {
+            background: var(--badge-info-bg);
+            color: var(--badge-info-text);
             padding: 2px 8px;
             border-radius: 4px;
             font-size: 0.75rem;
@@ -458,7 +532,7 @@
         }
 
         .back-btn {
-            background: white;
+            background: var(--card-bg);
             border: 1px solid var(--border-color);
             padding: 6px 12px;
             border-radius: 6px;
@@ -505,7 +579,7 @@
             top: 12px;
             left: 12px;
             z-index: 200;
-            background: #1e293b;
+            background: var(--sidebar-bg);
             color: white;
             border: none;
             border-radius: 8px;
@@ -579,6 +653,134 @@
                 width: 100%;
             }
         }
+        /* Sortable table headers */
+        .sortable-header { cursor: pointer; user-select: none; white-space: nowrap; }
+        .sortable-header:hover { color: var(--brand-color); }
+        .sortable-header.sort-asc::after { content: ' ▲'; font-size: 0.7em; }
+        .sortable-header.sort-desc::after { content: ' ▼'; font-size: 0.7em; }
+
+        /* Endpoint summary metric cards */
+        .metric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px 20px;
+            text-align: center;
+        }
+        .metric-card .metric-value { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); }
+        .metric-card .metric-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+
+        /* Error rate severity badges */
+        .severity-healthy { background: var(--badge-success-bg); color: var(--badge-success-text); }
+        .severity-warning { background: #fef9c3; color: #a16207; }
+        .severity-critical { background: var(--badge-error-bg); color: var(--badge-error-text); }
+        .severity-badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+
+        /* Endpoints table row hover */
+        #all-endpoints-table tbody tr { transition: background 0.15s; }
+        #all-endpoints-table tbody tr:hover { background: var(--table-hover); cursor: pointer; }
+
+        /* Endpoint detail back button */
+        .ep-back-btn { background: none; border: 1px solid var(--border-color); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 0.875rem; color: var(--text-secondary); }
+        .ep-back-btn:hover { background: var(--bg-color); color: var(--text-primary); }
+
+        /* Alerts page tabs */
+        .alerts-tab { padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); cursor: pointer; font-family: inherit; font-size: 0.875rem; color: var(--text-secondary); }
+        .alerts-tab:hover { background: var(--bg-color); }
+        .alerts-tab.active { background: var(--brand-color); color: white; border-color: var(--brand-color); }
+
+        /* Modal overlay */
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-card { background: var(--card-bg); border-radius: 16px; padding: 32px; width: 480px; max-width: 90vw; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.3); }
+        .modal-card h3 { margin: 0 0 20px 0; font-size: 1.25rem; }
+        .modal-form label { display: block; margin-bottom: 12px; font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); }
+        .modal-form input, .modal-form select { display: block; width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.875rem; font-family: inherit; margin-top: 4px; box-sizing: border-box; }
+        .modal-form input:focus, .modal-form select:focus { border-color: var(--brand-color); outline: none; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
+
+        /* Alert status badges */
+        .status-active { color: #15803d; }
+        .status-paused { color: #a16207; }
+        .status-fired { background: var(--badge-error-bg); color: var(--badge-error-text); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .status-error { background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+
+        /* Export buttons */
+        .export-btn {
+            padding: 4px 10px;
+            font-size: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--card-bg);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s;
+        }
+        .export-btn:hover { background: var(--bg-color); color: var(--text-primary); }
+
+        /* Skeleton loading */
+        .skeleton {
+            background: linear-gradient(90deg, var(--border-color) 25%, transparent 50%, var(--border-color) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s ease-in-out infinite;
+            border-radius: 4px;
+        }
+        .skeleton-chart { height: 200px; border-radius: 8px; margin-top: 16px; }
+        .skeleton-row { display: flex; gap: 16px; padding: 14px 12px; border-bottom: 1px solid var(--border-color); }
+        .skeleton-cell { height: 14px; border-radius: 4px; background: linear-gradient(90deg, var(--border-color) 25%, transparent 50%, var(--border-color) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; }
+        .card.loaded .skeleton-content { display: none; }
+        .card:not(.loaded) .real-content { display: none; }
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Modal form dark mode compatibility */
+        .modal-form input, .modal-form select { background: var(--input-bg); color: var(--text-primary); }
+
+        /* Quick-Start Wizard */
+        .wizard-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1100; }
+        .wizard-overlay.open { display: flex; }
+        .wizard-card { background: var(--card-bg); border-radius: 16px; width: 620px; max-width: 95vw; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-heavy); }
+        .wizard-header { display: flex; justify-content: space-between; align-items: center; padding: 24px 28px 0; }
+        .wizard-header h2 { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); }
+        .wizard-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary); line-height: 1; padding: 4px; }
+        .wizard-close:hover { color: var(--text-primary); }
+        .wizard-progress { display: flex; gap: 4px; padding: 16px 28px; }
+        .wizard-progress-step { flex: 1; height: 4px; border-radius: 2px; background: var(--border-color); transition: background 0.3s; }
+        .wizard-progress-step.active { background: var(--brand-color); }
+        .wizard-progress-step.done { background: var(--success-color); }
+        .wizard-body { padding: 0 28px 28px; }
+        .wizard-step { display: none; }
+        .wizard-step.active { display: block; }
+        .wizard-step h3 { font-size: 1rem; font-weight: 600; margin-bottom: 4px; color: var(--text-primary); }
+        .wizard-step .step-desc { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 16px; }
+        .wizard-lang-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+        .wizard-lang-btn { padding: 10px; border: 2px solid var(--border-color); border-radius: 8px; background: var(--card-bg); cursor: pointer; font-family: inherit; font-size: 0.8rem; font-weight: 600; text-align: center; transition: border-color 0.2s, background 0.2s; color: var(--text-primary); }
+        .wizard-lang-btn:hover { border-color: var(--brand-color); background: var(--bg-color); }
+        .wizard-lang-btn.selected { border-color: var(--brand-color); background: rgba(59,130,246,0.08); }
+        .wizard-code-block { position: relative; background: #1e293b; border-radius: 8px; padding: 16px; margin-bottom: 16px; overflow-x: auto; }
+        .wizard-code-block pre { color: #e2e8f0; font-size: 0.78rem; line-height: 1.6; white-space: pre; font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace; margin: 0; }
+        .wizard-copy-btn { position: absolute; top: 8px; right: 8px; padding: 4px 12px; background: #334155; color: #94a3b8; border: none; border-radius: 4px; font-size: 0.7rem; cursor: pointer; font-family: inherit; transition: color 0.2s; }
+        .wizard-copy-btn:hover { color: #e2e8f0; }
+        .wizard-footer { display: flex; justify-content: space-between; align-items: center; padding: 0 28px 24px; }
+        .wizard-footer-step { color: var(--text-secondary); font-size: 0.8rem; }
+        .wizard-footer-actions { display: flex; gap: 8px; }
+        .wizard-btn { padding: 8px 20px; border-radius: 8px; font-size: 0.875rem; font-weight: 600; cursor: pointer; font-family: inherit; transition: background 0.2s; }
+        .wizard-btn-secondary { background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-primary); }
+        .wizard-btn-secondary:hover { background: var(--border-color); }
+        .wizard-btn-primary { background: var(--brand-color); border: none; color: white; }
+        .wizard-btn-primary:hover { filter: brightness(1.1); }
+        .wizard-input { display: block; width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.875rem; font-family: inherit; margin-bottom: 12px; background: var(--input-bg); color: var(--text-primary); }
+        .wizard-input:focus { border-color: var(--brand-color); outline: none; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
+        .wizard-input-group { display: flex; gap: 10px; margin-bottom: 12px; }
+        .wizard-input-group .wizard-input { margin-bottom: 0; }
+        .wizard-label { display: block; font-size: 0.8rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+        .wizard-check-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; }
+        .wizard-check-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; flex-shrink: 0; margin-top: 1px; }
+        .wizard-check-icon.pending { border: 2px solid var(--border-color); }
+        .wizard-check-icon.done { background: var(--success-color); color: white; }
+        .wizard-check-text strong { display: block; font-size: 0.875rem; color: var(--text-primary); }
+        .wizard-check-text span { font-size: 0.8rem; color: var(--text-secondary); }
     </style>
 </head>
 
@@ -673,11 +875,20 @@
         </div>
         <nav aria-label="Main navigation" role="navigation">
             <a href="#" class="nav-link active" data-page="overview" aria-current="page">Overview</a>
-            <a href="#" class="nav-link disabled" data-page="transports" title="Coming soon">Transports</a>
-            <a href="#" class="nav-link disabled" data-page="ingestion" title="Coming soon">Ingestion</a>
+            <a href="#" class="nav-link" data-page="endpoints">Endpoints</a>
+            <a href="#" class="nav-link" data-page="alerts" id="nav-alerts">Alerts</a>
+            <a href="#" class="nav-link" data-page="ingestion">Ingestion</a>
             <a href="#" class="nav-link disabled" data-page="processing" title="Coming soon">Processing</a>
             <a href="#" class="nav-link disabled" data-page="settings" title="Coming soon">Settings</a>
         </nav>
+        <div style="margin-top: auto; padding-top: 24px; border-top: 1px solid var(--sidebar-hover);">
+            <button id="quickStartBtn" style="background: var(--brand-color); border: none; color: white; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 0.875rem; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: background 0.2s; margin-bottom: 8px; font-weight: 600;" title="Quick-start integration guide">
+                &#9889; Quick Start
+            </button>
+            <button id="themeToggle" style="background: var(--sidebar-hover); border: none; color: white; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 0.875rem; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" title="Toggle dark mode">
+                <span id="themeIcon">🌙</span> <span id="themeLabel">Dark Mode</span>
+            </button>
+        </div>
     </aside>
 
     <main class="main-content" role="main" aria-label="Dashboard content">
@@ -713,18 +924,19 @@
             </div>
         </div>
 
+        <!-- ==================== OVERVIEW PAGE ==================== -->
+        <div id="page-overview" class="page-content">
+
         <div id="errorBanner" class="error-banner">
             Cannot reach the data service. Check that Cube.js is running and accessible.
         </div>
 
         <div id="emptyState" class="empty-state">
-            <!-- Shown when filters are active but return no data -->
             <div id="emptyFiltered" style="display:none;">
                 <h3>No data for selected filters</h3>
                 <p>Try adjusting your date range or service filter. The current selection returned no metrics.</p>
-                <button id="resetFiltersBtn" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border-color);border-radius:8px;background:white;cursor:pointer;font-size:0.9rem;">Reset Filters</button>
+                <button id="resetFiltersBtn" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border-color);border-radius:8px;background:var(--card-bg);color:var(--text-primary);cursor:pointer;font-size:0.9rem;">Reset Filters</button>
             </div>
-            <!-- Shown when no data exists at all (fresh install / onboarding) -->
             <div id="emptyOnboard" style="display:none;">
                 <h3>No data available</h3>
                 <p>Gravix hasn't received any events yet. Send your first event:</p>
@@ -746,66 +958,80 @@
 
         <div id="dashboardGrid" class="grid">
             <!-- Error Rate Card -->
-            <div class="card">
-                <div class="loading-overlay" id="loading-error">
-                    <div class="loading-spinner"></div>
-                </div>
+            <div class="card" id="card-error">
                 <div class="card-header">
                     <div>
                         <div class="card-title">Error Rate (5xx)</div>
                         <div class="card-subtitle">Percentage of requests resulting in server errors</div>
                     </div>
+                    <button class="export-btn" onclick="exportChartPNG('errorRate', 'error-rate')" title="Export PNG">&#11015; PNG</button>
                 </div>
-                <div class="chart-wrapper">
-                    <canvas id="errorRateChart"></canvas>
+                <div class="skeleton-content">
+                    <div class="skeleton skeleton-chart"></div>
+                </div>
+                <div class="real-content">
+                    <div class="chart-wrapper">
+                        <canvas id="errorRateChart"></canvas>
+                    </div>
                 </div>
             </div>
 
             <!-- Latency Card -->
-            <div class="card">
-                <div class="loading-overlay" id="loading-latency">
-                    <div class="loading-spinner"></div>
-                </div>
+            <div class="card" id="card-latency">
                 <div class="card-header">
                     <div>
                         <div class="card-title">P95 Latency</div>
                         <div class="card-subtitle">95th percentile response time (ms)</div>
                     </div>
+                    <button class="export-btn" onclick="exportChartPNG('latency', 'p95-latency')" title="Export PNG">&#11015; PNG</button>
                 </div>
-                <div class="chart-wrapper">
-                    <canvas id="latencyChart"></canvas>
+                <div class="skeleton-content">
+                    <div class="skeleton skeleton-chart"></div>
+                </div>
+                <div class="real-content">
+                    <div class="chart-wrapper">
+                        <canvas id="latencyChart"></canvas>
+                    </div>
                 </div>
             </div>
 
             <!-- Throughput Card -->
-            <div class="card">
-                <div class="loading-overlay" id="loading-throughput">
-                    <div class="loading-spinner"></div>
-                </div>
+            <div class="card" id="card-throughput">
                 <div class="card-header">
                     <div>
                         <div class="card-title">Throughput</div>
                         <div class="card-subtitle">Requests per minute over time</div>
                     </div>
+                    <button class="export-btn" onclick="exportChartPNG('throughput', 'throughput')" title="Export PNG">&#11015; PNG</button>
                 </div>
-                <div class="chart-wrapper">
-                    <canvas id="throughputChart"></canvas>
+                <div class="skeleton-content">
+                    <div class="skeleton skeleton-chart"></div>
+                </div>
+                <div class="real-content">
+                    <div class="chart-wrapper">
+                        <canvas id="throughputChart"></canvas>
+                    </div>
                 </div>
             </div>
 
             <!-- Top Failing Endpoints Card -->
-            <div class="card" style="grid-column: span 2;">
-                <div class="loading-overlay" id="loading-endpoints">
-                    <div class="loading-spinner"></div>
-                </div>
+            <div class="card" id="card-endpoints" style="grid-column: span 2;">
                 <div class="card-header">
                     <div>
                         <div class="card-title">Top Failing Endpoints</div>
                         <div class="card-subtitle">Detailed breakdown of issues by path</div>
                     </div>
+                    <button class="export-btn" onclick="exportTableCSV('endpoints-table')" title="Export CSV">&#11015; CSV</button>
                 </div>
-                <div id="endpoints-container">
-                    <table class="data-table">
+                <div class="skeleton-content">
+                    <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 35%;"></div><div class="skeleton skeleton-cell" style="width: 10%;"></div><div class="skeleton skeleton-cell" style="width: 18%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div></div>
+                    <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 30%;"></div><div class="skeleton skeleton-cell" style="width: 10%;"></div><div class="skeleton skeleton-cell" style="width: 18%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div></div>
+                    <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 40%;"></div><div class="skeleton skeleton-cell" style="width: 10%;"></div><div class="skeleton skeleton-cell" style="width: 18%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div></div>
+                    <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 25%;"></div><div class="skeleton skeleton-cell" style="width: 10%;"></div><div class="skeleton skeleton-cell" style="width: 18%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div></div>
+                    <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 32%;"></div><div class="skeleton skeleton-cell" style="width: 10%;"></div><div class="skeleton skeleton-cell" style="width: 18%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div></div>
+                </div>
+                <div class="real-content" id="endpoints-container">
+                    <table class="data-table" id="endpoints-table">
                         <thead>
                             <tr>
                                 <th>Endpoint</th>
@@ -822,36 +1048,315 @@
                 </div>
             </div>
 
-            <!-- Service Events Card -->
-            <div class="card" style="grid-column: span 2;">
-                <div class="loading-overlay" id="loading-events">
-                    <div class="loading-spinner"></div>
-                </div>
+            <!-- Service Events Timeline Card -->
+            <div class="card" id="card-events" style="grid-column: span 2;">
                 <div class="card-header">
                     <div>
-                        <div class="card-title">Service Events</div>
-                        <div class="card-subtitle">Deploys, restarts, and lifecycle events by service</div>
+                        <div class="card-title">Service Events Timeline</div>
+                        <div class="card-subtitle">Deploys, restarts, and lifecycle events over time</div>
+                    </div>
+                    <div style="display: flex; gap: 6px;">
+                        <button class="export-btn" onclick="exportChartPNG('eventsTimeline', 'events-timeline')" title="Export PNG">&#11015; PNG</button>
+                        <button class="export-btn" onclick="exportTableCSV('events-table')" title="Export CSV">&#11015; CSV</button>
                     </div>
                 </div>
-                <div id="events-container">
+                <div class="skeleton-content">
+                    <div class="skeleton skeleton-chart"></div>
+                    <div style="margin-top: 16px;">
+                        <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 12%;"></div><div class="skeleton skeleton-cell" style="width: 18%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 12%;"></div><div class="skeleton skeleton-cell" style="width: 35%;"></div></div>
+                        <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 12%;"></div><div class="skeleton skeleton-cell" style="width: 20%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 10%;"></div><div class="skeleton skeleton-cell" style="width: 30%;"></div></div>
+                        <div class="skeleton-row"><div class="skeleton skeleton-cell" style="width: 12%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 15%;"></div><div class="skeleton skeleton-cell" style="width: 14%;"></div><div class="skeleton skeleton-cell" style="width: 28%;"></div></div>
+                    </div>
+                </div>
+                <div class="real-content" id="events-container">
                     <div id="events-empty" class="empty-state" style="padding: 24px;">
                         <p>No service events recorded for this date.</p>
                     </div>
-                    <table class="data-table" id="events-table" style="display: none;">
-                        <thead>
-                            <tr>
-                                <th>Service</th>
-                                <th>Event Type</th>
-                                <th>Count</th>
-                            </tr>
-                        </thead>
-                        <tbody id="events-body">
-                            <!-- Rows injected here -->
-                        </tbody>
-                    </table>
+                    <!-- Timeline stacked bar chart -->
+                    <div id="events-timeline-wrapper" class="chart-wrapper" style="display: none;">
+                        <canvas id="eventsTimelineChart"></canvas>
+                    </div>
+                    <!-- Event type filter + log table -->
+                    <div id="events-log-section" style="display: none; margin-top: 16px;">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 0 4px;">
+                            <span style="font-size: 0.875rem; font-weight: 600; color: var(--text-secondary);">Event Log</span>
+                            <select id="eventTypeFilter" class="filter-input" style="font-size: 0.8rem; padding: 4px 8px;">
+                                <option value="">All Types</option>
+                            </select>
+                            <span id="events-log-count" style="font-size: 0.8rem; color: var(--text-secondary);"></span>
+                        </div>
+                        <table class="data-table" id="events-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Service</th>
+                                    <th>Event Type</th>
+                                    <th>Entity</th>
+                                    <th>Message</th>
+                                </tr>
+                            </thead>
+                            <tbody id="events-body"></tbody>
+                        </table>
+                        <div id="events-load-more" style="text-align: center; padding: 12px; display: none;">
+                            <button id="loadMoreEventsBtn" class="ep-back-btn" style="padding: 6px 20px;">Load More</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
+        </div><!-- end page-overview -->
+
+        <!-- ==================== ENDPOINTS PAGE ==================== -->
+        <div id="page-endpoints" class="page-content" style="display: none;">
+
+            <!-- Endpoint detail view (hidden by default) -->
+            <div id="endpoint-detail" style="display: none;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
+                    <button id="backToEndpoints" class="ep-back-btn">&larr; Back to Endpoints</button>
+                    <span id="endpointDetailTitle" style="font-weight: 700; font-size: 1.25rem;"></span>
+                </div>
+
+                <!-- Summary metrics row -->
+                <div id="endpoint-summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px;"></div>
+
+                <!-- Charts grid -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px;">
+                    <div class="card">
+                        <div class="loading-overlay" id="loading-ep-error"><div class="loading-spinner"></div></div>
+                        <div class="card-header">
+                            <div><div class="card-title">Error Rate</div><div class="card-subtitle">Server error rate over time</div></div>
+                        </div>
+                        <div class="chart-wrapper"><canvas id="epErrorRateChart"></canvas></div>
+                    </div>
+                    <div class="card">
+                        <div class="loading-overlay" id="loading-ep-latency"><div class="loading-spinner"></div></div>
+                        <div class="card-header">
+                            <div><div class="card-title">Latency Distribution</div><div class="card-subtitle">P50 / P95 / P99 response time (ms)</div></div>
+                        </div>
+                        <div class="chart-wrapper"><canvas id="epLatencyChart"></canvas></div>
+                    </div>
+                    <div class="card">
+                        <div class="loading-overlay" id="loading-ep-throughput"><div class="loading-spinner"></div></div>
+                        <div class="card-header">
+                            <div><div class="card-title">Throughput</div><div class="card-subtitle">Requests per minute over time</div></div>
+                        </div>
+                        <div class="chart-wrapper"><canvas id="epThroughputChart"></canvas></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Endpoints list view -->
+            <div id="endpoints-list">
+                <div class="card">
+                    <div class="loading-overlay" id="loading-all-endpoints"><div class="loading-spinner"></div></div>
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">All Endpoints</div>
+                            <div class="card-subtitle" id="endpoints-count-label">Loading...</div>
+                        </div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="endpointSearch" placeholder="Filter endpoints..." class="filter-input" style="min-width: 200px;">
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                    <table class="data-table" id="all-endpoints-table">
+                        <thead>
+                            <tr>
+                                <th class="sortable-header" data-sort="path">Endpoint</th>
+                                <th class="sortable-header" data-sort="method">Method</th>
+                                <th class="sortable-header sort-desc" data-sort="requests">Requests</th>
+                                <th class="sortable-header" data-sort="errors">Errors</th>
+                                <th class="sortable-header" data-sort="errorRate">Error Rate</th>
+                                <th class="sortable-header" data-sort="p50">P50 (ms)</th>
+                                <th class="sortable-header" data-sort="p95">P95 (ms)</th>
+                                <th class="sortable-header" data-sort="p99">P99 (ms)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="all-endpoints-body"></tbody>
+                    </table>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-endpoints -->
+
+        <!-- ===== ALERTS PAGE ===== -->
+        <div id="page-alerts" class="page-content" style="display: none;">
+            <!-- Sub-tabs -->
+            <div style="display: flex; gap: 8px; margin-bottom: 24px;">
+                <button class="alerts-tab active" data-alerts-tab="rules">Alert Rules</button>
+                <button class="alerts-tab" data-alerts-tab="channels">Channels</button>
+                <button class="alerts-tab" data-alerts-tab="history">History</button>
+            </div>
+
+            <!-- Rules Tab -->
+            <div id="alerts-tab-rules">
+                <div class="card">
+                    <div class="card-header">
+                        <div><div class="card-title">Alert Rules</div><div class="card-subtitle" id="rules-count-label">Loading...</div></div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button class="export-btn" onclick="exportTableCSV('alert-rules-table')" title="Export CSV">&#11015; CSV</button>
+                            <button id="createRuleBtn" class="btn-primary" style="padding: 8px 16px; border-radius: 8px; border: none; background: var(--brand-color); color: white; cursor: pointer; font-weight: 600;">+ New Rule</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                    <table class="data-table" id="alert-rules-table">
+                        <thead><tr>
+                            <th>Name</th><th>Metric</th><th>Condition</th><th>Service</th><th>Channel</th><th>Status</th><th>Last Triggered</th><th>Actions</th>
+                        </tr></thead>
+                        <tbody id="alert-rules-body"></tbody>
+                    </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Channels Tab -->
+            <div id="alerts-tab-channels" style="display: none;">
+                <div class="card">
+                    <div class="card-header">
+                        <div><div class="card-title">Notification Channels</div><div class="card-subtitle" id="channels-count-label">Loading...</div></div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button class="export-btn" onclick="exportTableCSV('channels-table')" title="Export CSV">&#11015; CSV</button>
+                            <button id="createChannelBtn" class="btn-primary" style="padding: 8px 16px; border-radius: 8px; border: none; background: var(--brand-color); color: white; cursor: pointer; font-weight: 600;">+ New Channel</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                    <table class="data-table" id="channels-table">
+                        <thead><tr>
+                            <th>Name</th><th>Type</th><th>Status</th><th>Created</th><th>Actions</th>
+                        </tr></thead>
+                        <tbody id="channels-body"></tbody>
+                    </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History Tab -->
+            <div id="alerts-tab-history" style="display: none;">
+                <div class="card">
+                    <div class="card-header">
+                        <div><div class="card-title">Alert History</div><div class="card-subtitle" id="history-count-label">Loading...</div></div>
+                        <button class="export-btn" onclick="exportTableCSV('alert-history-table')" title="Export CSV">&#11015; CSV</button>
+                    </div>
+                    <div style="overflow-x: auto;">
+                    <table class="data-table" id="alert-history-table">
+                        <thead><tr>
+                            <th>Time</th><th>Rule</th><th>Metric</th><th>Value</th><th>Threshold</th><th>Service</th><th>Status</th>
+                        </tr></thead>
+                        <tbody id="alert-history-body"></tbody>
+                    </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Create/Edit Rule Modal -->
+            <div id="rule-modal" class="modal-overlay" style="display: none;">
+                <div class="modal-card">
+                    <h3 id="rule-modal-title">New Alert Rule</h3>
+                    <div class="modal-form">
+                        <label>Name<input type="text" id="ruleNameInput" placeholder="e.g. High Error Rate"></label>
+                        <label>Metric<select id="ruleMetricSelect">
+                            <option value="error_rate">Error Rate</option>
+                            <option value="p50_latency">P50 Latency (ms)</option>
+                            <option value="p95_latency">P95 Latency (ms)</option>
+                            <option value="p99_latency">P99 Latency (ms)</option>
+                            <option value="throughput">Throughput (count)</option>
+                        </select></label>
+                        <label>Operator<select id="ruleOperatorSelect">
+                            <option value="gt">Greater than (>)</option>
+                            <option value="lt">Less than (&lt;)</option>
+                            <option value="anomaly">Anomaly Detection</option>
+                        </select></label>
+                        <div id="thresholdFields" style="display: flex; gap: 12px;">
+                            <label style="flex:1;">Threshold<input type="number" id="ruleThresholdInput" step="any" min="0" placeholder="0.05"></label>
+                            <label style="flex:1;">Window (min)<select id="ruleWindowSelect">
+                                <option value="1">1</option><option value="5" selected>5</option><option value="10">10</option>
+                                <option value="15">15</option><option value="30">30</option><option value="60">60</option>
+                            </select></label>
+                        </div>
+                        <div id="anomalyFields" style="display: none;">
+                            <div style="display: flex; gap: 12px;">
+                                <label style="flex:1;">Stddev Multiplier (sigma)<input type="number" id="anomalyStddevInput" step="0.1" min="0.5" value="2.0" placeholder="2.0"></label>
+                                <label style="flex:1;">Lookback (days)<select id="anomalyLookbackSelect">
+                                    <option value="3">3 days</option>
+                                    <option value="7" selected>7 days</option>
+                                    <option value="14">14 days</option>
+                                    <option value="30">30 days</option>
+                                </select></label>
+                            </div>
+                            <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px;">
+                                Alerts when the current value deviates from the historical mean by more than N standard deviations.
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 12px;">
+                            <label style="flex:1;">Cooldown (min)<select id="ruleCooldownSelect">
+                                <option value="5">5</option><option value="15" selected>15</option><option value="30">30</option>
+                                <option value="60">60</option><option value="120">120</option>
+                            </select></label>
+                        </div>
+                        <label>Service (optional)<input type="text" id="ruleServiceInput" placeholder="Leave empty for all services"></label>
+                        <label>Path Template (optional)<input type="text" id="rulePathInput" placeholder="e.g. /api/v1/users/{id}"></label>
+                        <label>Notification Channel<select id="ruleChannelSelect"><option value="">Loading...</option></select></label>
+                    </div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+                        <button id="ruleModalCancel" class="ep-back-btn">Cancel</button>
+                        <button id="ruleModalSave" style="padding: 8px 20px; border-radius: 8px; border: none; background: var(--brand-color); color: white; cursor: pointer; font-weight: 600;">Save</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Create Channel Modal -->
+            <div id="channel-modal" class="modal-overlay" style="display: none;">
+                <div class="modal-card">
+                    <h3>New Notification Channel</h3>
+                    <div class="modal-form">
+                        <label>Name<input type="text" id="channelNameInput" placeholder="e.g. Production Slack"></label>
+                        <label>Type<select id="channelTypeSelect">
+                            <option value="slack">Slack Webhook</option>
+                            <option value="webhook">Generic Webhook</option>
+                        </select></label>
+                        <label>Webhook URL<input type="url" id="channelWebhookInput" placeholder="https://hooks.slack.com/services/..."></label>
+                        <label id="channelAuthLabel" style="display:none;">Auth Header (optional)<input type="text" id="channelAuthInput" placeholder="Bearer your-token"></label>
+                    </div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+                        <button id="channelModalCancel" class="ep-back-btn">Cancel</button>
+                        <button id="channelModalSave" style="padding: 8px 20px; border-radius: 8px; border: none; background: var(--brand-color); color: white; cursor: pointer; font-weight: 600;">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-alerts -->
+
+        <div id="page-ingestion" class="page-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Dead Letter Queue</div>
+                        <div class="card-subtitle" id="dlq-count-label">Rejected facts that failed validation</div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="export-btn" onclick="refreshDLQ()" title="Refresh">&#x21bb; Refresh</button>
+                    </div>
+                </div>
+                <div id="dlq-empty" style="display: none; padding: 48px 24px; text-align: center; color: var(--text-secondary);">
+                    <div style="font-size: 2rem; margin-bottom: 8px;">&#x2705;</div>
+                    <div style="font-size: 1.1rem; font-weight: 600;">No rejected facts</div>
+                    <div style="margin-top: 4px;">All ingested facts passed validation.</div>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table class="data-table" id="dlq-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Error</th>
+                                <th>Raw JSON</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dlq-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div><!-- end page-ingestion -->
+
     </main>
 
     <script>
@@ -868,6 +1373,64 @@
         const GATEWAY_URL = GRAVIX_CONFIG.gatewayUrl;
         const REFRESH_INTERVAL_MS = GRAVIX_CONFIG.refreshIntervalMs;
         const IS_MULTI_TENANT = !!GATEWAY_URL;
+
+        // --- THEME ---
+        function initTheme() {
+            const saved = localStorage.getItem('gravix_theme');
+            if (saved === 'dark' || saved === 'light') {
+                document.documentElement.setAttribute('data-theme', saved);
+            }
+            // If no saved preference, rely on CSS @media (prefers-color-scheme)
+            updateThemeUI();
+        }
+
+        function toggleTheme() {
+            const current = getEffectiveTheme();
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('gravix_theme', next);
+            updateThemeUI();
+            updateChartTheme();
+        }
+
+        function getEffectiveTheme() {
+            const attr = document.documentElement.getAttribute('data-theme');
+            if (attr) return attr;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+
+        function updateThemeUI() {
+            const isDark = getEffectiveTheme() === 'dark';
+            const icon = document.getElementById('themeIcon');
+            const label = document.getElementById('themeLabel');
+            if (icon) icon.textContent = isDark ? '☀️' : '🌙';
+            if (label) label.textContent = isDark ? 'Light Mode' : 'Dark Mode';
+        }
+
+        function updateChartTheme() {
+            const isDark = getEffectiveTheme() === 'dark';
+            const textColor = isDark ? '#94a3b8' : '#64748b';
+            const gridColor = isDark ? 'rgba(148, 163, 184, 0.1)' : 'rgba(0, 0, 0, 0.05)';
+            Chart.defaults.color = textColor;
+            Chart.defaults.borderColor = gridColor;
+            Chart.defaults.plugins.tooltip.backgroundColor = isDark ? '#334155' : '#1e293b';
+            Chart.defaults.plugins.tooltip.titleColor = '#f1f5f9';
+            Chart.defaults.plugins.tooltip.bodyColor = '#e2e8f0';
+            // Refresh all existing charts (charts may not be declared yet at init time)
+            if (typeof charts !== 'undefined') {
+                Object.values(charts).forEach(c => { if (c && c.update) c.update(); });
+            }
+        }
+
+        initTheme();
+
+        // Listen for system theme changes
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+            if (!localStorage.getItem('gravix_theme')) {
+                updateThemeUI();
+                updateChartTheme();
+            }
+        });
 
         // --- AUTH GATE ---
         let dashboardApiToken = sessionStorage.getItem('gravix_token') || '';
@@ -1110,18 +1673,344 @@
 
         // --- CHART DEFAULTS ---
         Chart.defaults.font.family = "'Inter', sans-serif";
-        Chart.defaults.color = '#64748b';
-        Chart.defaults.scale.grid.color = '#f1f5f9';
-        Chart.defaults.plugins.tooltip.backgroundColor = '#1e293b';
         Chart.defaults.plugins.tooltip.padding = 10;
         Chart.defaults.plugins.tooltip.cornerRadius = 8;
 
         let charts = {}; // Store chart instances
+        updateChartTheme(); // Apply theme-aware chart colors
         let availableServices = new Set();
         let lastSuccessfulUpdate = null;
         let hasConnectionError = false;
         let retryAttempts = 0;
         const MAX_RETRY_INTERVAL = 120000; // 2 minutes max
+
+        // --- PAGE SWITCHING ---
+        let currentPage = 'overview';
+
+        function switchPage(pageName) {
+            document.querySelectorAll('.page-content').forEach(p => p.style.display = 'none');
+            const target = document.getElementById('page-' + pageName);
+            if (target) target.style.display = 'block';
+
+            document.querySelectorAll('.nav-link').forEach(l => {
+                l.classList.remove('active');
+                l.removeAttribute('aria-current');
+            });
+            const activeLink = document.querySelector('.nav-link[data-page="' + pageName + '"]');
+            if (activeLink) {
+                activeLink.classList.add('active');
+                activeLink.setAttribute('aria-current', 'page');
+            }
+
+            currentPage = pageName;
+            saveFiltersToHash();
+
+            // Show/hide dashboard filters depending on page
+            const headerEl = document.querySelector('.header');
+            if (headerEl) {
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion') ? 'none' : '';
+            }
+
+            if (pageName === 'endpoints') {
+                updateEndpointsPage();
+            } else if (pageName === 'alerts') {
+                loadAlertsPage();
+            } else if (pageName === 'ingestion') {
+                loadIngestionPage();
+            }
+
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            document.getElementById('sidebar').classList.remove('open');
+            document.getElementById('sidebarBackdrop').classList.remove('open');
+        }
+
+        // --- SHARED FILTER BUILDER ---
+        function buildCurrentFilters() {
+            const service = document.getElementById('serviceFilter').value;
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+            const filters = [];
+            if (service) {
+                filters.push({ member: "RequestMetricsMinute.service", operator: "equals", values: [service] });
+            }
+            if (dateFrom && dateTo && dateFrom !== dateTo) {
+                filters.push({ member: "RequestMetricsMinute.bucketStart", operator: "gte", values: [dateFrom + "T00:00:00"] });
+                filters.push({ member: "RequestMetricsMinute.bucketStart", operator: "lte", values: [dateTo + "T23:59:59"] });
+            } else if (dateFrom) {
+                filters.push({ member: "RequestMetricsMinute.bucketStart", operator: "gte", values: [dateFrom + "T00:00:00"] });
+                filters.push({ member: "RequestMetricsMinute.bucketStart", operator: "lte", values: [dateFrom + "T23:59:59"] });
+            }
+            return filters;
+        }
+
+        // --- ENDPOINTS PAGE ---
+        let allEndpointsData = [];
+        let endpointsSortColumn = 'requests';
+        let endpointsSortDir = 'desc';
+        let currentEndpointPath = null;
+        let currentEndpointMethod = null;
+
+        function getErrorRateSeverityClass(rate) {
+            if (rate <= 0.01) return 'severity-healthy';
+            if (rate <= 0.05) return 'severity-warning';
+            return 'severity-critical';
+        }
+
+        async function fetchAllEndpointsData(filters) {
+            const query = {
+                measures: [
+                    "RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount",
+                    "RequestMetricsMinute.errorRate", "RequestMetricsMinute.p50Latency",
+                    "RequestMetricsMinute.p95Latency", "RequestMetricsMinute.p99Latency"
+                ],
+                dimensions: ["RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"],
+                order: { "RequestMetricsMinute.requestCount": "desc" },
+                filters: filters,
+                limit: 500
+            };
+            const response = await fetch(CUBE_API_URL, {
+                method: "POST", headers: cubeHeaders(),
+                body: JSON.stringify({ query: query })
+            });
+            if (!response.ok) {
+                if (response.status === 400) return [];
+                throw new Error("Cube API returned " + response.status);
+            }
+            const result = await response.json();
+            return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
+        }
+
+        function renderAllEndpointsTable(data) {
+            allEndpointsData = data;
+            const body = document.getElementById('all-endpoints-body');
+            body.innerHTML = '';
+            const countLabel = document.getElementById('endpoints-count-label');
+            countLabel.textContent = data.length + ' endpoint' + (data.length !== 1 ? 's' : '') + ' found';
+
+            const searchTerm = (document.getElementById('endpointSearch').value || '').toLowerCase();
+            let filtered = data;
+            if (searchTerm) {
+                filtered = data.filter(row => {
+                    const path = (row["RequestMetricsMinute.pathTemplate"] || '').toLowerCase();
+                    const method = (row["RequestMetricsMinute.method"] || '').toLowerCase();
+                    return path.includes(searchTerm) || method.includes(searchTerm);
+                });
+                countLabel.textContent = filtered.length + ' of ' + data.length + ' endpoints';
+            }
+
+            const sortKeyMap = {
+                path: "RequestMetricsMinute.pathTemplate", method: "RequestMetricsMinute.method",
+                requests: "RequestMetricsMinute.requestCount", errors: "RequestMetricsMinute.errorCount",
+                errorRate: "RequestMetricsMinute.errorRate", p50: "RequestMetricsMinute.p50Latency",
+                p95: "RequestMetricsMinute.p95Latency", p99: "RequestMetricsMinute.p99Latency"
+            };
+            const sortKey = sortKeyMap[endpointsSortColumn] || "RequestMetricsMinute.requestCount";
+
+            filtered.sort((a, b) => {
+                let va = a[sortKey], vb = b[sortKey];
+                if (typeof va === 'string' && typeof vb === 'string') {
+                    return endpointsSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+                }
+                va = parseFloat(va) || 0; vb = parseFloat(vb) || 0;
+                return endpointsSortDir === 'asc' ? va - vb : vb - va;
+            });
+
+            document.querySelectorAll('#all-endpoints-table .sortable-header').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.sort === endpointsSortColumn) {
+                    th.classList.add(endpointsSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+                }
+            });
+
+            filtered.forEach(row => {
+                const tr = document.createElement('tr');
+                const errorRate = parseFloat(row["RequestMetricsMinute.errorRate"]) || 0;
+                const sevClass = getErrorRateSeverityClass(errorRate);
+                tr.innerHTML = '<td><a href="#" class="ep-path-link">' + escapeHtml(row["RequestMetricsMinute.pathTemplate"]) + '</a></td>'
+                    + '<td><code>' + escapeHtml(row["RequestMetricsMinute.method"]) + '</code></td>'
+                    + '<td>' + Number(row["RequestMetricsMinute.requestCount"] || 0).toLocaleString() + '</td>'
+                    + '<td>' + Number(row["RequestMetricsMinute.errorCount"] || 0).toLocaleString() + '</td>'
+                    + '<td><span class="' + sevClass + ' severity-badge">' + (errorRate * 100).toFixed(2) + '%</span></td>'
+                    + '<td>' + Number(row["RequestMetricsMinute.p50Latency"] || 0).toFixed(0) + '</td>'
+                    + '<td>' + Number(row["RequestMetricsMinute.p95Latency"] || 0).toFixed(0) + '</td>'
+                    + '<td>' + Number(row["RequestMetricsMinute.p99Latency"] || 0).toFixed(0) + '</td>';
+                tr.querySelector('.ep-path-link').dataset.path = row["RequestMetricsMinute.pathTemplate"];
+                tr.querySelector('.ep-path-link').dataset.method = row["RequestMetricsMinute.method"] || '';
+                body.appendChild(tr);
+            });
+
+            document.querySelectorAll('.ep-path-link').forEach(link => {
+                link.onclick = (e) => {
+                    e.preventDefault();
+                    showEndpointDetail(e.target.dataset.path, e.target.dataset.method);
+                };
+            });
+        }
+
+        function renderEndpointSummary(data) {
+            const container = document.getElementById('endpoint-summary');
+            const errorRate = parseFloat(data["RequestMetricsMinute.errorRate"]) || 0;
+            const sevClass = getErrorRateSeverityClass(errorRate);
+            container.innerHTML = '<div class="metric-card"><div class="metric-value">'
+                + Number(data["RequestMetricsMinute.requestCount"] || 0).toLocaleString()
+                + '</div><div class="metric-label">Total Requests</div></div>'
+                + '<div class="metric-card"><div class="metric-value"><span class="' + sevClass + ' severity-badge">'
+                + (errorRate * 100).toFixed(2) + '%</span></div><div class="metric-label">Error Rate</div></div>'
+                + '<div class="metric-card"><div class="metric-value">'
+                + Number(data["RequestMetricsMinute.p50Latency"] || 0).toFixed(0)
+                + ' ms</div><div class="metric-label">P50 Latency</div></div>'
+                + '<div class="metric-card"><div class="metric-value">'
+                + Number(data["RequestMetricsMinute.p95Latency"] || 0).toFixed(0)
+                + ' ms</div><div class="metric-label">P95 Latency</div></div>'
+                + '<div class="metric-card"><div class="metric-value">'
+                + Number(data["RequestMetricsMinute.p99Latency"] || 0).toFixed(0)
+                + ' ms</div><div class="metric-label">P99 Latency</div></div>';
+        }
+
+        function renderLatencyMultiChart(p50Data, p95Data, p99Data) {
+            const ctx = document.getElementById('epLatencyChart').getContext('2d');
+            const refData = p95Data.length ? p95Data : p50Data;
+            const timeKey = refData.length > 0 && ("RequestMetricsMinute.bucketStart.hour" in refData[0])
+                ? "RequestMetricsMinute.bucketStart.hour" : "RequestMetricsMinute.bucketStart";
+            const labels = refData.map(d => {
+                const v = d[timeKey] || "";
+                return v.length >= 16 ? v.substring(11, 16) : v;
+            });
+            const datasets = [
+                { label: 'P50', data: p50Data.map(d => d["RequestMetricsMinute.p50Latency"]),
+                  borderColor: '#22c55e', backgroundColor: 'transparent', fill: false, tension: 0.4,
+                  pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5 },
+                { label: 'P95', data: p95Data.map(d => d["RequestMetricsMinute.p95Latency"]),
+                  borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)', fill: true, tension: 0.4,
+                  pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 },
+                { label: 'P99', data: p99Data.map(d => d["RequestMetricsMinute.p99Latency"]),
+                  borderColor: '#ef4444', backgroundColor: 'transparent', fill: false, tension: 0.4,
+                  pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5, borderDash: [4, 4] }
+            ];
+            if (charts['epLatency']) {
+                charts['epLatency'].data.labels = labels;
+                charts['epLatency'].data.datasets = datasets;
+                charts['epLatency'].update();
+            } else {
+                charts['epLatency'] = new Chart(ctx, {
+                    type: 'line', data: { labels, datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            x: { display: true, grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+                            y: { beginAtZero: true, border: { display: false }, title: { display: true, text: 'ms' } }
+                        },
+                        plugins: { legend: { display: true, position: 'top', align: 'end' } }
+                    }
+                });
+            }
+        }
+
+        async function showEndpointDetail(path, method) {
+            currentEndpointPath = path;
+            currentEndpointMethod = method;
+
+            document.getElementById('endpoints-list').style.display = 'none';
+            document.getElementById('endpoint-detail').style.display = 'block';
+            document.getElementById('endpointDetailTitle').textContent = (method ? method + ' ' : '') + path;
+
+            const filters = buildCurrentFilters();
+            filters.push({ member: "RequestMetricsMinute.pathTemplate", operator: "equals", values: [path] });
+            if (method) {
+                filters.push({ member: "RequestMetricsMinute.method", operator: "equals", values: [method] });
+            }
+
+            const compare = document.getElementById('compareFilter').value;
+
+            ['loading-ep-error', 'loading-ep-latency', 'loading-ep-throughput'].forEach(id => {
+                document.getElementById(id).style.display = 'flex';
+            });
+
+            try {
+                // Summary aggregate
+                const summaryQuery = {
+                    measures: ["RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount",
+                        "RequestMetricsMinute.errorRate", "RequestMetricsMinute.p50Latency",
+                        "RequestMetricsMinute.p95Latency", "RequestMetricsMinute.p99Latency"],
+                    filters: filters
+                };
+                const summaryResp = await fetch(CUBE_API_URL, {
+                    method: "POST", headers: cubeHeaders(),
+                    body: JSON.stringify({ query: summaryQuery })
+                });
+                const summaryResult = await summaryResp.json();
+                const sd = (summaryResult.results && summaryResult.results[0])
+                    ? summaryResult.results[0].data[0] : (summaryResult.data && summaryResult.data[0]) || {};
+                renderEndpointSummary(sd);
+
+                // Time-series in parallel
+                const [errorData, p50Data, p95Data, p99Data, tpData] = await Promise.all([
+                    fetchCubeData(["RequestMetricsMinute.errorRate"], filters, compare || null),
+                    fetchCubeData(["RequestMetricsMinute.p50Latency"], filters, null),
+                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters, null),
+                    fetchCubeData(["RequestMetricsMinute.p99Latency"], filters, null),
+                    fetchCubeData(["RequestMetricsMinute.requestCount"], filters, compare || null)
+                ]);
+
+                const processSeries = (data, measure) => {
+                    const timeKey = data.length > 0 && ("RequestMetricsMinute.bucketStart.hour" in data[0])
+                        ? "RequestMetricsMinute.bucketStart.hour" : "RequestMetricsMinute.bucketStart";
+                    if (compare) {
+                        const current = data.filter(d => d._comparison === "Current");
+                        const previous = data.filter(d => d._comparison === "Previous");
+                        return {
+                            labels: current.map(d => {
+                                const v = d[timeKey] || "";
+                                return v.length >= 16 ? v.substring(11, 16) : v;
+                            }),
+                            values: { current: current.map(d => d[measure]), previous: previous.map(d => d[measure]) }
+                        };
+                    }
+                    return {
+                        labels: data.map(d => {
+                            const v = d[timeKey] || "";
+                            return v.length >= 16 ? v.substring(11, 16) : v;
+                        }),
+                        values: data.map(d => d[measure])
+                    };
+                };
+
+                const errRes = processSeries(errorData, "RequestMetricsMinute.errorRate");
+                updateChart('epErrorRate', 'epErrorRateChart', 'Error Rate', errRes.labels, errRes.values, {
+                    borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', yMax: 1.0, yTitle: 'Rate'
+                });
+
+                renderLatencyMultiChart(p50Data, p95Data, p99Data);
+
+                const tpRes = processSeries(tpData, "RequestMetricsMinute.requestCount");
+                updateChart('epThroughput', 'epThroughputChart', 'Requests', tpRes.labels, tpRes.values, {
+                    borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)', yTitle: 'count'
+                });
+            } catch (err) {
+                console.error("Endpoint detail fetch failed:", err);
+            } finally {
+                ['loading-ep-error', 'loading-ep-latency', 'loading-ep-throughput'].forEach(id => {
+                    document.getElementById(id).style.display = 'none';
+                });
+            }
+
+            saveFiltersToHash();
+        }
+
+        async function updateEndpointsPage() {
+            if (currentPage !== 'endpoints') return;
+            document.getElementById('loading-all-endpoints').style.display = 'flex';
+            try {
+                const filters = buildCurrentFilters();
+                const data = await fetchAllEndpointsData(filters);
+                renderAllEndpointsTable(data);
+            } catch (err) {
+                console.error("Endpoints page update failed:", err);
+            } finally {
+                document.getElementById('loading-all-endpoints').style.display = 'none';
+            }
+        }
 
         // --- SECURITY: HTML escape helper to prevent XSS ---
         function escapeHtml(str) {
@@ -1142,17 +2031,66 @@
             return h;
         }
 
-        async function fetchCubeData(measures, filters = [], compareDateRange = null) {
-            const query = {
-                measures: measures,
-                dimensions: ["RequestMetricsMinute.bucketStart"],
-                order: { "RequestMetricsMinute.bucketStart": "asc" },
-                filters: filters
+        async function fetchCubeData(measures, filters = [], compareType = null) {
+            // Separate bucketStart date filters from other filters
+            const otherFilters = [];
+            let dateFrom = null, dateTo = null;
+            filters.forEach(f => {
+                if (f.member === "RequestMetricsMinute.bucketStart") {
+                    if (f.operator === "gte") dateFrom = f.values[0];
+                    else if (f.operator === "lte") dateTo = f.values[0];
+                } else {
+                    otherFilters.push(f);
+                }
+            });
+
+            // Build timeDimensions entry
+            const timeDim = {
+                dimension: "RequestMetricsMinute.bucketStart",
+                granularity: "hour"
             };
 
-            if (compareDateRange) {
-                query.compareDateRange = compareDateRange;
+            const shiftDate = (dateStr, days) => {
+                const parts = dateStr.slice(0, 10).split('-');
+                const d = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+                d.setDate(d.getDate() - days);
+                const p = n => String(n).padStart(2, '0');
+                return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+            };
+
+            if (compareType) {
+                const shiftDays = compareType === "day" ? 1 : 7;
+                let curFrom, curTo;
+
+                if (dateFrom) {
+                    curFrom = dateFrom.slice(0, 10);
+                    curTo = (dateTo || dateFrom).slice(0, 10);
+                } else {
+                    // Defaults when no date range selected
+                    const now = new Date();
+                    const p = n => String(n).padStart(2, '0');
+                    const fmtD = d => d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+                    curTo = fmtD(now);
+                    const from = new Date(now);
+                    from.setDate(from.getDate() - (compareType === "day" ? 0 : 6));
+                    curFrom = fmtD(from);
+                }
+
+                timeDim.compareDateRange = [
+                    [curFrom, curTo],
+                    [shiftDate(curFrom, shiftDays), shiftDate(curTo, shiftDays)]
+                ];
+            } else if (dateFrom) {
+                timeDim.dateRange = [dateFrom.slice(0, 10), (dateTo || dateFrom).slice(0, 10)];
             }
+            // No dates + no comparison → omit dateRange so Cube returns all data
+
+            const query = {
+                measures: measures,
+                timeDimensions: [timeDim],
+                order: { "RequestMetricsMinute.bucketStart": "asc" },
+                filters: otherFilters
+            };
 
             const response = await fetch(CUBE_API_URL, {
                 method: "POST",
@@ -1171,6 +2109,18 @@
             }
 
             const result = await response.json();
+
+            // compareDateRange returns multiple result sets
+            if (compareType && result.results && result.results.length > 1) {
+                const currentData = (result.results[0].data || []).map(
+                    d => Object.assign({}, d, { _comparison: "Current" })
+                );
+                const previousData = (result.results[1].data || []).map(
+                    d => Object.assign({}, d, { _comparison: "Previous" })
+                );
+                return currentData.concat(previousData);
+            }
+
             let data = [];
             if (result.results && result.results[0]) data = result.results[0].data;
             else if (result.data) data = result.data;
@@ -1255,8 +2205,11 @@
             document.getElementById('serviceFilter').value = '';
             document.getElementById('dateFrom').valueAsDate = new Date();
             document.getElementById('dateTo').valueAsDate = new Date();
+            currentDrilldownPath = null;
+            document.getElementById('default-header').style.display = 'block';
+            document.getElementById('drilldown-nav').style.display = 'none';
             saveFiltersToHash();
-            updateDashboard();
+            onFilterChange();
         }
 
         function updateFreshnessDisplay() {
@@ -1307,8 +2260,13 @@
                 // Single day (from only, or from == to)
                 filters.push({
                     member: "RequestMetricsMinute.bucketStart",
-                    operator: "contains",
-                    values: [dateFrom]
+                    operator: "gte",
+                    values: [dateFrom + "T00:00:00"]
+                });
+                filters.push({
+                    member: "RequestMetricsMinute.bucketStart",
+                    operator: "lte",
+                    values: [dateFrom + "T23:59:59"]
                 });
             }
             if (currentDrilldownPath) {
@@ -1319,27 +2277,23 @@
                 });
             }
 
-            let compareDateRange = null;
-            if (compare === 'day') compareDateRange = ['1 day ago', 'today'];
-            if (compare === 'week') compareDateRange = ['7 days ago', 'today'];
-
             // Save filter state to URL hash
             saveFiltersToHash();
 
-            // Show loading states if first load
-            if (!charts['errorRate']) document.getElementById('loading-error').style.display = 'flex';
-            if (!charts['latency']) document.getElementById('loading-latency').style.display = 'flex';
-            if (!charts['throughput']) document.getElementById('loading-throughput').style.display = 'flex';
-            document.getElementById('loading-endpoints').style.display = 'flex';
+            // Show skeleton states if first load
+            if (!charts['errorRate']) document.getElementById('card-error').classList.remove('loaded');
+            if (!charts['latency']) document.getElementById('card-latency').classList.remove('loaded');
+            if (!charts['throughput']) document.getElementById('card-throughput').classList.remove('loaded');
+            document.getElementById('card-endpoints').classList.remove('loaded');
 
             const lastUpdatedEl = document.getElementById('lastUpdated');
             lastUpdatedEl.textContent = 'Fetching data...';
 
             try {
                 const [errorData, latencyData, throughputData, endpointData] = await Promise.all([
-                    fetchCubeData(["RequestMetricsMinute.errorRate"], filters, compareDateRange),
-                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters, compareDateRange),
-                    fetchCubeData(["RequestMetricsMinute.requestCount"], filters, compareDateRange),
+                    fetchCubeData(["RequestMetricsMinute.errorRate"], filters, compare || null),
+                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters, compare || null),
+                    fetchCubeData(["RequestMetricsMinute.requestCount"], filters, compare || null),
                     fetchEndPointsData(filters)
                 ]);
 
@@ -1359,11 +2313,16 @@
                 renderEndpointsTable(endpointData);
 
                 const processSeries = (data, measure) => {
-                    if (compareDateRange) {
-                        const current = data.filter(d => d["RequestMetricsMinute.compareDateRange"] === "Current");
-                        const previous = data.filter(d => d["RequestMetricsMinute.compareDateRange"] === "Previous");
+                    const timeKey = data.length > 0 && ("RequestMetricsMinute.bucketStart.hour" in data[0])
+                        ? "RequestMetricsMinute.bucketStart.hour" : "RequestMetricsMinute.bucketStart";
+                    if (compare) {
+                        const current = data.filter(d => d._comparison === "Current");
+                        const previous = data.filter(d => d._comparison === "Previous");
                         return {
-                            labels: current.map(d => d["RequestMetricsMinute.bucketStart"].split(' ')[1]),
+                            labels: current.map(d => {
+                                const v = d[timeKey] || "";
+                                return v.includes("T") ? v.substring(11, 16) : (v.split(' ')[1] || v);
+                            }),
                             values: {
                                 current: current.map(d => d[measure]),
                                 previous: previous.map(d => d[measure])
@@ -1371,7 +2330,7 @@
                         };
                     }
                     return {
-                        labels: data.map(d => d["RequestMetricsMinute.bucketStart"]),
+                        labels: data.map(d => d[timeKey] || ""),
                         values: data.map(d => d[measure])
                     };
                 };
@@ -1412,10 +2371,10 @@
                 setTimeout(updateDashboard, backoffMs);
                 updateFreshnessDisplay();
             } finally {
-                document.getElementById('loading-error').style.display = 'none';
-                document.getElementById('loading-latency').style.display = 'none';
-                document.getElementById('loading-throughput').style.display = 'none';
-                document.getElementById('loading-endpoints').style.display = 'none';
+                document.getElementById('card-error').classList.add('loaded');
+                document.getElementById('card-latency').classList.add('loaded');
+                document.getElementById('card-throughput').classList.add('loaded');
+                document.getElementById('card-endpoints').classList.add('loaded');
             }
         }
 
@@ -1508,6 +2467,9 @@
             if (dateTo && dateTo !== dateFrom) params.set('to', dateTo);
             if (compare) params.set('compare', compare);
             if (currentDrilldownPath) params.set('path', currentDrilldownPath);
+            if (currentPage && currentPage !== 'overview') params.set('page', currentPage);
+            if (currentEndpointPath) params.set('endpoint', currentEndpointPath);
+            if (currentEndpointMethod) params.set('epmethod', currentEndpointMethod);
             const hash = params.toString();
             if (hash) {
                 history.replaceState(null, '', '#' + hash);
@@ -1532,6 +2494,107 @@
                 document.getElementById('drilldown-nav').style.display = 'flex';
                 document.getElementById('currentServiceTitle').textContent = currentDrilldownPath;
             }
+            if (params.has('page')) {
+                const page = params.get('page');
+                if (page === 'endpoints') {
+                    currentPage = 'endpoints';
+                    if (params.has('endpoint')) {
+                        currentEndpointPath = params.get('endpoint');
+                        currentEndpointMethod = params.get('epmethod') || '';
+                    }
+                } else if (page === 'alerts') {
+                    currentPage = 'alerts';
+                } else if (page === 'ingestion') {
+                    currentPage = 'ingestion';
+                }
+            }
+        }
+
+        // --- INGESTION / DLQ ---
+        async function loadIngestionPage() {
+            await refreshDLQ();
+        }
+
+        async function refreshDLQ() {
+            const tbody = document.getElementById('dlq-table-body');
+            const emptyEl = document.getElementById('dlq-empty');
+            const tableEl = document.getElementById('dlq-table');
+            const countLabel = document.getElementById('dlq-count-label');
+
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;">Loading...</td></tr>';
+            emptyEl.style.display = 'none';
+            tableEl.style.display = '';
+
+            try {
+                const data = await gatewayFetch('/api/gateway/dlq?limit=100');
+
+                if (!data.entries || data.entries.length === 0) {
+                    tbody.innerHTML = '';
+                    tableEl.style.display = 'none';
+                    emptyEl.style.display = '';
+                    countLabel.textContent = 'No rejected facts';
+                    return;
+                }
+
+                countLabel.textContent = data.entries.length + ' rejected fact' + (data.entries.length === 1 ? '' : 's');
+                renderDLQTable(data.entries);
+            } catch (err) {
+                console.error('DLQ fetch failed:', err);
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-secondary);">Failed to load DLQ: ' + err.message + '</td></tr>';
+            }
+        }
+
+        function renderDLQTable(entries) {
+            const tbody = document.getElementById('dlq-table-body');
+            tbody.innerHTML = '';
+
+            entries.forEach((entry, idx) => {
+                const tr = document.createElement('tr');
+                const ts = (entry.timestamp || '').substring(0, 19).replace('T', ' ');
+                const rawStr = typeof entry.raw_json === 'string'
+                    ? entry.raw_json : JSON.stringify(entry.raw_json);
+                const truncRaw = rawStr.length > 100 ? rawStr.substring(0, 97) + '...' : rawStr;
+
+                tr.innerHTML = '<td style="white-space:nowrap;font-size:0.85rem;">' + escapeHtml(ts) + '</td>'
+                    + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;font-size:0.85rem;" title="' + escapeAttr(entry.error) + '">' + escapeHtml(entry.error) + '</td>'
+                    + '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;font-family:monospace;font-size:0.8rem;" title="' + escapeAttr(rawStr) + '">' + escapeHtml(truncRaw) + '</td>'
+                    + '<td><button class="export-btn" onclick="replayDLQEntry(' + idx + ')" title="Replay this fact">&#x21ba; Replay</button></td>';
+                tbody.appendChild(tr);
+            });
+
+            // Store for replay
+            window._dlqEntries = entries;
+        }
+
+        async function replayDLQEntry(idx) {
+            const entry = window._dlqEntries && window._dlqEntries[idx];
+            if (!entry) return;
+
+            try {
+                const result = await gatewayFetch('/api/gateway/dlq/replay', {
+                    method: 'POST',
+                    body: JSON.stringify({ entries: [{ raw_json: entry.raw_json }] })
+                });
+
+                if (result.accepted > 0) {
+                    alert('Replay successful: ' + result.accepted + ' fact(s) accepted.');
+                    refreshDLQ();
+                } else {
+                    alert('Replay result: ' + (result.rejected || 0) + ' rejected. ' + (result.errors ? result.errors.join('; ') : ''));
+                }
+            } catch (err) {
+                alert('Replay failed: ' + err.message);
+            }
+        }
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.appendChild(document.createTextNode(s || ''));
+            return div.innerHTML;
+        }
+
+        function escapeAttr(s) {
+            return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
 
         // --- INIT ---
@@ -1543,9 +2606,24 @@
             fetchServices()
                 .then(() => {
                     loadFiltersFromHash(); // Re-apply after services list is populated
-                    updateDashboard();
+
+                    // Restore page from hash state
+                    if (currentPage === 'endpoints') {
+                        switchPage('endpoints');
+                        if (currentEndpointPath) {
+                            showEndpointDetail(currentEndpointPath, currentEndpointMethod);
+                        }
+                    } else if (currentPage === 'alerts') {
+                        switchPage('alerts');
+                    } else {
+                        updateDashboard();
+                    }
+
                     // Start auto-refresh only after dashboard is initialized
-                    setInterval(updateDashboard, REFRESH_INTERVAL_MS);
+                    setInterval(() => {
+                        if (currentPage === 'overview') updateDashboard();
+                        else if (currentPage === 'endpoints' && !currentEndpointPath) updateEndpointsPage();
+                    }, REFRESH_INTERVAL_MS);
                     setInterval(updateFreshnessDisplay, 30000);
                 })
                 .catch(() => {
@@ -1574,11 +2652,22 @@
             }
         })();
 
-        // Listeners
-        document.getElementById('serviceFilter').addEventListener('change', updateDashboard);
-        document.getElementById('dateFrom').addEventListener('change', updateDashboard);
-        document.getElementById('dateTo').addEventListener('change', updateDashboard);
-        document.getElementById('compareFilter').addEventListener('change', updateDashboard);
+        // Listeners — dispatch to active page
+        function onFilterChange() {
+            if (currentPage === 'endpoints') {
+                if (currentEndpointPath) {
+                    showEndpointDetail(currentEndpointPath, currentEndpointMethod);
+                } else {
+                    updateEndpointsPage();
+                }
+            } else {
+                updateDashboard();
+            }
+        }
+        document.getElementById('serviceFilter').addEventListener('change', onFilterChange);
+        document.getElementById('dateFrom').addEventListener('change', onFilterChange);
+        document.getElementById('dateTo').addEventListener('change', onFilterChange);
+        document.getElementById('compareFilter').addEventListener('change', onFilterChange);
 
         async function fetchEndPointsData(filters) {
             const query = {
@@ -1653,82 +2742,357 @@
             updateDashboard();
         };
 
-        // --- SERVICE EVENTS ---
-        async function fetchServiceEvents(filters) {
-            const eventFilters = [];
+        // --- SERVICE EVENTS TIMELINE ---
+        const EVENT_TYPE_COLORS = {
+            deploy_started: '#22c55e',
+            deploy_completed: '#16a34a',
+            restart: '#f97316',
+            scale_up: '#3b82f6',
+            scale_down: '#6366f1',
+            health_check_failed: '#ef4444'
+        };
+        const DEFAULT_EVENT_COLOR = '#94a3b8';
+
+        function getEventColor(eventType) {
+            return EVENT_TYPE_COLORS[eventType] || DEFAULT_EVENT_COLOR;
+        }
+
+        function getEventBadgeClass(eventType) {
+            if (eventType.includes('deploy')) return 'badge-success';
+            if (eventType.includes('fail') || eventType === 'restart') return 'badge-error';
+            return 'badge-info';
+        }
+
+        let eventsLogData = [];
+        let eventsLogOffset = 0;
+        const EVENTS_PAGE_SIZE = 25;
+        let deployAnnotations = []; // timestamps for chart annotations
+
+        // Build event-specific filters (uses ServiceEvents model with time dimension)
+        function buildEventFilters() {
+            const filters = [];
             const service = document.getElementById('serviceFilter').value;
-            if (service) {
-                eventFilters.push({
-                    member: "ServiceEventsDaily.service",
-                    operator: "equals",
-                    values: [service]
-                });
-            }
             const dateFrom = document.getElementById('dateFrom').value;
             const dateTo = document.getElementById('dateTo').value;
-            if (dateFrom && dateTo && dateFrom !== dateTo) {
-                eventFilters.push({
-                    member: "ServiceEventsDaily.eventDay",
-                    operator: "gte",
-                    values: [dateFrom]
-                });
-                eventFilters.push({
-                    member: "ServiceEventsDaily.eventDay",
-                    operator: "lte",
-                    values: [dateTo]
-                });
-            } else if (dateFrom) {
-                eventFilters.push({
-                    member: "ServiceEventsDaily.eventDay",
-                    operator: "equals",
-                    values: [dateFrom]
-                });
+            if (service) {
+                filters.push({ member: "ServiceEvents.service", operator: "equals", values: [service] });
             }
+            if (dateFrom && dateTo && dateFrom !== dateTo) {
+                filters.push({ member: "ServiceEvents.eventTime", operator: "gte", values: [dateFrom + "T00:00:00"] });
+                filters.push({ member: "ServiceEvents.eventTime", operator: "lte", values: [dateTo + "T23:59:59"] });
+            } else if (dateFrom) {
+                filters.push({ member: "ServiceEvents.eventTime", operator: "gte", values: [dateFrom + "T00:00:00"] });
+                filters.push({ member: "ServiceEvents.eventTime", operator: "lte", values: [dateFrom + "T23:59:59"] });
+            }
+            return filters;
+        }
 
+        // Fetch timeline data: event counts grouped by hour and event type
+        async function fetchEventsTimeline() {
+            const filters = buildEventFilters();
             const query = {
-                measures: ["ServiceEventsDaily.eventCount"],
-                dimensions: ["ServiceEventsDaily.service", "ServiceEventsDaily.eventType"],
-                order: { "ServiceEventsDaily.eventCount": "desc" },
-                filters: eventFilters,
-                limit: 20
+                measures: ["ServiceEvents.count"],
+                timeDimensions: [{
+                    dimension: "ServiceEvents.eventTime",
+                    granularity: "hour"
+                }],
+                dimensions: ["ServiceEvents.eventType"],
+                order: { "ServiceEvents.eventTime": "asc" },
+                filters: filters,
+                limit: 5000
             };
-
             const response = await fetch(CUBE_API_URL, {
                 method: "POST",
                 headers: cubeHeaders(),
                 body: JSON.stringify({ query: query })
             });
-
             if (!response.ok) return [];
             const result = await response.json();
             return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
         }
 
-        function renderServiceEvents(data) {
-            const table = document.getElementById('events-table');
+        // Fetch individual events for the event log
+        async function fetchEventLog(offset, limit, eventTypeFilter) {
+            const filters = buildEventFilters();
+            if (eventTypeFilter) {
+                filters.push({ member: "ServiceEvents.eventType", operator: "equals", values: [eventTypeFilter] });
+            }
+            const query = {
+                dimensions: [
+                    "ServiceEvents.eventTime", "ServiceEvents.service",
+                    "ServiceEvents.eventType", "ServiceEvents.entityId",
+                    "ServiceEvents.message"
+                ],
+                order: { "ServiceEvents.eventTime": "desc" },
+                filters: filters,
+                offset: offset,
+                limit: limit
+            };
+            const response = await fetch(CUBE_API_URL, {
+                method: "POST",
+                headers: cubeHeaders(),
+                body: JSON.stringify({ query: query })
+            });
+            if (!response.ok) return [];
+            const result = await response.json();
+            return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
+        }
+
+        // Fetch deploy events for chart annotations
+        async function fetchDeployAnnotations() {
+            const filters = buildEventFilters();
+            filters.push({ member: "ServiceEvents.eventType", operator: "contains", values: ["deploy"] });
+            const query = {
+                dimensions: ["ServiceEvents.eventTime", "ServiceEvents.service", "ServiceEvents.eventType"],
+                order: { "ServiceEvents.eventTime": "asc" },
+                filters: filters,
+                limit: 100
+            };
+            const response = await fetch(CUBE_API_URL, {
+                method: "POST",
+                headers: cubeHeaders(),
+                body: JSON.stringify({ query: query })
+            });
+            if (!response.ok) return [];
+            const result = await response.json();
+            return (result.results && result.results[0]) ? result.results[0].data : (result.data || []);
+        }
+
+        // Render stacked bar chart for events timeline
+        function renderEventsTimeline(data) {
+            const wrapper = document.getElementById('events-timeline-wrapper');
             const empty = document.getElementById('events-empty');
-            const body = document.getElementById('events-body');
-            body.innerHTML = '';
 
             if (!data || data.length === 0) {
-                table.style.display = 'none';
+                wrapper.style.display = 'none';
                 empty.style.display = 'block';
                 return;
             }
-
-            table.style.display = 'table';
+            wrapper.style.display = 'block';
             empty.style.display = 'none';
+
+            // Group data by time bucket, collect all event types
+            const buckets = {};
+            const eventTypes = new Set();
+            data.forEach(row => {
+                const time = row["ServiceEvents.eventTime.hour"] || row["ServiceEvents.eventTime"];
+                const type = row["ServiceEvents.eventType"];
+                const count = parseInt(row["ServiceEvents.count"], 10) || 0;
+                eventTypes.add(type);
+                if (!buckets[time]) buckets[time] = {};
+                buckets[time][type] = (buckets[time][type] || 0) + count;
+            });
+
+            const labels = Object.keys(buckets).sort();
+            const displayLabels = labels.map(l => {
+                const d = new Date(l);
+                return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            });
+
+            const datasets = Array.from(eventTypes).sort().map(type => ({
+                label: type.replace(/_/g, ' '),
+                data: labels.map(l => buckets[l][type] || 0),
+                backgroundColor: getEventColor(type),
+                borderRadius: 3
+            }));
+
+            const ctx = document.getElementById('eventsTimelineChart').getContext('2d');
+
+            if (charts['eventsTimeline']) {
+                charts['eventsTimeline'].data.labels = displayLabels;
+                charts['eventsTimeline'].data.datasets = datasets;
+                charts['eventsTimeline'].update();
+            } else {
+                charts['eventsTimeline'] = new Chart(ctx, {
+                    type: 'bar',
+                    data: { labels: displayLabels, datasets: datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 12 } },
+                            y: { stacked: true, beginAtZero: true, border: { display: false }, title: { display: true, text: 'Events' } }
+                        },
+                        plugins: {
+                            legend: { display: true, position: 'top', align: 'end', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } }
+                        }
+                    }
+                });
+            }
+        }
+
+        // Render event log table
+        function renderEventLog(data, append) {
+            const table = document.getElementById('events-table');
+            const body = document.getElementById('events-body');
+            const logSection = document.getElementById('events-log-section');
+            const countLabel = document.getElementById('events-log-count');
+            const loadMore = document.getElementById('events-load-more');
+
+            if (!append) body.innerHTML = '';
+
+            if (!data || data.length === 0) {
+                if (!append) {
+                    logSection.style.display = 'none';
+                }
+                loadMore.style.display = 'none';
+                return;
+            }
+
+            logSection.style.display = 'block';
 
             data.forEach(row => {
                 const tr = document.createElement('tr');
-                const eventType = row["ServiceEventsDaily.eventType"] || "unknown";
-                const badgeClass = eventType.includes("deploy") ? "badge-success" : "badge-error";
+                const eventType = row["ServiceEvents.eventType"] || "unknown";
+                const badgeClass = getEventBadgeClass(eventType);
+                const eventTime = new Date(row["ServiceEvents.eventTime"]);
+                const timeStr = eventTime.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 tr.innerHTML = `
-                    <td><strong>${escapeHtml(row["ServiceEventsDaily.service"])}</strong></td>
+                    <td style="white-space: nowrap; font-size: 0.8rem; color: var(--text-secondary);">${timeStr}</td>
+                    <td><strong>${escapeHtml(row["ServiceEvents.service"] || '')}</strong></td>
                     <td><span class="${badgeClass}">${escapeHtml(eventType)}</span></td>
-                    <td>${escapeHtml(row["ServiceEventsDaily.eventCount"])}</td>
+                    <td style="font-size: 0.85rem;">${escapeHtml(row["ServiceEvents.entityId"] || '-')}</td>
+                    <td style="font-size: 0.85rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(row["ServiceEvents.message"] || '')}">${escapeHtml(row["ServiceEvents.message"] || '-')}</td>
                 `;
                 body.appendChild(tr);
+            });
+
+            const totalRows = body.children.length;
+            countLabel.textContent = totalRows + ' event' + (totalRows !== 1 ? 's' : '') + ' shown';
+
+            // Show load more if we got a full page
+            loadMore.style.display = data.length >= EVENTS_PAGE_SIZE ? 'block' : 'none';
+        }
+
+        // Populate event type filter dropdown from observed data
+        function populateEventTypeFilter(data) {
+            const select = document.getElementById('eventTypeFilter');
+            const current = select.value;
+            const types = new Set();
+            data.forEach(row => {
+                const t = row["ServiceEvents.eventType"];
+                if (t) types.add(t);
+            });
+            select.innerHTML = '<option value="">All Types</option>';
+            Array.from(types).sort().forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t;
+                opt.textContent = t.replace(/_/g, ' ');
+                select.appendChild(opt);
+            });
+            if (current) select.value = current;
+        }
+
+        // Chart.js plugin for deploy annotations (vertical lines on metric charts)
+        const deployAnnotationPlugin = {
+            id: 'deployAnnotations',
+            afterDraw(chart) {
+                const events = chart.options.plugins.deployAnnotations?.events;
+                if (!events || events.length === 0) return;
+
+                const ctx = chart.ctx;
+                const xScale = chart.scales.x;
+                const yScale = chart.scales.y;
+                const labels = chart.data.labels || [];
+
+                events.forEach(evt => {
+                    // Find closest label index for this event time
+                    const evtTime = evt.time;
+                    let closestIdx = -1;
+                    let closestDist = Infinity;
+                    labels.forEach((label, idx) => {
+                        // Labels may be time strings; try to match by substring
+                        if (label && evtTime.includes(label)) {
+                            closestIdx = idx;
+                            closestDist = 0;
+                        } else if (closestIdx === -1) {
+                            // Fallback: try date parsing
+                            const labelTime = new Date(label).getTime();
+                            const evtTimeMs = new Date(evtTime).getTime();
+                            const dist = Math.abs(labelTime - evtTimeMs);
+                            if (dist < closestDist) {
+                                closestDist = dist;
+                                closestIdx = idx;
+                            }
+                        }
+                    });
+
+                    if (closestIdx < 0) return;
+
+                    const x = xScale.getPixelForValue(closestIdx);
+                    const topY = yScale.top;
+                    const bottomY = yScale.bottom;
+
+                    // Draw vertical dashed line
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeStyle = 'rgba(34, 197, 94, 0.6)';
+                    ctx.lineWidth = 1.5;
+                    ctx.moveTo(x, topY);
+                    ctx.lineTo(x, bottomY);
+                    ctx.stroke();
+
+                    // Draw small triangle marker at top
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = '#22c55e';
+                    ctx.beginPath();
+                    ctx.moveTo(x - 5, topY);
+                    ctx.lineTo(x + 5, topY);
+                    ctx.lineTo(x, topY + 8);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.restore();
+                });
+            }
+        };
+        Chart.register(deployAnnotationPlugin);
+
+        // Full events refresh: timeline + log + annotations
+        async function refreshServiceEvents() {
+            document.getElementById('card-events').classList.remove('loaded');
+            try {
+                const [timelineData, logData, annotationData] = await Promise.all([
+                    fetchEventsTimeline(),
+                    fetchEventLog(0, EVENTS_PAGE_SIZE, document.getElementById('eventTypeFilter').value),
+                    fetchDeployAnnotations()
+                ]);
+
+                renderEventsTimeline(timelineData);
+
+                eventsLogData = logData;
+                eventsLogOffset = logData.length;
+                renderEventLog(logData, false);
+                populateEventTypeFilter(timelineData);
+
+                // Store deploy annotations for chart overlay
+                deployAnnotations = annotationData.map(row => ({
+                    time: row["ServiceEvents.eventTime"],
+                    service: row["ServiceEvents.service"],
+                    type: row["ServiceEvents.eventType"]
+                }));
+
+                // Update existing metric charts with annotation data
+                updateChartAnnotations();
+
+            } catch (err) {
+                console.warn("Service events fetch failed:", err);
+                renderEventsTimeline([]);
+                renderEventLog([], false);
+                deployAnnotations = [];
+            } finally {
+                document.getElementById('card-events').classList.add('loaded');
+            }
+        }
+
+        // Apply deploy annotations to all metric charts
+        function updateChartAnnotations() {
+            ['errorRate', 'latency', 'throughput'].forEach(key => {
+                if (charts[key]) {
+                    charts[key].options.plugins.deployAnnotations = { events: deployAnnotations };
+                    charts[key].update('none'); // Update without animation
+                }
             });
         }
 
@@ -1736,18 +3100,25 @@
         const _originalUpdateDashboard = updateDashboard;
         updateDashboard = async function() {
             await _originalUpdateDashboard();
-            // Fetch service events separately (non-blocking to main dashboard)
-            try {
-                document.getElementById('loading-events').style.display = 'flex';
-                const eventsData = await fetchServiceEvents();
-                renderServiceEvents(eventsData);
-            } catch (err) {
-                console.warn("Service events fetch failed:", err);
-                renderServiceEvents([]);
-            } finally {
-                document.getElementById('loading-events').style.display = 'none';
-            }
+            await refreshServiceEvents();
         };
+
+        // Event type filter change handler
+        document.getElementById('eventTypeFilter').addEventListener('change', async () => {
+            const typeFilter = document.getElementById('eventTypeFilter').value;
+            const logData = await fetchEventLog(0, EVENTS_PAGE_SIZE, typeFilter);
+            eventsLogData = logData;
+            eventsLogOffset = logData.length;
+            renderEventLog(logData, false);
+        });
+
+        // Load more button
+        document.getElementById('loadMoreEventsBtn').addEventListener('click', async () => {
+            const typeFilter = document.getElementById('eventTypeFilter').value;
+            const moreData = await fetchEventLog(eventsLogOffset, EVENTS_PAGE_SIZE, typeFilter);
+            eventsLogOffset += moreData.length;
+            renderEventLog(moreData, true);
+        });
 
         // Auto-refresh intervals are now started inside initDashboard() to avoid
         // firing during the auth gate.
@@ -1760,17 +3131,34 @@
             link.addEventListener('click', (e) => {
                 e.preventDefault();
                 if (link.classList.contains('disabled')) return;
-                document.querySelectorAll('.nav-link').forEach(l => {
-                    l.classList.remove('active');
-                    l.removeAttribute('aria-current');
-                });
-                link.classList.add('active');
-                link.setAttribute('aria-current', 'page');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                // Close mobile sidebar
-                document.getElementById('sidebar').classList.remove('open');
-                document.getElementById('sidebarBackdrop').classList.remove('open');
+                switchPage(link.dataset.page);
             });
+        });
+
+        // --- ENDPOINTS PAGE: sort headers, search, back button ---
+        document.querySelectorAll('#all-endpoints-table .sortable-header').forEach(th => {
+            th.addEventListener('click', () => {
+                const col = th.dataset.sort;
+                if (endpointsSortColumn === col) {
+                    endpointsSortDir = endpointsSortDir === 'asc' ? 'desc' : 'asc';
+                } else {
+                    endpointsSortColumn = col;
+                    endpointsSortDir = 'desc';
+                }
+                renderAllEndpointsTable(allEndpointsData);
+            });
+        });
+
+        document.getElementById('endpointSearch').addEventListener('input', () => {
+            renderAllEndpointsTable(allEndpointsData);
+        });
+
+        document.getElementById('backToEndpoints').addEventListener('click', () => {
+            document.getElementById('endpoint-detail').style.display = 'none';
+            document.getElementById('endpoints-list').style.display = 'block';
+            currentEndpointPath = null;
+            currentEndpointMethod = null;
+            saveFiltersToHash();
         });
 
         // --- SIDEBAR TOGGLE (mobile) ---
@@ -1782,6 +3170,778 @@
             document.getElementById('sidebar').classList.remove('open');
             document.getElementById('sidebarBackdrop').classList.remove('open');
         });
+
+        // --- THEME TOGGLE ---
+        document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+
+        // --- DATA EXPORT ---
+        function downloadBlob(filename, blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function exportTableCSV(tableId) {
+            const table = document.getElementById(tableId);
+            if (!table) return;
+            const rows = [];
+            table.querySelectorAll('tr').forEach(tr => {
+                const cells = [];
+                tr.querySelectorAll('th, td').forEach(td => {
+                    let text = td.textContent.trim().replace(/"/g, '""');
+                    if (text.includes(',') || text.includes('"') || text.includes('\n')) {
+                        text = '"' + text + '"';
+                    }
+                    cells.push(text);
+                });
+                if (cells.length > 0) rows.push(cells.join(','));
+            });
+            const csv = rows.join('\n');
+            downloadBlob(tableId + '-export.csv', new Blob([csv], { type: 'text/csv' }));
+        }
+
+        function exportChartPNG(chartKey, filename) {
+            const chart = charts[chartKey];
+            if (!chart) return;
+            const url = chart.toBase64Image('image/png', 1);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = (filename || chartKey) + '.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        // === ALERTS PAGE ===
+        // Gate alerts nav link — only available in multi-tenant mode
+        if (!IS_MULTI_TENANT) {
+            const navAlerts = document.getElementById('nav-alerts');
+            if (navAlerts) {
+                navAlerts.classList.add('disabled');
+                navAlerts.title = 'Alerts require multi-tenant mode';
+            }
+        }
+
+        // Alerts state
+        let alertRulesData = [];
+        let channelsData = [];
+        let alertHistoryData = [];
+
+        // --- Alerts sub-tab switching ---
+        document.querySelectorAll('.alerts-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.alerts-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const target = tab.dataset.alertsTab;
+                document.getElementById('alerts-tab-rules').style.display = target === 'rules' ? 'block' : 'none';
+                document.getElementById('alerts-tab-channels').style.display = target === 'channels' ? 'block' : 'none';
+                document.getElementById('alerts-tab-history').style.display = target === 'history' ? 'block' : 'none';
+            });
+        });
+
+        // --- Helper: gateway fetch with auth ---
+        async function gatewayFetch(path, options = {}) {
+            const headers = Object.assign({
+                'Authorization': 'Bearer ' + dashboardApiToken,
+                'Content-Type': 'application/json'
+            }, options.headers || {});
+            const resp = await fetch(GATEWAY_URL + path, Object.assign({}, options, { headers }));
+            if (!resp.ok) {
+                const body = await resp.json().catch(() => ({}));
+                throw new Error(body.error || 'Request failed: ' + resp.status);
+            }
+            return resp.json();
+        }
+
+        // --- Load functions ---
+        async function loadChannels() {
+            try {
+                const data = await gatewayFetch('/api/gateway/channels');
+                channelsData = data.channels || [];
+                renderChannelsTable();
+            } catch (err) {
+                console.warn('Failed to load channels:', err);
+                channelsData = [];
+                renderChannelsTable();
+            }
+        }
+
+        async function loadAlertRules() {
+            try {
+                const data = await gatewayFetch('/api/gateway/alert-rules');
+                alertRulesData = data.rules || [];
+                renderAlertRulesTable();
+            } catch (err) {
+                console.warn('Failed to load alert rules:', err);
+                alertRulesData = [];
+                renderAlertRulesTable();
+            }
+        }
+
+        async function loadAlertHistory() {
+            try {
+                const data = await gatewayFetch('/api/gateway/alert-history');
+                alertHistoryData = data.history || [];
+                renderAlertHistoryTable();
+            } catch (err) {
+                console.warn('Failed to load alert history:', err);
+                alertHistoryData = [];
+                renderAlertHistoryTable();
+            }
+        }
+
+        function loadAlertsPage() {
+            loadChannels();
+            loadAlertRules();
+            loadAlertHistory();
+        }
+
+        // --- Render functions ---
+        function renderAlertRulesTable() {
+            const body = document.getElementById('alert-rules-body');
+            body.innerHTML = '';
+            document.getElementById('rules-count-label').textContent = alertRulesData.length + ' rule' + (alertRulesData.length !== 1 ? 's' : '');
+
+            if (alertRulesData.length === 0) {
+                body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:32px;">No alert rules configured</td></tr>';
+                return;
+            }
+
+            // Build a channel name lookup
+            const channelNames = {};
+            channelsData.forEach(ch => { channelNames[ch.ID] = ch.Name; });
+
+            alertRulesData.forEach(rule => {
+                const tr = document.createElement('tr');
+                let conditionText;
+                if (rule.Operator === 'anomaly') {
+                    conditionText = 'Anomaly (' + rule.Threshold + '\u03C3, ' + rule.WindowMinutes + 'd)';
+                } else {
+                    const opSymbol = rule.Operator === 'gt' ? '>' : '<';
+                    conditionText = opSymbol + ' ' + rule.Threshold;
+                }
+                const channelName = channelNames[rule.ChannelID] || rule.ChannelID;
+                const statusClass = rule.Status === 'active' ? 'status-active' : 'status-paused';
+                const lastTriggered = rule.LastTriggeredAt
+                    ? new Date(rule.LastTriggeredAt).toLocaleString()
+                    : 'Never';
+                const toggleLabel = rule.Status === 'active' ? 'Pause' : 'Resume';
+
+                tr.innerHTML = `
+                    <td>${escapeHtml(rule.Name)}</td>
+                    <td>${escapeHtml(rule.Metric)}</td>
+                    <td>${conditionText}</td>
+                    <td>${escapeHtml(rule.Service || 'All')}</td>
+                    <td>${escapeHtml(channelName)}</td>
+                    <td><span class="status-badge ${statusClass}">${rule.Status}</span></td>
+                    <td>${lastTriggered}</td>
+                    <td>
+                        <button class="ep-back-btn" onclick="toggleRuleStatus('${rule.ID}', '${rule.Status}')" style="padding:4px 10px;font-size:0.8rem;margin-right:4px;">${toggleLabel}</button>
+                        <button class="ep-back-btn" onclick="deleteAlertRule('${rule.ID}')" style="padding:4px 10px;font-size:0.8rem;color:#ef4444;">Delete</button>
+                    </td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
+        function renderChannelsTable() {
+            const body = document.getElementById('channels-body');
+            body.innerHTML = '';
+            document.getElementById('channels-count-label').textContent = channelsData.length + ' channel' + (channelsData.length !== 1 ? 's' : '');
+
+            if (channelsData.length === 0) {
+                body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:32px;">No notification channels configured</td></tr>';
+                return;
+            }
+
+            channelsData.forEach(ch => {
+                const tr = document.createElement('tr');
+                const typeLabel = ch.Type === 'slack' ? '🔔 Slack' : '🌐 Webhook';
+                const createdAt = new Date(ch.CreatedAt).toLocaleDateString();
+                tr.innerHTML = `
+                    <td>${escapeHtml(ch.Name)}</td>
+                    <td>${typeLabel}</td>
+                    <td><span class="status-badge status-active">${ch.Status}</span></td>
+                    <td>${createdAt}</td>
+                    <td>
+                        <button class="ep-back-btn" onclick="testChannel('${ch.ID}')" style="padding:4px 10px;font-size:0.8rem;margin-right:4px;">Test</button>
+                        <button class="ep-back-btn" onclick="deleteChannel('${ch.ID}')" style="padding:4px 10px;font-size:0.8rem;color:#ef4444;">Delete</button>
+                    </td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
+        function renderAlertHistoryTable() {
+            const body = document.getElementById('alert-history-body');
+            body.innerHTML = '';
+            document.getElementById('history-count-label').textContent = alertHistoryData.length + ' event' + (alertHistoryData.length !== 1 ? 's' : '');
+
+            if (alertHistoryData.length === 0) {
+                body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-secondary);padding:32px;">No alerts have fired yet</td></tr>';
+                return;
+            }
+
+            // Build rule name lookup from loaded rules
+            const ruleNames = {};
+            alertRulesData.forEach(r => { ruleNames[r.ID] = r.Name; });
+
+            alertHistoryData.forEach(entry => {
+                const tr = document.createElement('tr');
+                const time = new Date(entry.CreatedAt).toLocaleString();
+                const statusClass = entry.Status === 'fired' ? 'status-fired' : (entry.Status === 'error' ? 'status-error' : 'status-active');
+                const ruleName = ruleNames[entry.RuleID] || entry.RuleID;
+                tr.innerHTML = `
+                    <td>${time}</td>
+                    <td>${escapeHtml(ruleName)}</td>
+                    <td>${escapeHtml(entry.Metric)}</td>
+                    <td>${entry.ActualValue}</td>
+                    <td>${entry.Threshold}</td>
+                    <td>${escapeHtml(entry.Service || 'All')}</td>
+                    <td><span class="status-badge ${statusClass}">${entry.Status}</span></td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
+        // --- CRUD functions ---
+        async function createChannel(name, type, webhookUrl, authHeader) {
+            const config = { webhook_url: webhookUrl };
+            if (authHeader) config.auth_header = authHeader;
+            await gatewayFetch('/api/gateway/channels', {
+                method: 'POST',
+                body: JSON.stringify({ name, type, config })
+            });
+            await loadChannels();
+            // Refresh channel select in rule modal
+            populateChannelSelect();
+        }
+
+        async function deleteChannel(id) {
+            if (!confirm('Delete this notification channel? Any rules using it will stop working.')) return;
+            try {
+                await gatewayFetch('/api/gateway/channels/' + id, { method: 'DELETE' });
+                await loadChannels();
+                populateChannelSelect();
+            } catch (err) {
+                alert('Failed to delete channel: ' + err.message);
+            }
+        }
+
+        async function testChannel(id) {
+            try {
+                await gatewayFetch('/api/gateway/channels/' + id + '/test', { method: 'POST' });
+                alert('Test notification sent successfully!');
+            } catch (err) {
+                alert('Test failed: ' + err.message);
+            }
+        }
+
+        async function createAlertRule(data) {
+            await gatewayFetch('/api/gateway/alert-rules', {
+                method: 'POST',
+                body: JSON.stringify(data)
+            });
+            await loadAlertRules();
+        }
+
+        async function deleteAlertRule(id) {
+            if (!confirm('Delete this alert rule and its history?')) return;
+            try {
+                await gatewayFetch('/api/gateway/alert-rules/' + id, { method: 'DELETE' });
+                await loadAlertRules();
+                await loadAlertHistory();
+            } catch (err) {
+                alert('Failed to delete rule: ' + err.message);
+            }
+        }
+
+        async function toggleRuleStatus(id, currentStatus) {
+            const rule = alertRulesData.find(r => r.ID === id);
+            if (!rule) return;
+            const newStatus = currentStatus === 'active' ? 'paused' : 'active';
+            try {
+                await gatewayFetch('/api/gateway/alert-rules/' + id, {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        name: rule.Name,
+                        metric: rule.Metric,
+                        operator: rule.Operator,
+                        threshold: rule.Threshold,
+                        window_minutes: rule.WindowMinutes,
+                        service: rule.Service,
+                        path_template: rule.PathTemplate,
+                        channel_id: rule.ChannelID,
+                        cooldown_minutes: rule.CooldownMinutes,
+                        status: newStatus
+                    })
+                });
+                await loadAlertRules();
+            } catch (err) {
+                alert('Failed to update rule: ' + err.message);
+            }
+        }
+
+        // --- Channel select helper ---
+        function populateChannelSelect() {
+            const select = document.getElementById('ruleChannelSelect');
+            select.innerHTML = '';
+            if (channelsData.length === 0) {
+                select.innerHTML = '<option value="">No channels — create one first</option>';
+                return;
+            }
+            channelsData.forEach(ch => {
+                const opt = document.createElement('option');
+                opt.value = ch.ID;
+                opt.textContent = ch.Name + ' (' + ch.Type + ')';
+                select.appendChild(opt);
+            });
+        }
+
+        // --- Modal logic ---
+
+        // Toggle anomaly vs threshold fields based on operator selection
+        function toggleAnomalyFields() {
+            const op = document.getElementById('ruleOperatorSelect').value;
+            document.getElementById('thresholdFields').style.display = op === 'anomaly' ? 'none' : 'flex';
+            document.getElementById('anomalyFields').style.display = op === 'anomaly' ? '' : 'none';
+        }
+        document.getElementById('ruleOperatorSelect').addEventListener('change', toggleAnomalyFields);
+
+        // Rule modal
+        document.getElementById('createRuleBtn').addEventListener('click', () => {
+            document.getElementById('rule-modal-title').textContent = 'New Alert Rule';
+            document.getElementById('ruleNameInput').value = '';
+            document.getElementById('ruleMetricSelect').value = 'error_rate';
+            document.getElementById('ruleOperatorSelect').value = 'gt';
+            document.getElementById('ruleThresholdInput').value = '';
+            document.getElementById('ruleWindowSelect').value = '5';
+            document.getElementById('ruleCooldownSelect').value = '15';
+            document.getElementById('ruleServiceInput').value = '';
+            document.getElementById('rulePathInput').value = '';
+            document.getElementById('anomalyStddevInput').value = '2.0';
+            document.getElementById('anomalyLookbackSelect').value = '7';
+            toggleAnomalyFields();
+            populateChannelSelect();
+            document.getElementById('rule-modal').style.display = 'flex';
+        });
+
+        document.getElementById('ruleModalCancel').addEventListener('click', () => {
+            document.getElementById('rule-modal').style.display = 'none';
+        });
+
+        document.getElementById('ruleModalSave').addEventListener('click', async () => {
+            const name = document.getElementById('ruleNameInput').value.trim();
+            const metric = document.getElementById('ruleMetricSelect').value;
+            const operator = document.getElementById('ruleOperatorSelect').value;
+            const cooldownMinutes = parseInt(document.getElementById('ruleCooldownSelect').value, 10);
+            const service = document.getElementById('ruleServiceInput').value.trim();
+            const pathTemplate = document.getElementById('rulePathInput').value.trim();
+            const channelId = document.getElementById('ruleChannelSelect').value;
+
+            let threshold, windowMinutes;
+            if (operator === 'anomaly') {
+                threshold = parseFloat(document.getElementById('anomalyStddevInput').value);
+                windowMinutes = parseInt(document.getElementById('anomalyLookbackSelect').value, 10);
+                if (isNaN(threshold) || threshold <= 0) { alert('Stddev multiplier must be > 0'); return; }
+            } else {
+                threshold = parseFloat(document.getElementById('ruleThresholdInput').value);
+                windowMinutes = parseInt(document.getElementById('ruleWindowSelect').value, 10);
+                if (isNaN(threshold) || threshold < 0) { alert('Threshold must be a non-negative number'); return; }
+            }
+
+            if (!name) { alert('Name is required'); return; }
+            if (!channelId) { alert('Please select a notification channel'); return; }
+
+            try {
+                await createAlertRule({
+                    name, metric, operator, threshold,
+                    window_minutes: windowMinutes,
+                    cooldown_minutes: cooldownMinutes,
+                    service, path_template: pathTemplate,
+                    channel_id: channelId
+                });
+                document.getElementById('rule-modal').style.display = 'none';
+            } catch (err) {
+                alert('Failed to create rule: ' + err.message);
+            }
+        });
+
+        // Close rule modal on overlay click
+        document.getElementById('rule-modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                document.getElementById('rule-modal').style.display = 'none';
+            }
+        });
+
+        // Channel modal
+        document.getElementById('createChannelBtn').addEventListener('click', () => {
+            document.getElementById('channelNameInput').value = '';
+            document.getElementById('channelTypeSelect').value = 'slack';
+            document.getElementById('channelWebhookInput').value = '';
+            document.getElementById('channelAuthInput').value = '';
+            document.getElementById('channelAuthLabel').style.display = 'none';
+            document.getElementById('channel-modal').style.display = 'flex';
+        });
+
+        document.getElementById('channelModalCancel').addEventListener('click', () => {
+            document.getElementById('channel-modal').style.display = 'none';
+        });
+
+        // Show/hide auth header field based on channel type
+        document.getElementById('channelTypeSelect').addEventListener('change', () => {
+            const isWebhook = document.getElementById('channelTypeSelect').value === 'webhook';
+            document.getElementById('channelAuthLabel').style.display = isWebhook ? 'block' : 'none';
+        });
+
+        document.getElementById('channelModalSave').addEventListener('click', async () => {
+            const name = document.getElementById('channelNameInput').value.trim();
+            const type = document.getElementById('channelTypeSelect').value;
+            const webhookUrl = document.getElementById('channelWebhookInput').value.trim();
+            const authHeader = document.getElementById('channelAuthInput').value.trim();
+
+            if (!name) { alert('Name is required'); return; }
+            if (!webhookUrl) { alert('Webhook URL is required'); return; }
+
+            try {
+                await createChannel(name, type, webhookUrl, authHeader);
+                document.getElementById('channel-modal').style.display = 'none';
+            } catch (err) {
+                alert('Failed to create channel: ' + err.message);
+            }
+        });
+
+        // Close channel modal on overlay click
+        document.getElementById('channel-modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                document.getElementById('channel-modal').style.display = 'none';
+            }
+        });
+    </script>
+
+    <!-- Quick-Start Wizard -->
+    <div id="wizardOverlay" class="wizard-overlay" role="dialog" aria-modal="true" aria-label="Quick-start wizard">
+        <div class="wizard-card">
+            <div class="wizard-header">
+                <h2 id="wizardTitle">Quick Start</h2>
+                <button class="wizard-close" id="wizardClose" aria-label="Close wizard">&times;</button>
+            </div>
+            <div class="wizard-progress" id="wizardProgress">
+                <div class="wizard-progress-step active"></div>
+                <div class="wizard-progress-step"></div>
+                <div class="wizard-progress-step"></div>
+                <div class="wizard-progress-step"></div>
+            </div>
+            <div class="wizard-body">
+                <!-- Step 1: Choose Language -->
+                <div class="wizard-step active" data-step="1">
+                    <h3>Choose your language</h3>
+                    <p class="step-desc">Select the SDK for your service. We'll generate ready-to-use code.</p>
+                    <div class="wizard-lang-grid">
+                        <button class="wizard-lang-btn selected" data-lang="go">Go</button>
+                        <button class="wizard-lang-btn" data-lang="python">Python</button>
+                        <button class="wizard-lang-btn" data-lang="node">Node.js</button>
+                        <button class="wizard-lang-btn" data-lang="curl">cURL</button>
+                    </div>
+                </div>
+                <!-- Step 2: Configure -->
+                <div class="wizard-step" data-step="2">
+                    <h3>Configure your service</h3>
+                    <p class="step-desc">Set the details for your integration.</p>
+                    <label class="wizard-label">Service name</label>
+                    <input class="wizard-input" id="wizServiceName" type="text" placeholder="e.g. auth-service" value="my-service">
+                    <label class="wizard-label">Ingestion endpoint</label>
+                    <input class="wizard-input" id="wizEndpoint" type="text" placeholder="http://localhost:8090">
+                    <label class="wizard-label">API key</label>
+                    <input class="wizard-input" id="wizApiKey" type="text" placeholder="your-api-key">
+                </div>
+                <!-- Step 3: Install & Integrate -->
+                <div class="wizard-step" data-step="3">
+                    <h3 id="wizInstallTitle">Install the SDK</h3>
+                    <p class="step-desc" id="wizInstallDesc">Run this command to add the SDK to your project.</p>
+                    <div class="wizard-code-block">
+                        <pre id="wizInstallCode"></pre>
+                        <button class="wizard-copy-btn" data-copy="wizInstallCode">Copy</button>
+                    </div>
+                    <h3 style="margin-top:8px;">Integration code</h3>
+                    <p class="step-desc">Paste this into your service to start recording request facts.</p>
+                    <div class="wizard-code-block">
+                        <pre id="wizIntegrationCode"></pre>
+                        <button class="wizard-copy-btn" data-copy="wizIntegrationCode">Copy</button>
+                    </div>
+                </div>
+                <!-- Step 4: Verify -->
+                <div class="wizard-step" data-step="4">
+                    <h3>Verify your setup</h3>
+                    <p class="step-desc">Check that everything is working correctly.</p>
+                    <div class="wizard-check-item">
+                        <div class="wizard-check-icon pending" id="wizCheckSDK">1</div>
+                        <div class="wizard-check-text">
+                            <strong>SDK installed</strong>
+                            <span>Install the package from step 3</span>
+                        </div>
+                    </div>
+                    <div class="wizard-check-item">
+                        <div class="wizard-check-icon pending" id="wizCheckCode">2</div>
+                        <div class="wizard-check-text">
+                            <strong>Integration code added</strong>
+                            <span>Paste the snippet into your service</span>
+                        </div>
+                    </div>
+                    <div class="wizard-check-item">
+                        <div class="wizard-check-icon pending" id="wizCheckTraffic">3</div>
+                        <div class="wizard-check-text">
+                            <strong>Send test traffic</strong>
+                            <span>Make a few HTTP requests to your service</span>
+                        </div>
+                    </div>
+                    <div class="wizard-check-item">
+                        <div class="wizard-check-icon pending" id="wizCheckDash">4</div>
+                        <div class="wizard-check-text">
+                            <strong>See data on dashboard</strong>
+                            <span>Metrics appear within 5 minutes after the rollup job runs</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 16px; padding: 12px 16px; background: rgba(59,130,246,0.08); border-radius: 8px; border-left: 3px solid var(--brand-color);">
+                        <strong style="font-size: 0.85rem; color: var(--text-primary);">Need help?</strong>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px;">Check the <a href="../docs/api-site/index.html" target="_blank" style="color: var(--brand-color);">API docs</a> or run <code style="background: var(--border-color); padding: 2px 6px; border-radius: 3px; font-size: 0.75rem;">gravix status</code> to verify connectivity.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="wizard-footer">
+                <span class="wizard-footer-step" id="wizStepLabel">Step 1 of 4</span>
+                <div class="wizard-footer-actions">
+                    <button class="wizard-btn wizard-btn-secondary" id="wizBack" style="display:none;">Back</button>
+                    <button class="wizard-btn wizard-btn-primary" id="wizNext">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ─── Quick-Start Wizard Logic ───
+    (function() {
+        const overlay = document.getElementById('wizardOverlay');
+        const progressSteps = document.querySelectorAll('#wizardProgress .wizard-progress-step');
+        const steps = document.querySelectorAll('.wizard-step');
+        const btnBack = document.getElementById('wizBack');
+        const btnNext = document.getElementById('wizNext');
+        const stepLabel = document.getElementById('wizStepLabel');
+        let currentStep = 1;
+        let selectedLang = 'go';
+        const totalSteps = 4;
+
+        // Open / close
+        document.getElementById('quickStartBtn').addEventListener('click', () => {
+            // Pre-fill endpoint from current page origin or known config
+            const epInput = document.getElementById('wizEndpoint');
+            if (!epInput.value) {
+                epInput.value = (window.GRAVIX_ENDPOINT || 'http://localhost:8090');
+            }
+            // Pre-fill API key if stored
+            const storedKey = localStorage.getItem('gravix_api_key');
+            const keyInput = document.getElementById('wizApiKey');
+            if (!keyInput.value && storedKey) {
+                keyInput.value = storedKey;
+            }
+            currentStep = 1;
+            renderStep();
+            overlay.classList.add('open');
+        });
+
+        document.getElementById('wizardClose').addEventListener('click', () => {
+            overlay.classList.remove('open');
+        });
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.classList.remove('open');
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && overlay.classList.contains('open')) {
+                overlay.classList.remove('open');
+            }
+        });
+
+        // Language selection
+        document.querySelectorAll('.wizard-lang-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.wizard-lang-btn').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                selectedLang = btn.dataset.lang;
+            });
+        });
+
+        // Navigation
+        btnNext.addEventListener('click', () => {
+            if (currentStep < totalSteps) {
+                currentStep++;
+                if (currentStep === 3) generateCode();
+                renderStep();
+            } else {
+                overlay.classList.remove('open');
+            }
+        });
+        btnBack.addEventListener('click', () => {
+            if (currentStep > 1) {
+                currentStep--;
+                renderStep();
+            }
+        });
+
+        // Copy buttons
+        document.querySelectorAll('.wizard-copy-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const target = document.getElementById(btn.dataset.copy);
+                if (target) {
+                    navigator.clipboard.writeText(target.textContent).then(() => {
+                        const orig = btn.textContent;
+                        btn.textContent = 'Copied!';
+                        setTimeout(() => btn.textContent = orig, 1500);
+                    });
+                }
+            });
+        });
+
+        function renderStep() {
+            steps.forEach(s => s.classList.remove('active'));
+            const active = document.querySelector(`.wizard-step[data-step="${currentStep}"]`);
+            if (active) active.classList.add('active');
+
+            progressSteps.forEach((s, i) => {
+                s.classList.remove('active', 'done');
+                if (i + 1 === currentStep) s.classList.add('active');
+                else if (i + 1 < currentStep) s.classList.add('done');
+            });
+
+            stepLabel.textContent = `Step ${currentStep} of ${totalSteps}`;
+            btnBack.style.display = currentStep > 1 ? 'inline-block' : 'none';
+            btnNext.textContent = currentStep === totalSteps ? 'Done' : 'Next';
+        }
+
+        function esc(s) { return s.replace(/'/g, "\\'").replace(/"/g, '\\"'); }
+
+        function generateCode() {
+            const svc = document.getElementById('wizServiceName').value.trim() || 'my-service';
+            const ep = document.getElementById('wizEndpoint').value.trim() || 'http://localhost:8090';
+            const key = document.getElementById('wizApiKey').value.trim() || 'your-api-key';
+
+            let install = '', code = '';
+
+            if (selectedLang === 'go') {
+                install = 'go get github.com/gravix-io/gravix-go@latest';
+                code = `package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+    "time"
+
+    gravix "github.com/gravix-io/gravix-go"
+)
+
+func main() {
+    client := gravix.New(
+        "${esc(ep)}",
+        "${esc(key)}",
+        gravix.WithService("${esc(svc)}"),
+    )
+    defer client.Close()
+
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+
+        // Your handler logic here
+        w.WriteHeader(200)
+        w.Write([]byte("ok"))
+
+        client.RecordFact(r.Context(), gravix.RequestFact{
+            Method:       r.Method,
+            PathTemplate: r.URL.Path,
+            StatusCode:   200,
+            LatencyMs:    int(time.Since(start).Milliseconds()),
+        })
+    })
+
+    log.Println("Listening on :8080")
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}`;
+            } else if (selectedLang === 'python') {
+                install = 'pip install gravix';
+                code = `from flask import Flask
+from gravix import GravixClient
+from gravix.middleware import flask_middleware
+
+app = Flask(__name__)
+
+client = GravixClient(
+    "${esc(ep)}",
+    "${esc(key)}",
+    service="${esc(svc)}",
+)
+flask_middleware(client)(app)
+
+@app.route("/")
+def hello():
+    return "ok"
+
+if __name__ == "__main__":
+    app.run(port=8080)`;
+            } else if (selectedLang === 'node') {
+                install = 'npm install @gravix/sdk';
+                code = `import express from "express";
+import { GravixClient, expressMiddleware } from "@gravix/sdk";
+
+const app = express();
+
+const client = new GravixClient({
+  baseUrl: "${esc(ep)}",
+  apiKey: "${esc(key)}",
+  service: "${esc(svc)}",
+});
+
+app.use(expressMiddleware(client));
+
+app.get("/", (req, res) => {
+  res.send("ok");
+});
+
+app.listen(8080, () => {
+  console.log("Listening on :8080");
+});`;
+            } else {
+                // curl
+                install = '# No installation needed — curl is built in.';
+                code = `curl -X POST ${ep}/api/v1/facts \\
+  -H "X-API-Key: ${key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "service": "${svc}",
+    "method": "GET",
+    "pathTemplate": "/api/v1/users/{id}",
+    "statusCode": 200,
+    "latencyMs": 42,
+    "userAgentFamily": "curl"
+  }'`;
+            }
+
+            document.getElementById('wizInstallCode').textContent = install;
+            document.getElementById('wizIntegrationCode').textContent = code;
+
+            // Update titles for curl
+            if (selectedLang === 'curl') {
+                document.getElementById('wizInstallTitle').textContent = 'Prerequisites';
+                document.getElementById('wizInstallDesc').textContent = 'cURL is available on most systems by default.';
+            } else {
+                document.getElementById('wizInstallTitle').textContent = 'Install the SDK';
+                document.getElementById('wizInstallDesc').textContent = 'Run this command to add the SDK to your project.';
+            }
+        }
+    })();
     </script>
 </body>
 
