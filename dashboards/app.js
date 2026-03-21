@@ -375,7 +375,7 @@
             // Show/hide dashboard filters depending on page
             const headerEl = document.querySelector('.header');
             if (headerEl) {
-                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage') ? 'none' : '';
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces') ? 'none' : '';
             }
 
             if (pageName === 'endpoints') {
@@ -386,6 +386,8 @@
                 loadIngestionPage();
             } else if (pageName === 'usage') {
                 loadUsagePage();
+            } else if (pageName === 'traces') {
+                loadTracesPage();
             }
 
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2730,4 +2732,174 @@ app.listen(8080, () => {
                 tbody.appendChild(tr);
             });
         }
+
+        // --- TRACES PAGE ---
+
+        // Service colors for waterfall bars
+        const traceServiceColors = [
+            '#6366f1', '#ec4899', '#f59e0b', '#10b981', '#3b82f6',
+            '#8b5cf6', '#ef4444', '#14b8a6', '#f97316', '#06b6d4'
+        ];
+        const traceColorMap = {};
+        let traceColorIdx = 0;
+
+        function getServiceColor(service) {
+            if (!traceColorMap[service]) {
+                traceColorMap[service] = traceServiceColors[traceColorIdx % traceServiceColors.length];
+                traceColorIdx++;
+            }
+            return traceColorMap[service];
+        }
+
+        async function loadTracesPage() {
+            const loading = document.getElementById('traces-loading');
+            const listEl = document.getElementById('traces-list');
+            const errorEl = document.getElementById('traces-section-error');
+            const waterfallEl = document.getElementById('trace-waterfall');
+
+            loading.style.display = '';
+            listEl.style.display = 'none';
+            waterfallEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            try {
+                const resp = await cachedFetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces/recent?limit=50', {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') }
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+
+                loading.style.display = 'none';
+                listEl.style.display = 'block';
+
+                renderTracesList(data.traces || []);
+            } catch (err) {
+                loading.style.display = 'none';
+                errorEl.style.display = 'block';
+                errorEl.innerHTML = '&#x26A0; Failed to load traces. <button class="section-error-retry" onclick="loadTracesPage()">Retry</button>';
+            }
+        }
+
+        function renderTracesList(traces) {
+            const emptyEl = document.getElementById('traces-empty');
+            const tableEl = document.getElementById('traces-table');
+            const tbody = document.getElementById('traces-table-body');
+
+            if (!traces || traces.length === 0) {
+                emptyEl.style.display = 'block';
+                tableEl.style.display = 'none';
+                return;
+            }
+
+            emptyEl.style.display = 'none';
+            tableEl.style.display = 'table';
+            tbody.innerHTML = '';
+
+            traces.forEach(function(t) {
+                const tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.onclick = function() { loadTraceDetail(t.trace_id); };
+                const time = t.event_time ? new Date(t.event_time).toLocaleString() : '—';
+                const shortId = t.trace_id ? t.trace_id.substring(0, 13) + '...' : '—';
+                tr.innerHTML = '<td>' + time + '</td>' +
+                    '<td><code style="font-size:0.8rem">' + shortId + '</code></td>' +
+                    '<td>' + (t.root_service || '—') + '</td>' +
+                    '<td>' + (t.root_path || '—') + '</td>' +
+                    '<td>' + (t.span_count || 0) + '</td>' +
+                    '<td>' + (t.total_latency_ms || 0) + ' ms</td>';
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function loadTraceDetail(traceId) {
+            const listEl = document.getElementById('traces-list');
+            const waterfallEl = document.getElementById('trace-waterfall');
+
+            listEl.style.display = 'none';
+            waterfallEl.style.display = 'block';
+            document.getElementById('trace-waterfall-title').textContent = 'Trace: ' + traceId.substring(0, 13) + '...';
+
+            try {
+                const resp = await cachedFetch(
+                    GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces?trace_id=' + encodeURIComponent(traceId),
+                    { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') } }
+                );
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                renderWaterfall(data.spans || []);
+            } catch (err) {
+                document.getElementById('trace-waterfall-container').innerHTML =
+                    '<p style="color:var(--danger-color)">Failed to load trace detail.</p>';
+            }
+        }
+
+        function renderWaterfall(spans) {
+            const container = document.getElementById('trace-waterfall-container');
+            container.innerHTML = '';
+
+            if (!spans || spans.length === 0) {
+                container.innerHTML = '<p>No spans found for this trace.</p>';
+                return;
+            }
+
+            // Find the earliest start time and total duration
+            const startTimes = spans.map(function(s) { return new Date(s.event_time).getTime(); });
+            const minStart = Math.min.apply(null, startTimes);
+            const maxEnd = Math.max.apply(null, spans.map(function(s) {
+                return new Date(s.event_time).getTime() + s.latency_ms;
+            }));
+            const totalDuration = maxEnd - minStart || 1;
+
+            // Header
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-color);font-size:0.75rem;color:var(--text-secondary);margin-bottom:4px';
+            header.innerHTML = '<div style="width:200px;flex-shrink:0">Service / Path</div>' +
+                '<div style="flex:1;display:flex;justify-content:space-between"><span>0ms</span><span>' + totalDuration + 'ms</span></div>';
+            container.appendChild(header);
+
+            spans.forEach(function(span) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--bg-secondary);min-height:32px';
+
+                // Label
+                const label = document.createElement('div');
+                label.style.cssText = 'width:200px;flex-shrink:0;font-size:0.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+                label.title = span.service + ' ' + span.method + ' ' + span.path_template;
+                label.innerHTML = '<strong>' + span.service + '</strong> ' + span.method;
+
+                // Bar container
+                const barContainer = document.createElement('div');
+                barContainer.style.cssText = 'flex:1;position:relative;height:24px';
+
+                const offset = ((new Date(span.event_time).getTime() - minStart) / totalDuration) * 100;
+                const width = Math.max((span.latency_ms / totalDuration) * 100, 1);
+                const color = getServiceColor(span.service);
+
+                const bar = document.createElement('div');
+                bar.style.cssText = 'position:absolute;top:2px;height:20px;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:0.7rem;color:white;white-space:nowrap;overflow:hidden';
+                bar.style.left = offset + '%';
+                bar.style.width = width + '%';
+                bar.style.background = color;
+                bar.style.minWidth = '30px';
+
+                const statusIcon = span.status_code >= 400 ? ' !' : '';
+                bar.textContent = span.latency_ms + 'ms' + statusIcon;
+                bar.title = span.path_template + ' [' + span.status_code + '] ' + span.latency_ms + 'ms';
+
+                barContainer.appendChild(bar);
+                row.appendChild(label);
+                row.appendChild(barContainer);
+                container.appendChild(row);
+            });
+        }
+
+        window.showTracesList = function() {
+            document.getElementById('trace-waterfall').style.display = 'none';
+            document.getElementById('traces-list').style.display = 'block';
+        };
+
+        // Expose for onclick handlers
+        window.loadTracesPage = loadTracesPage;
+        window.loadTraceDetail = loadTraceDetail;
+
     })();

@@ -155,6 +155,7 @@ func main() {
 		retentionDays         int
 		raw                   string
 		rawEvents             string
+		rawTraces             string // trace samples always 7-day retention
 		warehouseMetrics      string
 		warehouseEvents       string
 		warehouseEventsDetail string
@@ -189,6 +190,7 @@ func main() {
 				retentionDays:         days,
 				raw:                   fmt.Sprintf("raw/%s/request_facts", t.ID),
 				rawEvents:             fmt.Sprintf("raw/%s/service_events", t.ID),
+				rawTraces:             fmt.Sprintf("raw/%s/trace_samples", t.ID),
 				warehouseMetrics:      fmt.Sprintf("warehouse/%s/request_metrics_minute", t.ID),
 				warehouseEvents:       fmt.Sprintf("warehouse/%s/service_events_daily", t.ID),
 				warehouseEventsDetail: fmt.Sprintf("warehouse/%s/service_events_detail", t.ID),
@@ -203,6 +205,7 @@ func main() {
 			retentionDays:         retentionDays,
 			raw:                   "raw/request_facts",
 			rawEvents:             "raw/service_events",
+			rawTraces:             "raw/trace_samples",
 			warehouseMetrics:      "warehouse/request_metrics_minute",
 			warehouseEvents:       "warehouse/service_events_daily",
 			warehouseEventsDetail: "warehouse/service_events_detail",
@@ -227,6 +230,18 @@ func main() {
 			slog.Info("processing tenant", "tenant_id", t.tenantID, "plan", t.tenantPlan, "retention_days", t.retentionDays, "cutoff", cutoffStr)
 		} else {
 			slog.Info("single-tenant purge", "retention_days", t.retentionDays, "cutoff", cutoffStr)
+		}
+
+		// Purge trace samples with hard 7-day retention (debug data, short-lived)
+		if t.rawTraces != "" {
+			traceCutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")
+			deleted, err := purgeOldData(ctx, store, t.rawTraces, traceCutoff, dryRun)
+			if err != nil {
+				slog.Error("trace purge error", "prefix", t.rawTraces, "error", err)
+				purgeErrorsTotal.Inc()
+			} else if deleted > 0 {
+				slog.Info("purged trace samples", "deleted", deleted, "cutoff", traceCutoff)
+			}
 		}
 
 		var tenantTotal int

@@ -893,3 +893,156 @@ func BenchmarkHandleBatchFacts(b *testing.B) {
 		}
 	})
 }
+
+// --- Trace Sample Tests ---
+
+// validTraceJSON returns a valid TraceSample JSON payload.
+func validTraceJSON(t *testing.T) string {
+	t.Helper()
+	ts := &gravixv1.TraceSample{
+		TraceId:      newUUIDv7(t),
+		SpanId:       "a1b2c3d4e5f60718",
+		EventTime:    timestamppb.New(time.Now().UTC()),
+		Service:      "test-service",
+		Method:       "GET",
+		PathTemplate: "/api/health",
+		StatusCode:   200,
+		LatencyMs:    42,
+	}
+	data, err := protojson.Marshal(ts)
+	if err != nil {
+		t.Fatalf("failed to marshal trace sample: %v", err)
+	}
+	return string(data)
+}
+
+func TestHandleTraces_ValidPost(t *testing.T) {
+	sink := setupSink(t)
+	// Use 100% sample rate so all traces are accepted
+	handler := handleTraces(sink, nil, 1.0)
+
+	body := validTraceJSON(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/traces", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp["sampled"] != true {
+		t.Errorf("expected sampled=true, got %v", resp["sampled"])
+	}
+}
+
+func TestHandleTraces_Dropped(t *testing.T) {
+	sink := setupSink(t)
+	// Use 0% sample rate so all traces are dropped
+	handler := handleTraces(sink, nil, 0.0)
+
+	body := validTraceJSON(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/traces", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp["sampled"] != false {
+		t.Errorf("expected sampled=false, got %v", resp["sampled"])
+	}
+}
+
+func TestHandleTraces_InvalidBody(t *testing.T) {
+	sink := setupSink(t)
+	handler := handleTraces(sink, nil, 1.0)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/traces", strings.NewReader(`{"not":"valid"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleTraces_WrongMethod(t *testing.T) {
+	sink := setupSink(t)
+	handler := handleTraces(sink, nil, 1.0)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/traces", nil)
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rr.Code)
+	}
+}
+
+func TestHandleTraces_WrongContentType(t *testing.T) {
+	sink := setupSink(t)
+	handler := handleTraces(sink, nil, 1.0)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/traces", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("expected 415, got %d", rr.Code)
+	}
+}
+
+func TestShouldSampleTrace_Deterministic(t *testing.T) {
+	traceID := newUUIDv7(t)
+
+	// Same trace ID should always give the same decision
+	result1 := shouldSampleTrace(traceID, 0.5)
+	result2 := shouldSampleTrace(traceID, 0.5)
+	if result1 != result2 {
+		t.Error("sampling should be deterministic for the same trace_id")
+	}
+}
+
+func TestShouldSampleTrace_BoundaryRates(t *testing.T) {
+	traceID := newUUIDv7(t)
+
+	// Rate 1.0 should always sample
+	if !shouldSampleTrace(traceID, 1.0) {
+		t.Error("rate 1.0 should always sample")
+	}
+
+	// Rate 0 should never sample
+	if shouldSampleTrace(traceID, 0.0) {
+		t.Error("rate 0.0 should never sample")
+	}
+}
+
+func TestShouldSampleTrace_Distribution(t *testing.T) {
+	// With 50% rate, roughly half of traces should be sampled
+	sampled := 0
+	total := 1000
+	for i := 0; i < total; i++ {
+		id := newUUIDv7(t)
+		if shouldSampleTrace(id, 0.5) {
+			sampled++
+		}
+	}
+	// Allow wide margin (30%-70%) since this is probabilistic
+	ratio := float64(sampled) / float64(total)
+	if ratio < 0.3 || ratio > 0.7 {
+		t.Errorf("expected ~50%% sampling, got %.1f%% (%d/%d)", ratio*100, sampled, total)
+	}
+}

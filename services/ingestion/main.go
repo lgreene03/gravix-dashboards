@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -168,6 +171,13 @@ var (
 		},
 		[]string{"tenant_id"},
 	)
+	ingestionTraceSamplesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingestion_trace_samples_total",
+			Help: "Total trace samples received.",
+		},
+		[]string{"tenant", "sampled"},
+	)
 )
 
 func init() {
@@ -179,6 +189,7 @@ func init() {
 	prometheus.MustRegister(ingestionUploadErrorsTotal)
 	prometheus.MustRegister(ingestionOverageEventsTotal)
 	prometheus.MustRegister(ingestionQuotaRejectedTotal)
+	prometheus.MustRegister(ingestionTraceSamplesTotal)
 }
 
 func tenantRateLimitMiddleware(trl *ratelimit.TenantLimiter, next http.HandlerFunc) http.HandlerFunc {
@@ -484,6 +495,91 @@ func (ds *DurableSink) startupScan() {
 	}
 }
 
+// shouldSampleTrace performs deterministic head-based sampling using trace_id.
+// All spans from the same trace will get the same decision.
+func shouldSampleTrace(traceID string, rate float64) bool {
+	if rate >= 1.0 {
+		return true
+	}
+	if rate <= 0 {
+		return false
+	}
+	h := sha256.Sum256([]byte(traceID))
+	// Use first 4 bytes as a uint32 to get a uniform distribution
+	n := binary.BigEndian.Uint32(h[:4])
+	threshold := uint32(rate * float64(1<<32-1))
+	return n <= threshold
+}
+
+// getTraceSampleRate reads TRACE_SAMPLE_RATE from env (default 0.01 = 1%).
+func getTraceSampleRate() float64 {
+	s := os.Getenv("TRACE_SAMPLE_RATE")
+	if s == "" {
+		return 0.01
+	}
+	rate, err := strconv.ParseFloat(s, 64)
+	if err != nil || rate < 0 || rate > 1 {
+		slog.Warn("invalid TRACE_SAMPLE_RATE, using default 0.01", "value", s)
+		return 0.01
+	}
+	return rate
+}
+
+func handleTraces(sink *DurableSink, tdb tenantdb.DB, sampleRate float64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
+			return
+		}
+		if !requireJSON(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "request body too large (max 1MB)")
+			return
+		}
+		defer r.Body.Close()
+
+		ts, err := schemas.ParseTraceSample(body)
+		if err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid TraceSample: %v", err))
+			return
+		}
+
+		tenantID := getTenantID(r)
+
+		// Deterministic sampling: all spans from the same trace get the same decision
+		if !shouldSampleTrace(ts.TraceId, sampleRate) {
+			ingestionTraceSamplesTotal.WithLabelValues(tenantID, "false").Inc()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"sampled": false})
+			return
+		}
+
+		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
+		cleanData, err := marshalOpts.Marshal(ts)
+		if err != nil {
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to marshal trace sample")
+			return
+		}
+
+		topic := topicForTenant(tenantID, "trace_samples")
+		if err := sink.Write(topic, cleanData); err != nil {
+			slog.Error("sink write error for trace", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist trace sample")
+			return
+		}
+
+		ingestionTraceSamplesTotal.WithLabelValues(tenantID, "true").Inc()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{"sampled": true})
+	}
+}
+
 func main() {
 	logging.Init("ingestion")
 
@@ -573,10 +669,15 @@ func main() {
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
 
+	// Trace sampling rate
+	traceSampleRate := getTraceSampleRate()
+	slog.Info("trace sampling configured", "rate", traceSampleRate)
+
 	// Wrap handlers: auth first (sets tenant context), then rate limit, then handler
 	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, handleFacts(sink, tdb))))
 	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, handleBatchFacts(sink, tdb))))
 	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, handleEvents(sink, tdb))))
+	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, handleTraces(sink, tdb, traceSampleRate))))
 
 	http.Handle("/metrics", promhttp.Handler())
 

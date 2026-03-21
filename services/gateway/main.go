@@ -292,6 +292,8 @@ func main() {
 	mux.HandleFunc("/api/gateway/alert-rules", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRules)))
 	mux.HandleFunc("/api/gateway/alert-rules/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRuleByID)))
 	mux.HandleFunc("/api/gateway/alert-history", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertHistory)))
+	mux.HandleFunc("/api/gateway/traces/recent", gw.requireAuth(gw.rateLimitMiddleware(gw.handleTracesRecent)))
+	mux.HandleFunc("/api/gateway/traces", gw.requireAuth(gw.rateLimitMiddleware(gw.handleTraceByID)))
 	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQ)))
 	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQReplay)))
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
@@ -2311,4 +2313,198 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
+}
+
+// traceSpan is a single span from a trace sample file.
+type traceSpan struct {
+	TraceID      string            `json:"trace_id"`
+	SpanID       string            `json:"span_id"`
+	ParentSpanID string            `json:"parent_span_id,omitempty"`
+	EventTime    string            `json:"event_time"`
+	Service      string            `json:"service"`
+	Method       string            `json:"method"`
+	PathTemplate string            `json:"path_template"`
+	StatusCode   int               `json:"status_code"`
+	LatencyMs    int               `json:"latency_ms"`
+	Tags         map[string]string `json:"tags,omitempty"`
+}
+
+// traceSummary is a lightweight summary of a trace for listing.
+type traceSummary struct {
+	TraceID      string `json:"trace_id"`
+	RootService  string `json:"root_service"`
+	RootPath     string `json:"root_path"`
+	TotalLatency int    `json:"total_latency_ms"`
+	SpanCount    int    `json:"span_count"`
+	EventTime    string `json:"event_time"`
+}
+
+// handleTracesRecent lists recent trace IDs by scanning the most recent trace_samples files.
+// GET /api/gateway/traces/recent?limit=20
+func (gw *gateway) handleTracesRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	if gw.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage not configured")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	tenantID := claims.TenantID
+
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	// List trace sample files for this tenant (last 24 hours)
+	prefix := "raw/"
+	if tenantID != "" {
+		prefix += tenantID + "/"
+	}
+	prefix += "trace_samples/"
+
+	files, err := gw.store.List(r.Context(), prefix)
+	if err != nil {
+		slog.Error("trace list error", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list trace files")
+		return
+	}
+
+	// Sort descending (most recent first)
+	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+
+	// Read spans and group by trace_id
+	traceMap := make(map[string]*traceSummary)
+	for _, file := range files {
+		if len(traceMap) >= limit*2 { // read enough files to fill limit
+			break
+		}
+
+		reader, err := gw.store.Get(r.Context(), file)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
+		for scanner.Scan() {
+			var span traceSpan
+			if err := json.Unmarshal(scanner.Bytes(), &span); err != nil {
+				continue
+			}
+			if summary, exists := traceMap[span.TraceID]; exists {
+				summary.SpanCount++
+				if span.LatencyMs > summary.TotalLatency {
+					summary.TotalLatency = span.LatencyMs
+				}
+			} else {
+				traceMap[span.TraceID] = &traceSummary{
+					TraceID:      span.TraceID,
+					RootService:  span.Service,
+					RootPath:     span.PathTemplate,
+					TotalLatency: span.LatencyMs,
+					SpanCount:    1,
+					EventTime:    span.EventTime,
+				}
+			}
+		}
+		reader.Close()
+	}
+
+	// Convert to sorted slice
+	traces := make([]traceSummary, 0, len(traceMap))
+	for _, s := range traceMap {
+		traces = append(traces, *s)
+	}
+	sort.Slice(traces, func(i, j int) bool {
+		return traces[i].EventTime > traces[j].EventTime
+	})
+	if len(traces) > limit {
+		traces = traces[:limit]
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"traces": traces,
+		"total":  len(traces),
+	})
+}
+
+// handleTraceByID returns all spans for a specific trace.
+// GET /api/gateway/traces?trace_id=...
+func (gw *gateway) handleTraceByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	if gw.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage not configured")
+		return
+	}
+
+	traceID := r.URL.Query().Get("trace_id")
+	if traceID == "" {
+		writeError(w, http.StatusBadRequest, "trace_id query parameter required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	tenantID := claims.TenantID
+
+	prefix := "raw/"
+	if tenantID != "" {
+		prefix += tenantID + "/"
+	}
+	prefix += "trace_samples/"
+
+	files, err := gw.store.List(r.Context(), prefix)
+	if err != nil {
+		slog.Error("trace list error", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list trace files")
+		return
+	}
+
+	// Sort descending to search recent files first
+	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+
+	var spans []traceSpan
+	for _, file := range files {
+		reader, err := gw.store.Get(r.Context(), file)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
+		for scanner.Scan() {
+			var span traceSpan
+			if err := json.Unmarshal(scanner.Bytes(), &span); err != nil {
+				continue
+			}
+			if span.TraceID == traceID {
+				spans = append(spans, span)
+			}
+		}
+		reader.Close()
+
+		// If we found spans and scanned enough files, stop
+		if len(spans) > 0 && len(spans) > 50 {
+			break
+		}
+	}
+
+	// Sort spans by event_time ascending
+	sort.Slice(spans, func(i, j int) bool {
+		return spans[i].EventTime < spans[j].EventTime
+	})
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"trace_id": traceID,
+		"spans":    spans,
+		"total":    len(spans),
+	})
 }
