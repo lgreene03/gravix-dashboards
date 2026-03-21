@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -234,7 +235,7 @@ func TestAPIKeyCreate(t *testing.T) {
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
 
-	plain, key, err := db.APIKeys().Create(ctx, tenant.ID, "prod-key")
+	plain, key, err := db.APIKeys().Create(ctx, tenant.ID, "prod-key", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -261,7 +262,7 @@ func TestAPIKeyValidate(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
-	plain, _, err := db.APIKeys().Create(ctx, tenant.ID, "test-key")
+	plain, _, err := db.APIKeys().Create(ctx, tenant.ID, "test-key", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -294,7 +295,7 @@ func TestAPIKeyValidateRevoked(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
-	plain, key, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key")
+	plain, key, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key", nil)
 
 	if err := db.APIKeys().Revoke(ctx, key.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
@@ -311,7 +312,7 @@ func TestAPIKeyValidateSuspendedTenant(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
-	plain, _, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key")
+	plain, _, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key", nil)
 
 	db.Tenants().UpdateStatus(ctx, tenant.ID, "suspended")
 
@@ -326,7 +327,7 @@ func TestAPIKeyRevoke(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
-	_, key, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key")
+	_, key, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key", nil)
 
 	if err := db.APIKeys().Revoke(ctx, key.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
@@ -352,8 +353,8 @@ func TestAPIKeyListByTenant(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
-	db.APIKeys().Create(ctx, tenant.ID, "key-1")
-	db.APIKeys().Create(ctx, tenant.ID, "key-2")
+	db.APIKeys().Create(ctx, tenant.ID, "key-1", nil)
+	db.APIKeys().Create(ctx, tenant.ID, "key-2", nil)
 
 	keys, err := db.APIKeys().ListByTenant(ctx, tenant.ID)
 	if err != nil {
@@ -384,7 +385,7 @@ func TestAPIKeyTouchLastUsed(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
-	plain, _, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key")
+	plain, _, _ := db.APIKeys().Create(ctx, tenant.ID, "test-key", nil)
 
 	hash := hashKey(plain)
 	if err := db.APIKeys().TouchLastUsed(ctx, hash); err != nil {
@@ -405,12 +406,110 @@ func TestAPIKeyUniquePerKey(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
-	plain1, _, _ := db.APIKeys().Create(ctx, tenant.ID, "key-1")
-	plain2, _, _ := db.APIKeys().Create(ctx, tenant.ID, "key-2")
+	plain1, _, _ := db.APIKeys().Create(ctx, tenant.ID, "key-1", nil)
+	plain2, _, _ := db.APIKeys().Create(ctx, tenant.ID, "key-2", nil)
 
 	// Each key should produce different plaintext
 	if plain1 == plain2 {
 		t.Error("two keys should be different")
+	}
+}
+
+func TestAPIKeyExpiry_NotExpired(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
+
+	future := time.Now().UTC().Add(24 * time.Hour)
+	plain, key, err := db.APIKeys().Create(ctx, tenant.ID, "future-key", &future)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if key.ExpiresAt == nil {
+		t.Fatal("ExpiresAt should be set")
+	}
+
+	// Key should validate successfully
+	info, err := db.APIKeys().ValidateKey(ctx, plain)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if info.TenantID != tenant.ID {
+		t.Errorf("TenantID = %q, want %q", info.TenantID, tenant.ID)
+	}
+}
+
+func TestAPIKeyExpiry_Expired(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
+
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	plain, _, err := db.APIKeys().Create(ctx, tenant.ID, "expired-key", &past)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Key should fail validation
+	_, err = db.APIKeys().ValidateKey(ctx, plain)
+	if err == nil {
+		t.Fatal("expected error for expired key, got nil")
+	}
+}
+
+func TestAPIKeyExpiry_NoExpiry(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
+
+	plain, key, err := db.APIKeys().Create(ctx, tenant.ID, "no-expiry", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if key.ExpiresAt != nil {
+		t.Fatal("ExpiresAt should be nil for no-expiry key")
+	}
+
+	// Key should validate successfully
+	info, err := db.APIKeys().ValidateKey(ctx, plain)
+	if err != nil {
+		t.Fatalf("ValidateKey: %v", err)
+	}
+	if info.TenantID != tenant.ID {
+		t.Errorf("TenantID = %q, want %q", info.TenantID, tenant.ID)
+	}
+}
+
+func TestAPIKeysExpiringSoon(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
+
+	// Key expiring in 3 days — should appear in "within 7 days" query
+	soon := time.Now().UTC().Add(3 * 24 * time.Hour)
+	db.APIKeys().Create(ctx, tenant.ID, "expiring-soon", &soon)
+
+	// Key expiring in 30 days — should NOT appear
+	later := time.Now().UTC().Add(30 * 24 * time.Hour)
+	db.APIKeys().Create(ctx, tenant.ID, "expiring-later", &later)
+
+	// Key with no expiry — should NOT appear
+	db.APIKeys().Create(ctx, tenant.ID, "no-expiry", nil)
+
+	// Already expired — should NOT appear
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	db.APIKeys().Create(ctx, tenant.ID, "already-expired", &past)
+
+	keys, err := db.APIKeys().ListExpiringSoon(ctx, tenant.ID, 7)
+	if err != nil {
+		t.Fatalf("ListExpiringSoon: %v", err)
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 expiring key, got %d", len(keys))
+	}
+	if keys[0].Name != "expiring-soon" {
+		t.Errorf("expected 'expiring-soon', got %q", keys[0].Name)
 	}
 }
 
@@ -649,7 +748,7 @@ func TestForeignKeyEnforced(t *testing.T) {
 	ctx := context.Background()
 
 	// Creating an API key for a nonexistent tenant should fail
-	_, _, err := db.APIKeys().Create(ctx, "nonexistent-tenant", "test-key")
+	_, _, err := db.APIKeys().Create(ctx, "nonexistent-tenant", "test-key", nil)
 	if err == nil {
 		t.Error("expected foreign key error")
 	}
@@ -1325,5 +1424,58 @@ func TestNewReposNotNil(t *testing.T) {
 	}
 	if db.AlertHistory() == nil {
 		t.Error("AlertHistory() returned nil")
+	}
+}
+
+func TestConcurrentReadWrite(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// Create a tenant to work with
+	tenant := &Tenant{Name: "concurrent-test", Plan: "free", Status: "active"}
+	if err := db.Tenants().Create(ctx, tenant); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hammer the DB with concurrent reads and writes
+	const goroutines = 10
+	const iterations = 50
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines*iterations)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				// Write: increment event counter
+				if err := db.EventCounters().Increment(ctx, tenant.ID, "2026-03-17", 1); err != nil {
+					errCh <- err
+					return
+				}
+				// Read: get tenant
+				if _, err := db.Tenants().GetByID(ctx, tenant.ID); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent access error: %v", err)
+	}
+
+	// Verify final counter value
+	count, err := db.EventCounters().GetCount(ctx, tenant.ID, "2026-03-17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := int64(goroutines * iterations)
+	if count != expected {
+		t.Errorf("event counter = %d, want %d", count, expected)
 	}
 }

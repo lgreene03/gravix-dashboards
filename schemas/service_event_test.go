@@ -290,3 +290,18 @@ func TestParseServiceEvent_Immutability_Check(t *testing.T) {
 	// The key is that the parser validation runs ONCE.
 	// If a user modifies the struct later, they break the contract, but the *ingestion* path is safe.
 }
+
+// FuzzValidateServiceEvent ensures ParseServiceEvent never panics on arbitrary input.
+func FuzzValidateServiceEvent(f *testing.F) {
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","eventType":"deploy_started","properties":{"version":"1.0"}}`))
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","eventType":"health_check_failed"}`))
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`not json`))
+	f.Add([]byte(``))
+	f.Add([]byte(`{"eventType":"UPPER_CASE"}`))
+	f.Add([]byte(`{"properties":{"key":"` + strings.Repeat("x", 2000) + `"}}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		ParseServiceEvent(data)
+	})
+}

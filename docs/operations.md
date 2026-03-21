@@ -82,7 +82,7 @@ gh workflow run deploy.yml -f environment=production -f image_tag=1.0.0
 
 ### Horizontal Pod Autoscaler
 
-Production uses HPA for ingestion pods (2–10 replicas, target 70% CPU).
+Production uses HPA for ingestion and gateway pods (2–10 replicas, target 70% CPU).
 
 ```bash
 # Check current HPA status
@@ -129,7 +129,10 @@ helm upgrade gravix deploy/gravix \
 | Dashboard | URL | Purpose |
 |-----------|-----|---------|
 | Gravix Dashboard | `https://gravix.example.com` | Service health overview |
-| Grafana | `https://grafana.example.com` | Detailed metrics |
+| Grafana — Health | `https://grafana.example.com/d/gravix-health` | Ingestion & pipeline health |
+| Grafana — Gateway | `https://grafana.example.com/d/gravix-gateway` | Gateway request metrics |
+| Grafana — Batch Jobs | `https://grafana.example.com/d/gravix-batch-jobs` | ETL job monitoring |
+| Grafana — SLO | `https://grafana.example.com/d/gravix-slo` | Availability, latency SLOs, error budget |
 | Prometheus | `https://prometheus.example.com` | Raw metrics, alert status |
 
 ### Key Metrics
@@ -140,8 +143,12 @@ helm upgrade gravix deploy/gravix \
 | `gravix_ingest_errors_total` | Failed ingestions | > 5% of total (5m) |
 | `gravix_ingest_latency_seconds` | Request latency histogram | P95 > 500ms |
 | `gravix_buffer_fsync_duration_seconds` | Disk write latency | P95 > 500ms |
-| `gravix_rollup_last_success_timestamp` | Last successful rollup | > 10m ago |
-| `gravix_rollup_duration_seconds` | Rollup execution time | > 120s |
+| `rollup_last_success_timestamp_seconds` | Last successful request rollup | > 10m ago |
+| `rollup_duration_seconds` | Request rollup execution time | > 120s |
+| `events_daily_last_success_timestamp_seconds` | Last successful events daily rollup | > 2h ago |
+| `events_detail_last_success_timestamp_seconds` | Last successful events detail rollup | > 2h ago |
+| `purge_last_success_timestamp_seconds` | Last successful purge | > 48h ago |
+| `purge_errors_total` | Purge errors | Any errors in 1h |
 
 ### Checking Alert Status
 
@@ -167,6 +174,43 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-alertmanager 9093:9
 
 ---
 
+## API Key Rotation
+
+API keys can be created with an optional expiry. Keys expiring within 7 days are surfaced via the `/api/gateway/api-keys/expiring` endpoint and shown with a warning badge in the dashboard Settings page.
+
+### Creating Keys with Expiry
+
+```bash
+# Create a key that expires in 90 days
+curl -X POST https://gateway.example.com/api/gateway/api-keys \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "production-key", "expires_in_days": 90}'
+
+# Create a key with no expiry (backward compatible)
+curl -X POST https://gateway.example.com/api/gateway/api-keys \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "permanent-key"}'
+```
+
+### Monitoring Expiring Keys
+
+```bash
+# List keys expiring within 7 days
+curl https://gateway.example.com/api/gateway/api-keys/expiring \
+  -H "Authorization: Bearer $JWT"
+```
+
+Expired keys are automatically rejected at the ingestion layer. Revoke old keys after rotation:
+
+```bash
+curl -X DELETE https://gateway.example.com/api/gateway/api-keys/{key_id} \
+  -H "Authorization: Bearer $JWT"
+```
+
+---
+
 ## Data Management
 
 ### Data Flow
@@ -185,8 +229,10 @@ kubectl -n gravix-prod exec deploy/gravix-ingestion -- du -sh /app/data/
 # 2. S3: Are files landing?
 aws s3 ls s3://gravix-prod/raw/ --recursive | tail -5
 
-# 3. Rollup: Is it running?
+# 3. Rollup: Are jobs running?
 kubectl -n gravix-prod get jobs -l app=rollup --sort-by=.metadata.creationTimestamp | tail -5
+kubectl -n gravix-prod get jobs -l app=events-rollup --sort-by=.metadata.creationTimestamp | tail -5
+kubectl -n gravix-prod get jobs -l app=events-detail --sort-by=.metadata.creationTimestamp | tail -5
 
 # 4. Warehouse: Are Parquet files being produced?
 aws s3 ls s3://gravix-prod/warehouse/ --recursive | tail -5
@@ -202,6 +248,12 @@ kubectl -n gravix-prod exec -it deploy/gravix-trino -- \
 # Trigger an immediate rollup outside the cron schedule
 kubectl -n gravix-prod create job --from=cronjob/gravix-rollup \
   gravix-rollup-manual-$(date +%s)
+
+# Trigger events daily or detail rollup
+kubectl -n gravix-prod create job --from=cronjob/gravix-events-rollup \
+  gravix-events-rollup-manual-$(date +%s)
+kubectl -n gravix-prod create job --from=cronjob/gravix-events-detail \
+  gravix-events-detail-manual-$(date +%s)
 
 # Watch progress
 kubectl -n gravix-prod logs -f job/gravix-rollup-manual-<timestamp>

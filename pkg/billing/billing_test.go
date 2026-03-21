@@ -1,8 +1,10 @@
 package billing
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stripe/stripe-go/v81"
 )
@@ -225,6 +227,173 @@ func TestExtractEvent_UnhandledType(t *testing.T) {
 	// Unhandled events should have empty fields
 	if we.CustomerID != "" {
 		t.Errorf("CustomerID should be empty for unhandled events, got %q", we.CustomerID)
+	}
+}
+
+// ─── Edge Case Tests ───
+
+func TestExtractEvent_EmptySubscriptionItems(t *testing.T) {
+	svc := NewStripeService("sk_test_fake", "whsec_fake", testPlans())
+
+	subJSON, _ := json.Marshal(map[string]interface{}{
+		"id": "sub_empty",
+		"customer": map[string]interface{}{
+			"id": "cus_empty",
+		},
+		"status": "active",
+		"items": map[string]interface{}{
+			"data": []map[string]interface{}{},
+		},
+	})
+
+	event := stripe.Event{
+		Type: "customer.subscription.created",
+		Data: &stripe.EventData{
+			Raw: json.RawMessage(subJSON),
+		},
+	}
+
+	we, err := svc.extractEvent(event)
+	if err != nil {
+		t.Fatalf("extractEvent error: %v", err)
+	}
+
+	if we.PriceID != "" {
+		t.Errorf("PriceID should be empty for subscription with no items, got %q", we.PriceID)
+	}
+	if we.PlanName != "" {
+		t.Errorf("PlanName should be empty for subscription with no items, got %q", we.PlanName)
+	}
+}
+
+func TestExtractEvent_MalformedSubscriptionJSON(t *testing.T) {
+	svc := NewStripeService("sk_test_fake", "whsec_fake", testPlans())
+
+	event := stripe.Event{
+		Type: "customer.subscription.created",
+		Data: &stripe.EventData{
+			Raw: json.RawMessage(`{invalid json`),
+		},
+	}
+
+	_, err := svc.extractEvent(event)
+	if err == nil {
+		t.Fatal("expected error for malformed subscription JSON")
+	}
+}
+
+func TestExtractEvent_MalformedInvoiceJSON(t *testing.T) {
+	svc := NewStripeService("sk_test_fake", "whsec_fake", testPlans())
+
+	event := stripe.Event{
+		Type: "invoice.payment_failed",
+		Data: &stripe.EventData{
+			Raw: json.RawMessage(`{not valid json`),
+		},
+	}
+
+	_, err := svc.extractEvent(event)
+	if err == nil {
+		t.Fatal("expected error for malformed invoice JSON")
+	}
+}
+
+func TestExtractEvent_InvoiceWithoutSubscription(t *testing.T) {
+	svc := NewStripeService("sk_test_fake", "whsec_fake", testPlans())
+
+	invJSON, _ := json.Marshal(map[string]interface{}{
+		"id": "inv_oneoff",
+		"customer": map[string]interface{}{
+			"id": "cus_oneoff",
+		},
+	})
+
+	event := stripe.Event{
+		Type: "invoice.payment_failed",
+		Data: &stripe.EventData{
+			Raw: json.RawMessage(invJSON),
+		},
+	}
+
+	we, err := svc.extractEvent(event)
+	if err != nil {
+		t.Fatalf("extractEvent error: %v", err)
+	}
+
+	if we.SubscriptionID != "" {
+		t.Errorf("SubscriptionID should be empty for invoice without subscription, got %q", we.SubscriptionID)
+	}
+	if we.Status != "payment_failed" {
+		t.Errorf("Status = %q, want payment_failed", we.Status)
+	}
+}
+
+func TestNewStripeService_NoFreePlan(t *testing.T) {
+	plans := []PlanConfig{
+		{PriceID: "price_starter", PlanName: "starter", EventLimit: 10_000_000},
+		{PriceID: "price_pro", PlanName: "pro", EventLimit: 50_000_000},
+	}
+	svc := NewStripeService("sk_test_fake", "whsec_fake", plans)
+
+	if svc.FreePriceID() != "" {
+		t.Errorf("FreePriceID() should be empty when no free plan, got %q", svc.FreePriceID())
+	}
+}
+
+// ─── MockService Tests ───
+
+func TestMockService_ImplementsInterface(t *testing.T) {
+	var _ Service = &MockService{}
+}
+
+func TestMockService_CallTracking(t *testing.T) {
+	m := &MockService{
+		CustomerID:     "cus_mock",
+		SubscriptionID: "sub_mock",
+		PortalURL:      "https://billing.example.com",
+		FreePriceIDVal: "price_free",
+		PlanName:       "starter",
+	}
+
+	ctx := context.Background()
+	if id, err := m.CreateCustomer(ctx, "Test", "test@example.com", "t1"); err != nil || id != "cus_mock" {
+		t.Errorf("CreateCustomer = (%q, %v), want (cus_mock, nil)", id, err)
+	}
+	if id, err := m.CreateSubscription(ctx, "cus_mock", "price_1"); err != nil || id != "sub_mock" {
+		t.Errorf("CreateSubscription = (%q, %v), want (sub_mock, nil)", id, err)
+	}
+	if err := m.ReportUsage(ctx, "sub_mock", 100, time.Now()); err != nil {
+		t.Errorf("ReportUsage = %v, want nil", err)
+	}
+	if url, err := m.CreatePortalSession(ctx, "cus_mock", "https://return.example.com"); err != nil || url != "https://billing.example.com" {
+		t.Errorf("CreatePortalSession = (%q, %v)", url, err)
+	}
+
+	if m.CreateCustomerCalls != 1 {
+		t.Errorf("CreateCustomerCalls = %d, want 1", m.CreateCustomerCalls)
+	}
+	if m.CreateSubscriptionCalls != 1 {
+		t.Errorf("CreateSubscriptionCalls = %d, want 1", m.CreateSubscriptionCalls)
+	}
+	if m.ReportUsageCalls != 1 {
+		t.Errorf("ReportUsageCalls = %d, want 1", m.ReportUsageCalls)
+	}
+	if m.CreatePortalCalls != 1 {
+		t.Errorf("CreatePortalCalls = %d, want 1", m.CreatePortalCalls)
+	}
+
+	if m.PlanForPriceID("any") != "starter" {
+		t.Errorf("PlanForPriceID = %q, want starter", m.PlanForPriceID("any"))
+	}
+	if m.FreePriceID() != "price_free" {
+		t.Errorf("FreePriceID = %q, want price_free", m.FreePriceID())
+	}
+}
+
+func TestMockService_DefaultPlanName(t *testing.T) {
+	m := &MockService{}
+	if got := m.PlanForPriceID("any"); got != "unknown" {
+		t.Errorf("PlanForPriceID with empty PlanName = %q, want unknown", got)
 	}
 }
 

@@ -90,11 +90,39 @@ rollupJob:
     tag: "0.1.0"       # Pin to same SHA as ingestion
     pullPolicy: IfNotPresent
 
+eventsRollupJob:
+  enabled: true
+  schedule: "0 * * * *"
+
+eventsDetailJob:
+  enabled: true
+  schedule: "0 * * * *"
+
 retentionJob:
+  mode: "auto"  # Per-plan retention: free=7d, starter=30d, pro=90d
   image:
     repository: gravix-rollup
     tag: "0.1.0"
     pullPolicy: IfNotPresent
+
+# ─── Gateway ───
+gateway:
+  replicaCount: 2
+  image:
+    repository: gravix-gateway
+    tag: "0.1.0"       # Pin to same SHA as other services
+    pullPolicy: IfNotPresent
+  stripe:
+    enabled: true
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  persistence:
+    storageClass: "gp3"  # AWS EBS gp3
 
 # ─── Dashboard ───
 dashboard:

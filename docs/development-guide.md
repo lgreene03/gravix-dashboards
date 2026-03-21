@@ -20,6 +20,7 @@ This guide gets a new engineer from zero to productive on the Gravix codebase.
 services/ingestion/                    # Go HTTP service — validates facts, buffers to JSONL, rotates to S3
 transforms/request_metrics_minute/     # Go ETL job — aggregates JSONL into Parquet (p50/p95/p99, error rates)
 transforms/service_events_daily/       # Go ETL job — aggregates service events into daily summaries
+transforms/service_events_detail/      # Go ETL job — preserves full event detail as deduplicated Parquet
 schemas/                               # Protobuf validation layer (100% test coverage target)
 proto/                                 # Source-of-truth .proto definitions
 gen/                                   # Generated Go code from protobuf
@@ -81,6 +82,7 @@ Configured in `.env` (see `.env.example` for defaults):
 | `MINIO_ROOT_PASSWORD` | MinIO console password (required) |
 | `CUBEJS_DEV_MODE` | Enable Cube playground; set `true` for local dev |
 | `CUBEJS_API_SECRET` | Optional auth gate for dashboard queries |
+| `LOG_LEVEL` | Log verbosity: `debug`, `info` (default), `warn`, `error` |
 
 ## Local Service Endpoints
 
@@ -88,9 +90,11 @@ Configured in `.env` (see `.env.example` for defaults):
 |---------|-----|-------|
 | Dashboard | http://localhost:8000/index.html | Main UI |
 | Ingestion API | http://localhost:8090/api/v1/facts | Requires `X-API-Key` header |
+| Gateway API | http://localhost:8091 | Multi-tenant gateway |
 | Trino UI | http://localhost:8081 | SQL query interface |
 | Cube Playground | http://localhost:4000 | Only when `CUBEJS_DEV_MODE=true` |
 | Prometheus | http://localhost:9090 | Metrics and alerting rules |
+| Grafana — SLO | http://localhost:3000/d/gravix-slo | Availability & latency SLOs |
 | Grafana | http://localhost:3000 | Login: `admin` / `admin` |
 | MinIO Console | http://localhost:9001 | Login: `admin` / `<MINIO_ROOT_PASSWORD>` |
 
@@ -121,7 +125,8 @@ go test ./... -v -cover
 go test ./schemas/... -v -cover                            # Schema validation (>=90% coverage required)
 go test ./services/ingestion/... -v                        # Ingestion handlers
 go test ./transforms/request_metrics_minute/... -v         # Rollup aggregation
-go test ./transforms/service_events_daily/... -v           # Events rollup
+go test ./transforms/service_events_daily/... -v           # Events daily rollup
+go test ./transforms/service_events_detail/... -v          # Events detail rollup
 go test ./pkg/storage/... -v                               # Storage (includes path traversal tests)
 
 # Single test by name
@@ -206,7 +211,7 @@ the source of truth; generated Go code lives in `gen/gravix/v1/`.
 ## CI Pipeline
 
 **On pull request**: lint (`go vet` + `staticcheck`), test (race detector,
->=90% schema coverage), build (5 binaries), helm-validate, docker-lint
+>=90% schema coverage), build (7 binaries), helm-validate, docker-lint
 (hadolint).
 
 **On merge to main**: All above + Docker build/push to GHCR + Trivy scan.

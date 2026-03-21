@@ -68,3 +68,20 @@ spec:
     matchLabels:
       app: cube
 {{- end }}
+
+{{- if and .Values.gateway.enabled (gt (int .Values.gateway.replicaCount) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-gateway-pdb
+  labels:
+    app: gateway
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: gateway
+{{- end }}

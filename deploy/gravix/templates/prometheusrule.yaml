@@ -84,6 +84,96 @@ spec:
             summary: "Rollup job took over 2 minutes"
             description: "A rollup job execution exceeded 120s, which may indicate growing data volume."
 
+    # ─── Events Rollup Alerts ───
+    - name: gravix_events_rollup
+      rules:
+        - alert: EventsDailyRollupStale
+          expr: |
+            time() - max(events_daily_last_success_timestamp_seconds) > 7200
+          for: 10m
+          labels:
+            severity: warning
+            service: events-rollup
+          annotations:
+            summary: "Events daily rollup has not completed in 2 hours"
+            description: "The events daily rollup job has not completed successfully in the last 2 hours. Event aggregation may be stale."
+
+        - alert: EventsDetailRollupStale
+          expr: |
+            time() - max(events_detail_last_success_timestamp_seconds) > 7200
+          for: 10m
+          labels:
+            severity: warning
+            service: events-detail-rollup
+          annotations:
+            summary: "Events detail rollup has not completed in 2 hours"
+            description: "The events detail rollup job has not completed successfully in the last 2 hours. Event details may be stale."
+
+    # ─── Purge Alerts ───
+    - name: gravix_purge
+      rules:
+        - alert: PurgeJobStale
+          expr: |
+            time() - max(purge_last_success_timestamp_seconds) > 172800
+          for: 30m
+          labels:
+            severity: warning
+            service: purge
+          annotations:
+            summary: "Purge job has not completed in 48 hours"
+            description: "The data retention purge job has not completed successfully in 48 hours. Old data may not be getting cleaned up."
+
+        - alert: PurgeHighErrorRate
+          expr: |
+            rate(purge_errors_total[1h]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: purge
+          annotations:
+            summary: "Purge job encountering errors"
+            description: "The purge job is encountering storage or audit log errors. Check purge job logs for details."
+
+    # ─── Gateway Alerts ───
+    - name: gravix_gateway
+      rules:
+        - alert: GatewayDown
+          expr: up{job="gateway"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            service: gateway
+          annotations:
+            summary: "Gateway service is down"
+            description: "The gateway service has been unreachable for 2 minutes. Authentication and dashboard access are unavailable."
+
+        - alert: GatewayHighErrorRate
+          expr: |
+            sum(rate(gateway_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(gateway_requests_total[5m]))
+            > 0.05
+          for: 5m
+          labels:
+            severity: warning
+            service: gateway
+          annotations:
+            summary: "Gateway error rate above 5%"
+            description: "The gateway service is returning >5% server errors over the last 5 minutes."
+
+        - alert: GatewayHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)
+            ) > 2.0
+          for: 5m
+          labels:
+            severity: warning
+            service: gateway
+          annotations:
+            summary: "Gateway P95 latency above 2s"
+            description: "Gateway request latency is elevated, which may indicate database or upstream issues."
+
     # ─── Infrastructure Alerts ───
     - name: gravix_infrastructure
       rules:

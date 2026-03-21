@@ -61,3 +61,18 @@ CREATE TABLE gravix.raw.service_events_daily (
     format = 'PARQUET',
     external_location = '/data/warehouse/service_events_daily'
 );
+
+-- Service Events Detail (Parquet from service_events_detail rollup)
+DROP TABLE IF EXISTS gravix.raw.service_events_detail;
+CREATE TABLE gravix.raw.service_events_detail (
+    tenant_id VARCHAR,
+    event_time VARCHAR,
+    service VARCHAR,
+    event_type VARCHAR,
+    entity_id VARCHAR,
+    message VARCHAR,
+    properties VARCHAR
+) WITH (
+    format = 'PARQUET',
+    external_location = '/data/warehouse/service_events_detail'
+);
