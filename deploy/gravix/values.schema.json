@@ -302,6 +302,44 @@
         "tenantDBPath": {
           "type": "string",
           "description": "Path to tenant SQLite database inside the container"
+        },
+        "warmAfterDays": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Move data to warm storage tier after this many days (0=disabled)"
+        },
+        "coldAfterDays": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Move data to cold storage tier after this many days (0=disabled)"
+        }
+      }
+    },
+    "s3Lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "S3 bucket lifecycle policy configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "warmAfterDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 7,
+          "description": "Transition to STANDARD_IA after N days"
+        },
+        "coldAfterDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "Transition to GLACIER after N days"
+        },
+        "deleteAfterDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 90,
+          "description": "Permanently delete after N days"
         }
       }
     },

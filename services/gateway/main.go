@@ -35,7 +35,10 @@ import (
 	"sort"
 	"strconv"
 
+	"archive/tar"
+	"compress/gzip"
 	"math"
+	"sync"
 
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 
@@ -236,13 +239,14 @@ func main() {
 	defer trl.Close()
 
 	gw := &gateway{
-		db:          db,
-		tokens:      tokens,
-		notifier:    notify.NewDispatcher(),
-		store:       objStore,
-		rateLimiter: trl,
-		cubeAPIURL:  cubeURL,
-		jwtSecret:   *jwtSecret,
+		db:            db,
+		tokens:        tokens,
+		notifier:      notify.NewDispatcher(),
+		store:         objStore,
+		rateLimiter:   trl,
+		cubeAPIURL:    cubeURL,
+		jwtSecret:     *jwtSecret,
+		activeExports: make(map[string]bool),
 	}
 
 	// Master context for background goroutines — cancelled on shutdown
@@ -297,6 +301,8 @@ func main() {
 	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQ)))
 	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQReplay)))
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
+	mux.HandleFunc("/api/gateway/retention", gw.requireAuth(gw.rateLimitMiddleware(gw.handleRetention)))
+	mux.HandleFunc("/api/gateway/export", gw.requireAuth(gw.rateLimitMiddleware(gw.handleExport)))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -397,14 +403,16 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 }
 
 type gateway struct {
-	db          tenantdb.DB
-	tokens      *auth.TokenService
-	billing     billing.Service // nil if Stripe is not configured
-	notifier    *notify.Dispatcher
-	store       storage.ObjectStore // for DLQ reads
-	rateLimiter *ratelimit.TenantLimiter
-	cubeAPIURL  string
-	jwtSecret   string
+	db              tenantdb.DB
+	tokens          *auth.TokenService
+	billing         billing.Service // nil if Stripe is not configured
+	notifier        *notify.Dispatcher
+	store           storage.ObjectStore // for DLQ reads
+	rateLimiter     *ratelimit.TenantLimiter
+	cubeAPIURL      string
+	jwtSecret       string
+	activeExports   map[string]bool // tracks in-progress exports per tenant
+	activeExportsMu sync.Mutex
 }
 
 // requireRole returns middleware that checks if the authenticated user has one of the given roles.
@@ -577,6 +585,304 @@ func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 		"limit":   limit,
 		"offset":  offset,
 	})
+}
+
+// planMinRetentionDays returns the minimum allowed retention in days for a given plan.
+// Custom retention policies cannot go below these minimums.
+func planMinRetentionDays(plan string) int {
+	switch plan {
+	case "free":
+		return 1
+	case "starter":
+		return 7
+	case "pro":
+		return 7
+	default:
+		return 7
+	}
+}
+
+// planMaxRetentionDays returns the maximum allowed retention in days for a given plan.
+func planMaxRetentionDays(plan string) int {
+	switch plan {
+	case "free":
+		return 7
+	case "starter":
+		return 30
+	case "pro":
+		return 365
+	default:
+		return 90
+	}
+}
+
+// handleRetention handles GET/PUT for per-tenant retention policies.
+func (gw *gateway) handleRetention(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if !claims.HasRole(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		policy, err := gw.db.RetentionPolicies().GetByTenantID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get retention policy")
+			return
+		}
+
+		// Get tenant for plan info
+		tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get tenant")
+			return
+		}
+
+		resp := map[string]interface{}{
+			"plan":        tenant.Plan,
+			"min_days":    planMinRetentionDays(tenant.Plan),
+			"max_days":    planMaxRetentionDays(tenant.Plan),
+			"plan_default_facts_days": planDefaultFactsDays(tenant.Plan),
+		}
+		if policy != nil {
+			resp["facts_days"] = policy.FactsDays
+			resp["metrics_days"] = policy.MetricsDays
+			resp["traces_days"] = policy.TracesDays
+			resp["updated_at"] = policy.UpdatedAt
+		}
+		writeJSON(w, http.StatusOK, resp)
+
+	case http.MethodPut:
+		var req struct {
+			FactsDays   int `json:"facts_days"`
+			MetricsDays int `json:"metrics_days"`
+			TracesDays  int `json:"traces_days"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		// Get tenant for plan-based validation
+		tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get tenant")
+			return
+		}
+
+		minDays := planMinRetentionDays(tenant.Plan)
+		maxDays := planMaxRetentionDays(tenant.Plan)
+
+		// Validate: 0 means "use default", otherwise must be within plan bounds
+		for _, pair := range []struct {
+			name string
+			val  int
+		}{
+			{"facts_days", req.FactsDays},
+			{"metrics_days", req.MetricsDays},
+			{"traces_days", req.TracesDays},
+		} {
+			if pair.val != 0 && (pair.val < minDays || pair.val > maxDays) {
+				writeError(w, http.StatusBadRequest,
+					fmt.Sprintf("%s must be 0 (default) or between %d and %d for %s plan",
+						pair.name, minDays, maxDays, tenant.Plan))
+				return
+			}
+		}
+
+		policy := &tenantdb.RetentionPolicy{
+			TenantID:    claims.TenantID,
+			FactsDays:   req.FactsDays,
+			MetricsDays: req.MetricsDays,
+			TracesDays:  req.TracesDays,
+		}
+		if err := gw.db.RetentionPolicies().Upsert(r.Context(), policy); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save retention policy")
+			return
+		}
+
+		// Audit log
+		detail := fmt.Sprintf(`{"facts_days":%d,"metrics_days":%d,"traces_days":%d}`,
+			req.FactsDays, req.MetricsDays, req.TracesDays)
+		gw.db.AuditLog().Log(r.Context(), &tenantdb.AuditEntry{
+			TenantID:   claims.TenantID,
+			UserID:     claims.UserID,
+			Action:     "retention.update",
+			Resource:   "retention_policy",
+			ResourceID: claims.TenantID,
+			Detail:     detail,
+		})
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"facts_days":   policy.FactsDays,
+			"metrics_days": policy.MetricsDays,
+			"traces_days":  policy.TracesDays,
+			"updated_at":   policy.UpdatedAt,
+		})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or PUT required")
+	}
+}
+
+// planDefaultFactsDays returns the default facts retention for a plan.
+func planDefaultFactsDays(plan string) int {
+	switch plan {
+	case "free":
+		return 7
+	case "starter":
+		return 30
+	case "pro":
+		return 90
+	default:
+		return 30
+	}
+}
+
+// handleExport streams a tar.gz archive of raw JSONL files for a date range.
+// Limited to 1 concurrent export per tenant, max 30-day range.
+func (gw *gateway) handleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+
+	var req struct {
+		StartDate string `json:"start_date"` // YYYY-MM-DD
+		EndDate   string `json:"end_date"`   // YYYY-MM-DD
+		DataType  string `json:"data_type"`  // request_facts, service_events (default: request_facts)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if req.DataType == "" {
+		req.DataType = "request_facts"
+	}
+	if req.DataType != "request_facts" && req.DataType != "service_events" {
+		writeError(w, http.StatusBadRequest, "data_type must be request_facts or service_events")
+		return
+	}
+
+	startDate, err := time.Parse("2006-01-02", req.StartDate)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "start_date must be YYYY-MM-DD format")
+		return
+	}
+	endDate, err := time.Parse("2006-01-02", req.EndDate)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "end_date must be YYYY-MM-DD format")
+		return
+	}
+
+	if endDate.Before(startDate) {
+		writeError(w, http.StatusBadRequest, "end_date must be after start_date")
+		return
+	}
+
+	daySpan := int(endDate.Sub(startDate).Hours()/24) + 1
+	if daySpan > 30 {
+		writeError(w, http.StatusBadRequest, "export range cannot exceed 30 days")
+		return
+	}
+
+	// Enforce 1 concurrent export per tenant
+	gw.activeExportsMu.Lock()
+	if gw.activeExports[claims.TenantID] {
+		gw.activeExportsMu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "an export is already in progress for this tenant")
+		return
+	}
+	gw.activeExports[claims.TenantID] = true
+	gw.activeExportsMu.Unlock()
+	defer func() {
+		gw.activeExportsMu.Lock()
+		delete(gw.activeExports, claims.TenantID)
+		gw.activeExportsMu.Unlock()
+	}()
+
+	// Collect files matching the date range
+	prefix := fmt.Sprintf("raw/%s/%s", claims.TenantID, req.DataType)
+	keys, err := gw.store.List(r.Context(), prefix)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list files")
+		return
+	}
+
+	var matchedKeys []string
+	for _, key := range keys {
+		for d := startDate; !d.After(endDate); d = d.AddDate(0, 0, 1) {
+			dateStr := d.Format("2006-01-02")
+			if strings.Contains(key, dateStr) {
+				matchedKeys = append(matchedKeys, key)
+				break
+			}
+		}
+	}
+
+	if len(matchedKeys) == 0 {
+		writeError(w, http.StatusNotFound, "no data found for the specified date range")
+		return
+	}
+
+	// Audit log
+	detail := fmt.Sprintf(`{"data_type":"%s","start_date":"%s","end_date":"%s","file_count":%d}`,
+		req.DataType, req.StartDate, req.EndDate, len(matchedKeys))
+	gw.db.AuditLog().Log(r.Context(), &tenantdb.AuditEntry{
+		TenantID:   claims.TenantID,
+		UserID:     claims.UserID,
+		Action:     "data.export",
+		Resource:   req.DataType,
+		ResourceID: claims.TenantID,
+		Detail:     detail,
+	})
+
+	// Stream tar.gz response
+	filename := fmt.Sprintf("gravix-export-%s-%s-to-%s.tar.gz", req.DataType, req.StartDate, req.EndDate)
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.WriteHeader(http.StatusOK)
+
+	gzw := gzip.NewWriter(w)
+	defer gzw.Close()
+	tw := tar.NewWriter(gzw)
+	defer tw.Close()
+
+	for _, key := range matchedKeys {
+		rc, err := gw.store.Get(r.Context(), key)
+		if err != nil {
+			slog.Error("export: failed to read file", "key", key, "error", err)
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			slog.Error("export: failed to read file data", "key", key, "error", err)
+			continue
+		}
+
+		hdr := &tar.Header{
+			Name:    key,
+			Size:    int64(len(data)),
+			Mode:    0644,
+			ModTime: time.Now(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			slog.Error("export: failed to write tar header", "key", key, "error", err)
+			return
+		}
+		if _, err := tw.Write(data); err != nil {
+			slog.Error("export: failed to write tar data", "key", key, "error", err)
+			return
+		}
+	}
+
+	slog.Info("export complete", "tenant_id", claims.TenantID, "data_type", req.DataType,
+		"start", req.StartDate, "end", req.EndDate, "files", len(matchedKeys))
 }
 
 // handleLogin authenticates a user with email/password and returns a JWT.

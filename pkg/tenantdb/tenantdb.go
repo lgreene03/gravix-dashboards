@@ -197,6 +197,24 @@ type AuditRepo interface {
 	ListByTenant(ctx context.Context, tenantID string, limit, offset int) ([]*AuditEntry, int, error)
 }
 
+// RetentionPolicy represents per-tenant data retention configuration.
+// When set, overrides the plan-based default retention for that tenant.
+type RetentionPolicy struct {
+	TenantID       string
+	FactsDays      int  // retention for request facts (0 = use plan default)
+	MetricsDays    int  // retention for aggregated metrics (0 = use plan default)
+	TracesDays     int  // retention for trace samples (0 = use 7-day default)
+	UpdatedAt      time.Time
+}
+
+// RetentionPolicyRepo manages per-tenant retention policies.
+type RetentionPolicyRepo interface {
+	// Upsert creates or updates the retention policy for a tenant.
+	Upsert(ctx context.Context, p *RetentionPolicy) error
+	// GetByTenantID returns the retention policy for a tenant, or nil if none set.
+	GetByTenantID(ctx context.Context, tenantID string) (*RetentionPolicy, error)
+}
+
 // MonthlyUsage represents a monthly snapshot of tenant event usage.
 type MonthlyUsage struct {
 	TenantID  string
@@ -223,5 +241,6 @@ type DB interface {
 	AlertRules() AlertRuleRepo
 	AlertHistory() AlertHistoryRepo
 	AuditLog() AuditRepo
+	RetentionPolicies() RetentionPolicyRepo
 	Close() error
 }

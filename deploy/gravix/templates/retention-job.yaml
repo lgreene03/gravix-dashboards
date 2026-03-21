@@ -45,6 +45,14 @@ spec:
                 - "--retention-days"
                 - "{{ .Values.retentionJob.retentionDays }}"
                 {{- end }}
+                {{- if gt (int (default 0 .Values.retentionJob.warmAfterDays)) 0 }}
+                - "--warm-after-days"
+                - "{{ .Values.retentionJob.warmAfterDays }}"
+                {{- end }}
+                {{- if gt (int (default 0 .Values.retentionJob.coldAfterDays)) 0 }}
+                - "--cold-after-days"
+                - "{{ .Values.retentionJob.coldAfterDays }}"
+                {{- end }}
               env:
                 - name: TENANT_DB_PATH
                   value: {{ .Values.retentionJob.tenantDBPath | default "/data/gravix.db" | quote }}

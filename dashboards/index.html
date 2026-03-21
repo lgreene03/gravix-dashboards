@@ -118,6 +118,7 @@
             <a href="#" class="nav-link" data-page="ingestion">Ingestion</a>
             <a href="#" class="nav-link" data-page="traces" id="nav-traces">Traces</a>
             <a href="#" class="nav-link" data-page="usage" id="nav-usage">Usage &amp; Billing</a>
+            <a href="#" class="nav-link" data-page="data" id="nav-data">Data</a>
             <a href="#" class="nav-link disabled" data-page="processing" title="Coming soon">Processing</a>
             <a href="#" class="nav-link disabled" data-page="settings" title="Coming soon">Settings</a>
         </nav>
@@ -721,6 +722,67 @@
                 </div>
             </div>
         </div><!-- end page-traces -->
+
+        <div id="page-data" class="page-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Data Management</div>
+                        <div class="card-subtitle">Export data and manage retention policies</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <h3 style="margin-bottom: 16px;">Export Data</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px;">Download raw JSONL files as a compressed archive. Maximum 30-day range.</p>
+                    <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+                        <div>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Data Type</label>
+                            <select id="export-data-type" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                                <option value="request_facts">Request Facts</option>
+                                <option value="service_events">Service Events</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Start Date</label>
+                            <input type="date" id="export-start-date" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">End Date</label>
+                            <input type="date" id="export-end-date" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <button class="export-btn" onclick="startExport()" id="export-btn">Export</button>
+                    </div>
+                    <div id="export-status" style="margin-top: 12px; display: none;"></div>
+
+                    <hr style="margin: 32px 0; border-color: var(--border);">
+
+                    <h3 style="margin-bottom: 16px;">Retention Policy</h3>
+                    <div id="retention-loading" class="skeleton-container">
+                        <div class="skeleton-line" style="width:100%;height:100px"></div>
+                    </div>
+                    <div id="retention-info" style="display: none;">
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                            <div class="stat-card">
+                                <div class="stat-label">Plan</div>
+                                <div class="stat-value" id="retention-plan">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Facts Retention</div>
+                                <div class="stat-value" id="retention-facts">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Metrics Retention</div>
+                                <div class="stat-value" id="retention-metrics">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Traces Retention</div>
+                                <div class="stat-value" id="retention-traces">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-data -->
 
     </main>
 

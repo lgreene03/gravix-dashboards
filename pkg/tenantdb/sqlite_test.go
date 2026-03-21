@@ -1479,3 +1479,102 @@ func TestConcurrentReadWrite(t *testing.T) {
 		t.Errorf("event counter = %d, want %d", count, expected)
 	}
 }
+
+// --- Retention Policy Tests ---
+
+func TestRetentionPolicyUpsertAndGet(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	tenant := createTestTenant(t, db, "Ret Tenant", "ret@test.com")
+
+	// Initially no policy
+	policy, err := db.RetentionPolicies().GetByTenantID(ctx, tenant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy != nil {
+		t.Error("expected nil policy for new tenant")
+	}
+
+	// Create policy
+	p := &RetentionPolicy{
+		TenantID:    tenant.ID,
+		FactsDays:   14,
+		MetricsDays: 30,
+		TracesDays:  3,
+	}
+	if err := db.RetentionPolicies().Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if p.UpdatedAt.IsZero() {
+		t.Error("expected UpdatedAt to be set")
+	}
+
+	// Read it back
+	got, err := db.RetentionPolicies().GetByTenantID(ctx, tenant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil policy")
+	}
+	if got.FactsDays != 14 {
+		t.Errorf("FactsDays = %d, want 14", got.FactsDays)
+	}
+	if got.MetricsDays != 30 {
+		t.Errorf("MetricsDays = %d, want 30", got.MetricsDays)
+	}
+	if got.TracesDays != 3 {
+		t.Errorf("TracesDays = %d, want 3", got.TracesDays)
+	}
+}
+
+func TestRetentionPolicyUpsertUpdate(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	tenant := createTestTenant(t, db, "Ret2 Tenant", "ret2@test.com")
+
+	// Create initial policy
+	p := &RetentionPolicy{TenantID: tenant.ID, FactsDays: 7}
+	if err := db.RetentionPolicies().Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	// Update it
+	p.FactsDays = 30
+	p.MetricsDays = 60
+	if err := db.RetentionPolicies().Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.RetentionPolicies().GetByTenantID(ctx, tenant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FactsDays != 30 {
+		t.Errorf("FactsDays = %d, want 30", got.FactsDays)
+	}
+	if got.MetricsDays != 60 {
+		t.Errorf("MetricsDays = %d, want 60", got.MetricsDays)
+	}
+}
+
+func TestRetentionPolicyGetNonexistentTenant(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	policy, err := db.RetentionPolicies().GetByTenantID(ctx, "nonexistent-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy != nil {
+		t.Error("expected nil for nonexistent tenant")
+	}
+}
+
+func TestRetentionPolicyRepoNotNil(t *testing.T) {
+	db := newTestDB(t)
+	if db.RetentionPolicies() == nil {
+		t.Error("RetentionPolicies() returned nil")
+	}
+}

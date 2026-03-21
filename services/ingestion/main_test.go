@@ -49,6 +49,10 @@ func (f *failingStore) Exists(_ context.Context, _ string) (bool, error) {
 	return false, errors.New("not implemented")
 }
 
+func (f *failingStore) PutWithStorageClass(_ context.Context, _ string, _ io.Reader, _ storage.StorageClass) error {
+	return errors.New("simulated S3 upload failure")
+}
+
 // newUUIDv7 generates a fresh UUIDv7 string for test data.
 func newUUIDv7(t *testing.T) string {
 	t.Helper()

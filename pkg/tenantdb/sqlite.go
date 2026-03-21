@@ -130,6 +130,14 @@ CREATE TABLE IF NOT EXISTS monthly_usage (
 	snapped_at TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY (tenant_id, month)
 );
+
+CREATE TABLE IF NOT EXISTS retention_policies (
+	tenant_id    TEXT PRIMARY KEY REFERENCES tenants(id),
+	facts_days   INTEGER NOT NULL DEFAULT 0,
+	metrics_days INTEGER NOT NULL DEFAULT 0,
+	traces_days  INTEGER NOT NULL DEFAULT 0,
+	updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -194,6 +202,9 @@ func (s *SQLiteDB) AlertRules() AlertRuleRepo     { return &sqliteAlertRuleRepo{
 func (s *SQLiteDB) AlertHistory() AlertHistoryRepo { return &sqliteAlertHistoryRepo{db: s.db} }
 func (s *SQLiteDB) AuditLog() AuditRepo            { return &sqliteAuditRepo{db: s.db} }
 func (s *SQLiteDB) MonthlyUsage() MonthlyUsageRepo  { return &sqliteMonthlyUsageRepo{db: s.db} }
+func (s *SQLiteDB) RetentionPolicies() RetentionPolicyRepo {
+	return &sqliteRetentionPolicyRepo{db: s.db}
+}
 
 // --- Tenant Repo ---
 
@@ -984,4 +995,44 @@ func (r *sqliteMonthlyUsageRepo) GetByTenant(ctx context.Context, tenantID strin
 		result = append(result, m)
 	}
 	return result, rows.Err()
+}
+
+// --- Retention Policy Repo ---
+
+type sqliteRetentionPolicyRepo struct{ db *sql.DB }
+
+func (r *sqliteRetentionPolicyRepo) Upsert(ctx context.Context, p *RetentionPolicy) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO retention_policies (tenant_id, facts_days, metrics_days, traces_days, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET
+		   facts_days = excluded.facts_days,
+		   metrics_days = excluded.metrics_days,
+		   traces_days = excluded.traces_days,
+		   updated_at = excluded.updated_at`,
+		p.TenantID, p.FactsDays, p.MetricsDays, p.TracesDays, now,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert retention policy: %w", err)
+	}
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, now)
+	return nil
+}
+
+func (r *sqliteRetentionPolicyRepo) GetByTenantID(ctx context.Context, tenantID string) (*RetentionPolicy, error) {
+	p := &RetentionPolicy{}
+	var updatedAt string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT tenant_id, facts_days, metrics_days, traces_days, updated_at
+		 FROM retention_policies WHERE tenant_id = ?`, tenantID,
+	).Scan(&p.TenantID, &p.FactsDays, &p.MetricsDays, &p.TracesDays, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get retention policy: %w", err)
+	}
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return p, nil
 }

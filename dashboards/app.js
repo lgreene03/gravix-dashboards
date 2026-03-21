@@ -375,7 +375,7 @@
             // Show/hide dashboard filters depending on page
             const headerEl = document.querySelector('.header');
             if (headerEl) {
-                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces') ? 'none' : '';
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data') ? 'none' : '';
             }
 
             if (pageName === 'endpoints') {
@@ -388,6 +388,8 @@
                 loadUsagePage();
             } else if (pageName === 'traces') {
                 loadTracesPage();
+            } else if (pageName === 'data') {
+                loadDataPage();
             }
 
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2901,5 +2903,93 @@ app.listen(8080, () => {
         // Expose for onclick handlers
         window.loadTracesPage = loadTracesPage;
         window.loadTraceDetail = loadTraceDetail;
+
+        // ─── Data Management Page ───
+
+        async function loadDataPage() {
+            // Set default date range (last 7 days)
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 7);
+            document.getElementById('export-start-date').value = startDate.toISOString().split('T')[0];
+            document.getElementById('export-end-date').value = endDate.toISOString().split('T')[0];
+
+            // Load retention info
+            const loadingEl = document.getElementById('retention-loading');
+            const infoEl = document.getElementById('retention-info');
+            loadingEl.style.display = 'block';
+            infoEl.style.display = 'none';
+
+            try {
+                const resp = await cachedFetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/retention', {
+                    headers: { 'Authorization': 'Bearer ' + getJWT() }
+                });
+                const data = await resp.json();
+                document.getElementById('retention-plan').textContent = (data.plan || 'unknown').toUpperCase();
+                const defaultDays = data.plan_default_facts_days || 30;
+                document.getElementById('retention-facts').textContent = (data.facts_days || defaultDays) + ' days';
+                document.getElementById('retention-metrics').textContent = (data.metrics_days || defaultDays) + ' days';
+                document.getElementById('retention-traces').textContent = (data.traces_days || 7) + ' days';
+                loadingEl.style.display = 'none';
+                infoEl.style.display = 'block';
+            } catch (err) {
+                loadingEl.innerHTML = '<p style="color: var(--text-secondary);">Unable to load retention info.</p>';
+            }
+        }
+
+        async function startExport() {
+            const btn = document.getElementById('export-btn');
+            const statusEl = document.getElementById('export-status');
+            const dataType = document.getElementById('export-data-type').value;
+            const startDate = document.getElementById('export-start-date').value;
+            const endDate = document.getElementById('export-end-date').value;
+
+            if (!startDate || !endDate) {
+                statusEl.style.display = 'block';
+                statusEl.innerHTML = '<span style="color: var(--warning);">Please select start and end dates.</span>';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Exporting...';
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = '<span style="color: var(--text-secondary);">Preparing export...</span>';
+
+            try {
+                const resp = await fetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/export', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + getJWT(),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ data_type: dataType, start_date: startDate, end_date: endDate })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.error || 'Export failed');
+                }
+
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'gravix-export-' + dataType + '-' + startDate + '-to-' + endDate + '.tar.gz';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                statusEl.innerHTML = '<span style="color: var(--success);">Export downloaded successfully.</span>';
+            } catch (err) {
+                statusEl.innerHTML = '<span style="color: var(--error);">' + err.message + '</span>';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Export';
+            }
+        }
+
+        window.startExport = startExport;
+        window.loadDataPage = loadDataPage;
 
     })();

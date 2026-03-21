@@ -102,7 +102,18 @@ retentionJob:
   schedule: "0 3 * * *" # Daily at 03:00 UTC
   mode: "manual"        # "auto" = per-plan retention (free=7d, starter=30d, pro=90d), "manual" = use retentionDays
   retentionDays: 30     # Only used when mode=manual
+  warmAfterDays: 7      # Move data to warm (STANDARD_IA) after this many days (0=disabled)
+  coldAfterDays: 30     # Move data to cold (GLACIER) after this many days (0=disabled)
   tenantDBPath: "/data/gravix.db"  # Path to tenant SQLite database inside the container
+
+# S3 lifecycle policy configuration.
+# When enabled, creates a ConfigMap with lifecycle rules for the S3 bucket.
+# These are applied to the bucket via the MinIO/S3 API or IaC tooling.
+s3Lifecycle:
+  enabled: false
+  warmAfterDays: 7      # Transition to STANDARD_IA after N days
+  coldAfterDays: 30     # Transition to GLACIER after N days
+  deleteAfterDays: 90   # Permanently delete after N days
 
 gateway:
   enabled: true
