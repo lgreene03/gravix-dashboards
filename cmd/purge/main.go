@@ -4,39 +4,127 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+var (
+	purgeFilesDeletedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "purge_files_deleted_total",
+			Help: "Total files deleted by the purge job.",
+		},
+		[]string{"tenant_id"},
+	)
+	purgeDurationSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "purge_duration_seconds",
+			Help: "Duration of the last purge run in seconds.",
+		},
+	)
+	purgeErrorsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "purge_errors_total",
+			Help: "Total errors encountered during purge.",
+		},
+	)
+	purgeLastSuccessTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "purge_last_success_timestamp_seconds",
+			Help: "Unix timestamp of the last successful purge run.",
+		},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(purgeFilesDeletedTotal)
+	prometheus.MustRegister(purgeDurationSeconds)
+	prometheus.MustRegister(purgeErrorsTotal)
+	prometheus.MustRegister(purgeLastSuccessTimestamp)
+}
+
+func startMetricsServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			slog.Error("metrics server error", "error", err)
+		}
+	}()
+	return srv
+}
+
+// planRetentionDays returns the data retention period in days for a given billing plan.
+// Used in "auto" mode to enforce per-tenant retention based on their subscription tier.
+func planRetentionDays(plan string) int {
+	switch plan {
+	case "free":
+		return 7
+	case "starter":
+		return 30
+	case "pro":
+		return 90
+	default:
+		return 30 // unknown plans default to starter-level retention
+	}
+}
+
 func main() {
+	logging.Init("purge")
+
 	var retentionDays int
 	var dryRun bool
 	var dataDir string
 	var tenantDBPath string
+	var mode string
 
-	flag.IntVar(&retentionDays, "retention-days", 30, "Delete data older than this many days")
+	flag.IntVar(&retentionDays, "retention-days", 30, "Delete data older than this many days (manual mode only)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print files that would be deleted without actually deleting")
 	flag.StringVar(&dataDir, "data-dir", "./data", "Base data directory (used for local storage)")
 	flag.StringVar(&tenantDBPath, "tenant-db", "", "Path to tenant SQLite database (multi-tenant mode)")
+	flag.StringVar(&mode, "mode", "manual", "Retention mode: 'auto' uses per-plan retention, 'manual' uses --retention-days")
 	flag.Parse()
 
 	if tenantDBPath == "" {
 		tenantDBPath = os.Getenv("TENANT_DB_PATH")
 	}
 
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
-	cutoffStr := cutoff.Format("2006-01-02")
-	log.Printf("Purging data older than %d days (cutoff: %s, dry-run: %v)", retentionDays, cutoffStr, dryRun)
+	if mode != "auto" && mode != "manual" {
+		slog.Error("invalid mode", "mode", mode)
+		os.Exit(1)
+	}
 
-	ctx := context.Background()
+	start := time.Now()
+	slog.Info("starting purge", "mode", mode, "dry_run", dryRun)
+
+	// Start metrics server
+	metricsSrv := startMetricsServer(":9091")
+
+	// Graceful shutdown: listen for SIGINT/SIGTERM
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	shutdownCh := make(chan os.Signal, 1)
+	signal.Notify(shutdownCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-shutdownCh
+		slog.Info("received shutdown signal", "signal", sig.String())
+		cancel()
+	}()
 
 	var store storage.ObjectStore
 	if os.Getenv("S3_ENDPOINT") != "" {
-		log.Println("Using S3/MinIO storage...")
+		slog.Info("initializing s3/minio storage")
 		var err error
 		store, err = storage.NewS3Store(
 			ctx,
@@ -47,73 +135,148 @@ func main() {
 			os.Getenv("S3_SECRET_KEY"),
 		)
 		if err != nil {
-			log.Fatalf("Failed to initialize S3 store: %v", err)
+			slog.Error("failed to initialize s3 store", "error", err)
+			os.Exit(1)
 		}
 	} else {
-		log.Printf("Using local storage at %s...", dataDir)
+		slog.Info("initializing local storage", "data_dir", dataDir)
 		var err error
 		store, err = storage.NewLocalStore(dataDir)
 		if err != nil {
-			log.Fatalf("Failed to initialize local store: %v", err)
+			slog.Error("failed to initialize local store", "error", err)
+			os.Exit(1)
 		}
 	}
 
-	// Build list of prefixes to purge
+	// Build list of per-tenant purge targets
 	type purgeTarget struct {
-		raw              string
-		rawEvents        string
-		warehouseMetrics string
-		warehouseEvents  string
+		tenantID              string
+		tenantPlan            string
+		retentionDays         int
+		raw                   string
+		rawEvents             string
+		warehouseMetrics      string
+		warehouseEvents       string
+		warehouseEventsDetail string
 	}
 
 	var targets []purgeTarget
+	var tdb tenantdb.DB
 
 	if tenantDBPath != "" {
-		tdb, err := tenantdb.Open(tenantDBPath)
+		var err error
+		tdb, err = tenantdb.Open(tenantDBPath)
 		if err != nil {
-			log.Fatalf("Failed to open tenant database: %v", err)
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
 		}
 		defer tdb.Close()
 
 		tenants, err := tdb.Tenants().List(ctx)
 		if err != nil {
-			log.Fatalf("Failed to list tenants: %v", err)
+			slog.Error("failed to list tenants", "error", err)
+			os.Exit(1)
 		}
 
 		for _, t := range tenants {
+			days := retentionDays
+			if mode == "auto" {
+				days = planRetentionDays(t.Plan)
+			}
 			targets = append(targets, purgeTarget{
-				raw:              fmt.Sprintf("raw/%s/request_facts", t.ID),
-				rawEvents:        fmt.Sprintf("raw/%s/service_events", t.ID),
-				warehouseMetrics: fmt.Sprintf("warehouse/%s/request_metrics_minute", t.ID),
-				warehouseEvents:  fmt.Sprintf("warehouse/%s/service_events_daily", t.ID),
+				tenantID:              t.ID,
+				tenantPlan:            t.Plan,
+				retentionDays:         days,
+				raw:                   fmt.Sprintf("raw/%s/request_facts", t.ID),
+				rawEvents:             fmt.Sprintf("raw/%s/service_events", t.ID),
+				warehouseMetrics:      fmt.Sprintf("warehouse/%s/request_metrics_minute", t.ID),
+				warehouseEvents:       fmt.Sprintf("warehouse/%s/service_events_daily", t.ID),
+				warehouseEventsDetail: fmt.Sprintf("warehouse/%s/service_events_detail", t.ID),
 			})
 		}
-		log.Printf("Multi-tenant mode: purging %d tenants", len(targets))
+		slog.Info("multi-tenant mode", "mode", mode, "tenant_count", len(targets))
 	} else {
+		if mode == "auto" {
+			slog.Warn("auto mode requires tenant database, falling back to manual retention")
+		}
 		targets = append(targets, purgeTarget{
-			raw:              "raw/request_facts",
-			rawEvents:        "raw/service_events",
-			warehouseMetrics: "warehouse/request_metrics_minute",
-			warehouseEvents:  "warehouse/service_events_daily",
+			retentionDays:         retentionDays,
+			raw:                   "raw/request_facts",
+			rawEvents:             "raw/service_events",
+			warehouseMetrics:      "warehouse/request_metrics_minute",
+			warehouseEvents:       "warehouse/service_events_daily",
+			warehouseEventsDetail: "warehouse/service_events_detail",
 		})
 	}
 
-	var total int
+	var grandTotal int
 	for _, t := range targets {
-		for _, prefix := range []string{t.raw, t.rawEvents, t.warehouseMetrics, t.warehouseEvents} {
+		if ctx.Err() != nil {
+			slog.Info("shutdown requested, skipping remaining tenants")
+			break
+		}
+		cutoff := time.Now().UTC().AddDate(0, 0, -t.retentionDays)
+		cutoffStr := cutoff.Format("2006-01-02")
+
+		tenantLabel := t.tenantID
+		if tenantLabel == "" {
+			tenantLabel = "default"
+		}
+
+		if t.tenantID != "" {
+			slog.Info("processing tenant", "tenant_id", t.tenantID, "plan", t.tenantPlan, "retention_days", t.retentionDays, "cutoff", cutoffStr)
+		} else {
+			slog.Info("single-tenant purge", "retention_days", t.retentionDays, "cutoff", cutoffStr)
+		}
+
+		var tenantTotal int
+		for _, prefix := range []string{t.raw, t.rawEvents, t.warehouseMetrics, t.warehouseEvents, t.warehouseEventsDetail} {
 			deleted, err := purgeOldData(ctx, store, prefix, cutoffStr, dryRun)
 			if err != nil {
-				log.Printf("Error purging %s: %v", prefix, err)
+				slog.Error("purge error", "prefix", prefix, "error", err)
+				purgeErrorsTotal.Inc()
 			}
-			total += deleted
+			tenantTotal += deleted
 		}
+
+		purgeFilesDeletedTotal.WithLabelValues(tenantLabel).Add(float64(tenantTotal))
+
+		// Write audit entry for each tenant purge (skip dry-run and zero-delete runs)
+		if tdb != nil && t.tenantID != "" && !dryRun && tenantTotal > 0 {
+			detail := fmt.Sprintf(
+				`{"retention_days":%d,"files_deleted":%d,"cutoff":"%s","plan":"%s","mode":"%s"}`,
+				t.retentionDays, tenantTotal, cutoffStr, t.tenantPlan, mode,
+			)
+			entry := &tenantdb.AuditEntry{
+				TenantID:   t.tenantID,
+				UserID:     "system",
+				Action:     "data.purge",
+				Resource:   "retention",
+				ResourceID: t.tenantID,
+				Detail:     detail,
+			}
+			if err := tdb.AuditLog().Log(ctx, entry); err != nil {
+				slog.Error("audit log error", "tenant_id", t.tenantID, "error", err)
+				purgeErrorsTotal.Inc()
+			}
+		}
+
+		grandTotal += tenantTotal
 	}
 
 	action := "deleted"
 	if dryRun {
 		action = "would delete"
 	}
-	log.Printf("Purge complete: %s %d files total", action, total)
+
+	purgeDurationSeconds.Set(time.Since(start).Seconds())
+	purgeLastSuccessTimestamp.SetToCurrentTime()
+	slog.Info("purge complete", "action", action, "files_total", grandTotal, "duration_seconds", time.Since(start).Seconds())
+
+	// Grace period for Prometheus scrape
+	slog.Info("waiting for prometheus scrape")
+	time.Sleep(5 * time.Second)
+	metricsSrv.Close()
 }
 
 // purgeOldData lists all keys under a prefix and deletes those containing dates older than the cutoff.
@@ -132,13 +295,14 @@ func purgeOldData(ctx context.Context, store storage.ObjectStore, prefix, cutoff
 		}
 		if dateStr < cutoffDate {
 			if dryRun {
-				log.Printf("[dry-run] would delete: %s (date: %s)", key, dateStr)
+				slog.Info("would delete file", "key", key, "date", dateStr)
 			} else {
 				if err := store.Delete(ctx, key); err != nil {
-					log.Printf("Failed to delete %s: %v", key, err)
+					slog.Error("failed to delete file", "key", key, "error", err)
+					purgeErrorsTotal.Inc()
 					continue
 				}
-				log.Printf("Deleted: %s (date: %s)", key, dateStr)
+				slog.Info("deleted file", "key", key, "date", dateStr)
 			}
 			deleted++
 		}

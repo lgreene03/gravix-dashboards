@@ -57,7 +57,7 @@ func main() {
 		}
 
 		// Create an API key for each tenant
-		plainKey, key, err := db.APIKeys().Create(ctx, tenant.ID, "default")
+		plainKey, key, err := db.APIKeys().Create(ctx, tenant.ID, "default", nil)
 		if err != nil {
 			log.Fatalf("Failed to create API key for %q: %v", st.Name, err)
 		}

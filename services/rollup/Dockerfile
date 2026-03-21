@@ -7,6 +7,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o request-metrics-rollup ./transforms/request_metrics_minute && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o service-events-rollup ./transforms/service_events_daily && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o service-events-detail-rollup ./transforms/service_events_detail && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o purge ./cmd/purge
 
 FROM alpine:3.21
@@ -26,6 +27,7 @@ RUN apk add --no-cache tzdata=2025c-r0
 
 COPY --from=builder /app/request-metrics-rollup .
 COPY --from=builder /app/service-events-rollup .
+COPY --from=builder /app/service-events-detail-rollup .
 COPY --from=builder /app/purge .
 
 RUN mkdir -p /app/data && chown -R gravix:gravix /app/data

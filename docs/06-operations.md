@@ -54,6 +54,35 @@ go run transforms/request_metrics_minute/main.go \
   --end-time 2026-02-16T11:00:00Z
 ```
 
+### Manual Events Detail Rollup
+
+To re-process service events detail for a specific day or range:
+
+```bash
+go run transforms/service_events_detail/main.go \
+  -input-dir ./data/raw/service_events \
+  -output-dir ./data/warehouse/service_events_detail \
+  -start-day 2026-03-01 -end-day 2026-03-15
+```
+
+### Batch Job Metrics
+
+All batch jobs export Prometheus metrics on dedicated ports. These are scraped
+by Prometheus and visualized in the **Gravix Batch Jobs** Grafana dashboard.
+
+| Job | Container | Metrics Port | Key Metrics |
+|-----|-----------|-------------|-------------|
+| Request Rollup | `gravix-request-rollup` | 9090 | `rollup_processed_events_total`, `rollup_duration_seconds` |
+| Purge | `gravix-purge` | 9091 | `purge_files_deleted_total`, `purge_errors_total` |
+| Events Daily | `gravix-events-rollup` | 9092 | `events_daily_processed_total`, `events_daily_duration_seconds` |
+| Events Detail | `gravix-events-detail-rollup` | 9093 | `events_detail_processed_total`, `events_detail_duration_seconds` |
+
+To check metrics manually:
+
+```bash
+docker exec -it gravix-events-detail-rollup wget -qO- http://localhost:9093/metrics
+```
+
 ## 3. Troubleshooting
 
 ### Dashboard Showing "No Data"
@@ -116,6 +145,32 @@ Ensure your client is sending the correct API Key.
 
 - Header: `X-API-Key: <your-secret>`
 - Env Var: Check `API_KEY` in your `.env` file.
+
+### API Key Management (Multi-Tenant)
+
+In multi-tenant mode, API keys are managed via the gateway. Keys can be created with an optional expiry:
+
+```bash
+# Create a key expiring in 90 days
+curl -X POST http://localhost:8091/api/gateway/api-keys \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-service", "expires_in_days": 90}'
+
+# List all keys
+curl http://localhost:8091/api/gateway/api-keys \
+  -H "Authorization: Bearer $JWT"
+
+# Check keys expiring within 7 days
+curl http://localhost:8091/api/gateway/api-keys/expiring \
+  -H "Authorization: Bearer $JWT"
+
+# Revoke a key
+curl -X DELETE http://localhost:8091/api/gateway/api-keys/{key_id} \
+  -H "Authorization: Bearer $JWT"
+```
+
+Expired keys are automatically rejected at ingestion time. The dashboard Settings page shows key status, expiry dates, and warnings for keys expiring within 7 days.
 
 ## 4. Disaster Recovery
 

@@ -1,4 +1,4 @@
-{{- if .Values.rollupJob.enabled }}
+{{- if .Values.eventsRollupJob.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/name: gravix
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  schedule: "0 * * * *"  # Every hour
+  schedule: {{ .Values.eventsRollupJob.schedule | quote }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -19,7 +19,7 @@ spec:
         metadata:
           annotations:
             prometheus.io/scrape: "true"
-            prometheus.io/port: "9090"
+            prometheus.io/port: "9092"
             prometheus.io/path: "/metrics"
         spec:
           serviceAccountName: {{ .Release.Name }}-jobs

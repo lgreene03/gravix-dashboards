@@ -21,7 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -37,14 +37,119 @@ import (
 
 	"math"
 
+	"github.com/lgreene/gravix-dashboards/pkg/logging"
+
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/billing"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
+	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/montanaflynn/stats"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// Prometheus metrics — names match PrometheusRule expressions in deploy/gravix/templates/prometheusrule.yaml
+var (
+	gatewayRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_requests_total",
+			Help: "Total number of gateway HTTP requests.",
+		},
+		[]string{"path", "method", "status"},
+	)
+	gatewayRequestDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "gateway_request_duration_seconds",
+			Help:    "Duration of gateway HTTP requests in seconds.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"path", "method"},
+	)
+	gatewayRateLimitRejectedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_rate_limit_rejected_total",
+			Help: "Total number of requests rejected by rate limiting.",
+		},
+		[]string{"tenant_id"},
+	)
+	gatewayAuditErrorsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "gateway_audit_errors_total",
+			Help: "Total audit log write failures.",
+		},
+	)
+	gatewayAlertNotificationErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_alert_notification_errors_total",
+			Help: "Total alert notification delivery failures.",
+		},
+		[]string{"channel_type"},
+	)
+	gatewayAlertEvalErrorsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "gateway_alert_eval_errors_total",
+			Help: "Total alert evaluation errors.",
+		},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(gatewayRequestsTotal)
+	prometheus.MustRegister(gatewayRequestDurationSeconds)
+	prometheus.MustRegister(gatewayRateLimitRejectedTotal)
+	prometheus.MustRegister(gatewayAuditErrorsTotal)
+	prometheus.MustRegister(gatewayAlertNotificationErrorsTotal)
+	prometheus.MustRegister(gatewayAlertEvalErrorsTotal)
+	prometheus.MustRegister(collectors.NewBuildInfoCollector())
+}
+
+// metricsResponseWriter captures the HTTP status code for metrics recording.
+type metricsResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	written    bool
+}
+
+func (rw *metricsResponseWriter) WriteHeader(code int) {
+	if !rw.written {
+		rw.statusCode = code
+		rw.written = true
+	}
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+// normalizePath maps dynamic URL segments to fixed route patterns to avoid
+// high-cardinality Prometheus labels.
+func normalizePath(path string) string {
+	if strings.HasPrefix(path, "/api/gateway/api-keys/") {
+		return "/api/gateway/api-keys/{id}"
+	}
+	if strings.HasPrefix(path, "/api/gateway/channels/") {
+		return "/api/gateway/channels/{id}"
+	}
+	if strings.HasPrefix(path, "/api/gateway/alert-rules/") {
+		return "/api/gateway/alert-rules/{id}"
+	}
+	return path
+}
+
+// metricsMiddleware records request count and duration for all gateway endpoints.
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &metricsResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rw, r)
+
+		route := normalizePath(r.URL.Path)
+		status := strconv.Itoa(rw.statusCode)
+		gatewayRequestsTotal.WithLabelValues(route, r.Method, status).Inc()
+		gatewayRequestDurationSeconds.WithLabelValues(route, r.Method).Observe(time.Since(start).Seconds())
+	})
+}
 
 func writeJSON(w http.ResponseWriter, code int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -57,6 +162,8 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 }
 
 func main() {
+	logging.Init("gateway")
+
 	port := flag.Int("port", 8091, "HTTP port")
 	tenantDBPath := flag.String("tenant-db", "", "Path to tenant SQLite database")
 	jwtSecret := flag.String("jwt-secret", "", "JWT signing secret")
@@ -70,15 +177,38 @@ func main() {
 	}
 
 	if *tenantDBPath == "" {
-		log.Fatal("FATAL: TENANT_DB_PATH is required")
+		slog.Error("TENANT_DB_PATH is required")
+		os.Exit(1)
 	}
 	if *jwtSecret == "" {
-		log.Fatal("FATAL: JWT_SECRET is required")
+		slog.Error("JWT_SECRET is required")
+		os.Exit(1)
+	}
+	if len(*jwtSecret) < 32 {
+		slog.Error("JWT_SECRET must be at least 32 characters")
+		os.Exit(1)
+	}
+
+	// Validate optional Stripe config
+	if sk := os.Getenv("STRIPE_SECRET_KEY"); sk != "" && !strings.HasPrefix(sk, "sk_") {
+		slog.Error("STRIPE_SECRET_KEY must start with 'sk_'")
+		os.Exit(1)
+	}
+	if wh := os.Getenv("STRIPE_WEBHOOK_SECRET"); wh != "" && !strings.HasPrefix(wh, "whsec_") {
+		slog.Error("STRIPE_WEBHOOK_SECRET must start with 'whsec_'")
+		os.Exit(1)
+	}
+
+	// Validate CUBE_API_URL if set
+	if cubeEnv := os.Getenv("CUBE_API_URL"); cubeEnv != "" && !strings.HasPrefix(cubeEnv, "http") {
+		slog.Error("CUBE_API_URL must be a valid HTTP URL", "value", cubeEnv)
+		os.Exit(1)
 	}
 
 	db, err := tenantdb.Open(*tenantDBPath)
 	if err != nil {
-		log.Fatalf("Failed to open tenant database: %v", err)
+		slog.Error("failed to open tenant database", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -96,18 +226,23 @@ func main() {
 	}
 	objStore, err := storage.NewLocalStore(rawDir)
 	if err != nil {
-		log.Printf("WARNING: DLQ store init failed: %v (DLQ endpoints will be unavailable)", err)
+		slog.Warn("DLQ store init failed, DLQ endpoints will be unavailable", "error", err)
 	} else {
-		log.Printf("DLQ store initialized: local dir %s", rawDir)
+		slog.Info("DLQ store initialized", "dir", rawDir)
 	}
 
+	// Per-tenant rate limiting (fallback 100/s for legacy mode)
+	trl := ratelimit.NewTenantLimiter(100, 200)
+	defer trl.Close()
+
 	gw := &gateway{
-		db:         db,
-		tokens:     tokens,
-		notifier:   notify.NewDispatcher(),
-		store:      objStore,
-		cubeAPIURL: cubeURL,
-		jwtSecret:  *jwtSecret,
+		db:          db,
+		tokens:      tokens,
+		notifier:    notify.NewDispatcher(),
+		store:       objStore,
+		rateLimiter: trl,
+		cubeAPIURL:  cubeURL,
+		jwtSecret:   *jwtSecret,
 	}
 
 	// Master context for background goroutines — cancelled on shutdown
@@ -130,29 +265,34 @@ func main() {
 			os.Getenv("STRIPE_WEBHOOK_SECRET"),
 			plans,
 		)
-		log.Println("Stripe billing enabled")
+		slog.Info("stripe billing enabled")
 
 		// Start background usage metering (hourly)
 		go gw.usageMeteringLoop(bgCtx)
 	} else {
-		log.Println("Stripe billing disabled (STRIPE_SECRET_KEY not set)")
+		slog.Info("stripe billing disabled, STRIPE_SECRET_KEY not set")
 	}
 
 	mux := http.NewServeMux()
+	// Public endpoints (no rate limiting by tenant plan)
 	mux.HandleFunc("/api/gateway/login", gw.handleLogin)
 	mux.HandleFunc("/api/gateway/register", gw.handleRegister)
-	mux.HandleFunc("/api/gateway/me", gw.requireAuth(gw.handleMe))
-	mux.HandleFunc("/api/gateway/api-keys", gw.requireAuth(gw.handleAPIKeys))
 	mux.HandleFunc("/api/gateway/webhooks/stripe", gw.handleStripeWebhook)
-	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.handleBillingPortal))
-	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.handleBillingUsage))
-	mux.HandleFunc("/api/gateway/channels", gw.requireAuth(gw.handleChannels))
-	mux.HandleFunc("/api/gateway/channels/", gw.requireAuth(gw.handleChannelByID))
-	mux.HandleFunc("/api/gateway/alert-rules", gw.requireAuth(gw.handleAlertRules))
-	mux.HandleFunc("/api/gateway/alert-rules/", gw.requireAuth(gw.handleAlertRuleByID))
-	mux.HandleFunc("/api/gateway/alert-history", gw.requireAuth(gw.handleAlertHistory))
-	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.handleDLQ))
-	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.handleDLQReplay))
+
+	// Authenticated + rate-limited API endpoints
+	mux.HandleFunc("/api/gateway/me", gw.requireAuth(gw.rateLimitMiddleware(gw.handleMe)))
+	mux.HandleFunc("/api/gateway/api-keys", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeys)))
+	mux.HandleFunc("/api/gateway/api-keys/expiring", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeysExpiring)))
+	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingPortal)))
+	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingUsage)))
+	mux.HandleFunc("/api/gateway/channels", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannels)))
+	mux.HandleFunc("/api/gateway/channels/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannelByID)))
+	mux.HandleFunc("/api/gateway/alert-rules", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRules)))
+	mux.HandleFunc("/api/gateway/alert-rules/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRuleByID)))
+	mux.HandleFunc("/api/gateway/alert-history", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertHistory)))
+	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQ)))
+	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQReplay)))
+	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -169,11 +309,15 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ready"))
 	})
+	mux.Handle("/metrics", promhttp.Handler())
 
-	// CORS middleware for dashboard access
-	handler := corsMiddleware(mux)
+	// Metrics middleware wraps CORS so all responses (including OPTIONS) are counted
+	handler := logging.RequestIDMiddleware(metricsMiddleware(securityHeadersMiddleware(mux)))
 
 	addr := fmt.Sprintf(":%d", *port)
+	if envAddr := os.Getenv("GATEWAY_ADDR"); envAddr != "" {
+		addr = envAddr
+	}
 	srv := &http.Server{
 		Addr:           addr,
 		Handler:        handler,
@@ -189,27 +333,55 @@ func main() {
 
 	go func() {
 		sig := <-shutdownCh
-		log.Printf("Received %v, draining connections (10s)...", sig)
+		slog.Info("received shutdown signal, draining connections", "signal", sig.String(), "timeout", "10s")
 		bgCancel() // stop background goroutines
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
-			log.Printf("HTTP shutdown error: %v", err)
+			slog.Error("HTTP shutdown error", "error", err)
 		}
 	}()
 
-	log.Printf("Gateway service starting on %s", addr)
+	slog.Info("gateway service starting", "addr", addr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatal(err)
+		slog.Error("server failed", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Gateway stopped gracefully.")
+	slog.Info("gateway stopped gracefully")
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// CORS
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// Security headers
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"connect-src 'self' http://localhost:4000 http://localhost:8091; "+
+				"img-src 'self' data:; "+
+				"font-src 'self'; "+
+				"frame-ancestors 'none'; "+
+				"base-uri 'self'; "+
+				"form-action 'self'",
+		)
+
+		// HSTS only when behind TLS-terminating proxy
+		if r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -221,13 +393,186 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 type gateway struct {
-	db         tenantdb.DB
-	tokens     *auth.TokenService
-	billing    billing.Service // nil if Stripe is not configured
-	notifier   *notify.Dispatcher
-	store      storage.ObjectStore // for DLQ reads
-	cubeAPIURL string
-	jwtSecret  string
+	db          tenantdb.DB
+	tokens      *auth.TokenService
+	billing     billing.Service // nil if Stripe is not configured
+	notifier    *notify.Dispatcher
+	store       storage.ObjectStore // for DLQ reads
+	rateLimiter *ratelimit.TenantLimiter
+	cubeAPIURL  string
+	jwtSecret   string
+}
+
+// requireRole returns middleware that checks if the authenticated user has one of the given roles.
+// Must be used inside requireAuth (assumes claims are in context).
+func (gw *gateway) requireRole(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			claims := auth.ClaimsFromContext(r.Context())
+			if claims == nil || !claims.HasRole(roles...) {
+				writeError(w, http.StatusForbidden, fmt.Sprintf("requires one of roles: %v", roles))
+				return
+			}
+			next(w, r)
+		}
+	}
+}
+
+// planRank maps plan names to a numeric rank for comparison.
+var planRank = map[string]int{
+	"free":    0,
+	"starter": 1,
+	"pro":     2,
+}
+
+// requirePlan returns middleware that checks if the tenant's plan meets the minimum.
+// Must be used inside requireAuth.
+func (gw *gateway) requirePlan(minPlan string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			claims := auth.ClaimsFromContext(r.Context())
+			if claims == nil {
+				writeError(w, http.StatusUnauthorized, "authentication required")
+				return
+			}
+			tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "tenant not found")
+				return
+			}
+			if planRank[tenant.Plan] < planRank[minPlan] {
+				writeError(w, http.StatusForbidden,
+					fmt.Sprintf("upgrade required: %s plan needed (current: %s)", minPlan, tenant.Plan))
+				return
+			}
+			next(w, r)
+		}
+	}
+}
+
+// rateLimitMiddleware checks tenant-specific rate limits on API requests.
+// Must be used inside requireAuth (assumes claims are in context).
+// Returns 429 with standard X-RateLimit headers when exceeded.
+func (gw *gateway) rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		var tenantID, plan string
+		if claims != nil {
+			tenantID = claims.TenantID
+			// Look up tenant plan
+			if tenant, err := gw.db.Tenants().GetByID(r.Context(), tenantID); err == nil {
+				plan = tenant.Plan
+			}
+		}
+
+		if !gw.rateLimiter.Allow(tenantID, plan) {
+			gatewayRateLimitRejectedTotal.WithLabelValues(tenantID).Inc()
+			// Set rate limit headers
+			rl := gw.rateLimiter.Get(tenantID)
+			if rl != nil {
+				w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", rl.Max()))
+				w.Header().Set("X-RateLimit-Remaining", "0")
+				w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(time.Second).Unix()))
+			}
+			writeError(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
+			return
+		}
+
+		// Set rate limit headers on successful requests too
+		rl := gw.rateLimiter.Get(tenantID)
+		if rl != nil {
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", rl.Max()))
+			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", rl.Remaining()))
+			w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(time.Second).Unix()))
+		}
+
+		next(w, r)
+	}
+}
+
+// audit records an immutable audit entry for a mutation. Runs async (fire-and-forget)
+// so it never blocks the HTTP request path. Errors are logged but not propagated.
+func (gw *gateway) audit(r *http.Request, action, resource, resourceID, detail string) {
+	claims := auth.ClaimsFromContext(r.Context())
+	entry := &tenantdb.AuditEntry{
+		Action:     action,
+		Resource:   resource,
+		ResourceID: resourceID,
+		Detail:     detail,
+		IPAddress:  r.RemoteAddr,
+	}
+	if claims != nil {
+		entry.TenantID = claims.TenantID
+		entry.UserID = claims.UserID
+	}
+	go func() {
+		if err := gw.db.AuditLog().Log(context.Background(), entry); err != nil {
+			slog.Error("audit log error", "error", err)
+			gatewayAuditErrorsTotal.Inc()
+		}
+	}()
+}
+
+// auditDirect records an audit entry with explicit tenant/user IDs.
+// Used by pre-auth endpoints (register) and system actions (webhooks).
+func (gw *gateway) auditDirect(tenantID, userID, action, resource, resourceID, detail, ip string) {
+	entry := &tenantdb.AuditEntry{
+		TenantID:   tenantID,
+		UserID:     userID,
+		Action:     action,
+		Resource:   resource,
+		ResourceID: resourceID,
+		Detail:     detail,
+		IPAddress:  ip,
+	}
+	go func() {
+		if err := gw.db.AuditLog().Log(context.Background(), entry); err != nil {
+			slog.Error("audit log error", "error", err)
+			gatewayAuditErrorsTotal.Inc()
+		}
+	}()
+}
+
+// handleAuditLog lists audit entries for the authenticated tenant (admin only).
+func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	if !claims.HasRole(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	entries, total, err := gw.db.AuditLog().ListByTenant(r.Context(), claims.TenantID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list audit log")
+		return
+	}
+	if entries == nil {
+		entries = []*tenantdb.AuditEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"entries": entries,
+		"total":   total,
+		"limit":   limit,
+		"offset":  offset,
+	})
 }
 
 // handleLogin authenticates a user with email/password and returns a JWT.
@@ -274,6 +619,8 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
+
+	gw.auditDirect(user.TenantID, user.ID, "user.login", "user", user.ID, "", r.RemoteAddr)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"token":     token,
@@ -337,14 +684,14 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if gw.billing != nil {
 		customerID, err := gw.billing.CreateCustomer(ctx, req.Name, req.Email, tenant.ID)
 		if err != nil {
-			log.Printf("Warning: failed to create Stripe customer for tenant %s: %v", tenant.ID, err)
+			slog.Warn("failed to create stripe customer", "tenant_id", tenant.ID, "error", err)
 		} else {
 			subID, err := gw.billing.CreateSubscription(ctx, customerID, gw.billing.FreePriceID())
 			if err != nil {
-				log.Printf("Warning: failed to create Stripe subscription for tenant %s: %v", tenant.ID, err)
+				slog.Warn("failed to create stripe subscription", "tenant_id", tenant.ID, "error", err)
 			}
 			if err := gw.db.Tenants().UpdateStripe(ctx, tenant.ID, customerID, subID); err != nil {
-				log.Printf("Warning: failed to store Stripe IDs for tenant %s: %v", tenant.ID, err)
+				slog.Warn("failed to store stripe IDs", "tenant_id", tenant.ID, "error", err)
 			}
 		}
 	}
@@ -362,7 +709,7 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create initial API key
-	plainKey, apiKey, err := gw.db.APIKeys().Create(ctx, tenant.ID, "default")
+	plainKey, apiKey, err := gw.db.APIKeys().Create(ctx, tenant.ID, "default", nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create API key")
 		return
@@ -374,6 +721,9 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
+
+	gw.auditDirect(tenant.ID, user.ID, "tenant.register", "tenant", tenant.ID,
+		fmt.Sprintf(`{"name":%q,"email":%q}`, req.Name, req.Email), r.RemoteAddr)
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"token":      token,
@@ -453,25 +803,39 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var req struct {
-			Name string `json:"name"`
+			Name          string `json:"name"`
+			ExpiresInDays *int   `json:"expires_in_days,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
 
-		plain, key, err := gw.db.APIKeys().Create(r.Context(), claims.TenantID, req.Name)
+		var expiresAt *time.Time
+		if req.ExpiresInDays != nil && *req.ExpiresInDays > 0 {
+			t := time.Now().UTC().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour)
+			expiresAt = &t
+		}
+
+		plain, key, err := gw.db.APIKeys().Create(r.Context(), claims.TenantID, req.Name, expiresAt)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create key")
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, map[string]interface{}{
+		gw.audit(r, "api_key.create", "api_key", key.ID,
+			fmt.Sprintf(`{"name":%q,"prefix":%q}`, key.Name, key.KeyPrefix))
+
+		resp := map[string]interface{}{
 			"key":        plain,
 			"key_id":     key.ID,
 			"key_prefix": key.KeyPrefix,
 			"name":       key.Name,
-		})
+		}
+		if key.ExpiresAt != nil {
+			resp["expires_at"] = key.ExpiresAt.Format(time.RFC3339)
+		}
+		writeJSON(w, http.StatusCreated, resp)
 
 	case http.MethodDelete:
 		if claims.Role != "admin" {
@@ -491,11 +855,31 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "key not found or already revoked")
 			return
 		}
+
+		gw.audit(r, "api_key.revoke", "api_key", keyID, `{}`)
+
 		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleAPIKeysExpiring returns API keys expiring within 7 days.
+func (gw *gateway) handleAPIKeysExpiring(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	keys, err := gw.db.APIKeys().ListExpiringSoon(r.Context(), claims.TenantID, 7)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list expiring keys")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"keys": keys})
 }
 
 // handleStripeWebhook processes Stripe webhook events.
@@ -521,19 +905,18 @@ func (gw *gateway) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	sigHeader := r.Header.Get("Stripe-Signature")
 	event, err := gw.billing.ParseWebhook(payload, sigHeader)
 	if err != nil {
-		log.Printf("Webhook signature verification failed: %v", err)
+		slog.Error("webhook signature verification failed", "error", err)
 		writeError(w, http.StatusBadRequest, "invalid webhook signature")
 		return
 	}
 
 	ctx := r.Context()
-	log.Printf("Stripe webhook: type=%s customer=%s subscription=%s status=%s plan=%s",
-		event.Type, event.CustomerID, event.SubscriptionID, event.Status, event.PlanName)
+	slog.Info("stripe webhook received", "type", event.Type, "customer_id", event.CustomerID, "subscription_id", event.SubscriptionID, "status", event.Status, "plan", event.PlanName)
 
 	// Find tenant by Stripe customer ID
 	tenants, err := gw.db.Tenants().List(ctx)
 	if err != nil {
-		log.Printf("Webhook error: failed to list tenants: %v", err)
+		slog.Error("webhook failed to list tenants", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -547,7 +930,7 @@ func (gw *gateway) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if tenant == nil {
-		log.Printf("Webhook: no tenant found for Stripe customer %s", event.CustomerID)
+		slog.Warn("webhook no tenant found for stripe customer", "customer_id", event.CustomerID)
 		// Return 200 to acknowledge — Stripe retries on non-2xx
 		w.WriteHeader(http.StatusOK)
 		return
@@ -556,38 +939,43 @@ func (gw *gateway) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	switch event.Type {
 	case "customer.subscription.created", "customer.subscription.updated":
 		// Update plan based on price ID
+		oldPlan := tenant.Plan
 		if event.PlanName != "" && event.PlanName != "unknown" {
 			if err := gw.db.Tenants().UpdatePlan(ctx, tenant.ID, event.PlanName); err != nil {
-				log.Printf("Webhook error: failed to update plan for tenant %s: %v", tenant.ID, err)
+				slog.Error("webhook failed to update plan", "tenant_id", tenant.ID, "error", err)
 			} else {
-				log.Printf("Webhook: updated tenant %s plan to %s", tenant.ID, event.PlanName)
+				slog.Info("webhook updated tenant plan", "tenant_id", tenant.ID, "plan", event.PlanName)
+				gw.auditDirect(tenant.ID, "", "tenant.plan_change", "tenant", tenant.ID,
+					fmt.Sprintf(`{"old":%q,"new":%q}`, oldPlan, event.PlanName), r.RemoteAddr)
 			}
 		}
 		// Update subscription ID
 		if err := gw.db.Tenants().UpdateStripe(ctx, tenant.ID, event.CustomerID, event.SubscriptionID); err != nil {
-			log.Printf("Webhook error: failed to update stripe IDs for tenant %s: %v", tenant.ID, err)
+			slog.Error("webhook failed to update stripe IDs", "tenant_id", tenant.ID, "error", err)
 		}
 		// Reactivate if previously suspended
 		if event.Status == "active" && tenant.Status != "active" {
 			if err := gw.db.Tenants().UpdateStatus(ctx, tenant.ID, "active"); err != nil {
-				log.Printf("Webhook error: failed to reactivate tenant %s: %v", tenant.ID, err)
+				slog.Error("webhook failed to reactivate tenant", "tenant_id", tenant.ID, "error", err)
 			}
 		}
 
 	case "customer.subscription.deleted":
 		// Subscription canceled — mark tenant as churned
 		if err := gw.db.Tenants().UpdateStatus(ctx, tenant.ID, "churned"); err != nil {
-			log.Printf("Webhook error: failed to mark tenant %s as churned: %v", tenant.ID, err)
+			slog.Error("webhook failed to mark tenant as churned", "tenant_id", tenant.ID, "error", err)
 		} else {
-			log.Printf("Webhook: marked tenant %s as churned", tenant.ID)
+			slog.Info("webhook marked tenant as churned", "tenant_id", tenant.ID)
+			gw.auditDirect(tenant.ID, "", "tenant.churned", "tenant", tenant.ID, "", r.RemoteAddr)
 		}
 
 	case "invoice.payment_failed":
 		// Payment failed — suspend tenant
 		if err := gw.db.Tenants().UpdateStatus(ctx, tenant.ID, "suspended"); err != nil {
-			log.Printf("Webhook error: failed to suspend tenant %s: %v", tenant.ID, err)
+			slog.Error("webhook failed to suspend tenant", "tenant_id", tenant.ID, "error", err)
 		} else {
-			log.Printf("Webhook: suspended tenant %s due to payment failure", tenant.ID)
+			slog.Info("webhook suspended tenant due to payment failure", "tenant_id", tenant.ID)
+			gw.auditDirect(tenant.ID, "", "tenant.suspended", "tenant", tenant.ID, "payment_failed", r.RemoteAddr)
 		}
 	}
 
@@ -629,7 +1017,7 @@ func (gw *gateway) handleBillingPortal(w http.ResponseWriter, r *http.Request) {
 
 	url, err := gw.billing.CreatePortalSession(r.Context(), tenant.StripeCustomerID, req.ReturnURL)
 	if err != nil {
-		log.Printf("Failed to create portal session for tenant %s: %v", tenant.ID, err)
+		slog.Error("failed to create portal session", "tenant_id", tenant.ID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create billing portal session")
 		return
 	}
@@ -713,8 +1101,8 @@ func (gw *gateway) handleChannels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"channels": channels})
 
 	case http.MethodPost:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 
@@ -756,6 +1144,7 @@ func (gw *gateway) handleChannels(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to create channel")
 			return
 		}
+		gw.audit(r, "channel.create", "channel", ch.ID, req.Name)
 		writeJSON(w, http.StatusCreated, ch)
 
 	default:
@@ -778,8 +1167,8 @@ func (gw *gateway) handleChannelByID(w http.ResponseWriter, r *http.Request) {
 	isTest := len(parts) >= 6 && parts[5] == "test"
 
 	if isTest && r.Method == http.MethodPost {
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 		ch, err := gw.db.NotificationChannels().GetByID(r.Context(), channelID)
@@ -806,8 +1195,8 @@ func (gw *gateway) handleChannelByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodDelete:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 		ch, err := gw.db.NotificationChannels().GetByID(r.Context(), channelID)
@@ -823,6 +1212,7 @@ func (gw *gateway) handleChannelByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to delete channel")
 			return
 		}
+		gw.audit(r, "channel.delete", "channel", channelID, ch.Name)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 
 	default:
@@ -856,8 +1246,8 @@ func (gw *gateway) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"rules": rules})
 
 	case http.MethodPost:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 
@@ -906,6 +1296,7 @@ func (gw *gateway) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to create rule")
 			return
 		}
+		gw.audit(r, "alert_rule.create", "alert_rule", rule.ID, req.Name)
 		writeJSON(w, http.StatusCreated, rule)
 
 	default:
@@ -925,8 +1316,8 @@ func (gw *gateway) handleAlertRuleByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPut:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 
@@ -991,11 +1382,13 @@ func (gw *gateway) handleAlertRuleByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to update rule")
 			return
 		}
+		gw.audit(r, "alert_rule.update", "alert_rule", ruleID,
+			fmt.Sprintf(`{"name":%q,"status":%q}`, existing.Name, existing.Status))
 		writeJSON(w, http.StatusOK, existing)
 
 	case http.MethodDelete:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 
@@ -1013,6 +1406,7 @@ func (gw *gateway) handleAlertRuleByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to delete rule")
 			return
 		}
+		gw.audit(r, "alert_rule.delete", "alert_rule", ruleID, existing.Name)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 
 	default:
@@ -1125,7 +1519,7 @@ func (gw *gateway) alertEvaluatorLoop(ctx context.Context) {
 func (gw *gateway) evaluateAlerts(ctx context.Context) {
 	rules, err := gw.db.AlertRules().ListActive(ctx)
 	if err != nil {
-		log.Printf("Alert evaluator: failed to list active rules: %v", err)
+		slog.Error("alert evaluator failed to list active rules", "error", err)
 		return
 	}
 
@@ -1145,7 +1539,7 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 		// Generate a short-lived token for Cube.js queries
 		token, err := gw.tokens.Generate(tenantID, "evaluator", "evaluator@system", "admin")
 		if err != nil {
-			log.Printf("Alert evaluator: failed to generate token for tenant %s: %v", tenantID, err)
+			slog.Error("alert evaluator failed to generate token", "tenant_id", tenantID, "error", err)
 			continue
 		}
 
@@ -1168,8 +1562,7 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				var err error
 				anomalyRes, err = gw.evaluateAnomalyRule(ctx, token, rule)
 				if err != nil {
-					log.Printf("Alert evaluator: tenant=%s rule=%s anomaly error: %v",
-						tenantID, rule.ID, err)
+					slog.Error("alert evaluator anomaly error", "tenant_id", tenantID, "rule_id", rule.ID, "error", err)
 					continue
 				}
 				if anomalyRes == nil {
@@ -1184,8 +1577,8 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				var err error
 				value, err = gw.queryCubeMetric(ctx, token, rule)
 				if err != nil {
-					log.Printf("Alert evaluator: tenant=%s rule=%s error querying metric: %v",
-						tenantID, rule.ID, err)
+					slog.Error("alert evaluator error querying metric", "tenant_id", tenantID, "rule_id", rule.ID, "error", err)
+					gatewayAlertEvalErrorsTotal.Inc()
 					continue
 				}
 
@@ -1207,20 +1600,18 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				continue
 			}
 
-			log.Printf("Alert evaluator: TRIGGERED tenant=%s rule=%q metric=%s value=%.4f",
-				tenantID, rule.Name, rule.Metric, value)
+			slog.Warn("alert evaluator triggered", "tenant_id", tenantID, "rule_name", rule.Name, "metric", rule.Metric, "value", value)
 
 			// Dispatch notification
 			ch, err := gw.db.NotificationChannels().GetByID(ctx, rule.ChannelID)
 			if err != nil {
-				log.Printf("Alert evaluator: channel %s not found for rule %s: %v",
-					rule.ChannelID, rule.ID, err)
+				slog.Error("alert evaluator channel not found", "channel_id", rule.ChannelID, "rule_id", rule.ID, "error", err)
 				continue
 			}
 
 			cfg, err := notify.ParseChannelConfig(ch.Config)
 			if err != nil {
-				log.Printf("Alert evaluator: invalid config for channel %s: %v", ch.ID, err)
+				slog.Error("alert evaluator invalid config for channel", "channel_id", ch.ID, "error", err)
 				continue
 			}
 
@@ -1245,7 +1636,8 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 
 			status := "fired"
 			if err := gw.notifier.Send(ctx, ch.Type, cfg, payload); err != nil {
-				log.Printf("Alert evaluator: failed to send notification for rule %s: %v", rule.ID, err)
+				slog.Error("alert evaluator failed to send notification", "rule_id", rule.ID, "error", err)
+				gatewayAlertNotificationErrorsTotal.WithLabelValues(ch.Type).Inc()
 				status = "error"
 				message += " (notification failed: " + err.Error() + ")"
 			}
@@ -1263,12 +1655,12 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				Message:      message,
 			}
 			if err := gw.db.AlertHistory().Create(ctx, entry); err != nil {
-				log.Printf("Alert evaluator: failed to record history for rule %s: %v", rule.ID, err)
+				slog.Error("alert evaluator failed to record history", "rule_id", rule.ID, "error", err)
 			}
 
 			// Update last triggered
 			if err := gw.db.AlertRules().UpdateLastTriggered(ctx, rule.ID, now); err != nil {
-				log.Printf("Alert evaluator: failed to update last_triggered for rule %s: %v", rule.ID, err)
+				slog.Error("alert evaluator failed to update last_triggered", "rule_id", rule.ID, "error", err)
 			}
 		}
 	}
@@ -1444,8 +1836,7 @@ func (gw *gateway) evaluateAnomalyRule(ctx context.Context, token string, rule *
 
 	// Need at least 3 historical data points for meaningful statistics
 	if len(historicalValues) < 3 {
-		log.Printf("Alert evaluator: anomaly rule %s skipped — only %d historical data points (need ≥3)",
-			rule.ID, len(historicalValues))
+		slog.Info("alert evaluator anomaly rule skipped insufficient data", "rule_id", rule.ID, "data_points", len(historicalValues))
 		return nil, nil
 	}
 
@@ -1601,7 +1992,7 @@ func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 
 	tenants, err := gw.db.Tenants().List(ctx)
 	if err != nil {
-		log.Printf("Usage metering: failed to list tenants: %v", err)
+		slog.Error("usage metering failed to list tenants", "error", err)
 		return
 	}
 
@@ -1614,7 +2005,7 @@ func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 
 		count, err := gw.db.EventCounters().GetCount(ctx, tenant.ID, today)
 		if err != nil {
-			log.Printf("Usage metering: failed to get count for tenant %s: %v", tenant.ID, err)
+			slog.Error("usage metering failed to get count", "tenant_id", tenant.ID, "error", err)
 			continue
 		}
 
@@ -1623,9 +2014,9 @@ func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 		}
 
 		if err := gw.billing.ReportUsage(ctx, tenant.StripeSubscriptionID, count, time.Now().UTC()); err != nil {
-			log.Printf("Usage metering: failed to report usage for tenant %s: %v", tenant.ID, err)
+			slog.Error("usage metering failed to report usage", "tenant_id", tenant.ID, "error", err)
 		} else {
-			log.Printf("Usage metering: reported %d events for tenant %s", count, tenant.ID)
+			slog.Info("usage metering reported events", "tenant_id", tenant.ID, "count", count)
 		}
 	}
 }
@@ -1671,7 +2062,7 @@ func (gw *gateway) handleDLQ(w http.ResponseWriter, r *http.Request) {
 
 	files, err := gw.store.List(r.Context(), prefix)
 	if err != nil {
-		log.Printf("DLQ list error: %v", err)
+		slog.Error("dlq list error", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list DLQ files")
 		return
 	}
@@ -1688,7 +2079,7 @@ func (gw *gateway) handleDLQ(w http.ResponseWriter, r *http.Request) {
 
 		reader, err := gw.store.Get(r.Context(), file)
 		if err != nil {
-			log.Printf("DLQ read error for %s: %v", file, err)
+			slog.Error("dlq read error", "file", file, "error", err)
 			continue
 		}
 
@@ -1764,6 +2155,9 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fwdReq.Header.Set("Content-Type", "application/x-ndjson")
+
+	// Propagate request ID for cross-service tracing
+	logging.PropagateRequestID(r.Context(), fwdReq)
 
 	// Forward the Authorization header
 	if auth := r.Header.Get("Authorization"); auth != "" {

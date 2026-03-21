@@ -6,8 +6,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -16,12 +18,64 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+var (
+	eventsDailyProcessedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "events_daily_processed_total",
+			Help: "Total events processed by the daily rollup.",
+		},
+		[]string{"service", "day"},
+	)
+	eventsDailyDurationSeconds = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "events_daily_duration_seconds",
+			Help: "Duration of the daily events rollup in seconds.",
+		},
+		[]string{"day"},
+	)
+	eventsDailyLastSuccessTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "events_daily_last_success_timestamp_seconds",
+			Help: "Unix timestamp of the last successful events daily rollup.",
+		},
+	)
+	eventsDailyRowsWrittenTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "events_daily_rows_written_total",
+			Help: "Total Parquet rows written by the daily events rollup.",
+		},
+		[]string{"day"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(eventsDailyProcessedTotal)
+	prometheus.MustRegister(eventsDailyDurationSeconds)
+	prometheus.MustRegister(eventsDailyLastSuccessTimestamp)
+	prometheus.MustRegister(eventsDailyRowsWrittenTotal)
+}
+
+func startMetricsServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			slog.Error("metrics server error", "error", err)
+		}
+	}()
+	return srv
+}
 
 // EventSummaryRow represents a daily summary of service events by type.
 type EventSummaryRow struct {
@@ -48,7 +102,7 @@ func acquireLock(dir string) (*os.File, error) {
 	if err != nil {
 		if os.IsExist(err) {
 			if isLockStale(lockPath) {
-				log.Printf("Removing stale lock file %s (owner process is dead)", lockPath)
+				slog.Warn("removing stale lock file", "path", lockPath)
 				os.Remove(lockPath)
 				f, err = os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 				if err != nil {
@@ -96,6 +150,8 @@ func releaseLock(f *os.File) {
 }
 
 func main() {
+	logging.Init("service-events-daily-rollup")
+
 	var inputDir, outputDir string
 	var startDay, endDay, processingTime string
 	var tenantDBPath string
@@ -114,7 +170,8 @@ func main() {
 
 	lockFile, err := acquireLock(outputDir)
 	if err != nil {
-		log.Fatalf("Cannot start event rollup: %v", err)
+		slog.Error("cannot start event rollup", "error", err)
+		os.Exit(1)
 	}
 	defer releaseLock(lockFile)
 
@@ -122,11 +179,13 @@ func main() {
 	if startDay != "" && endDay != "" {
 		start, err := time.Parse("2006-01-02", startDay)
 		if err != nil {
-			log.Fatalf("Invalid start-day: %v", err)
+			slog.Error("invalid start-day", "error", err)
+			os.Exit(1)
 		}
 		end, err := time.Parse("2006-01-02", endDay)
 		if err != nil {
-			log.Fatalf("Invalid end-day: %v", err)
+			slog.Error("invalid end-day", "error", err)
+			os.Exit(1)
 		}
 		for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 			days = append(days, d)
@@ -137,10 +196,25 @@ func main() {
 		}
 		procTime, err := time.Parse(time.RFC3339, processingTime)
 		if err != nil {
-			log.Fatalf("Invalid process-time: %v", err)
+			slog.Error("invalid process-time", "error", err)
+			os.Exit(1)
 		}
 		days = append(days, procTime)
 	}
+
+	// Start metrics server
+	metricsSrv := startMetricsServer(":9092")
+
+	// Graceful shutdown: listen for SIGINT/SIGTERM
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	shutdownCh := make(chan os.Signal, 1)
+	signal.Notify(shutdownCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-shutdownCh
+		slog.Info("received shutdown signal", "signal", sig.String())
+		cancel()
+	}()
 
 	var store storage.ObjectStore
 	if os.Getenv("S3_ENDPOINT") != "" {
@@ -153,12 +227,14 @@ func main() {
 			os.Getenv("S3_SECRET_KEY"),
 		)
 		if err != nil {
-			log.Fatalf("Failed to initialize S3 store: %v", err)
+			slog.Error("failed to initialize s3 store", "error", err)
+			os.Exit(1)
 		}
 	} else {
 		store, err = storage.NewLocalStore("./data")
 		if err != nil {
-			log.Fatalf("Failed to initialize local store: %v", err)
+			slog.Error("failed to initialize local store", "error", err)
+			os.Exit(1)
 		}
 	}
 
@@ -173,13 +249,15 @@ func main() {
 	if tenantDBPath != "" {
 		tdb, err := tenantdb.Open(tenantDBPath)
 		if err != nil {
-			log.Fatalf("Failed to open tenant database: %v", err)
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
 		}
 		defer tdb.Close()
 
 		tenants, err := tdb.Tenants().List(context.Background())
 		if err != nil {
-			log.Fatalf("Failed to list tenants: %v", err)
+			slog.Error("failed to list tenants", "error", err)
+			os.Exit(1)
 		}
 
 		for _, t := range tenants {
@@ -192,7 +270,7 @@ func main() {
 				outputDir: fmt.Sprintf("./data/warehouse/%s/service_events_daily", t.ID),
 			})
 		}
-		log.Printf("Multi-tenant mode: processing %d active tenants", len(configs))
+		slog.Info("multi-tenant mode", "active_tenants", len(configs))
 	} else {
 		configs = append(configs, tenantConfig{
 			tenantID:  "",
@@ -202,28 +280,40 @@ func main() {
 	}
 
 	for _, cfg := range configs {
+		if ctx.Err() != nil {
+			slog.Info("shutdown requested, skipping remaining tenants")
+			break
+		}
 		if cfg.tenantID != "" {
-			log.Printf("Processing tenant %s...", cfg.tenantID)
+			slog.Info("processing tenant", "tenant_id", cfg.tenantID)
 		}
 		for _, day := range days {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			if err := processDay(ctx, day, store, cfg.inputDir, cfg.outputDir, cfg.tenantID); err != nil {
-				cancel()
-				log.Printf("Failed to process day %s for tenant %s: %v", day.Format("2006-01-02"), cfg.tenantID, err)
+			if ctx.Err() != nil {
+				slog.Info("shutdown requested, skipping remaining days")
+				break
+			}
+			dayCtx, dayCancel := context.WithTimeout(ctx, 10*time.Minute)
+			if err := processDay(dayCtx, day, store, cfg.inputDir, cfg.outputDir, cfg.tenantID); err != nil {
+				dayCancel()
+				slog.Error("failed to process day", "day", day.Format("2006-01-02"), "tenant_id", cfg.tenantID, "error", err)
 				os.Exit(1)
 			}
-			cancel()
+			dayCancel()
 		}
 	}
 
-	log.Println("Service events rollup complete.")
+	eventsDailyLastSuccessTimestamp.SetToCurrentTime()
+	slog.Info("service events rollup complete, waiting for prometheus scrape")
+	time.Sleep(5 * time.Second)
+	metricsSrv.Close()
 }
 
 func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, inputDir, outputDir, tenantID string) error {
 	dayStr := day.UTC().Format("2006-01-02")
 	inputPrefix := fmt.Sprintf("%s/%s", strings.TrimPrefix(inputDir, "./data/"), dayStr)
 
-	log.Printf("Processing service events for prefix %s...", inputPrefix)
+	slog.Info("processing service events", "prefix", inputPrefix)
+	start := time.Now()
 
 	aggs := make(map[EventAggKey]int64)
 	seen := make(map[string]struct{})
@@ -240,7 +330,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 
 		rc, err := store.Get(ctx, key)
 		if err != nil {
-			log.Printf("Error getting object %s: %v", key, err)
+			slog.Error("error getting object", "key", key, "error", err)
 			continue
 		}
 
@@ -256,7 +346,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 
 			event, err := schemas.ParseServiceEvent(line)
 			if err != nil {
-				log.Printf("Skipping invalid line in %s: %v", key, err)
+				slog.Warn("skipping invalid line", "key", key, "error", err)
 				continue
 			}
 
@@ -277,6 +367,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 				EventType: event.EventType,
 			}
 			aggs[aggKey]++
+			eventsDailyProcessedTotal.WithLabelValues(event.Service, dayStr).Inc()
 		}
 		rc.Close()
 	}
@@ -291,7 +382,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 				store.Delete(ctx, k)
 			}
 		}
-		log.Printf("No service events found for %s.", dayStr)
+		slog.Info("no service events found", "day", dayStr)
 		return nil
 	}
 
@@ -342,6 +433,8 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		}
 	}
 
-	log.Printf("Uploaded %d event summary rows to %s", len(rows), destKey)
+	slog.Info("uploaded event summary", "row_count", len(rows), "dest_key", destKey)
+	eventsDailyRowsWrittenTotal.WithLabelValues(dayStr).Add(float64(len(rows)))
+	eventsDailyDurationSeconds.WithLabelValues(dayStr).Set(time.Since(start).Seconds())
 	return nil
 }

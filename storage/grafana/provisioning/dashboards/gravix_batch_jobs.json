@@ -1,0 +1,439 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Request Metrics Rollup",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": ""
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Rollup Events Processed by Service",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "sum(increase(rollup_processed_events_total[5m])) by (service)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-GrYlRd" },
+          "custom": {
+            "axisLabel": "",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "red", "value": 120 }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 3,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Rollup Duration",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "rollup_duration_seconds",
+          "legendFormat": "{{day}}",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 4,
+      "title": "Events Rollup (Daily + Detail)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": ""
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "id": 5,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Daily Events Processed",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "sum(increase(events_daily_processed_total[5m])) by (service)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": ""
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "id": 6,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Detail Events Processed",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "sum(increase(events_detail_processed_total[5m])) by (service)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "id": 7,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Events Rollup Duration",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "events_daily_duration_seconds",
+          "legendFormat": "daily {{day}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "events_detail_duration_seconds",
+          "legendFormat": "detail {{day}}",
+          "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 8,
+      "title": "Purge Job",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": ""
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
+      "id": 9,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Files Deleted by Tenant",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "sum(increase(purge_files_deleted_total[1h])) by (tenant_id)",
+          "legendFormat": "{{tenant_id}}",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "red", "value": 300 }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
+      "id": 10,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Purge Duration",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "purge_duration_seconds",
+          "legendFormat": "duration",
+          "refId": "A"
+        }
+      ],
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-GrYlRd" },
+          "custom": {
+            "axisLabel": "",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.001 }
+            ]
+          },
+          "unit": ""
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
+      "id": 11,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Purge Error Rate",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "rate(purge_errors_total[5m])",
+          "legendFormat": "errors/s",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 12,
+      "title": "Job Health",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 28 },
+      "id": 13,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      },
+      "title": "Last Successful Run",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "rollup_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Request Rollup",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "events_daily_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Events Daily",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "events_detail_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Events Detail",
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "purge_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Purge",
+          "refId": "D"
+        }
+      ],
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["gravix"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Gravix Batch Jobs",
+  "uid": "gravix-batch-jobs",
+  "version": 1,
+  "weekStart": ""
+}

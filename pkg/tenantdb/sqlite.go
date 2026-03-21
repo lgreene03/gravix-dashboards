@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
 	name        TEXT NOT NULL DEFAULT 'default',
 	status      TEXT NOT NULL DEFAULT 'active',
 	created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-	last_used_at TEXT
+	last_used_at TEXT,
+	expires_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
@@ -106,6 +107,19 @@ CREATE TABLE IF NOT EXISTS alert_history (
 CREATE INDEX IF NOT EXISTS idx_alert_history_tenant ON alert_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_alert_history_rule ON alert_history(rule_id);
 CREATE INDEX IF NOT EXISTS idx_alert_history_created ON alert_history(created_at);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+	id          TEXT PRIMARY KEY,
+	tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+	user_id     TEXT NOT NULL,
+	action      TEXT NOT NULL,
+	resource    TEXT NOT NULL DEFAULT '',
+	resource_id TEXT NOT NULL DEFAULT '',
+	detail      TEXT NOT NULL DEFAULT '',
+	ip_address  TEXT NOT NULL DEFAULT '',
+	created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_tenant_time ON audit_logs(tenant_id, created_at);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -131,10 +145,26 @@ func Open(dbPath string) (*SQLiteDB, error) {
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
+	// Connection pool tuning: SQLite serializes writes, so a single
+	// connection avoids SQLITE_BUSY contention while WAL mode still
+	// allows concurrent reads from the same connection.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0) // no lifetime limit for single-conn pool
+
 	// Run schema migrations (idempotent)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run schema: %w", err)
+	}
+
+	// Incremental migrations for existing databases
+	migrations := []string{
+		`ALTER TABLE api_keys ADD COLUMN expires_at TEXT`,
+	}
+	for _, m := range migrations {
+		// Ignore "duplicate column" errors from re-running migrations
+		db.Exec(m)
 	}
 
 	return &SQLiteDB{db: db}, nil
@@ -150,8 +180,9 @@ func (s *SQLiteDB) EventCounters() EventCounterRepo {
 func (s *SQLiteDB) NotificationChannels() NotificationChannelRepo {
 	return &sqliteNotificationChannelRepo{db: s.db}
 }
-func (s *SQLiteDB) AlertRules() AlertRuleRepo   { return &sqliteAlertRuleRepo{db: s.db} }
+func (s *SQLiteDB) AlertRules() AlertRuleRepo     { return &sqliteAlertRuleRepo{db: s.db} }
 func (s *SQLiteDB) AlertHistory() AlertHistoryRepo { return &sqliteAlertHistoryRepo{db: s.db} }
+func (s *SQLiteDB) AuditLog() AuditRepo            { return &sqliteAuditRepo{db: s.db} }
 
 // --- Tenant Repo ---
 
@@ -281,7 +312,7 @@ func hashKey(rawKey string) string {
 	return fmt.Sprintf("%x", h[:])
 }
 
-func (r *sqliteAPIKeyRepo) Create(ctx context.Context, tenantID, name string) (string, *APIKey, error) {
+func (r *sqliteAPIKeyRepo) Create(ctx context.Context, tenantID, name string, expiresAt *time.Time) (string, *APIKey, error) {
 	plain, hash, prefix, err := generateKey()
 	if err != nil {
 		return "", nil, err
@@ -290,10 +321,15 @@ func (r *sqliteAPIKeyRepo) Create(ctx context.Context, tenantID, name string) (s
 	id := uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	var expiresStr sql.NullString
+	if expiresAt != nil {
+		expiresStr = sql.NullString{String: expiresAt.UTC().Format(time.RFC3339), Valid: true}
+	}
+
 	_, err = r.db.ExecContext(ctx,
-		`INSERT INTO api_keys (id, tenant_id, key_hash, key_prefix, name, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, 'active', ?)`,
-		id, tenantID, hash, prefix, name, now,
+		`INSERT INTO api_keys (id, tenant_id, key_hash, key_prefix, name, status, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
+		id, tenantID, hash, prefix, name, now, expiresStr,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("create api key: %w", err)
@@ -307,6 +343,7 @@ func (r *sqliteAPIKeyRepo) Create(ctx context.Context, tenantID, name string) (s
 		Name:      name,
 		Status:    "active",
 		CreatedAt: createdAt,
+		ExpiresAt: expiresAt,
 	}
 	return plain, key, nil
 }
@@ -318,7 +355,8 @@ func (r *sqliteAPIKeyRepo) ValidateKey(ctx context.Context, rawKey string) (*API
 	err := r.db.QueryRowContext(ctx,
 		`SELECT t.id, t.plan, t.status
 		 FROM api_keys k JOIN tenants t ON k.tenant_id = t.id
-		 WHERE k.key_hash = ? AND k.status = 'active'`,
+		 WHERE k.key_hash = ? AND k.status = 'active'
+		   AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))`,
 		hash,
 	).Scan(&info.TenantID, &info.Plan, &info.Status)
 	if err != nil {
@@ -340,26 +378,49 @@ func (r *sqliteAPIKeyRepo) TouchLastUsed(ctx context.Context, keyHash string) er
 
 func (r *sqliteAPIKeyRepo) ListByTenant(ctx context.Context, tenantID string) ([]*APIKey, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, tenant_id, key_prefix, name, status, created_at, last_used_at
+		`SELECT id, tenant_id, key_prefix, name, status, created_at, last_used_at, expires_at
 		 FROM api_keys WHERE tenant_id = ? ORDER BY created_at`, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanAPIKeys(rows)
+}
 
+func (r *sqliteAPIKeyRepo) ListExpiringSoon(ctx context.Context, tenantID string, withinDays int) ([]*APIKey, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, key_prefix, name, status, created_at, last_used_at, expires_at
+		 FROM api_keys
+		 WHERE tenant_id = ? AND status = 'active'
+		   AND expires_at IS NOT NULL
+		   AND datetime(expires_at) > datetime('now')
+		   AND datetime(expires_at) <= datetime('now', ? || ' days')
+		 ORDER BY expires_at`, tenantID, fmt.Sprintf("+%d", withinDays))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAPIKeys(rows)
+}
+
+func scanAPIKeys(rows *sql.Rows) ([]*APIKey, error) {
 	var keys []*APIKey
 	for rows.Next() {
 		k := &APIKey{}
 		var createdAt string
-		var lastUsed sql.NullString
+		var lastUsed, expiresAt sql.NullString
 		if err := rows.Scan(&k.ID, &k.TenantID, &k.KeyPrefix, &k.Name,
-			&k.Status, &createdAt, &lastUsed); err != nil {
+			&k.Status, &createdAt, &lastUsed, &expiresAt); err != nil {
 			return nil, err
 		}
 		k.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 		if lastUsed.Valid {
 			t, _ := time.Parse(time.RFC3339, lastUsed.String)
 			k.LastUsedAt = &t
+		}
+		if expiresAt.Valid {
+			t, _ := time.Parse(time.RFC3339, expiresAt.String)
+			k.ExpiresAt = &t
 		}
 		keys = append(keys, k)
 	}
@@ -802,4 +863,64 @@ func (r *sqliteAlertHistoryRepo) scanAlertHistory(rows *sql.Rows) ([]*AlertHisto
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// --- Audit Log Repo ---
+
+type sqliteAuditRepo struct{ db *sql.DB }
+
+func (r *sqliteAuditRepo) Log(ctx context.Context, entry *AuditEntry) error {
+	if entry.ID == "" {
+		entry.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO audit_logs (id, tenant_id, user_id, action, resource, resource_id, detail, ip_address, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.ID, entry.TenantID, entry.UserID, entry.Action,
+		entry.Resource, entry.ResourceID, entry.Detail, entry.IPAddress, now,
+	)
+	if err == nil {
+		entry.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	}
+	return err
+}
+
+func (r *sqliteAuditRepo) ListByTenant(ctx context.Context, tenantID string, limit, offset int) ([]*AuditEntry, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	// Get total count
+	var total int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE tenant_id = ?`, tenantID).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, user_id, action, resource, resource_id, detail, ip_address, created_at
+		 FROM audit_logs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		tenantID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var entries []*AuditEntry
+	for rows.Next() {
+		e := &AuditEntry{}
+		var createdAt string
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.UserID, &e.Action,
+			&e.Resource, &e.ResourceID, &e.Detail, &e.IPAddress, &createdAt); err != nil {
+			return nil, 0, err
+		}
+		e.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		entries = append(entries, e)
+	}
+	return entries, total, rows.Err()
 }

@@ -1,9 +1,10 @@
 openapi: 3.0.3
 info:
-  title: Gravix Ingestion API
+  title: Gravix API
   description: |
     HTTP API for the Gravix observability platform.
     Accepts request facts and service lifecycle events for aggregation and visualization.
+    Provides tenant management, authentication, billing, alerting, and audit capabilities.
   version: 0.1.0
   contact:
     name: Gravix
@@ -13,7 +14,9 @@ info:
 
 servers:
   - url: http://localhost:8090
-    description: Local development
+    description: Ingestion API (local)
+  - url: http://localhost:8091
+    description: Gateway API (local)
 
 security:
   - apiKeyAuth: []
@@ -23,8 +26,24 @@ tags:
     description: Ingest request facts and service events
   - name: Health
     description: Liveness, readiness, and metrics endpoints
+  - name: Auth
+    description: Registration, login, and user profile
+  - name: APIKeys
+    description: API key management
+  - name: Billing
+    description: Stripe billing and usage
+  - name: Alerts
+    description: Alert rules and alert history
+  - name: Channels
+    description: Notification channels
+  - name: DLQ
+    description: Dead-letter queue management
+  - name: Audit
+    description: Audit log
 
 paths:
+  # ── Ingestion endpoints ──────────────────────────────────────────────
+
   /api/v1/facts:
     post:
       operationId: ingestFact
@@ -161,6 +180,8 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  # ── Health endpoints ─────────────────────────────────────────────────
+
   /live:
     get:
       operationId: liveness
@@ -213,6 +234,698 @@ paths:
               schema:
                 type: string
 
+  # ── Auth endpoints ───────────────────────────────────────────────────
+
+  /api/gateway/register:
+    post:
+      operationId: register
+      summary: Register a new tenant and user
+      description: Creates a new tenant, user account, initial API key, and returns a JWT token.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Tenant and user created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/gateway/login:
+    post:
+      operationId: login
+      summary: Authenticate user
+      description: Validates credentials and returns a JWT token.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authentication successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/gateway/me:
+    get:
+      operationId: getMe
+      summary: Get current user info
+      description: Returns profile information for the authenticated user.
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── API Keys endpoints ──────────────────────────────────────────────
+
+  /api/gateway/api-keys:
+    get:
+      operationId: listAPIKeys
+      summary: List API keys
+      description: Returns all API keys for the authenticated user's tenant.
+      tags: [APIKeys]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of API keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeyListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createAPIKey
+      summary: Create an API key
+      description: Creates a new API key. Requires admin or editor role.
+      tags: [APIKeys]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
+      responses:
+        "201":
+          description: API key created. The full key is only returned once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateAPIKeyResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/gateway/api-keys/{id}:
+    delete:
+      operationId: revokeAPIKey
+      summary: Revoke an API key
+      description: Revokes an API key by ID. Requires admin role.
+      tags: [APIKeys]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: API key ID.
+      responses:
+        "200":
+          description: API key revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Billing endpoints ───────────────────────────────────────────────
+
+  /api/gateway/billing/portal:
+    post:
+      operationId: billingPortal
+      summary: Get Stripe Customer Portal URL
+      description: Returns a URL to the Stripe Customer Portal for managing subscriptions.
+      tags: [Billing]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Portal URL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingPortalResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/gateway/billing/usage:
+    get:
+      operationId: billingUsage
+      summary: Get current usage stats
+      description: Returns the current billing period usage for the authenticated tenant.
+      tags: [Billing]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Usage statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingUsageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Stripe Webhook ──────────────────────────────────────────────────
+
+  /api/gateway/webhooks/stripe:
+    post:
+      operationId: stripeWebhook
+      summary: Handle Stripe webhook events
+      description: Receives Stripe webhook events. Verified via Stripe signature header, no JWT required.
+      tags: [Billing]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Stripe event payload.
+      responses:
+        "200":
+          description: Webhook processed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Alert Rules endpoints ───────────────────────────────────────────
+
+  /api/gateway/alert-rules:
+    get:
+      operationId: listAlertRules
+      summary: List alert rules
+      description: Returns all alert rules for the authenticated tenant.
+      tags: [Alerts]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of alert rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRuleListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createAlertRule
+      summary: Create an alert rule
+      description: Creates a new alert rule for the authenticated tenant.
+      tags: [Alerts]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertRuleInput"
+      responses:
+        "201":
+          description: Alert rule created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/gateway/alert-rules/{id}:
+    get:
+      operationId: getAlertRule
+      summary: Get an alert rule
+      description: Returns a single alert rule by ID.
+      tags: [Alerts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Alert rule ID.
+      responses:
+        "200":
+          description: Alert rule details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: updateAlertRule
+      summary: Update an alert rule
+      description: Updates an existing alert rule by ID.
+      tags: [Alerts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Alert rule ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertRuleInput"
+      responses:
+        "200":
+          description: Alert rule updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteAlertRule
+      summary: Delete an alert rule
+      description: Deletes an alert rule by ID.
+      tags: [Alerts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Alert rule ID.
+      responses:
+        "200":
+          description: Alert rule deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Notification Channels endpoints ─────────────────────────────────
+
+  /api/gateway/channels:
+    get:
+      operationId: listChannels
+      summary: List notification channels
+      description: Returns all notification channels for the authenticated tenant.
+      tags: [Channels]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of channels.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createChannel
+      summary: Create a notification channel
+      description: Creates a new notification channel.
+      tags: [Channels]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelInput"
+      responses:
+        "201":
+          description: Channel created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Channel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/gateway/channels/{id}:
+    get:
+      operationId: getChannel
+      summary: Get a notification channel
+      description: Returns a single notification channel by ID.
+      tags: [Channels]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Channel ID.
+      responses:
+        "200":
+          description: Channel details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Channel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: updateChannel
+      summary: Update a notification channel
+      description: Updates an existing notification channel by ID.
+      tags: [Channels]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Channel ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelInput"
+      responses:
+        "200":
+          description: Channel updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Channel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteChannel
+      summary: Delete a notification channel
+      description: Deletes a notification channel by ID.
+      tags: [Channels]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Channel ID.
+      responses:
+        "200":
+          description: Channel deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Alert History endpoint ──────────────────────────────────────────
+
+  /api/gateway/alert-history:
+    get:
+      operationId: listAlertHistory
+      summary: List alert history
+      description: Returns alert firing history. Requires admin role.
+      tags: [Alerts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of entries to return.
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Number of entries to skip.
+      responses:
+        "200":
+          description: Alert history entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertHistoryResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── DLQ endpoints ───────────────────────────────────────────────────
+
+  /api/gateway/dlq:
+    get:
+      operationId: listDLQ
+      summary: List dead-letter queue entries
+      description: Returns entries from the dead-letter queue.
+      tags: [DLQ]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of entries to return.
+      responses:
+        "200":
+          description: DLQ entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DLQListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/gateway/dlq/replay:
+    post:
+      operationId: replayDLQ
+      summary: Replay DLQ entries
+      description: Re-ingests selected dead-letter queue entries.
+      tags: [DLQ]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DLQReplayRequest"
+      responses:
+        "200":
+          description: Entries replayed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DLQReplayResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Audit Log endpoint ─────────────────────────────────────────────
+
+  /api/gateway/audit-log:
+    get:
+      operationId: listAuditLog
+      summary: List audit log entries
+      description: Returns paginated audit log entries. Requires admin role.
+      tags: [Audit]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of entries to return.
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Number of entries to skip.
+      responses:
+        "200":
+          description: Audit log entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 components:
   securitySchemes:
     apiKeyAuth:
@@ -220,8 +933,15 @@ components:
       in: header
       name: X-API-Key
       description: API key for authentication. Set via the API_KEY environment variable on the server.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token from /api/gateway/login
 
   schemas:
+    # ── Ingestion schemas ────────────────────────────────────────────
+
     RequestFact:
       type: object
       description: A single HTTP request observation.
@@ -358,6 +1078,362 @@ components:
           description: HTTP status code.
           example: 400
 
+    # ── Gateway Auth schemas ─────────────────────────────────────────
+
+    RegisterRequest:
+      type: object
+      required:
+        - tenant_name
+        - email
+        - password
+        - plan
+      properties:
+        tenant_name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        plan:
+          type: string
+
+    RegisterResponse:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        api_key:
+          type: string
+        token:
+          type: string
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    MeResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+        tenant_id:
+          type: string
+        tenant_name:
+          type: string
+        plan:
+          type: string
+
+    # ── API Keys schemas ─────────────────────────────────────────────
+
+    APIKeySummary:
+      type: object
+      properties:
+        id:
+          type: string
+        key_prefix:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+
+    APIKeyListResponse:
+      type: object
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/APIKeySummary"
+
+    CreateAPIKeyRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+
+    CreateAPIKeyResponse:
+      type: object
+      properties:
+        key:
+          type: string
+        key_prefix:
+          type: string
+        name:
+          type: string
+
+    # ── Billing schemas ──────────────────────────────────────────────
+
+    BillingPortalResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+
+    BillingUsageResponse:
+      type: object
+      properties:
+        today_count:
+          type: integer
+        plan:
+          type: string
+        period:
+          type: string
+
+    # ── Alert Rules schemas ──────────────────────────────────────────
+
+    AlertRuleInput:
+      type: object
+      required:
+        - name
+        - metric
+        - operator
+        - threshold
+        - window_minutes
+      properties:
+        name:
+          type: string
+        metric:
+          type: string
+        operator:
+          type: string
+        threshold:
+          type: number
+        window_minutes:
+          type: integer
+        service:
+          type: string
+        path_template:
+          type: string
+        channel_id:
+          type: string
+        enabled:
+          type: boolean
+
+    AlertRule:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        metric:
+          type: string
+        operator:
+          type: string
+        threshold:
+          type: number
+        window_minutes:
+          type: integer
+        service:
+          type: string
+        path_template:
+          type: string
+        channel_id:
+          type: string
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AlertRuleListResponse:
+      type: object
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/AlertRule"
+
+    AlertHistoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        rule_id:
+          type: string
+        rule_name:
+          type: string
+        metric:
+          type: string
+        value:
+          type: number
+        threshold:
+          type: number
+        fired_at:
+          type: string
+          format: date-time
+
+    AlertHistoryResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AlertHistoryEntry"
+        total:
+          type: integer
+
+    # ── Channels schemas ─────────────────────────────────────────────
+
+    ChannelInput:
+      type: object
+      required:
+        - name
+        - type
+        - config
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+
+    Channel:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ChannelListResponse:
+      type: object
+      properties:
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+
+    # ── DLQ schemas ──────────────────────────────────────────────────
+
+    DLQEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        payload:
+          type: object
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DLQListResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/DLQEntry"
+
+    DLQReplayRequest:
+      type: object
+      required:
+        - entries
+      properties:
+        entries:
+          type: array
+          items:
+            type: string
+
+    DLQReplayResponse:
+      type: object
+      properties:
+        replayed:
+          type: integer
+
+    # ── Audit Log schemas ────────────────────────────────────────────
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        detail:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    AuditLogResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogEntry"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
   responses:
     BadRequest:
       description: Validation failure.
@@ -370,7 +1446,7 @@ components:
             code: 400
 
     Unauthorized:
-      description: Missing or invalid API key.
+      description: Missing or invalid API key or JWT token.
       content:
         application/json:
           schema:
@@ -378,6 +1454,26 @@ components:
           example:
             error: "unauthorized"
             code: 401
+
+    Forbidden:
+      description: Insufficient permissions.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "forbidden: admin role required"
+            code: 403
+
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "not found"
+            code: 404
 
     PayloadTooLarge:
       description: Request body exceeds 1 MB limit.
@@ -398,6 +1494,29 @@ components:
           example:
             error: "rate limit exceeded, try again later"
             code: 429
+
+    GatewayRateLimited:
+      description: Per-tenant rate limit exceeded.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "rate limit exceeded, try again later"
+            code: 429
+      headers:
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+          description: Maximum requests allowed per window.
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+          description: Remaining requests in the current window.
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+          description: Unix timestamp when the rate limit window resets.
 
     InternalError:
       description: Internal server error (disk write or marshal failure).

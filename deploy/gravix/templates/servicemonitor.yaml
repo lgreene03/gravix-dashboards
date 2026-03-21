@@ -47,4 +47,34 @@ spec:
         {{- toYaml .Values.monitoring.serviceMonitor.metricRelabelings | nindent 8 }}
       {{- end }}
 
+# ─── Gateway Service Monitor ───
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-gateway
+  labels:
+    app: gateway
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: gateway
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "15s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      {{- if .Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml .Values.monitoring.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end }}
+
 {{- end }}

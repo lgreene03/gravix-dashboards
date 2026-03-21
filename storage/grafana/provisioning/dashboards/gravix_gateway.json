@@ -1,0 +1,326 @@
+{
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "datasource": "-- Grafana --",
+                "enable": true,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "name": "Annotations & Alerts",
+                "type": "dashboard"
+            }
+        ]
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "id": null,
+    "links": [],
+    "liveNow": false,
+    "panels": [
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+            "id": 1,
+            "title": "Gateway Traffic",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisLabel": "Requests/sec",
+                        "axisPlacement": "auto",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "auto",
+                        "spanNulls": false,
+                        "stacking": { "group": "A", "mode": "none" }
+                    },
+                    "mappings": [],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+                    "unit": "reqps"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+            "id": 2,
+            "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "sum(rate(gateway_requests_total{job=\"gateway\"}[5m])) by (path, status)",
+                    "legendFormat": "{{path}} {{status}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Request Rate by Path/Status",
+            "type": "timeseries"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisLabel": "Duration (s)",
+                        "axisPlacement": "auto",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "auto",
+                        "spanNulls": false,
+                        "stacking": { "group": "A", "mode": "none" }
+                    },
+                    "mappings": [],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+            "id": 3,
+            "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "histogram_quantile(0.50, sum(rate(gateway_request_duration_seconds_bucket{job=\"gateway\"}[5m])) by (le))",
+                    "legendFormat": "p50",
+                    "refId": "A"
+                },
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "histogram_quantile(0.95, sum(rate(gateway_request_duration_seconds_bucket{job=\"gateway\"}[5m])) by (le))",
+                    "legendFormat": "p95",
+                    "refId": "B"
+                },
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "histogram_quantile(0.99, sum(rate(gateway_request_duration_seconds_bucket{job=\"gateway\"}[5m])) by (le))",
+                    "legendFormat": "p99",
+                    "refId": "C"
+                }
+            ],
+            "title": "Request Duration p50/p95/p99",
+            "type": "timeseries"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisLabel": "Errors/sec",
+                        "axisPlacement": "auto",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "auto",
+                        "spanNulls": false,
+                        "stacking": { "group": "A", "mode": "none" }
+                    },
+                    "mappings": [],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+                    "unit": "reqps"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+            "id": 4,
+            "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "sum(rate(gateway_requests_total{job=\"gateway\", status=~\"5..\"}[5m])) by (path)",
+                    "legendFormat": "{{path}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Error Rate (5xx)",
+            "type": "timeseries"
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+            "id": 10,
+            "title": "Gateway Health",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }] },
+                    "unit": "reqps"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 0, "y": 18 },
+            "id": 11,
+            "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "showThresholdLabels": false, "showThresholdMarkers": true },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "sum(rate(gateway_requests_total{job=\"gateway\"}[5m]))",
+                    "legendFormat": "req/s",
+                    "refId": "A"
+                }
+            ],
+            "title": "Current Request Rate",
+            "type": "gauge"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 }] },
+                    "unit": "percentunit",
+                    "max": 1
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 6, "y": 18 },
+            "id": 12,
+            "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "showThresholdLabels": false, "showThresholdMarkers": true },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "sum(rate(gateway_requests_total{job=\"gateway\", status=~\"5..\"}[5m])) / sum(rate(gateway_requests_total{job=\"gateway\"}[5m]))",
+                    "legendFormat": "error %",
+                    "refId": "A"
+                }
+            ],
+            "title": "Error Rate",
+            "type": "gauge"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [
+                        { "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } }, "type": "value" }
+                    ],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 12, "y": 18 },
+            "id": 13,
+            "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "up{job=\"gateway\"}",
+                    "legendFormat": "gateway",
+                    "refId": "A"
+                }
+            ],
+            "title": "Gateway Status",
+            "type": "stat"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisLabel": "Bytes",
+                        "axisPlacement": "auto",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "auto",
+                        "spanNulls": false,
+                        "stacking": { "group": "A", "mode": "none" }
+                    },
+                    "mappings": [],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+                    "unit": "bytes"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 18, "y": 18 },
+            "id": 14,
+            "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "process_resident_memory_bytes{job=\"gateway\"}",
+                    "legendFormat": "RSS",
+                    "refId": "A"
+                }
+            ],
+            "title": "Memory Usage",
+            "type": "timeseries"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisLabel": "Rejections/sec",
+                        "axisPlacement": "auto",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "auto",
+                        "spanNulls": false,
+                        "stacking": { "group": "A", "mode": "none" }
+                    },
+                    "mappings": [],
+                    "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+                    "unit": "reqps"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
+            "id": 15,
+            "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "sum(rate(gateway_rate_limit_rejected_total{job=\"gateway\"}[5m])) by (tenant_id)",
+                    "legendFormat": "{{tenant_id}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Rate Limit Rejections by Tenant",
+            "type": "timeseries"
+        }
+    ],
+    "refresh": "5s",
+    "schemaVersion": 36,
+    "style": "dark",
+    "tags": [
+        "gravix",
+        "gateway"
+    ],
+    "templating": {
+        "list": []
+    },
+    "time": {
+        "from": "now-30m",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "",
+    "title": "Gravix Gateway",
+    "uid": "gravix-gateway",
+    "version": 1,
+    "weekStart": ""
+}

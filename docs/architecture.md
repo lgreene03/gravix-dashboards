@@ -67,6 +67,7 @@ Local Disk / S3  (raw facts as JSONL, partitioned by date/hour)
 Rollup ETL Jobs (Go)
   |-- request_metrics_minute  (every 5 min)
   |-- service_events_daily    (every 1 hr)
+  |-- service_events_detail   (every 1 hr)
   |
   v
 Parquet files (warehouse/, ZSTD compressed)
@@ -105,7 +106,8 @@ Key characteristics of this pipeline:
 | Ingestion | Go HTTP server | `services/ingestion/` | Validate, buffer, and upload facts to object storage |
 | Storage | Local disk / S3 | `pkg/storage/` | `ObjectStore` interface with local and S3 backends |
 | Request Rollup | Go CronJob | `transforms/request_metrics_minute/` | Aggregate request facts into per-minute Parquet metrics |
-| Events Rollup | Go CronJob | `transforms/service_events_daily/` | Aggregate service events into daily Parquet summaries |
+| Events Daily Rollup | Go CronJob | `transforms/service_events_daily/` | Aggregate service events into daily Parquet summaries |
+| Events Detail Rollup | Go CronJob | `transforms/service_events_detail/` | Preserve full event detail as Parquet (deduplicated, sorted) |
 | Purge | Go CronJob | `cmd/purge/` | Enforce 30-day retention policy |
 | Query Engine (default) | DuckDB (embedded) | `cube/model/` | Embedded SQL engine, reads Parquet directly |
 | Query Engine (full stack) | Trino 351 | `storage/trino/` | Separate SQL engine over Parquet via Hive metastore |
@@ -281,9 +283,23 @@ Processing steps:
 3. **Aggregate** by `(event_day, service, event_type)`.
 4. **Write** Parquet output to `warehouse/service_events_daily/`.
 
+### Service Events Detail
+
+**Source:** `transforms/service_events_detail/`
+**Schedule:** Every 1 hour.
+
+Processing steps:
+
+1. **List** all JSONL files under `raw/service_events/`.
+2. **Deduplicate** by `event_id`.
+3. **Preserve** full event detail (no aggregation): tenant_id, event_time,
+   service, event_type, entity_id, message, and JSON-encoded properties.
+4. **Sort** by `event_time`.
+5. **Write** Parquet output to `warehouse/service_events_detail/`.
+
 ### Idempotency
 
-Both rollup jobs are idempotent. Re-running a rollup for any time window
+All rollup jobs are idempotent. Re-running a rollup for any time window
 produces the same output. This makes recovery from failures straightforward:
 simply re-run the job.
 
@@ -330,6 +346,7 @@ Hive file-based metastore provides SQL access over Parquet via S3A.
 |----------------------|--------|
 | `gravix.raw.request_metrics_minute` | `warehouse/request_metrics_minute/` |
 | `gravix.raw.service_events_daily` | `warehouse/service_events_daily/` |
+| `gravix.raw.service_events_detail` | `warehouse/service_events_detail/` |
 
 ### Column Types (both engines)
 
@@ -426,12 +443,52 @@ The nginx configuration sets the following response headers:
 
 **Source:** `storage/prometheus/`
 
-Prometheus scrapes the ingestion service at `:8080/metrics`. Grafana provides
-pre-provisioned dashboards at `:3000`.
+Prometheus scrapes all services and batch jobs. Grafana provides pre-provisioned
+dashboards at `:3000`.
+
+### Prometheus Scrape Targets
+
+| Job | Target | Port |
+|-----|--------|------|
+| `ingestion` | ingestion:8080 | 8080 |
+| `gateway` | gateway:8091 | 8091 |
+| `request-metrics-rollup` | request-metrics-rollup:9090 | 9090 |
+| `purge` | purge:9091 | 9091 |
+| `service-events-rollup` | service-events-rollup:9092 | 9092 |
+| `service-events-detail-rollup` | service-events-detail-rollup:9093 | 9093 |
+
+### Batch Job Prometheus Metrics
+
+| Job | Metric | Type | Labels |
+|-----|--------|------|--------|
+| Request Rollup | `rollup_processed_events_total` | CounterVec | `service`, `day` |
+| Request Rollup | `rollup_duration_seconds` | GaugeVec | `day` |
+| Request Rollup | `rollup_last_success_timestamp_seconds` | Gauge | -- |
+| Events Daily | `events_daily_processed_total` | CounterVec | `service`, `day` |
+| Events Daily | `events_daily_duration_seconds` | GaugeVec | `day` |
+| Events Daily | `events_daily_last_success_timestamp_seconds` | Gauge | -- |
+| Events Detail | `events_detail_processed_total` | CounterVec | `service`, `day` |
+| Events Detail | `events_detail_duration_seconds` | GaugeVec | `day` |
+| Events Detail | `events_detail_last_success_timestamp_seconds` | Gauge | -- |
+| Purge | `purge_files_deleted_total` | CounterVec | `tenant_id` |
+| Purge | `purge_duration_seconds` | Gauge | -- |
+| Purge | `purge_errors_total` | Counter | -- |
+| Purge | `purge_last_success_timestamp_seconds` | Gauge | -- |
+
+### Grafana Dashboards
+
+Three pre-provisioned dashboards are auto-loaded from
+`storage/grafana/provisioning/dashboards/`:
+
+| Dashboard | UID | Focus |
+|-----------|-----|-------|
+| Gravix Health | `gravix-health` | Ingestion metrics, rollup status, infrastructure |
+| Gravix Gateway | `gravix-gateway` | Gateway traffic, latency, rate limiting |
+| Gravix Batch Jobs | `gravix-batch-jobs` | All batch job metrics, durations, error rates, last success |
 
 ### Alert Rules
 
-Alert rules are defined in `storage/prometheus/alert_rules.yml` across three
+Alert rules are defined in `storage/prometheus/alert_rules.yml` across five
 groups:
 
 **gravix_ingestion**
@@ -448,6 +505,20 @@ groups:
 |-------|-----------|----------|
 | `RollupStaleData` | No successful rollup in 10 minutes | -- |
 | `RollupSlowExecution` | Rollup execution exceeds 120 seconds | -- |
+
+**gravix_events_rollup**
+
+| Alert | Condition | Duration |
+|-------|-----------|----------|
+| `EventsDailyRollupStale` | No successful daily rollup in 2 hours | 10 minutes |
+| `EventsDetailRollupStale` | No successful detail rollup in 2 hours | 10 minutes |
+
+**gravix_purge**
+
+| Alert | Condition | Duration |
+|-------|-----------|----------|
+| `PurgeJobStale` | No successful purge in 48 hours | 30 minutes |
+| `PurgeHighErrorRate` | Any purge errors in the last hour | 5 minutes |
 
 **gravix_infrastructure**
 
@@ -517,7 +588,8 @@ The Helm chart produces 49 production resources across 21+ template types.
 | Deployment | load-generator | Synthetic traffic (dev/staging) |
 | StatefulSet | trino | Query engine with persistent storage |
 | CronJob | request-rollup | Every 5 minutes |
-| CronJob | events-rollup | Every 1 hour |
+| CronJob | events-rollup | Every 1 hour (daily aggregation) |
+| CronJob | events-detail | Every 1 hour (detail preservation) |
 | CronJob | retention | Daily at 03:00 UTC |
 | CronJob | backup | Daily at 02:00 UTC |
 
@@ -529,7 +601,7 @@ The Helm chart produces 49 production resources across 21+ template types.
 - **NetworkPolicy** -- Optional; requires a CNI that supports it.
 - **PodDisruptionBudget** -- Availability guarantees during rollouts.
 - **ResourceQuota** -- Namespace-level resource caps.
-- **HorizontalPodAutoscaler** -- Autoscaling for ingestion.
+- **HorizontalPodAutoscaler** -- Autoscaling for ingestion and gateway.
 - **ServiceMonitor, PrometheusRule** -- Prometheus Operator CRDs for automatic
   scrape target and alert rule discovery.
 - **Certificate** -- cert-manager integration for TLS.
@@ -561,7 +633,7 @@ Triggered on every push to `main` and on pull requests.
 |-------|---------|
 | Lint | `go vet` + `staticcheck` |
 | Test | `go test -race`; coverage >= 90% enforced for `schemas/` |
-| Build | All 5 Go binaries (ingestion, rollup, events-rollup, purge, load-generator) |
+| Build | All 7 Go binaries (ingestion, gateway, rollup, events-rollup, events-detail-rollup, purge, load-generator) |
 | Helm Validate | `helm lint` + `helm template`; resource count >= 40 for prod values |
 | Docker Lint | `hadolint` on all Dockerfiles |
 | Docker Build & Push | To GHCR on `main` only; tagged `sha-<short>` + semver |

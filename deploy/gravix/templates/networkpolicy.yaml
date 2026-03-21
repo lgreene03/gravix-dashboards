@@ -205,6 +205,9 @@ spec:
               app: events-rollup
         - podSelector:
             matchLabels:
+              app: events-detail
+        - podSelector:
+            matchLabels:
               app: retention
       ports:
         - port: 8080
@@ -258,6 +261,9 @@ spec:
               app: events-rollup
         - podSelector:
             matchLabels:
+              app: events-detail
+        - podSelector:
+            matchLabels:
               app: retention
         - podSelector:
             matchLabels:
@@ -284,7 +290,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [rollup, events-rollup, retention]
+        values: [rollup, events-rollup, events-detail, retention]
   policyTypes:
     - Egress
   egress:

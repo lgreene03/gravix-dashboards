@@ -67,3 +67,64 @@ func TestValidateGarbage(t *testing.T) {
 		t.Error("expected error for garbage token")
 	}
 }
+
+func TestValidateTamperedSignature(t *testing.T) {
+	ts := NewTokenService("test-secret-key-32-chars-long!!", 1*time.Hour)
+	token, err := ts.Generate("t1", "u1", "a@b.com", "admin")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	// Flip last character of signature
+	tampered := token[:len(token)-1] + "X"
+	_, err = ts.Validate(tampered)
+	if err == nil {
+		t.Error("expected error for tampered signature")
+	}
+}
+
+func TestValidateNoneAlgorithm(t *testing.T) {
+	ts := NewTokenService("secret", 1*time.Hour)
+
+	// Craft a token with alg:none — base64url("{"alg":"none","typ":"JWT"}") . base64url(claims) . ""
+	// This is the classic JWT bypass attack
+	noneToken := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ0ZW5hbnRfaWQiOiJ0MSIsInVzZXJfaWQiOiJ1MSJ9."
+	_, err := ts.Validate(noneToken)
+	if err == nil {
+		t.Error("expected error for alg:none token — this is a security vulnerability")
+	}
+}
+
+func TestValidateWrongSigningMethod(t *testing.T) {
+	ts := NewTokenService("secret", 1*time.Hour)
+
+	// Create a token using RS256 header but with HMAC signature
+	// The Validate function should reject non-HMAC signing methods
+	rs256Token := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZW5hbnRfaWQiOiJ0MSIsInVzZXJfaWQiOiJ1MSJ9.invalid"
+	_, err := ts.Validate(rs256Token)
+	if err == nil {
+		t.Error("expected error for RS256 signing method")
+	}
+}
+
+func TestValidateEmptyClaims(t *testing.T) {
+	ts := NewTokenService("test-secret-key-32-chars-long!!", 1*time.Hour)
+
+	// Generate with empty tenant/user — should still work at JWT level
+	// (application-level validation is the caller's responsibility)
+	token, err := ts.Generate("", "", "", "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	claims, err := ts.Validate(token)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if claims.TenantID != "" {
+		t.Errorf("expected empty tenant_id, got %q", claims.TenantID)
+	}
+	if claims.UserID != "" {
+		t.Errorf("expected empty user_id, got %q", claims.UserID)
+	}
+}

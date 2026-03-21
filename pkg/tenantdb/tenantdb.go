@@ -24,13 +24,14 @@ type Tenant struct {
 
 // APIKey represents an ingestion API key belonging to a tenant.
 type APIKey struct {
-	ID        string
-	TenantID  string
-	KeyPrefix string // first 8 chars for display (e.g., "grvx_abc1...")
-	Name      string
-	Status    string // active, revoked
-	CreatedAt time.Time
+	ID         string
+	TenantID   string
+	KeyPrefix  string // first 8 chars for display (e.g., "grvx_abc1...")
+	Name       string
+	Status     string // active, revoked
+	CreatedAt  time.Time
 	LastUsedAt *time.Time
+	ExpiresAt  *time.Time
 }
 
 // APIKeyInfo is the minimal info returned during key validation on the
@@ -66,10 +67,12 @@ type TenantRepo interface {
 type APIKeyRepo interface {
 	// Create generates a new API key for the tenant. Returns the plaintext
 	// key (only returned once — the stored value is a SHA-256 hash).
-	Create(ctx context.Context, tenantID, name string) (plainKey string, key *APIKey, err error)
+	// expiresAt is optional — pass nil for keys that never expire.
+	Create(ctx context.Context, tenantID, name string, expiresAt *time.Time) (plainKey string, key *APIKey, err error)
 
 	// ValidateKey checks a raw API key and returns tenant info if valid.
 	// This is called on every ingestion request — must be fast.
+	// Returns error if the key is expired, revoked, or not found.
 	ValidateKey(ctx context.Context, rawKey string) (*APIKeyInfo, error)
 
 	// TouchLastUsed updates the last_used_at timestamp for the key.
@@ -77,6 +80,9 @@ type APIKeyRepo interface {
 
 	// ListByTenant returns all API keys for a tenant (without hashes).
 	ListByTenant(ctx context.Context, tenantID string) ([]*APIKey, error)
+
+	// ListExpiringSoon returns active keys expiring within the given number of days.
+	ListExpiringSoon(ctx context.Context, tenantID string, withinDays int) ([]*APIKey, error)
 
 	// Revoke marks an API key as revoked.
 	Revoke(ctx context.Context, keyID string) error
@@ -170,6 +176,25 @@ type AlertHistoryRepo interface {
 	ListByRule(ctx context.Context, ruleID string, limit int) ([]*AlertHistoryEntry, error)
 }
 
+// AuditEntry represents an immutable audit log record.
+type AuditEntry struct {
+	ID         string
+	TenantID   string
+	UserID     string // actor who performed the action
+	Action     string // e.g. "api_key.create", "tenant.register", "data.purge"
+	Resource   string // type of resource acted upon
+	ResourceID string // ID of the specific resource
+	Detail     string // JSON-encoded details (before/after, metadata)
+	IPAddress  string // request source IP
+	CreatedAt  time.Time
+}
+
+// AuditRepo manages immutable audit log entries.
+type AuditRepo interface {
+	Log(ctx context.Context, entry *AuditEntry) error
+	ListByTenant(ctx context.Context, tenantID string, limit, offset int) ([]*AuditEntry, int, error)
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
@@ -179,5 +204,6 @@ type DB interface {
 	NotificationChannels() NotificationChannelRepo
 	AlertRules() AlertRuleRepo
 	AlertHistory() AlertHistoryRepo
+	AuditLog() AuditRepo
 	Close() error
 }

@@ -94,8 +94,10 @@ jobs:
       - name: Build all binaries
         run: |
           go build -o bin/ingestion-service ./services/ingestion/
+          go build -o bin/gateway ./services/gateway/
           go build -o bin/request-metrics-rollup ./transforms/request_metrics_minute/
           go build -o bin/service-events-rollup ./transforms/service_events_daily/
+          go build -o bin/service-events-detail-rollup ./transforms/service_events_detail/
           go build -o bin/load-generator ./cmd/load_generator/
           go build -o bin/purge ./cmd/purge/
 
@@ -176,6 +178,11 @@ jobs:
         with:
           dockerfile: services/load_generator/Dockerfile
 
+      - name: Lint gateway Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: services/gateway/Dockerfile
+
   # ─── Container Image Pipeline (runs only on main branch push) ───
   docker-build:
     runs-on: ubuntu-latest
@@ -193,6 +200,8 @@ jobs:
             dockerfile: services/rollup/Dockerfile
           - image: load-generator
             dockerfile: services/load_generator/Dockerfile
+          - image: gateway
+            dockerfile: services/gateway/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -242,7 +251,7 @@ jobs:
       security-events: write
     strategy:
       matrix:
-        image: [ingestion, rollup, load-generator]
+        image: [ingestion, rollup, load-generator, gateway]
     steps:
       - uses: actions/checkout@v4
 

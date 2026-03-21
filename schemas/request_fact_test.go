@@ -392,3 +392,21 @@ func TestParseRequestFact_ValidationError(t *testing.T) {
 		t.Errorf("expected 'validation error', got: %v", err)
 	}
 }
+
+// FuzzValidateRequestFact ensures ParseRequestFact never panics on arbitrary input.
+func FuzzValidateRequestFact(f *testing.F) {
+	// Seed corpus with valid and edge-case JSON
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","method":"GET","pathTemplate":"/api","statusCode":200,"latencyMs":10}`))
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","method":"POST","pathTemplate":"/api/{id}","statusCode":100,"latencyMs":0}`))
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","method":"DELETE","pathTemplate":"/api","statusCode":599,"latencyMs":99999}`))
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`not json`))
+	f.Add([]byte(``))
+	f.Add([]byte(`{"statusCode":-1}`))
+	f.Add([]byte(`{"pathTemplate":"/users/52380628-863e-4390-8e12-254245645511"}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		// Must not panic — errors are fine
+		ParseRequestFact(data)
+	})
+}
