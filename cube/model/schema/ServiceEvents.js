@@ -66,5 +66,17 @@ cube(`ServiceEvents`, {
     }
   },
 
+  preAggregations: {
+    recentEvents: {
+      measures: [count],
+      dimensions: [service, eventType],
+      timeDimension: eventTime,
+      granularity: `hour`,
+      refreshKey: {
+        every: `5 minute`
+      }
+    }
+  },
+
   dataSource: `default`
 });

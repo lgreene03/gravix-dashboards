@@ -18,6 +18,7 @@ type Tenant struct {
 	StripeCustomerID     string
 	StripeSubscriptionID string
 	Status               string // active, suspended, churned
+	OverageAllowed       bool   // false=reject over limit (free), true=allow+flag (paid)
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -37,9 +38,10 @@ type APIKey struct {
 // APIKeyInfo is the minimal info returned during key validation on the
 // ingestion hot path. Keep this struct small for performance.
 type APIKeyInfo struct {
-	TenantID string
-	Plan     string
-	Status   string // tenant status (active, suspended)
+	TenantID       string
+	Plan           string
+	Status         string // tenant status (active, suspended)
+	OverageAllowed bool   // whether overage is permitted (paid plans)
 }
 
 // User represents a dashboard user belonging to a tenant.
@@ -195,12 +197,28 @@ type AuditRepo interface {
 	ListByTenant(ctx context.Context, tenantID string, limit, offset int) ([]*AuditEntry, int, error)
 }
 
+// MonthlyUsage represents a monthly snapshot of tenant event usage.
+type MonthlyUsage struct {
+	TenantID  string
+	Month     string // YYYY-MM
+	Count     int64
+	Plan      string
+	SnappedAt time.Time
+}
+
+// MonthlyUsageRepo manages monthly usage snapshots.
+type MonthlyUsageRepo interface {
+	Snapshot(ctx context.Context, tenantID, month string, count int64, plan string) error
+	GetByTenant(ctx context.Context, tenantID string, limit int) ([]*MonthlyUsage, error)
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
 	APIKeys() APIKeyRepo
 	Users() UserRepo
 	EventCounters() EventCounterRepo
+	MonthlyUsage() MonthlyUsageRepo
 	NotificationChannels() NotificationChannelRepo
 	AlertRules() AlertRuleRepo
 	AlertHistory() AlertHistoryRepo

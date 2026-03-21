@@ -53,5 +53,16 @@ cube(`ServiceEventsDaily`, {
     }
   },
 
+  preAggregations: {
+    dailySummary: {
+      type: `rollup`,
+      measures: [eventCount],
+      dimensions: [service, eventType, eventDay],
+      refreshKey: {
+        every: `10 minute`
+      }
+    }
+  },
+
   dataSource: `default`
 });

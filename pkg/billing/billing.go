@@ -56,6 +56,20 @@ type Service interface {
 
 	// FreePriceID returns the price ID for the free plan.
 	FreePriceID() string
+
+	// ListInvoices returns recent invoices for a Stripe customer.
+	ListInvoices(ctx context.Context, customerID string) ([]Invoice, error)
+}
+
+// Invoice represents a billing invoice summary.
+type Invoice struct {
+	ID        string `json:"id"`
+	Date      string `json:"date"`       // YYYY-MM-DD
+	Amount    int64  `json:"amount"`      // cents
+	Currency  string `json:"currency"`
+	Status    string `json:"status"`      // paid, open, void, draft
+	PDFUrl    string `json:"pdf_url"`
+	HostedUrl string `json:"hosted_url"`
 }
 
 // DefaultPlans returns the standard plan configuration.

@@ -116,6 +116,7 @@
             <a href="#" class="nav-link" data-page="endpoints">Endpoints</a>
             <a href="#" class="nav-link" data-page="alerts" id="nav-alerts">Alerts</a>
             <a href="#" class="nav-link" data-page="ingestion">Ingestion</a>
+            <a href="#" class="nav-link" data-page="usage" id="nav-usage">Usage &amp; Billing</a>
             <a href="#" class="nav-link disabled" data-page="processing" title="Coming soon">Processing</a>
             <a href="#" class="nav-link disabled" data-page="settings" title="Coming soon">Settings</a>
         </nav>
@@ -594,6 +595,89 @@
                 </div>
             </div>
         </div><!-- end page-ingestion -->
+
+        <div id="page-usage" class="page-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Usage &amp; Billing</div>
+                        <div class="card-subtitle">Current period usage and plan details</div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="export-btn" onclick="handleManageBilling()" id="manage-billing-btn">Manage Billing</button>
+                    </div>
+                </div>
+                <div id="usage-section-error" class="section-error" style="display:none;"></div>
+                <div id="usage-loading" class="skeleton-container">
+                    <div class="skeleton-line" style="width:60%;height:24px;margin-bottom:16px"></div>
+                    <div class="skeleton-line" style="width:100%;height:120px;margin-bottom:16px"></div>
+                    <div class="skeleton-line" style="width:100%;height:200px"></div>
+                </div>
+                <div id="usage-content" style="display:none; padding: 24px;">
+                    <!-- Plan Info Card -->
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                        <div class="stat-card">
+                            <div class="stat-label">Plan</div>
+                            <div class="stat-value" id="usage-plan-name">—</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Monthly Limit</div>
+                            <div class="stat-value" id="usage-event-limit">—</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Rate Limit</div>
+                            <div class="stat-value" id="usage-rate-limit">—</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Today</div>
+                            <div class="stat-value" id="usage-today-count">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Usage Progress Bar -->
+                    <div style="margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="font-weight: 600;">Monthly Usage</span>
+                            <span id="usage-progress-label">0 / 0</span>
+                        </div>
+                        <div class="usage-progress-bar">
+                            <div class="usage-progress-fill" id="usage-progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Daily Usage Chart -->
+                    <div style="margin-bottom: 24px;">
+                        <div style="font-weight: 600; margin-bottom: 12px;">Daily Usage (Last 30 Days)</div>
+                        <canvas id="usage-daily-chart" height="200"></canvas>
+                    </div>
+
+                    <!-- Monthly Usage History -->
+                    <div style="margin-bottom: 24px;">
+                        <div style="font-weight: 600; margin-bottom: 12px;">Monthly Usage History</div>
+                        <canvas id="usage-monthly-chart" height="200"></canvas>
+                    </div>
+
+                    <!-- Invoice History -->
+                    <div>
+                        <div style="font-weight: 600; margin-bottom: 12px;">Invoice History</div>
+                        <div id="invoice-empty" style="display: none; padding: 24px; text-align: center; color: var(--text-secondary);">
+                            No invoices yet.
+                        </div>
+                        <table class="data-table" id="invoice-table" style="display: none;">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoice-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-usage -->
 
     </main>
 

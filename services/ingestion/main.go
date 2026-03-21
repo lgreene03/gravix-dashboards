@@ -91,6 +91,14 @@ func getTenantPlan(r *http.Request) string {
 	return ""
 }
 
+// getTenantOverageAllowed extracts the tenant's overage_allowed flag from context.
+func getTenantOverageAllowed(r *http.Request) bool {
+	if info, ok := r.Context().Value(tenantInfoKey).(*tenantdb.APIKeyInfo); ok {
+		return info.OverageAllowed
+	}
+	return false
+}
+
 // topicForTenant returns the storage topic prefixed with tenant ID.
 // In legacy mode (empty tenantID), returns the base topic unchanged.
 func topicForTenant(tenantID, baseTopic string) string {
@@ -146,6 +154,20 @@ var (
 			Help: "Total storage upload failures.",
 		},
 	)
+	ingestionOverageEventsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingestion_overage_events_total",
+			Help: "Total events accepted over plan limit (paid plans only).",
+		},
+		[]string{"tenant_id"},
+	)
+	ingestionQuotaRejectedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingestion_quota_rejected_total",
+			Help: "Total requests rejected due to quota exceeded.",
+		},
+		[]string{"tenant_id"},
+	)
 )
 
 func init() {
@@ -155,6 +177,8 @@ func init() {
 	prometheus.MustRegister(ingestionFsyncDurationSeconds)
 	prometheus.MustRegister(ingestionDLQWriteErrorsTotal)
 	prometheus.MustRegister(ingestionUploadErrorsTotal)
+	prometheus.MustRegister(ingestionOverageEventsTotal)
+	prometheus.MustRegister(ingestionQuotaRejectedTotal)
 }
 
 func tenantRateLimitMiddleware(trl *ratelimit.TenantLimiter, next http.HandlerFunc) http.HandlerFunc {
@@ -681,6 +705,13 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 
 		tenantID := getTenantID(r)
 
+		// Check quota before processing
+		if checkQuota(tdb, tenantID, getTenantPlan(r), getTenantOverageAllowed(r)) {
+			writeErrorJSON(w, http.StatusTooManyRequests, "monthly event quota exceeded — upgrade your plan")
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "429", tenantID).Inc()
+			return
+		}
+
 		reqID := logging.GetRequestID(r.Context())
 
 		fact, err := schemas.ParseRequestFact(body)
@@ -739,13 +770,21 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
+		tenantID := getTenantID(r)
+
+		// Check quota before processing batch
+		if checkQuota(tdb, tenantID, getTenantPlan(r), getTenantOverageAllowed(r)) {
+			writeErrorJSON(w, http.StatusTooManyRequests, "monthly event quota exceeded — upgrade your plan")
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "429", tenantID).Inc()
+			return
+		}
+
 		lines := splitJSONL(body)
 		if len(lines) == 0 {
 			writeErrorJSON(w, http.StatusBadRequest, "empty request body")
 			return
 		}
 
-		tenantID := getTenantID(r)
 		reqID := logging.GetRequestID(r.Context())
 		now := time.Now().UTC()
 
@@ -914,4 +953,51 @@ func incrementEventCounter(tdb tenantdb.DB, tenantID string, count int64) {
 			slog.Warn("failed to increment event counter", "tenant_id", tenantID, "error", err)
 		}
 	}()
+}
+
+// checkQuota verifies a tenant hasn't exceeded their monthly event limit.
+// Returns true if the request should be rejected, false if allowed.
+// For paid plans with overage_allowed=true, allows but flags the overage.
+func checkQuota(tdb tenantdb.DB, tenantID, plan string, overageAllowed bool) bool {
+	if tdb == nil || tenantID == "" {
+		return false // no tenant DB → single tenant mode, no quota
+	}
+
+	var eventLimit int64
+	switch plan {
+	case "pro":
+		eventLimit = 50_000_000
+	case "starter":
+		eventLimit = 10_000_000
+	default:
+		eventLimit = 1_000_000
+	}
+
+	// Sum current month's usage
+	ctx := context.Background()
+	year, month, _ := time.Now().UTC().Date()
+	var monthTotal int64
+	for day := 1; day <= 31; day++ {
+		d := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+		if d.Month() != month {
+			break
+		}
+		dayStr := d.Format("2006-01-02")
+		count, _ := tdb.EventCounters().GetCount(ctx, tenantID, dayStr)
+		monthTotal += count
+	}
+
+	if monthTotal < eventLimit {
+		return false // under limit
+	}
+
+	if overageAllowed {
+		// Paid plan: allow but flag
+		ingestionOverageEventsTotal.WithLabelValues(tenantID).Inc()
+		return false
+	}
+
+	// Free plan: reject
+	ingestionQuotaRejectedTotal.WithLabelValues(tenantID).Inc()
+	return true
 }

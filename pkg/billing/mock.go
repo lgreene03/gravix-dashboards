@@ -64,3 +64,7 @@ func (m *MockService) PlanForPriceID(priceID string) string {
 func (m *MockService) FreePriceID() string {
 	return m.FreePriceIDVal
 }
+
+func (m *MockService) ListInvoices(_ context.Context, customerID string) ([]Invoice, error) {
+	return []Invoice{}, nil
+}

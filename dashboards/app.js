@@ -12,6 +12,35 @@
         const REFRESH_INTERVAL_MS = GRAVIX_CONFIG.refreshIntervalMs;
         const IS_MULTI_TENANT = !!GATEWAY_URL;
 
+        // --- ETag CACHE ---
+        // Caches ETag values per request body hash to enable 304 Not Modified responses
+        const etagCache = new Map();
+
+        async function cachedFetch(url, options = {}) {
+            const cacheKey = url + '|' + (options.body || '');
+            const cached = etagCache.get(cacheKey);
+
+            const headers = { ...(options.headers || {}) };
+            if (cached && cached.etag) {
+                headers['If-None-Match'] = cached.etag;
+            }
+
+            const resp = await fetch(url, { ...options, headers });
+
+            if (resp.status === 304 && cached) {
+                return cached.response.clone();
+            }
+
+            const etag = resp.headers.get('ETag');
+            if (etag) {
+                etagCache.set(cacheKey, {
+                    etag,
+                    response: resp.clone()
+                });
+            }
+            return resp;
+        }
+
         // --- THEME ---
         function initTheme() {
             const saved = localStorage.getItem('gravix_theme');
@@ -346,7 +375,7 @@
             // Show/hide dashboard filters depending on page
             const headerEl = document.querySelector('.header');
             if (headerEl) {
-                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion') ? 'none' : '';
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage') ? 'none' : '';
             }
 
             if (pageName === 'endpoints') {
@@ -355,6 +384,8 @@
                 loadAlertsPage();
             } else if (pageName === 'ingestion') {
                 loadIngestionPage();
+            } else if (pageName === 'usage') {
+                loadUsagePage();
             }
 
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2499,5 +2530,204 @@ app.listen(8080, () => {
                 document.getElementById('wizInstallTitle').textContent = 'Install the SDK';
                 document.getElementById('wizInstallDesc').textContent = 'Run this command to add the SDK to your project.';
             }
+        }
+
+        // --- USAGE & BILLING PAGE ---
+        let usageChart = null;
+
+        async function loadUsagePage() {
+            const loading = document.getElementById('usage-loading');
+            const content = document.getElementById('usage-content');
+            const errorEl = document.getElementById('usage-section-error');
+
+            if (!IS_MULTI_TENANT) {
+                loading.style.display = 'none';
+                content.style.display = 'block';
+                document.getElementById('usage-plan-name').textContent = 'Self-hosted';
+                document.getElementById('usage-event-limit').textContent = 'Unlimited';
+                document.getElementById('usage-rate-limit').textContent = 'Unlimited';
+                document.getElementById('usage-today-count').textContent = '—';
+                document.getElementById('manage-billing-btn').style.display = 'none';
+                return;
+            }
+
+            loading.style.display = '';
+            content.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            try {
+                const token = localStorage.getItem('gravix_jwt');
+                const [usageResp, historyResp, invoiceResp] = await Promise.all([
+                    fetch(GATEWAY_URL + '/api/gateway/billing/usage', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }),
+                    fetch(GATEWAY_URL + '/api/gateway/billing/usage/history', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }),
+                    fetch(GATEWAY_URL + '/api/gateway/billing/invoices', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    })
+                ]);
+                if (!usageResp.ok) throw new Error('Failed to fetch usage data');
+                const data = await usageResp.json();
+                const historyData = historyResp.ok ? await historyResp.json() : { history: [] };
+                const invoiceData = invoiceResp.ok ? await invoiceResp.json() : { invoices: [] };
+                renderUsagePage(data);
+                renderMonthlyHistory(historyData.history || []);
+                renderInvoices(invoiceData.invoices || []);
+            } catch (err) {
+                loading.style.display = 'none';
+                errorEl.style.display = 'flex';
+                errorEl.innerHTML = '&#x26A0; Failed to load usage data. <button class="section-error-retry" onclick="loadUsagePage()">Retry</button>';
+            }
+        }
+
+        function renderUsagePage(data) {
+            const loading = document.getElementById('usage-loading');
+            const content = document.getElementById('usage-content');
+            loading.style.display = 'none';
+            content.style.display = 'block';
+
+            // Plan info
+            document.getElementById('usage-plan-name').textContent = (data.plan || 'free').charAt(0).toUpperCase() + (data.plan || 'free').slice(1);
+            document.getElementById('usage-event-limit').textContent = formatNumber(data.event_limit || 0);
+            document.getElementById('usage-rate-limit').textContent = (data.rate_limit_rps || 0) + ' req/s';
+            document.getElementById('usage-today-count').textContent = formatNumber(data.today || 0);
+
+            // Progress bar
+            const monthTotal = data.month_total || 0;
+            const eventLimit = data.event_limit || 1;
+            const pct = Math.min((monthTotal / eventLimit) * 100, 100);
+            const fill = document.getElementById('usage-progress-fill');
+            fill.style.width = pct.toFixed(1) + '%';
+            fill.className = 'usage-progress-fill' + (pct >= 100 ? ' danger' : pct >= 80 ? ' warning' : '');
+            document.getElementById('usage-progress-label').textContent = formatNumber(monthTotal) + ' / ' + formatNumber(eventLimit);
+
+            // Daily chart
+            const dailyCounts = data.daily_counts || [];
+            const labels = dailyCounts.map(d => d.day.slice(5)); // MM-DD
+            const values = dailyCounts.map(d => d.count);
+
+            const ctx = document.getElementById('usage-daily-chart');
+            if (usageChart) usageChart.destroy();
+            usageChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Events',
+                        data: values,
+                        backgroundColor: 'rgba(99, 102, 241, 0.6)',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { maxRotation: 45 } },
+                        y: { beginAtZero: true, ticks: { callback: v => formatNumber(v) } }
+                    }
+                }
+            });
+        }
+
+        function formatNumber(n) {
+            if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+            if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+            return n.toString();
+        }
+
+        async function handleManageBilling() {
+            if (!IS_MULTI_TENANT) return;
+            try {
+                const token = localStorage.getItem('gravix_jwt');
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/billing/portal', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ return_url: window.location.href })
+                });
+                if (!resp.ok) throw new Error('Portal error');
+                const data = await resp.json();
+                if (data.url) window.location.href = data.url;
+            } catch (err) {
+                alert('Could not open billing portal. ' + err.message);
+            }
+        }
+
+        // --- MONTHLY HISTORY CHART ---
+        let monthlyChart = null;
+
+        function renderMonthlyHistory(history) {
+            const ctx = document.getElementById('usage-monthly-chart');
+            if (!ctx) return;
+
+            // Reverse so oldest is first
+            const sorted = [...history].reverse();
+            const labels = sorted.map(h => h.month);
+            const values = sorted.map(h => h.count);
+
+            if (monthlyChart) monthlyChart.destroy();
+            monthlyChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Events',
+                        data: values,
+                        borderColor: 'rgba(99, 102, 241, 0.8)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false } },
+                        y: { beginAtZero: true, ticks: { callback: v => formatNumber(v) } }
+                    }
+                }
+            });
+        }
+
+        // --- INVOICE TABLE ---
+        function renderInvoices(invoices) {
+            const table = document.getElementById('invoice-table');
+            const emptyEl = document.getElementById('invoice-empty');
+            const tbody = document.getElementById('invoice-table-body');
+            if (!table || !tbody) return;
+
+            if (!invoices || invoices.length === 0) {
+                table.style.display = 'none';
+                if (emptyEl) emptyEl.style.display = 'block';
+                return;
+            }
+
+            if (emptyEl) emptyEl.style.display = 'none';
+            table.style.display = '';
+            tbody.innerHTML = '';
+
+            invoices.forEach(inv => {
+                const tr = document.createElement('tr');
+                const amount = (inv.amount / 100).toFixed(2);
+                const currency = (inv.currency || 'usd').toUpperCase();
+                const statusClass = inv.status === 'paid' ? 'color: var(--success-color)' : '';
+                let actions = '';
+                if (inv.hosted_url) {
+                    actions += '<a href="' + inv.hosted_url + '" target="_blank" rel="noopener" style="margin-right:8px">View</a>';
+                }
+                if (inv.pdf_url) {
+                    actions += '<a href="' + inv.pdf_url + '" target="_blank" rel="noopener">PDF</a>';
+                }
+                tr.innerHTML = '<td>' + inv.date + '</td>' +
+                    '<td>' + currency + ' ' + amount + '</td>' +
+                    '<td style="' + statusClass + '">' + (inv.status || '—') + '</td>' +
+                    '<td>' + (actions || '—') + '</td>';
+                tbody.appendChild(tr);
+            });
         }
     })();

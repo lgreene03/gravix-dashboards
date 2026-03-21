@@ -67,6 +67,13 @@ func TestExtractDateNoDate(t *testing.T) {
 	}
 }
 
+func TestExtractDateHivePartition(t *testing.T) {
+	got := extractDate("warehouse/request_metrics_minute/event_day=2025-06-15/metrics_abc123.parquet")
+	if got != "2025-06-15" {
+		t.Errorf("extractDate = %q, want 2025-06-15", got)
+	}
+}
+
 func TestExtractDateInvalid(t *testing.T) {
 	got := extractDate("raw/9999-99-99/data.jsonl")
 	if got != "" {

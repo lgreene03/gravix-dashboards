@@ -1,6 +1,9 @@
 const jwt = require('jsonwebtoken');
 
 module.exports = {
+    // Refresh pre-aggregations every 5 minutes in the background
+    scheduledRefreshTimer: 300,
+
     checkAuth: (req, auth) => {
         const jwtSecret = process.env.JWT_SECRET;
         const apiSecret = process.env.CUBEJS_API_SECRET;

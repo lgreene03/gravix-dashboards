@@ -285,6 +285,8 @@ func main() {
 	mux.HandleFunc("/api/gateway/api-keys/expiring", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeysExpiring)))
 	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingPortal)))
 	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingUsage)))
+	mux.HandleFunc("/api/gateway/billing/invoices", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingInvoices)))
+	mux.HandleFunc("/api/gateway/billing/usage/history", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingUsageHistory)))
 	mux.HandleFunc("/api/gateway/channels", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannels)))
 	mux.HandleFunc("/api/gateway/channels/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannelByID)))
 	mux.HandleFunc("/api/gateway/alert-rules", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRules)))
@@ -1025,7 +1027,7 @@ func (gw *gateway) handleBillingPortal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
-// handleBillingUsage returns current event usage for the tenant.
+// handleBillingUsage returns current event usage for the tenant, including plan info and daily breakdown.
 func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "GET required")
@@ -1035,7 +1037,14 @@ func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	ctx := r.Context()
 
-	// Get today's count and this month's total
+	// Look up tenant for plan info
+	tenant, err := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up tenant")
+		return
+	}
+
+	// Get today's count
 	today := time.Now().UTC().Format("2006-01-02")
 	todayCount, _ := gw.db.EventCounters().GetCount(ctx, claims.TenantID, today)
 
@@ -1052,12 +1061,102 @@ func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 		monthTotal += count
 	}
 
+	// Daily counts for last 30 days
+	type dailyCount struct {
+		Day   string `json:"day"`
+		Count int64  `json:"count"`
+	}
+	dailyCounts := make([]dailyCount, 0, 30)
+	for i := 29; i >= 0; i-- {
+		d := time.Now().UTC().AddDate(0, 0, -i)
+		dayStr := d.Format("2006-01-02")
+		count, _ := gw.db.EventCounters().GetCount(ctx, claims.TenantID, dayStr)
+		dailyCounts = append(dailyCounts, dailyCount{Day: dayStr, Count: count})
+	}
+
+	// Plan limits
+	var eventLimit int64
+	switch tenant.Plan {
+	case "pro":
+		eventLimit = 50_000_000
+	case "starter":
+		eventLimit = 10_000_000
+	default:
+		eventLimit = 1_000_000
+	}
+
+	rateLimitRPS, _ := ratelimit.PlanRateLimit(tenant.Plan)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"tenant_id":   claims.TenantID,
-		"today":       todayCount,
-		"month_total": monthTotal,
-		"period":      fmt.Sprintf("%d-%02d", year, month),
+		"tenant_id":      claims.TenantID,
+		"today":          todayCount,
+		"month_total":    monthTotal,
+		"period":         fmt.Sprintf("%d-%02d", year, month),
+		"plan":           tenant.Plan,
+		"event_limit":    eventLimit,
+		"rate_limit_rps": rateLimitRPS,
+		"daily_counts":   dailyCounts,
 	})
+}
+
+// handleBillingInvoices returns Stripe invoice list for the tenant.
+func (gw *gateway) handleBillingInvoices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	tenant, err := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up tenant")
+		return
+	}
+
+	if tenant.StripeCustomerID == "" || gw.billing == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"invoices": []interface{}{}})
+		return
+	}
+
+	invoices, err := gw.billing.ListInvoices(ctx, tenant.StripeCustomerID)
+	if err != nil {
+		slog.Error("failed to list invoices", "tenant_id", claims.TenantID, "error", err)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"invoices": []interface{}{}})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"invoices": invoices})
+}
+
+// handleBillingUsageHistory returns monthly usage summaries for the tenant.
+func (gw *gateway) handleBillingUsageHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	history, err := gw.db.MonthlyUsage().GetByTenant(ctx, claims.TenantID, 12)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get usage history")
+		return
+	}
+
+	type monthEntry struct {
+		Month string `json:"month"`
+		Count int64  `json:"count"`
+		Plan  string `json:"plan"`
+	}
+	entries := make([]monthEntry, 0, len(history))
+	for _, h := range history {
+		entries = append(entries, monthEntry{Month: h.Month, Count: h.Count, Plan: h.Plan})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"history": entries})
 }
 
 // usageMeteringLoop reports tenant event usage to Stripe every hour.
@@ -2017,6 +2116,37 @@ func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 			slog.Error("usage metering failed to report usage", "tenant_id", tenant.ID, "error", err)
 		} else {
 			slog.Info("usage metering reported events", "tenant_id", tenant.ID, "count", count)
+		}
+	}
+
+	// Monthly snapshot: on the 1st of each month, snapshot previous month's total
+	now := time.Now().UTC()
+	if now.Day() == 1 {
+		prevMonth := now.AddDate(0, -1, 0)
+		prevYear, prevMon, _ := prevMonth.Date()
+		monthStr := fmt.Sprintf("%d-%02d", prevYear, prevMon)
+
+		for _, tenant := range tenants {
+			if tenant.Status != "active" {
+				continue
+			}
+			var total int64
+			for day := 1; day <= 31; day++ {
+				d := time.Date(prevYear, prevMon, day, 0, 0, 0, 0, time.UTC)
+				if d.Month() != prevMon {
+					break
+				}
+				dayStr := d.Format("2006-01-02")
+				c, _ := gw.db.EventCounters().GetCount(ctx, tenant.ID, dayStr)
+				total += c
+			}
+			if total > 0 {
+				if err := gw.db.MonthlyUsage().Snapshot(ctx, tenant.ID, monthStr, total, tenant.Plan); err != nil {
+					slog.Error("monthly snapshot failed", "tenant_id", tenant.ID, "month", monthStr, "error", err)
+				} else {
+					slog.Info("monthly usage snapshot", "tenant_id", tenant.ID, "month", monthStr, "count", total)
+				}
+			}
 		}
 	}
 }
