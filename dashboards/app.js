@@ -704,6 +704,44 @@
             return h;
         }
 
+        // --- Graceful Degradation: Cache layer for Cube queries ---
+        const CACHE_PREFIX = 'gravix_cache_';
+        const CACHE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes — stale after this
+
+        function cacheKey(measures, filters, compareType) {
+            return CACHE_PREFIX + JSON.stringify({ m: measures, f: filters, c: compareType });
+        }
+
+        function cacheGet(key) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (!raw) return null;
+                const cached = JSON.parse(raw);
+                return cached; // { data, timestamp }
+            } catch { return null; }
+        }
+
+        function cacheSet(key, data) {
+            try {
+                localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
+            } catch { /* localStorage full — ignore */ }
+        }
+
+        function showStaleBanner(timestamp) {
+            const banner = document.getElementById('staleBanner');
+            const timeEl = document.getElementById('staleBannerTime');
+            if (banner && timeEl) {
+                const ago = new Date(timestamp);
+                timeEl.textContent = ago.toLocaleTimeString();
+                banner.style.display = 'flex';
+            }
+        }
+
+        function hideStaleBanner() {
+            const banner = document.getElementById('staleBanner');
+            if (banner) banner.style.display = 'none';
+        }
+
         async function fetchCubeData(measures, filters = [], compareType = null) {
             // Separate bucketStart date filters from other filters
             const otherFilters = [];
@@ -765,11 +803,24 @@
                 filters: otherFilters
             };
 
-            const response = await fetch(CUBE_API_URL, {
-                method: "POST",
-                headers: cubeHeaders(),
-                body: JSON.stringify({ query: query })
-            });
+            const ck = cacheKey(measures, filters, compareType);
+
+            let response;
+            try {
+                response = await fetch(CUBE_API_URL, {
+                    method: "POST",
+                    headers: cubeHeaders(),
+                    body: JSON.stringify({ query: query })
+                });
+            } catch (networkErr) {
+                // Network failure — try cache
+                const cached = cacheGet(ck);
+                if (cached && (Date.now() - cached.timestamp) < CACHE_MAX_AGE_MS) {
+                    showStaleBanner(cached.timestamp);
+                    return cached.data;
+                }
+                throw networkErr;
+            }
 
             if (!response.ok) {
                 // 400 from Cube typically means Trino tables don't exist yet (no data).
@@ -778,12 +829,20 @@
                     console.warn("Cube returned 400 — table may not exist yet (no rollup data)");
                     return [];
                 }
+                // Server error — try cache
+                const cached = cacheGet(ck);
+                if (cached && (Date.now() - cached.timestamp) < CACHE_MAX_AGE_MS) {
+                    showStaleBanner(cached.timestamp);
+                    return cached.data;
+                }
                 throw new Error("Cube API returned " + response.status);
             }
 
+            hideStaleBanner();
             const result = await response.json();
 
             // compareDateRange returns multiple result sets
+            let data;
             if (compareType && result.results && result.results.length > 1) {
                 const currentData = (result.results[0].data || []).map(
                     d => Object.assign({}, d, { _comparison: "Current" })
@@ -791,13 +850,17 @@
                 const previousData = (result.results[1].data || []).map(
                     d => Object.assign({}, d, { _comparison: "Previous" })
                 );
-                return currentData.concat(previousData);
+                data = currentData.concat(previousData);
+            } else if (result.results && result.results[0]) {
+                data = result.results[0].data || [];
+            } else if (result.data) {
+                data = result.data;
+            } else {
+                data = [];
             }
 
-            let data = [];
-            if (result.results && result.results[0]) data = result.results[0].data;
-            else if (result.data) data = result.data;
-
+            // Cache successful response
+            cacheSet(ck, data);
             return data;
         }
 

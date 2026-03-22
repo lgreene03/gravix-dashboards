@@ -17,10 +17,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/circuitbreaker"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
@@ -178,9 +180,26 @@ var (
 		},
 		[]string{"tenant", "sampled"},
 	)
+	circuitBreakerState = prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "circuit_breaker_state",
+			Help: "Current circuit breaker state (0=closed, 1=open, 2=half_open).",
+		},
+		func() float64 { return circuitBreakerStateValue.Load().(float64) },
+	)
+	circuitBreakerTripsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "circuit_breaker_trips_total",
+			Help: "Total number of times the circuit breaker has tripped open.",
+		},
+	)
 )
 
+// circuitBreakerStateValue stores the current CB state as a float64 for the gauge.
+var circuitBreakerStateValue atomic.Value
+
 func init() {
+	circuitBreakerStateValue.Store(float64(0))
 	prometheus.MustRegister(ingestionRequestsTotal)
 	prometheus.MustRegister(ingestionBatchSizeBytes)
 	prometheus.MustRegister(collectors.NewBuildInfoCollector())
@@ -190,6 +209,8 @@ func init() {
 	prometheus.MustRegister(ingestionOverageEventsTotal)
 	prometheus.MustRegister(ingestionQuotaRejectedTotal)
 	prometheus.MustRegister(ingestionTraceSamplesTotal)
+	prometheus.MustRegister(circuitBreakerState)
+	prometheus.MustRegister(circuitBreakerTripsTotal)
 }
 
 func tenantRateLimitMiddleware(trl *ratelimit.TenantLimiter, next http.HandlerFunc) http.HandlerFunc {
@@ -215,20 +236,25 @@ type DurableSink struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	cb             *circuitbreaker.CircuitBreaker
+	maxBufferBytes int64 // max buffer size before returning 503
 }
 
-func NewDurableSink(bufferDir string, store storage.ObjectStore) (*DurableSink, error) {
+func NewDurableSink(bufferDir string, store storage.ObjectStore, cb *circuitbreaker.CircuitBreaker, maxBufferBytes int64) (*DurableSink, error) {
 	if err := os.MkdirAll(bufferDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create buffer dir: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ds := &DurableSink{
-		bufferDir:   bufferDir,
-		store:       store,
-		activeFiles: make(map[string]*os.File),
-		ctx:         ctx,
-		cancel:      cancel,
+		bufferDir:      bufferDir,
+		store:          store,
+		activeFiles:    make(map[string]*os.File),
+		ctx:            ctx,
+		cancel:         cancel,
+		cb:             cb,
+		maxBufferBytes: maxBufferBytes,
 	}
 
 	// Startup: Check for any previously rotated but not uploaded files
@@ -439,7 +465,7 @@ func (ds *DurableSink) rotateTopic(topic string) {
 	}()
 }
 
-// uploadFile uploads the local batch to the object store
+// uploadFile uploads the local batch to the object store, wrapped in a circuit breaker.
 func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 	// Destination Key: raw/<topic>/YYYY-MM-DD/HH/<uuid>.jsonl
 	dayStr := t.Format("2006-01-02")
@@ -453,7 +479,17 @@ func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 	}
 	defer f.Close()
 
-	if err := ds.store.Put(ds.ctx, destKey, f); err != nil {
+	uploadFn := func() error {
+		return ds.store.Put(ds.ctx, destKey, f)
+	}
+
+	if ds.cb != nil {
+		err = ds.cb.Execute(uploadFn)
+	} else {
+		err = uploadFn()
+	}
+
+	if err != nil {
 		slog.Error("error uploading to storage, file preserved for retry", "path", sourcePath, "error", err)
 		ingestionUploadErrorsTotal.Inc()
 		return // Do NOT delete the local file — it will be retried on next startup scan
@@ -464,6 +500,27 @@ func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 		slog.Warn("uploaded but failed to remove local file", "path", sourcePath, "error", err)
 	}
 	slog.Info("uploaded to storage", "path", sourcePath, "key", destKey)
+}
+
+// bufferSizeBytes returns the total size of all files in the buffer directory.
+func (ds *DurableSink) bufferSizeBytes() int64 {
+	var total int64
+	filepath.Walk(ds.bufferDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
+}
+
+// IsBufferFull returns true if the buffer has exceeded the max allowed size.
+func (ds *DurableSink) IsBufferFull() bool {
+	if ds.maxBufferBytes <= 0 {
+		return false
+	}
+	return ds.bufferSizeBytes() > ds.maxBufferBytes
 }
 
 // startupScan checks for any leftover batch files in buffer and uploads them
@@ -657,8 +714,23 @@ func main() {
 		}
 	}
 
-	slog.Info("initializing durable sink", "buffer_dir", bufferDir)
-	sink, err := NewDurableSink(bufferDir, store)
+	// Circuit breaker for S3 uploads
+	cb := circuitbreaker.New(circuitbreaker.Options{
+		FailureThreshold: getEnvInt("CB_FAILURE_THRESHOLD", 5),
+		ResetTimeout:     time.Duration(getEnvInt("CB_RESET_TIMEOUT_SEC", 30)) * time.Second,
+		OnStateChange: func(from, to circuitbreaker.State) {
+			slog.Warn("circuit breaker state change", "from", from.String(), "to", to.String())
+			circuitBreakerStateValue.Store(float64(to))
+			if to == circuitbreaker.StateOpen {
+				circuitBreakerTripsTotal.Inc()
+			}
+		},
+	})
+
+	maxBufferMB := int64(getEnvInt("MAX_BUFFER_SIZE_MB", 500))
+
+	slog.Info("initializing durable sink", "buffer_dir", bufferDir, "max_buffer_mb", maxBufferMB)
+	sink, err := NewDurableSink(bufferDir, store, cb, maxBufferMB*1024*1024)
 	if err != nil {
 		slog.Error("failed to create sink", "error", err)
 		os.Exit(1)
@@ -673,11 +745,23 @@ func main() {
 	traceSampleRate := getTraceSampleRate()
 	slog.Info("trace sampling configured", "rate", traceSampleRate)
 
-	// Wrap handlers: auth first (sets tenant context), then rate limit, then handler
-	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, handleFacts(sink, tdb))))
-	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, handleBatchFacts(sink, tdb))))
-	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, handleEvents(sink, tdb))))
-	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, handleTraces(sink, tdb, traceSampleRate))))
+	// Buffer-full middleware: reject new data when buffer exceeds limit
+	bufferCheck := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if sink.IsBufferFull() {
+				w.Header().Set("Retry-After", "30")
+				writeErrorJSON(w, http.StatusServiceUnavailable, "buffer capacity exceeded, try again later")
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	// Wrap handlers: auth first (sets tenant context), then rate limit, then buffer check, then handler
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleFacts(sink, tdb)))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleBatchFacts(sink, tdb)))))
+	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleEvents(sink, tdb)))))
+	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleTraces(sink, tdb, traceSampleRate)))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -687,14 +771,24 @@ func main() {
 	})
 
 	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		// In a real app, check DB connectivity or sink status.
-		// For now, if the sink is initialized, we are ready.
-		if sink != nil {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ready"))
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
+		w.Header().Set("Content-Type", "application/json")
+		status := map[string]string{
+			"db":      "ok",
+			"storage": "ok",
+			"circuit": cb.State().String(),
 		}
+		if sink == nil {
+			status["storage"] = "unavailable"
+		}
+		if cb.State() == circuitbreaker.StateOpen {
+			status["storage"] = "degraded"
+		}
+		if sink == nil || cb.State() == circuitbreaker.StateOpen {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		json.NewEncoder(w).Encode(status)
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
@@ -1101,4 +1195,17 @@ func checkQuota(tdb tenantdb.DB, tenantID, plan string, overageAllowed bool) boo
 	// Free plan: reject
 	ingestionQuotaRejectedTotal.WithLabelValues(tenantID).Inc()
 	return true
+}
+
+// getEnvInt reads an integer from env, returning def if missing/invalid.
+func getEnvInt(key string, def int) int {
+	s := os.Getenv(key)
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }

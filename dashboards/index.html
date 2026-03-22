@@ -171,6 +171,9 @@
         <div id="errorBanner" class="error-banner">
             Cannot reach the data service. Check that Cube.js is running and accessible.
         </div>
+        <div id="staleBanner" class="stale-banner" style="display:none; align-items:center; gap:8px; padding:10px 16px; margin-bottom:16px; background:#fef3c7; border:1px solid #fde68a; border-radius:8px; color:#92400e; font-size:0.875rem; font-weight:500;">
+            Showing cached data from <span id="staleBannerTime"></span>. Analytics service is temporarily unavailable.
+        </div>
 
         <div id="emptyState" class="empty-state">
             <div id="emptyFiltered" style="display:none;">

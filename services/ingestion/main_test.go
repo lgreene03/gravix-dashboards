@@ -110,7 +110,7 @@ func setupSink(t *testing.T) *DurableSink {
 	if err != nil {
 		t.Fatalf("failed to create local store: %v", err)
 	}
-	sink, err := NewDurableSink(bufDir, store)
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
 	if err != nil {
 		t.Fatalf("failed to create sink: %v", err)
 	}
@@ -654,7 +654,7 @@ func TestHandleFacts_DLQEntryWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore: %v", err)
 	}
-	sink, err := NewDurableSink(bufDir, store)
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
 	if err != nil {
 		t.Fatalf("NewDurableSink: %v", err)
 	}
@@ -823,7 +823,7 @@ func BenchmarkHandleFacts(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	sink, err := NewDurableSink(bufDir, store)
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func BenchmarkHandleBatchFacts(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	sink, err := NewDurableSink(bufDir, store)
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
 	if err != nil {
 		b.Fatal(err)
 	}

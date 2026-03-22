@@ -288,16 +288,16 @@ func main() {
 	mux.HandleFunc("/api/gateway/api-keys", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeys)))
 	mux.HandleFunc("/api/gateway/api-keys/expiring", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeysExpiring)))
 	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingPortal)))
-	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingUsage)))
+	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsage))))
 	mux.HandleFunc("/api/gateway/billing/invoices", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingInvoices)))
-	mux.HandleFunc("/api/gateway/billing/usage/history", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingUsageHistory)))
+	mux.HandleFunc("/api/gateway/billing/usage/history", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsageHistory))))
 	mux.HandleFunc("/api/gateway/channels", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannels)))
 	mux.HandleFunc("/api/gateway/channels/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannelByID)))
 	mux.HandleFunc("/api/gateway/alert-rules", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRules)))
 	mux.HandleFunc("/api/gateway/alert-rules/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRuleByID)))
 	mux.HandleFunc("/api/gateway/alert-history", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertHistory)))
-	mux.HandleFunc("/api/gateway/traces/recent", gw.requireAuth(gw.rateLimitMiddleware(gw.handleTracesRecent)))
-	mux.HandleFunc("/api/gateway/traces", gw.requireAuth(gw.rateLimitMiddleware(gw.handleTraceByID)))
+	mux.HandleFunc("/api/gateway/traces/recent", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleTracesRecent))))
+	mux.HandleFunc("/api/gateway/traces", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleTraceByID))))
 	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQ)))
 	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQReplay)))
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
@@ -498,6 +498,17 @@ func (gw *gateway) rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(time.Second).Unix()))
 		}
 
+		next(w, r)
+	}
+}
+
+// cacheableHandler wraps a handler with Cache-Control headers for analytics endpoints.
+// Allows clients to use stale data while revalidating in the background.
+func (gw *gateway) cacheableHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Cache-Control", "max-age=60, stale-while-revalidate=300")
+		}
 		next(w, r)
 	}
 }
