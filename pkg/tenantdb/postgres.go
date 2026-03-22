@@ -87,11 +87,20 @@ func (p *PostgresDB) Close() error                              { return p.db.Cl
 type pgTenantRepo struct{ db *sql.DB }
 
 func (r *pgTenantRepo) Create(ctx context.Context, t *Tenant) error {
+	if t.ID == "" {
+		t.ID = uuid.New().String()
+	}
+	now := time.Now().UTC()
+	t.CreatedAt = now
+	t.UpdatedAt = now
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO tenants (id, name, email, plan, stripe_customer_id, stripe_subscription_id, status, overage_allowed, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		t.ID, t.Name, t.Email, t.Plan, t.StripeCustomerID, t.StripeSubscriptionID, t.Status, t.OverageAllowed, t.CreatedAt, t.UpdatedAt)
-	return err
+	if err != nil {
+		return fmt.Errorf("create tenant: %w", err)
+	}
+	return nil
 }
 
 func (r *pgTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) {
@@ -275,6 +284,12 @@ func (r *pgAPIKeyRepo) Revoke(ctx context.Context, keyID string) error {
 type pgUserRepo struct{ db *sql.DB }
 
 func (r *pgUserRepo) Create(ctx context.Context, u *User) error {
+	if u.ID == "" {
+		u.ID = uuid.New().String()
+	}
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = time.Now().UTC()
+	}
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO users (id, tenant_id, email, password_hash, role, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
 		u.ID, u.TenantID, u.Email, u.PasswordHash, u.Role, u.CreatedAt)
@@ -378,6 +393,14 @@ func (r *pgMonthlyUsageRepo) GetByTenant(ctx context.Context, tenantID string, l
 type pgNotificationChannelRepo struct{ db *sql.DB }
 
 func (r *pgNotificationChannelRepo) Create(ctx context.Context, c *NotificationChannel) error {
+	if c.ID == "" {
+		c.ID = uuid.New().String()
+	}
+	now := time.Now().UTC()
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = now
+	}
+	c.UpdatedAt = now
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO notification_channels (id, tenant_id, name, type, config, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		c.ID, c.TenantID, c.Name, c.Type, c.Config, c.Status, c.CreatedAt, c.UpdatedAt)
@@ -430,6 +453,14 @@ func (r *pgNotificationChannelRepo) ListByTenant(ctx context.Context, tenantID s
 type pgAlertRuleRepo struct{ db *sql.DB }
 
 func (r *pgAlertRuleRepo) Create(ctx context.Context, rule *AlertRule) error {
+	if rule.ID == "" {
+		rule.ID = uuid.New().String()
+	}
+	now := time.Now().UTC()
+	if rule.CreatedAt.IsZero() {
+		rule.CreatedAt = now
+	}
+	rule.UpdatedAt = now
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO alert_rules (id, tenant_id, name, metric, operator, threshold, window_minutes, service, path_template, channel_id, cooldown_minutes, status, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
@@ -517,6 +548,12 @@ func scanAlertRules(rows *sql.Rows) ([]*AlertRule, error) {
 type pgAlertHistoryRepo struct{ db *sql.DB }
 
 func (r *pgAlertHistoryRepo) Create(ctx context.Context, e *AlertHistoryEntry) error {
+	if e.ID == "" {
+		e.ID = uuid.New().String()
+	}
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO alert_history (id, rule_id, tenant_id, metric, threshold, actual_value, service, path_template, status, message, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -563,6 +600,12 @@ func scanAlertHistory(rows *sql.Rows) ([]*AlertHistoryEntry, error) {
 type pgAuditRepo struct{ db *sql.DB }
 
 func (r *pgAuditRepo) Log(ctx context.Context, entry *AuditEntry) error {
+	if entry.ID == "" {
+		entry.ID = uuid.New().String()
+	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now().UTC()
+	}
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO audit_log (id, tenant_id, user_id, action, resource, resource_id, detail, ip_address, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,

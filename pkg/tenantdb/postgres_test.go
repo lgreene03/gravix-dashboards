@@ -65,6 +65,17 @@ func newPostgresTestDB(t *testing.T) *PostgresDB {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+
+	// Truncate all tables to ensure clean state between test runs.
+	tables := []string{
+		"retention_policies", "audit_log", "alert_history", "alert_rules",
+		"notification_channels", "monthly_usage", "event_counters",
+		"api_keys", "users", "leader_locks", "tenants",
+	}
+	for _, tbl := range tables {
+		db.db.ExecContext(context.Background(), "DELETE FROM "+tbl)
+	}
+
 	return db
 }
 

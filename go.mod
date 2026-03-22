@@ -1,6 +1,6 @@
 module github.com/lgreene/gravix-dashboards
 
-go 1.25.0
+go 1.24.9
 
 require github.com/gravix-io/gravix-go v0.0.0
 
@@ -12,7 +12,7 @@ require (
 	github.com/aws/smithy-go v1.24.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.9.0
+	github.com/jackc/pgx/v5 v5.7.4
 	github.com/montanaflynn/stats v0.7.1
 	github.com/parquet-go/parquet-go v0.27.0
 	github.com/prometheus/client_golang v1.23.2
