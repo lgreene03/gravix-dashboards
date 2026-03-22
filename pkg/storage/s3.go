@@ -118,6 +118,36 @@ func (s *S3Store) Put(ctx context.Context, key string, reader io.Reader) error {
 	})
 }
 
+// storageClassToS3 maps our StorageClass to S3 storage class types.
+func storageClassToS3(class StorageClass) types.StorageClass {
+	switch class {
+	case StorageClassWarm:
+		return types.StorageClassStandardIa
+	case StorageClassCold:
+		return types.StorageClassGlacier
+	default:
+		return types.StorageClassStandard
+	}
+}
+
+func (s *S3Store) PutWithStorageClass(ctx context.Context, key string, reader io.Reader, class StorageClass) error {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data for upload: %w", err)
+	}
+
+	sc := storageClassToS3(class)
+	return retryWithBackoff(ctx, "PutWithStorageClass", func() error {
+		_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:       aws.String(s.bucket),
+			Key:          aws.String(key),
+			Body:         bytes.NewReader(data),
+			StorageClass: sc,
+		})
+		return err
+	})
+}
+
 func (s *S3Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	var result io.ReadCloser
 	err := retryWithBackoff(ctx, "Get", func() error {

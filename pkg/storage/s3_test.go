@@ -354,6 +354,70 @@ func TestS3Store_List_Error(t *testing.T) {
 	}
 }
 
+// ─── PutWithStorageClass Tests ───
+
+func TestS3Store_PutWithStorageClass(t *testing.T) {
+	tests := []struct {
+		class    StorageClass
+		expected types.StorageClass
+	}{
+		{StorageClassStandard, types.StorageClassStandard},
+		{StorageClassWarm, types.StorageClassStandardIa},
+		{StorageClassCold, types.StorageClassGlacier},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.class), func(t *testing.T) {
+			var capturedClass types.StorageClass
+			mock := &mockS3Client{
+				putObjectFn: func(ctx context.Context, params *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+					capturedClass = params.StorageClass
+					return &s3.PutObjectOutput{}, nil
+				},
+			}
+			store := NewS3StoreWithClient(mock, "test-bucket")
+			err := store.PutWithStorageClass(context.Background(), "key", bytes.NewReader([]byte("data")), tt.class)
+			if err != nil {
+				t.Fatalf("PutWithStorageClass failed: %v", err)
+			}
+			if capturedClass != tt.expected {
+				t.Errorf("storage class = %v, want %v", capturedClass, tt.expected)
+			}
+		})
+	}
+}
+
+func TestS3Store_PutWithStorageClass_Error(t *testing.T) {
+	mock := &mockS3Client{
+		putObjectFn: func(ctx context.Context, params *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			return nil, fmt.Errorf("access denied")
+		},
+	}
+	store := NewS3StoreWithClient(mock, "test-bucket")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := store.PutWithStorageClass(ctx, "key", bytes.NewReader([]byte("data")), StorageClassWarm)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestStorageClassToS3(t *testing.T) {
+	if got := storageClassToS3(StorageClassWarm); got != types.StorageClassStandardIa {
+		t.Errorf("warm = %v, want STANDARD_IA", got)
+	}
+	if got := storageClassToS3(StorageClassCold); got != types.StorageClassGlacier {
+		t.Errorf("cold = %v, want GLACIER", got)
+	}
+	if got := storageClassToS3(StorageClassStandard); got != types.StorageClassStandard {
+		t.Errorf("standard = %v, want STANDARD", got)
+	}
+	if got := storageClassToS3("unknown"); got != types.StorageClassStandard {
+		t.Errorf("unknown = %v, want STANDARD", got)
+	}
+}
+
 // ─── NewS3StoreWithClient Tests ───
 
 func TestNewS3StoreWithClient(t *testing.T) {

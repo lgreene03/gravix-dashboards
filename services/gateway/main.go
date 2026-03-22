@@ -35,7 +35,10 @@ import (
 	"sort"
 	"strconv"
 
+	"archive/tar"
+	"compress/gzip"
 	"math"
+	"sync"
 
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 
@@ -176,8 +179,8 @@ func main() {
 		*jwtSecret = os.Getenv("JWT_SECRET")
 	}
 
-	if *tenantDBPath == "" {
-		slog.Error("TENANT_DB_PATH is required")
+	if *tenantDBPath == "" && os.Getenv("DB_DRIVER") == "" {
+		slog.Error("TENANT_DB_PATH or DB_DRIVER is required")
 		os.Exit(1)
 	}
 	if *jwtSecret == "" {
@@ -205,10 +208,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := tenantdb.Open(*tenantDBPath)
-	if err != nil {
-		slog.Error("failed to open tenant database", "error", err)
-		os.Exit(1)
+	var db tenantdb.DB
+	if dbDriver := os.Getenv("DB_DRIVER"); dbDriver != "" {
+		var err error
+		db, err = tenantdb.OpenFromEnv()
+		if err != nil {
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("tenant database opened", "driver", dbDriver)
+	} else {
+		var err error
+		db, err = tenantdb.Open(*tenantDBPath)
+		if err != nil {
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
+		}
 	}
 	defer db.Close()
 
@@ -236,13 +251,14 @@ func main() {
 	defer trl.Close()
 
 	gw := &gateway{
-		db:          db,
-		tokens:      tokens,
-		notifier:    notify.NewDispatcher(),
-		store:       objStore,
-		rateLimiter: trl,
-		cubeAPIURL:  cubeURL,
-		jwtSecret:   *jwtSecret,
+		db:            db,
+		tokens:        tokens,
+		notifier:      notify.NewDispatcher(),
+		store:         objStore,
+		rateLimiter:   trl,
+		cubeAPIURL:    cubeURL,
+		jwtSecret:     *jwtSecret,
+		activeExports: make(map[string]bool),
 	}
 
 	// Master context for background goroutines — cancelled on shutdown
@@ -284,30 +300,51 @@ func main() {
 	mux.HandleFunc("/api/gateway/api-keys", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeys)))
 	mux.HandleFunc("/api/gateway/api-keys/expiring", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeysExpiring)))
 	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingPortal)))
-	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingUsage)))
+	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsage))))
+	mux.HandleFunc("/api/gateway/billing/invoices", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingInvoices)))
+	mux.HandleFunc("/api/gateway/billing/usage/history", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsageHistory))))
 	mux.HandleFunc("/api/gateway/channels", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannels)))
 	mux.HandleFunc("/api/gateway/channels/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleChannelByID)))
 	mux.HandleFunc("/api/gateway/alert-rules", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRules)))
 	mux.HandleFunc("/api/gateway/alert-rules/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertRuleByID)))
 	mux.HandleFunc("/api/gateway/alert-history", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAlertHistory)))
+	mux.HandleFunc("/api/gateway/traces/recent", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleTracesRecent))))
+	mux.HandleFunc("/api/gateway/traces", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleTraceByID))))
 	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQ)))
 	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQReplay)))
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
+	mux.HandleFunc("/api/gateway/retention", gw.requireAuth(gw.rateLimitMiddleware(gw.handleRetention)))
+	mux.HandleFunc("/api/gateway/export", gw.requireAuth(gw.rateLimitMiddleware(gw.handleExport)))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		// Lightweight DB probe — confirm SQLite is responsive
+		w.Header().Set("Content-Type", "application/json")
+		status := map[string]string{
+			"db": "ok",
+		}
+		ready := true
+
+		// DB probe
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if _, err := gw.db.Tenants().List(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("not ready"))
-			return
+			status["db"] = "unavailable"
+			ready = false
 		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ready"))
+
+		// Stripe probe (optional)
+		if os.Getenv("STRIPE_SECRET_KEY") != "" {
+			status["stripe"] = "configured"
+		}
+
+		if !ready {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		json.NewEncoder(w).Encode(status)
 	})
 	mux.Handle("/metrics", promhttp.Handler())
 
@@ -393,14 +430,16 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 }
 
 type gateway struct {
-	db          tenantdb.DB
-	tokens      *auth.TokenService
-	billing     billing.Service // nil if Stripe is not configured
-	notifier    *notify.Dispatcher
-	store       storage.ObjectStore // for DLQ reads
-	rateLimiter *ratelimit.TenantLimiter
-	cubeAPIURL  string
-	jwtSecret   string
+	db              tenantdb.DB
+	tokens          *auth.TokenService
+	billing         billing.Service // nil if Stripe is not configured
+	notifier        *notify.Dispatcher
+	store           storage.ObjectStore // for DLQ reads
+	rateLimiter     *ratelimit.TenantLimiter
+	cubeAPIURL      string
+	jwtSecret       string
+	activeExports   map[string]bool // tracks in-progress exports per tenant
+	activeExportsMu sync.Mutex
 }
 
 // requireRole returns middleware that checks if the authenticated user has one of the given roles.
@@ -490,6 +529,17 @@ func (gw *gateway) rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// cacheableHandler wraps a handler with Cache-Control headers for analytics endpoints.
+// Allows clients to use stale data while revalidating in the background.
+func (gw *gateway) cacheableHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Cache-Control", "max-age=60, stale-while-revalidate=300")
+		}
+		next(w, r)
+	}
+}
+
 // audit records an immutable audit entry for a mutation. Runs async (fire-and-forget)
 // so it never blocks the HTTP request path. Errors are logged but not propagated.
 func (gw *gateway) audit(r *http.Request, action, resource, resourceID, detail string) {
@@ -573,6 +623,304 @@ func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 		"limit":   limit,
 		"offset":  offset,
 	})
+}
+
+// planMinRetentionDays returns the minimum allowed retention in days for a given plan.
+// Custom retention policies cannot go below these minimums.
+func planMinRetentionDays(plan string) int {
+	switch plan {
+	case "free":
+		return 1
+	case "starter":
+		return 7
+	case "pro":
+		return 7
+	default:
+		return 7
+	}
+}
+
+// planMaxRetentionDays returns the maximum allowed retention in days for a given plan.
+func planMaxRetentionDays(plan string) int {
+	switch plan {
+	case "free":
+		return 7
+	case "starter":
+		return 30
+	case "pro":
+		return 365
+	default:
+		return 90
+	}
+}
+
+// handleRetention handles GET/PUT for per-tenant retention policies.
+func (gw *gateway) handleRetention(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if !claims.HasRole(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		policy, err := gw.db.RetentionPolicies().GetByTenantID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get retention policy")
+			return
+		}
+
+		// Get tenant for plan info
+		tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get tenant")
+			return
+		}
+
+		resp := map[string]interface{}{
+			"plan":        tenant.Plan,
+			"min_days":    planMinRetentionDays(tenant.Plan),
+			"max_days":    planMaxRetentionDays(tenant.Plan),
+			"plan_default_facts_days": planDefaultFactsDays(tenant.Plan),
+		}
+		if policy != nil {
+			resp["facts_days"] = policy.FactsDays
+			resp["metrics_days"] = policy.MetricsDays
+			resp["traces_days"] = policy.TracesDays
+			resp["updated_at"] = policy.UpdatedAt
+		}
+		writeJSON(w, http.StatusOK, resp)
+
+	case http.MethodPut:
+		var req struct {
+			FactsDays   int `json:"facts_days"`
+			MetricsDays int `json:"metrics_days"`
+			TracesDays  int `json:"traces_days"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		// Get tenant for plan-based validation
+		tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get tenant")
+			return
+		}
+
+		minDays := planMinRetentionDays(tenant.Plan)
+		maxDays := planMaxRetentionDays(tenant.Plan)
+
+		// Validate: 0 means "use default", otherwise must be within plan bounds
+		for _, pair := range []struct {
+			name string
+			val  int
+		}{
+			{"facts_days", req.FactsDays},
+			{"metrics_days", req.MetricsDays},
+			{"traces_days", req.TracesDays},
+		} {
+			if pair.val != 0 && (pair.val < minDays || pair.val > maxDays) {
+				writeError(w, http.StatusBadRequest,
+					fmt.Sprintf("%s must be 0 (default) or between %d and %d for %s plan",
+						pair.name, minDays, maxDays, tenant.Plan))
+				return
+			}
+		}
+
+		policy := &tenantdb.RetentionPolicy{
+			TenantID:    claims.TenantID,
+			FactsDays:   req.FactsDays,
+			MetricsDays: req.MetricsDays,
+			TracesDays:  req.TracesDays,
+		}
+		if err := gw.db.RetentionPolicies().Upsert(r.Context(), policy); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save retention policy")
+			return
+		}
+
+		// Audit log
+		detail := fmt.Sprintf(`{"facts_days":%d,"metrics_days":%d,"traces_days":%d}`,
+			req.FactsDays, req.MetricsDays, req.TracesDays)
+		gw.db.AuditLog().Log(r.Context(), &tenantdb.AuditEntry{
+			TenantID:   claims.TenantID,
+			UserID:     claims.UserID,
+			Action:     "retention.update",
+			Resource:   "retention_policy",
+			ResourceID: claims.TenantID,
+			Detail:     detail,
+		})
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"facts_days":   policy.FactsDays,
+			"metrics_days": policy.MetricsDays,
+			"traces_days":  policy.TracesDays,
+			"updated_at":   policy.UpdatedAt,
+		})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or PUT required")
+	}
+}
+
+// planDefaultFactsDays returns the default facts retention for a plan.
+func planDefaultFactsDays(plan string) int {
+	switch plan {
+	case "free":
+		return 7
+	case "starter":
+		return 30
+	case "pro":
+		return 90
+	default:
+		return 30
+	}
+}
+
+// handleExport streams a tar.gz archive of raw JSONL files for a date range.
+// Limited to 1 concurrent export per tenant, max 30-day range.
+func (gw *gateway) handleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+
+	var req struct {
+		StartDate string `json:"start_date"` // YYYY-MM-DD
+		EndDate   string `json:"end_date"`   // YYYY-MM-DD
+		DataType  string `json:"data_type"`  // request_facts, service_events (default: request_facts)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if req.DataType == "" {
+		req.DataType = "request_facts"
+	}
+	if req.DataType != "request_facts" && req.DataType != "service_events" {
+		writeError(w, http.StatusBadRequest, "data_type must be request_facts or service_events")
+		return
+	}
+
+	startDate, err := time.Parse("2006-01-02", req.StartDate)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "start_date must be YYYY-MM-DD format")
+		return
+	}
+	endDate, err := time.Parse("2006-01-02", req.EndDate)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "end_date must be YYYY-MM-DD format")
+		return
+	}
+
+	if endDate.Before(startDate) {
+		writeError(w, http.StatusBadRequest, "end_date must be after start_date")
+		return
+	}
+
+	daySpan := int(endDate.Sub(startDate).Hours()/24) + 1
+	if daySpan > 30 {
+		writeError(w, http.StatusBadRequest, "export range cannot exceed 30 days")
+		return
+	}
+
+	// Enforce 1 concurrent export per tenant
+	gw.activeExportsMu.Lock()
+	if gw.activeExports[claims.TenantID] {
+		gw.activeExportsMu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "an export is already in progress for this tenant")
+		return
+	}
+	gw.activeExports[claims.TenantID] = true
+	gw.activeExportsMu.Unlock()
+	defer func() {
+		gw.activeExportsMu.Lock()
+		delete(gw.activeExports, claims.TenantID)
+		gw.activeExportsMu.Unlock()
+	}()
+
+	// Collect files matching the date range
+	prefix := fmt.Sprintf("raw/%s/%s", claims.TenantID, req.DataType)
+	keys, err := gw.store.List(r.Context(), prefix)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list files")
+		return
+	}
+
+	var matchedKeys []string
+	for _, key := range keys {
+		for d := startDate; !d.After(endDate); d = d.AddDate(0, 0, 1) {
+			dateStr := d.Format("2006-01-02")
+			if strings.Contains(key, dateStr) {
+				matchedKeys = append(matchedKeys, key)
+				break
+			}
+		}
+	}
+
+	if len(matchedKeys) == 0 {
+		writeError(w, http.StatusNotFound, "no data found for the specified date range")
+		return
+	}
+
+	// Audit log
+	detail := fmt.Sprintf(`{"data_type":"%s","start_date":"%s","end_date":"%s","file_count":%d}`,
+		req.DataType, req.StartDate, req.EndDate, len(matchedKeys))
+	gw.db.AuditLog().Log(r.Context(), &tenantdb.AuditEntry{
+		TenantID:   claims.TenantID,
+		UserID:     claims.UserID,
+		Action:     "data.export",
+		Resource:   req.DataType,
+		ResourceID: claims.TenantID,
+		Detail:     detail,
+	})
+
+	// Stream tar.gz response
+	filename := fmt.Sprintf("gravix-export-%s-%s-to-%s.tar.gz", req.DataType, req.StartDate, req.EndDate)
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.WriteHeader(http.StatusOK)
+
+	gzw := gzip.NewWriter(w)
+	defer gzw.Close()
+	tw := tar.NewWriter(gzw)
+	defer tw.Close()
+
+	for _, key := range matchedKeys {
+		rc, err := gw.store.Get(r.Context(), key)
+		if err != nil {
+			slog.Error("export: failed to read file", "key", key, "error", err)
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			slog.Error("export: failed to read file data", "key", key, "error", err)
+			continue
+		}
+
+		hdr := &tar.Header{
+			Name:    key,
+			Size:    int64(len(data)),
+			Mode:    0644,
+			ModTime: time.Now(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			slog.Error("export: failed to write tar header", "key", key, "error", err)
+			return
+		}
+		if _, err := tw.Write(data); err != nil {
+			slog.Error("export: failed to write tar data", "key", key, "error", err)
+			return
+		}
+	}
+
+	slog.Info("export complete", "tenant_id", claims.TenantID, "data_type", req.DataType,
+		"start", req.StartDate, "end", req.EndDate, "files", len(matchedKeys))
 }
 
 // handleLogin authenticates a user with email/password and returns a JWT.
@@ -1025,7 +1373,7 @@ func (gw *gateway) handleBillingPortal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
-// handleBillingUsage returns current event usage for the tenant.
+// handleBillingUsage returns current event usage for the tenant, including plan info and daily breakdown.
 func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "GET required")
@@ -1035,7 +1383,14 @@ func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	ctx := r.Context()
 
-	// Get today's count and this month's total
+	// Look up tenant for plan info
+	tenant, err := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up tenant")
+		return
+	}
+
+	// Get today's count
 	today := time.Now().UTC().Format("2006-01-02")
 	todayCount, _ := gw.db.EventCounters().GetCount(ctx, claims.TenantID, today)
 
@@ -1052,12 +1407,102 @@ func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 		monthTotal += count
 	}
 
+	// Daily counts for last 30 days
+	type dailyCount struct {
+		Day   string `json:"day"`
+		Count int64  `json:"count"`
+	}
+	dailyCounts := make([]dailyCount, 0, 30)
+	for i := 29; i >= 0; i-- {
+		d := time.Now().UTC().AddDate(0, 0, -i)
+		dayStr := d.Format("2006-01-02")
+		count, _ := gw.db.EventCounters().GetCount(ctx, claims.TenantID, dayStr)
+		dailyCounts = append(dailyCounts, dailyCount{Day: dayStr, Count: count})
+	}
+
+	// Plan limits
+	var eventLimit int64
+	switch tenant.Plan {
+	case "pro":
+		eventLimit = 50_000_000
+	case "starter":
+		eventLimit = 10_000_000
+	default:
+		eventLimit = 1_000_000
+	}
+
+	rateLimitRPS, _ := ratelimit.PlanRateLimit(tenant.Plan)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"tenant_id":   claims.TenantID,
-		"today":       todayCount,
-		"month_total": monthTotal,
-		"period":      fmt.Sprintf("%d-%02d", year, month),
+		"tenant_id":      claims.TenantID,
+		"today":          todayCount,
+		"month_total":    monthTotal,
+		"period":         fmt.Sprintf("%d-%02d", year, month),
+		"plan":           tenant.Plan,
+		"event_limit":    eventLimit,
+		"rate_limit_rps": rateLimitRPS,
+		"daily_counts":   dailyCounts,
 	})
+}
+
+// handleBillingInvoices returns Stripe invoice list for the tenant.
+func (gw *gateway) handleBillingInvoices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	tenant, err := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up tenant")
+		return
+	}
+
+	if tenant.StripeCustomerID == "" || gw.billing == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"invoices": []interface{}{}})
+		return
+	}
+
+	invoices, err := gw.billing.ListInvoices(ctx, tenant.StripeCustomerID)
+	if err != nil {
+		slog.Error("failed to list invoices", "tenant_id", claims.TenantID, "error", err)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"invoices": []interface{}{}})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"invoices": invoices})
+}
+
+// handleBillingUsageHistory returns monthly usage summaries for the tenant.
+func (gw *gateway) handleBillingUsageHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	history, err := gw.db.MonthlyUsage().GetByTenant(ctx, claims.TenantID, 12)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get usage history")
+		return
+	}
+
+	type monthEntry struct {
+		Month string `json:"month"`
+		Count int64  `json:"count"`
+		Plan  string `json:"plan"`
+	}
+	entries := make([]monthEntry, 0, len(history))
+	for _, h := range history {
+		entries = append(entries, monthEntry{Month: h.Month, Count: h.Count, Plan: h.Plan})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"history": entries})
 }
 
 // usageMeteringLoop reports tenant event usage to Stripe every hour.
@@ -2019,6 +2464,37 @@ func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 			slog.Info("usage metering reported events", "tenant_id", tenant.ID, "count", count)
 		}
 	}
+
+	// Monthly snapshot: on the 1st of each month, snapshot previous month's total
+	now := time.Now().UTC()
+	if now.Day() == 1 {
+		prevMonth := now.AddDate(0, -1, 0)
+		prevYear, prevMon, _ := prevMonth.Date()
+		monthStr := fmt.Sprintf("%d-%02d", prevYear, prevMon)
+
+		for _, tenant := range tenants {
+			if tenant.Status != "active" {
+				continue
+			}
+			var total int64
+			for day := 1; day <= 31; day++ {
+				d := time.Date(prevYear, prevMon, day, 0, 0, 0, 0, time.UTC)
+				if d.Month() != prevMon {
+					break
+				}
+				dayStr := d.Format("2006-01-02")
+				c, _ := gw.db.EventCounters().GetCount(ctx, tenant.ID, dayStr)
+				total += c
+			}
+			if total > 0 {
+				if err := gw.db.MonthlyUsage().Snapshot(ctx, tenant.ID, monthStr, total, tenant.Plan); err != nil {
+					slog.Error("monthly snapshot failed", "tenant_id", tenant.ID, "month", monthStr, "error", err)
+				} else {
+					slog.Info("monthly usage snapshot", "tenant_id", tenant.ID, "month", monthStr, "count", total)
+				}
+			}
+		}
+	}
 }
 
 // --- Dead Letter Queue API ---
@@ -2181,4 +2657,198 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
+}
+
+// traceSpan is a single span from a trace sample file.
+type traceSpan struct {
+	TraceID      string            `json:"trace_id"`
+	SpanID       string            `json:"span_id"`
+	ParentSpanID string            `json:"parent_span_id,omitempty"`
+	EventTime    string            `json:"event_time"`
+	Service      string            `json:"service"`
+	Method       string            `json:"method"`
+	PathTemplate string            `json:"path_template"`
+	StatusCode   int               `json:"status_code"`
+	LatencyMs    int               `json:"latency_ms"`
+	Tags         map[string]string `json:"tags,omitempty"`
+}
+
+// traceSummary is a lightweight summary of a trace for listing.
+type traceSummary struct {
+	TraceID      string `json:"trace_id"`
+	RootService  string `json:"root_service"`
+	RootPath     string `json:"root_path"`
+	TotalLatency int    `json:"total_latency_ms"`
+	SpanCount    int    `json:"span_count"`
+	EventTime    string `json:"event_time"`
+}
+
+// handleTracesRecent lists recent trace IDs by scanning the most recent trace_samples files.
+// GET /api/gateway/traces/recent?limit=20
+func (gw *gateway) handleTracesRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	if gw.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage not configured")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	tenantID := claims.TenantID
+
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	// List trace sample files for this tenant (last 24 hours)
+	prefix := "raw/"
+	if tenantID != "" {
+		prefix += tenantID + "/"
+	}
+	prefix += "trace_samples/"
+
+	files, err := gw.store.List(r.Context(), prefix)
+	if err != nil {
+		slog.Error("trace list error", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list trace files")
+		return
+	}
+
+	// Sort descending (most recent first)
+	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+
+	// Read spans and group by trace_id
+	traceMap := make(map[string]*traceSummary)
+	for _, file := range files {
+		if len(traceMap) >= limit*2 { // read enough files to fill limit
+			break
+		}
+
+		reader, err := gw.store.Get(r.Context(), file)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
+		for scanner.Scan() {
+			var span traceSpan
+			if err := json.Unmarshal(scanner.Bytes(), &span); err != nil {
+				continue
+			}
+			if summary, exists := traceMap[span.TraceID]; exists {
+				summary.SpanCount++
+				if span.LatencyMs > summary.TotalLatency {
+					summary.TotalLatency = span.LatencyMs
+				}
+			} else {
+				traceMap[span.TraceID] = &traceSummary{
+					TraceID:      span.TraceID,
+					RootService:  span.Service,
+					RootPath:     span.PathTemplate,
+					TotalLatency: span.LatencyMs,
+					SpanCount:    1,
+					EventTime:    span.EventTime,
+				}
+			}
+		}
+		reader.Close()
+	}
+
+	// Convert to sorted slice
+	traces := make([]traceSummary, 0, len(traceMap))
+	for _, s := range traceMap {
+		traces = append(traces, *s)
+	}
+	sort.Slice(traces, func(i, j int) bool {
+		return traces[i].EventTime > traces[j].EventTime
+	})
+	if len(traces) > limit {
+		traces = traces[:limit]
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"traces": traces,
+		"total":  len(traces),
+	})
+}
+
+// handleTraceByID returns all spans for a specific trace.
+// GET /api/gateway/traces?trace_id=...
+func (gw *gateway) handleTraceByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	if gw.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage not configured")
+		return
+	}
+
+	traceID := r.URL.Query().Get("trace_id")
+	if traceID == "" {
+		writeError(w, http.StatusBadRequest, "trace_id query parameter required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	tenantID := claims.TenantID
+
+	prefix := "raw/"
+	if tenantID != "" {
+		prefix += tenantID + "/"
+	}
+	prefix += "trace_samples/"
+
+	files, err := gw.store.List(r.Context(), prefix)
+	if err != nil {
+		slog.Error("trace list error", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list trace files")
+		return
+	}
+
+	// Sort descending to search recent files first
+	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+
+	var spans []traceSpan
+	for _, file := range files {
+		reader, err := gw.store.Get(r.Context(), file)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
+		for scanner.Scan() {
+			var span traceSpan
+			if err := json.Unmarshal(scanner.Bytes(), &span); err != nil {
+				continue
+			}
+			if span.TraceID == traceID {
+				spans = append(spans, span)
+			}
+		}
+		reader.Close()
+
+		// If we found spans and scanned enough files, stop
+		if len(spans) > 0 && len(spans) > 50 {
+			break
+		}
+	}
+
+	// Sort spans by event_time ascending
+	sort.Slice(spans, func(i, j int) bool {
+		return spans[i].EventTime < spans[j].EventTime
+	})
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"trace_id": traceID,
+		"spans":    spans,
+		"total":    len(spans),
+	})
 }

@@ -184,3 +184,33 @@ func TestLocalStore_ValidKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalStore_PutWithStorageClass(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewLocalStore(dir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	ctx := context.Background()
+	content := "warm tier data"
+
+	// PutWithStorageClass should work same as Put (ignores class)
+	for _, class := range []StorageClass{StorageClassStandard, StorageClassWarm, StorageClassCold} {
+		key := "tier/" + string(class) + "/data.txt"
+		if err := store.PutWithStorageClass(ctx, key, strings.NewReader(content), class); err != nil {
+			t.Fatalf("PutWithStorageClass(%s) failed: %v", class, err)
+		}
+
+		// Verify data is readable
+		rc, err := store.Get(ctx, key)
+		if err != nil {
+			t.Fatalf("Get after PutWithStorageClass failed: %v", err)
+		}
+		data, _ := io.ReadAll(rc)
+		rc.Close()
+		if string(data) != content {
+			t.Errorf("content = %q, want %q", string(data), content)
+		}
+	}
+}

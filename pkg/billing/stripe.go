@@ -9,6 +9,7 @@ import (
 	"github.com/stripe/stripe-go/v81"
 	portalsession "github.com/stripe/stripe-go/v81/billingportal/session"
 	"github.com/stripe/stripe-go/v81/customer"
+	"github.com/stripe/stripe-go/v81/invoice"
 	"github.com/stripe/stripe-go/v81/subscription"
 	"github.com/stripe/stripe-go/v81/usagerecord"
 	"github.com/stripe/stripe-go/v81/webhook"
@@ -165,4 +166,40 @@ func (s *StripeService) PlanForPriceID(priceID string) string {
 
 func (s *StripeService) FreePriceID() string {
 	return s.freePriceID
+}
+
+func (s *StripeService) ListInvoices(ctx context.Context, customerID string) ([]Invoice, error) {
+	// Stripe invoice listing — uses the stripe-go SDK
+	params := &stripe.InvoiceListParams{
+		Customer: stripe.String(customerID),
+	}
+	params.Filters.AddFilter("limit", "", "12")
+
+	var invoices []Invoice
+	iter := invoice.List(params)
+	for iter.Next() {
+		inv := iter.Invoice()
+		date := time.Unix(inv.Created, 0).UTC().Format("2006-01-02")
+		pdfURL := ""
+		if inv.InvoicePDF != "" {
+			pdfURL = inv.InvoicePDF
+		}
+		hostedURL := ""
+		if inv.HostedInvoiceURL != "" {
+			hostedURL = inv.HostedInvoiceURL
+		}
+		invoices = append(invoices, Invoice{
+			ID:        inv.ID,
+			Date:      date,
+			Amount:    inv.AmountDue,
+			Currency:  string(inv.Currency),
+			Status:    string(inv.Status),
+			PDFUrl:    pdfURL,
+			HostedUrl: hostedURL,
+		})
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("list invoices: %w", err)
+	}
+	return invoices, nil
 }

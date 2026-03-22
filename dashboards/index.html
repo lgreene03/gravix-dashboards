@@ -116,6 +116,9 @@
             <a href="#" class="nav-link" data-page="endpoints">Endpoints</a>
             <a href="#" class="nav-link" data-page="alerts" id="nav-alerts">Alerts</a>
             <a href="#" class="nav-link" data-page="ingestion">Ingestion</a>
+            <a href="#" class="nav-link" data-page="traces" id="nav-traces">Traces</a>
+            <a href="#" class="nav-link" data-page="usage" id="nav-usage">Usage &amp; Billing</a>
+            <a href="#" class="nav-link" data-page="data" id="nav-data">Data</a>
             <a href="#" class="nav-link disabled" data-page="processing" title="Coming soon">Processing</a>
             <a href="#" class="nav-link disabled" data-page="settings" title="Coming soon">Settings</a>
         </nav>
@@ -167,6 +170,9 @@
 
         <div id="errorBanner" class="error-banner">
             Cannot reach the data service. Check that Cube.js is running and accessible.
+        </div>
+        <div id="staleBanner" class="stale-banner" style="display:none; align-items:center; gap:8px; padding:10px 16px; margin-bottom:16px; background:#fef3c7; border:1px solid #fde68a; border-radius:8px; color:#92400e; font-size:0.875rem; font-weight:500;">
+            Showing cached data from <span id="staleBannerTime"></span>. Analytics service is temporarily unavailable.
         </div>
 
         <div id="emptyState" class="empty-state">
@@ -594,6 +600,192 @@
                 </div>
             </div>
         </div><!-- end page-ingestion -->
+
+        <div id="page-usage" class="page-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Usage &amp; Billing</div>
+                        <div class="card-subtitle">Current period usage and plan details</div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="export-btn" onclick="handleManageBilling()" id="manage-billing-btn">Manage Billing</button>
+                    </div>
+                </div>
+                <div id="usage-section-error" class="section-error" style="display:none;"></div>
+                <div id="usage-loading" class="skeleton-container">
+                    <div class="skeleton-line" style="width:60%;height:24px;margin-bottom:16px"></div>
+                    <div class="skeleton-line" style="width:100%;height:120px;margin-bottom:16px"></div>
+                    <div class="skeleton-line" style="width:100%;height:200px"></div>
+                </div>
+                <div id="usage-content" style="display:none; padding: 24px;">
+                    <!-- Plan Info Card -->
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                        <div class="stat-card">
+                            <div class="stat-label">Plan</div>
+                            <div class="stat-value" id="usage-plan-name">—</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Monthly Limit</div>
+                            <div class="stat-value" id="usage-event-limit">—</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Rate Limit</div>
+                            <div class="stat-value" id="usage-rate-limit">—</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Today</div>
+                            <div class="stat-value" id="usage-today-count">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Usage Progress Bar -->
+                    <div style="margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="font-weight: 600;">Monthly Usage</span>
+                            <span id="usage-progress-label">0 / 0</span>
+                        </div>
+                        <div class="usage-progress-bar">
+                            <div class="usage-progress-fill" id="usage-progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Daily Usage Chart -->
+                    <div style="margin-bottom: 24px;">
+                        <div style="font-weight: 600; margin-bottom: 12px;">Daily Usage (Last 30 Days)</div>
+                        <canvas id="usage-daily-chart" height="200"></canvas>
+                    </div>
+
+                    <!-- Monthly Usage History -->
+                    <div style="margin-bottom: 24px;">
+                        <div style="font-weight: 600; margin-bottom: 12px;">Monthly Usage History</div>
+                        <canvas id="usage-monthly-chart" height="200"></canvas>
+                    </div>
+
+                    <!-- Invoice History -->
+                    <div>
+                        <div style="font-weight: 600; margin-bottom: 12px;">Invoice History</div>
+                        <div id="invoice-empty" style="display: none; padding: 24px; text-align: center; color: var(--text-secondary);">
+                            No invoices yet.
+                        </div>
+                        <table class="data-table" id="invoice-table" style="display: none;">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoice-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-usage -->
+
+        <div id="page-traces" class="page-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Distributed Traces</div>
+                        <div class="card-subtitle">Sampled request traces across services</div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="export-btn" onclick="loadTracesPage()" id="traces-refresh-btn">Refresh</button>
+                    </div>
+                </div>
+                <div id="traces-section-error" class="section-error" style="display:none;"></div>
+                <div id="traces-loading" class="skeleton-container">
+                    <div class="skeleton-line" style="width:100%;height:300px"></div>
+                </div>
+                <div id="traces-list" style="display:none; padding: 24px;">
+                    <div id="traces-empty" style="display: none; padding: 24px; text-align: center; color: var(--text-secondary);">
+                        No traces found. Traces appear when SDK trace middleware is enabled.
+                    </div>
+                    <table class="data-table" id="traces-table" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Trace ID</th>
+                                <th>Service</th>
+                                <th>Path</th>
+                                <th>Spans</th>
+                                <th>Latency</th>
+                            </tr>
+                        </thead>
+                        <tbody id="traces-table-body"></tbody>
+                    </table>
+                </div>
+                <!-- Waterfall View (shown when a trace is selected) -->
+                <div id="trace-waterfall" style="display:none; padding: 24px;">
+                    <button class="back-btn" onclick="showTracesList()">Back to Traces</button>
+                    <h3 id="trace-waterfall-title" style="margin: 12px 0;"></h3>
+                    <div id="trace-waterfall-container"></div>
+                </div>
+            </div>
+        </div><!-- end page-traces -->
+
+        <div id="page-data" class="page-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Data Management</div>
+                        <div class="card-subtitle">Export data and manage retention policies</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <h3 style="margin-bottom: 16px;">Export Data</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px;">Download raw JSONL files as a compressed archive. Maximum 30-day range.</p>
+                    <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+                        <div>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Data Type</label>
+                            <select id="export-data-type" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                                <option value="request_facts">Request Facts</option>
+                                <option value="service_events">Service Events</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Start Date</label>
+                            <input type="date" id="export-start-date" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">End Date</label>
+                            <input type="date" id="export-end-date" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <button class="export-btn" onclick="startExport()" id="export-btn">Export</button>
+                    </div>
+                    <div id="export-status" style="margin-top: 12px; display: none;"></div>
+
+                    <hr style="margin: 32px 0; border-color: var(--border);">
+
+                    <h3 style="margin-bottom: 16px;">Retention Policy</h3>
+                    <div id="retention-loading" class="skeleton-container">
+                        <div class="skeleton-line" style="width:100%;height:100px"></div>
+                    </div>
+                    <div id="retention-info" style="display: none;">
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                            <div class="stat-card">
+                                <div class="stat-label">Plan</div>
+                                <div class="stat-value" id="retention-plan">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Facts Retention</div>
+                                <div class="stat-value" id="retention-facts">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Metrics Retention</div>
+                                <div class="stat-value" id="retention-metrics">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Traces Retention</div>
+                                <div class="stat-value" id="retention-traces">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-data -->
 
     </main>
 

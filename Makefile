@@ -1,4 +1,4 @@
-.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs
+.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -58,3 +58,6 @@ trino-init:
 docs:
 	@echo "API docs: open docs/api-site/index.html in a browser"
 	@echo "OpenAPI spec: docs/openapi.yaml"
+
+chaos:
+	bash scripts/chaos/run_all.sh

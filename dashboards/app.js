@@ -12,6 +12,35 @@
         const REFRESH_INTERVAL_MS = GRAVIX_CONFIG.refreshIntervalMs;
         const IS_MULTI_TENANT = !!GATEWAY_URL;
 
+        // --- ETag CACHE ---
+        // Caches ETag values per request body hash to enable 304 Not Modified responses
+        const etagCache = new Map();
+
+        async function cachedFetch(url, options = {}) {
+            const cacheKey = url + '|' + (options.body || '');
+            const cached = etagCache.get(cacheKey);
+
+            const headers = { ...(options.headers || {}) };
+            if (cached && cached.etag) {
+                headers['If-None-Match'] = cached.etag;
+            }
+
+            const resp = await fetch(url, { ...options, headers });
+
+            if (resp.status === 304 && cached) {
+                return cached.response.clone();
+            }
+
+            const etag = resp.headers.get('ETag');
+            if (etag) {
+                etagCache.set(cacheKey, {
+                    etag,
+                    response: resp.clone()
+                });
+            }
+            return resp;
+        }
+
         // --- THEME ---
         function initTheme() {
             const saved = localStorage.getItem('gravix_theme');
@@ -346,7 +375,7 @@
             // Show/hide dashboard filters depending on page
             const headerEl = document.querySelector('.header');
             if (headerEl) {
-                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion') ? 'none' : '';
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data') ? 'none' : '';
             }
 
             if (pageName === 'endpoints') {
@@ -355,6 +384,12 @@
                 loadAlertsPage();
             } else if (pageName === 'ingestion') {
                 loadIngestionPage();
+            } else if (pageName === 'usage') {
+                loadUsagePage();
+            } else if (pageName === 'traces') {
+                loadTracesPage();
+            } else if (pageName === 'data') {
+                loadDataPage();
             }
 
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -669,6 +704,44 @@
             return h;
         }
 
+        // --- Graceful Degradation: Cache layer for Cube queries ---
+        const CACHE_PREFIX = 'gravix_cache_';
+        const CACHE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes — stale after this
+
+        function cacheKey(measures, filters, compareType) {
+            return CACHE_PREFIX + JSON.stringify({ m: measures, f: filters, c: compareType });
+        }
+
+        function cacheGet(key) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (!raw) return null;
+                const cached = JSON.parse(raw);
+                return cached; // { data, timestamp }
+            } catch { return null; }
+        }
+
+        function cacheSet(key, data) {
+            try {
+                localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
+            } catch { /* localStorage full — ignore */ }
+        }
+
+        function showStaleBanner(timestamp) {
+            const banner = document.getElementById('staleBanner');
+            const timeEl = document.getElementById('staleBannerTime');
+            if (banner && timeEl) {
+                const ago = new Date(timestamp);
+                timeEl.textContent = ago.toLocaleTimeString();
+                banner.style.display = 'flex';
+            }
+        }
+
+        function hideStaleBanner() {
+            const banner = document.getElementById('staleBanner');
+            if (banner) banner.style.display = 'none';
+        }
+
         async function fetchCubeData(measures, filters = [], compareType = null) {
             // Separate bucketStart date filters from other filters
             const otherFilters = [];
@@ -730,11 +803,24 @@
                 filters: otherFilters
             };
 
-            const response = await fetch(CUBE_API_URL, {
-                method: "POST",
-                headers: cubeHeaders(),
-                body: JSON.stringify({ query: query })
-            });
+            const ck = cacheKey(measures, filters, compareType);
+
+            let response;
+            try {
+                response = await fetch(CUBE_API_URL, {
+                    method: "POST",
+                    headers: cubeHeaders(),
+                    body: JSON.stringify({ query: query })
+                });
+            } catch (networkErr) {
+                // Network failure — try cache
+                const cached = cacheGet(ck);
+                if (cached && (Date.now() - cached.timestamp) < CACHE_MAX_AGE_MS) {
+                    showStaleBanner(cached.timestamp);
+                    return cached.data;
+                }
+                throw networkErr;
+            }
 
             if (!response.ok) {
                 // 400 from Cube typically means Trino tables don't exist yet (no data).
@@ -743,12 +829,20 @@
                     console.warn("Cube returned 400 — table may not exist yet (no rollup data)");
                     return [];
                 }
+                // Server error — try cache
+                const cached = cacheGet(ck);
+                if (cached && (Date.now() - cached.timestamp) < CACHE_MAX_AGE_MS) {
+                    showStaleBanner(cached.timestamp);
+                    return cached.data;
+                }
                 throw new Error("Cube API returned " + response.status);
             }
 
+            hideStaleBanner();
             const result = await response.json();
 
             // compareDateRange returns multiple result sets
+            let data;
             if (compareType && result.results && result.results.length > 1) {
                 const currentData = (result.results[0].data || []).map(
                     d => Object.assign({}, d, { _comparison: "Current" })
@@ -756,13 +850,17 @@
                 const previousData = (result.results[1].data || []).map(
                     d => Object.assign({}, d, { _comparison: "Previous" })
                 );
-                return currentData.concat(previousData);
+                data = currentData.concat(previousData);
+            } else if (result.results && result.results[0]) {
+                data = result.results[0].data || [];
+            } else if (result.data) {
+                data = result.data;
+            } else {
+                data = [];
             }
 
-            let data = [];
-            if (result.results && result.results[0]) data = result.results[0].data;
-            else if (result.data) data = result.data;
-
+            // Cache successful response
+            cacheSet(ck, data);
             return data;
         }
 
@@ -2500,4 +2598,555 @@ app.listen(8080, () => {
                 document.getElementById('wizInstallDesc').textContent = 'Run this command to add the SDK to your project.';
             }
         }
+
+        // Auto-show wizard on first login (if not previously completed)
+        if (!localStorage.getItem('gravix_wizard_done')) {
+            // Delay slightly to ensure the dashboard is loaded
+            setTimeout(() => {
+                const epInput = document.getElementById('wizEndpoint');
+                if (!epInput.value) {
+                    epInput.value = (window.GRAVIX_ENDPOINT || 'http://localhost:8090');
+                }
+                const storedKey = localStorage.getItem('gravix_api_key');
+                const keyInput = document.getElementById('wizApiKey');
+                if (!keyInput.value && storedKey) {
+                    keyInput.value = storedKey;
+                }
+                currentStep = 1;
+                renderStep();
+                overlay.classList.add('open');
+            }, 800);
+        }
+
+        // Mark wizard done when user closes it or completes step 4
+        function markWizardDone() {
+            localStorage.setItem('gravix_wizard_done', '1');
+        }
+        document.getElementById('wizardClose').addEventListener('click', markWizardDone);
+        const origNextClick = btnNext.onclick;
+        btnNext.addEventListener('click', () => {
+            if (currentStep > totalSteps) markWizardDone();
+        });
+
+        // Verify button on step 4 — polls usage endpoint
+        const verifySection = document.querySelector('.wizard-step[data-step="4"]');
+        if (verifySection) {
+            const verifyBtn = document.createElement('button');
+            verifyBtn.className = 'wizard-btn wizard-btn-primary';
+            verifyBtn.style.marginTop = '16px';
+            verifyBtn.style.width = '100%';
+            verifyBtn.textContent = 'Verify Connection';
+            verifySection.insertBefore(verifyBtn, verifySection.querySelector('[style*="Need help"]'));
+
+            let verifyInterval = null;
+            verifyBtn.addEventListener('click', async () => {
+                verifyBtn.textContent = 'Checking...';
+                verifyBtn.disabled = true;
+
+                const checkIcon = (id, done) => {
+                    const el = document.getElementById(id);
+                    if (el && done) {
+                        el.classList.remove('pending');
+                        el.classList.add('done');
+                        el.textContent = '\u2713';
+                    }
+                };
+
+                // Mark SDK + code as done (user is on step 4, they followed the steps)
+                checkIcon('wizCheckSDK', true);
+                checkIcon('wizCheckCode', true);
+
+                try {
+                    const token = localStorage.getItem('gravix_jwt');
+                    const headers = {};
+                    if (token) headers['Authorization'] = 'Bearer ' + token;
+                    const apiKey = localStorage.getItem('gravix_api_key');
+                    if (apiKey) headers['X-API-Key'] = apiKey;
+
+                    const resp = await fetch((window.GATEWAY_URL || window.GRAVIX_ENDPOINT || 'http://localhost:8091') + '/api/gateway/billing/usage', { headers });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const count = data.todayEventCount || data.total_events || 0;
+                        if (count > 0) {
+                            checkIcon('wizCheckTraffic', true);
+                            checkIcon('wizCheckDash', true);
+                            verifyBtn.textContent = 'Verified! Events detected.';
+                            verifyBtn.style.background = 'var(--success-color)';
+                            markWizardDone();
+                        } else {
+                            checkIcon('wizCheckTraffic', false);
+                            verifyBtn.textContent = 'No events yet — send some traffic and try again';
+                        }
+                    } else {
+                        verifyBtn.textContent = 'Could not reach server — check endpoint';
+                    }
+                } catch (e) {
+                    verifyBtn.textContent = 'Connection error — check endpoint';
+                }
+
+                setTimeout(() => {
+                    verifyBtn.disabled = false;
+                    if (!verifyBtn.textContent.startsWith('Verified')) {
+                        verifyBtn.textContent = 'Verify Connection';
+                    }
+                }, 3000);
+            });
+        }
+
+        // --- USAGE & BILLING PAGE ---
+        let usageChart = null;
+
+        async function loadUsagePage() {
+            const loading = document.getElementById('usage-loading');
+            const content = document.getElementById('usage-content');
+            const errorEl = document.getElementById('usage-section-error');
+
+            if (!IS_MULTI_TENANT) {
+                loading.style.display = 'none';
+                content.style.display = 'block';
+                document.getElementById('usage-plan-name').textContent = 'Self-hosted';
+                document.getElementById('usage-event-limit').textContent = 'Unlimited';
+                document.getElementById('usage-rate-limit').textContent = 'Unlimited';
+                document.getElementById('usage-today-count').textContent = '—';
+                document.getElementById('manage-billing-btn').style.display = 'none';
+                return;
+            }
+
+            loading.style.display = '';
+            content.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            try {
+                const token = localStorage.getItem('gravix_jwt');
+                const [usageResp, historyResp, invoiceResp] = await Promise.all([
+                    fetch(GATEWAY_URL + '/api/gateway/billing/usage', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }),
+                    fetch(GATEWAY_URL + '/api/gateway/billing/usage/history', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }),
+                    fetch(GATEWAY_URL + '/api/gateway/billing/invoices', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    })
+                ]);
+                if (!usageResp.ok) throw new Error('Failed to fetch usage data');
+                const data = await usageResp.json();
+                const historyData = historyResp.ok ? await historyResp.json() : { history: [] };
+                const invoiceData = invoiceResp.ok ? await invoiceResp.json() : { invoices: [] };
+                renderUsagePage(data);
+                renderMonthlyHistory(historyData.history || []);
+                renderInvoices(invoiceData.invoices || []);
+            } catch (err) {
+                loading.style.display = 'none';
+                errorEl.style.display = 'flex';
+                errorEl.innerHTML = '&#x26A0; Failed to load usage data. <button class="section-error-retry" onclick="loadUsagePage()">Retry</button>';
+            }
+        }
+
+        function renderUsagePage(data) {
+            const loading = document.getElementById('usage-loading');
+            const content = document.getElementById('usage-content');
+            loading.style.display = 'none';
+            content.style.display = 'block';
+
+            // Plan info
+            document.getElementById('usage-plan-name').textContent = (data.plan || 'free').charAt(0).toUpperCase() + (data.plan || 'free').slice(1);
+            document.getElementById('usage-event-limit').textContent = formatNumber(data.event_limit || 0);
+            document.getElementById('usage-rate-limit').textContent = (data.rate_limit_rps || 0) + ' req/s';
+            document.getElementById('usage-today-count').textContent = formatNumber(data.today || 0);
+
+            // Progress bar
+            const monthTotal = data.month_total || 0;
+            const eventLimit = data.event_limit || 1;
+            const pct = Math.min((monthTotal / eventLimit) * 100, 100);
+            const fill = document.getElementById('usage-progress-fill');
+            fill.style.width = pct.toFixed(1) + '%';
+            fill.className = 'usage-progress-fill' + (pct >= 100 ? ' danger' : pct >= 80 ? ' warning' : '');
+            document.getElementById('usage-progress-label').textContent = formatNumber(monthTotal) + ' / ' + formatNumber(eventLimit);
+
+            // Daily chart
+            const dailyCounts = data.daily_counts || [];
+            const labels = dailyCounts.map(d => d.day.slice(5)); // MM-DD
+            const values = dailyCounts.map(d => d.count);
+
+            const ctx = document.getElementById('usage-daily-chart');
+            if (usageChart) usageChart.destroy();
+            usageChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Events',
+                        data: values,
+                        backgroundColor: 'rgba(99, 102, 241, 0.6)',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { maxRotation: 45 } },
+                        y: { beginAtZero: true, ticks: { callback: v => formatNumber(v) } }
+                    }
+                }
+            });
+        }
+
+        function formatNumber(n) {
+            if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+            if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+            return n.toString();
+        }
+
+        async function handleManageBilling() {
+            if (!IS_MULTI_TENANT) return;
+            try {
+                const token = localStorage.getItem('gravix_jwt');
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/billing/portal', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ return_url: window.location.href })
+                });
+                if (!resp.ok) throw new Error('Portal error');
+                const data = await resp.json();
+                if (data.url) window.location.href = data.url;
+            } catch (err) {
+                alert('Could not open billing portal. ' + err.message);
+            }
+        }
+
+        // --- MONTHLY HISTORY CHART ---
+        let monthlyChart = null;
+
+        function renderMonthlyHistory(history) {
+            const ctx = document.getElementById('usage-monthly-chart');
+            if (!ctx) return;
+
+            // Reverse so oldest is first
+            const sorted = [...history].reverse();
+            const labels = sorted.map(h => h.month);
+            const values = sorted.map(h => h.count);
+
+            if (monthlyChart) monthlyChart.destroy();
+            monthlyChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Events',
+                        data: values,
+                        borderColor: 'rgba(99, 102, 241, 0.8)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false } },
+                        y: { beginAtZero: true, ticks: { callback: v => formatNumber(v) } }
+                    }
+                }
+            });
+        }
+
+        // --- INVOICE TABLE ---
+        function renderInvoices(invoices) {
+            const table = document.getElementById('invoice-table');
+            const emptyEl = document.getElementById('invoice-empty');
+            const tbody = document.getElementById('invoice-table-body');
+            if (!table || !tbody) return;
+
+            if (!invoices || invoices.length === 0) {
+                table.style.display = 'none';
+                if (emptyEl) emptyEl.style.display = 'block';
+                return;
+            }
+
+            if (emptyEl) emptyEl.style.display = 'none';
+            table.style.display = '';
+            tbody.innerHTML = '';
+
+            invoices.forEach(inv => {
+                const tr = document.createElement('tr');
+                const amount = (inv.amount / 100).toFixed(2);
+                const currency = (inv.currency || 'usd').toUpperCase();
+                const statusClass = inv.status === 'paid' ? 'color: var(--success-color)' : '';
+                let actions = '';
+                if (inv.hosted_url) {
+                    actions += '<a href="' + inv.hosted_url + '" target="_blank" rel="noopener" style="margin-right:8px">View</a>';
+                }
+                if (inv.pdf_url) {
+                    actions += '<a href="' + inv.pdf_url + '" target="_blank" rel="noopener">PDF</a>';
+                }
+                tr.innerHTML = '<td>' + inv.date + '</td>' +
+                    '<td>' + currency + ' ' + amount + '</td>' +
+                    '<td style="' + statusClass + '">' + (inv.status || '—') + '</td>' +
+                    '<td>' + (actions || '—') + '</td>';
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- TRACES PAGE ---
+
+        // Service colors for waterfall bars
+        const traceServiceColors = [
+            '#6366f1', '#ec4899', '#f59e0b', '#10b981', '#3b82f6',
+            '#8b5cf6', '#ef4444', '#14b8a6', '#f97316', '#06b6d4'
+        ];
+        const traceColorMap = {};
+        let traceColorIdx = 0;
+
+        function getServiceColor(service) {
+            if (!traceColorMap[service]) {
+                traceColorMap[service] = traceServiceColors[traceColorIdx % traceServiceColors.length];
+                traceColorIdx++;
+            }
+            return traceColorMap[service];
+        }
+
+        async function loadTracesPage() {
+            const loading = document.getElementById('traces-loading');
+            const listEl = document.getElementById('traces-list');
+            const errorEl = document.getElementById('traces-section-error');
+            const waterfallEl = document.getElementById('trace-waterfall');
+
+            loading.style.display = '';
+            listEl.style.display = 'none';
+            waterfallEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            try {
+                const resp = await cachedFetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces/recent?limit=50', {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') }
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+
+                loading.style.display = 'none';
+                listEl.style.display = 'block';
+
+                renderTracesList(data.traces || []);
+            } catch (err) {
+                loading.style.display = 'none';
+                errorEl.style.display = 'block';
+                errorEl.innerHTML = '&#x26A0; Failed to load traces. <button class="section-error-retry" onclick="loadTracesPage()">Retry</button>';
+            }
+        }
+
+        function renderTracesList(traces) {
+            const emptyEl = document.getElementById('traces-empty');
+            const tableEl = document.getElementById('traces-table');
+            const tbody = document.getElementById('traces-table-body');
+
+            if (!traces || traces.length === 0) {
+                emptyEl.style.display = 'block';
+                tableEl.style.display = 'none';
+                return;
+            }
+
+            emptyEl.style.display = 'none';
+            tableEl.style.display = 'table';
+            tbody.innerHTML = '';
+
+            traces.forEach(function(t) {
+                const tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.onclick = function() { loadTraceDetail(t.trace_id); };
+                const time = t.event_time ? new Date(t.event_time).toLocaleString() : '—';
+                const shortId = t.trace_id ? t.trace_id.substring(0, 13) + '...' : '—';
+                tr.innerHTML = '<td>' + time + '</td>' +
+                    '<td><code style="font-size:0.8rem">' + shortId + '</code></td>' +
+                    '<td>' + (t.root_service || '—') + '</td>' +
+                    '<td>' + (t.root_path || '—') + '</td>' +
+                    '<td>' + (t.span_count || 0) + '</td>' +
+                    '<td>' + (t.total_latency_ms || 0) + ' ms</td>';
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function loadTraceDetail(traceId) {
+            const listEl = document.getElementById('traces-list');
+            const waterfallEl = document.getElementById('trace-waterfall');
+
+            listEl.style.display = 'none';
+            waterfallEl.style.display = 'block';
+            document.getElementById('trace-waterfall-title').textContent = 'Trace: ' + traceId.substring(0, 13) + '...';
+
+            try {
+                const resp = await cachedFetch(
+                    GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces?trace_id=' + encodeURIComponent(traceId),
+                    { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') } }
+                );
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                renderWaterfall(data.spans || []);
+            } catch (err) {
+                document.getElementById('trace-waterfall-container').innerHTML =
+                    '<p style="color:var(--danger-color)">Failed to load trace detail.</p>';
+            }
+        }
+
+        function renderWaterfall(spans) {
+            const container = document.getElementById('trace-waterfall-container');
+            container.innerHTML = '';
+
+            if (!spans || spans.length === 0) {
+                container.innerHTML = '<p>No spans found for this trace.</p>';
+                return;
+            }
+
+            // Find the earliest start time and total duration
+            const startTimes = spans.map(function(s) { return new Date(s.event_time).getTime(); });
+            const minStart = Math.min.apply(null, startTimes);
+            const maxEnd = Math.max.apply(null, spans.map(function(s) {
+                return new Date(s.event_time).getTime() + s.latency_ms;
+            }));
+            const totalDuration = maxEnd - minStart || 1;
+
+            // Header
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-color);font-size:0.75rem;color:var(--text-secondary);margin-bottom:4px';
+            header.innerHTML = '<div style="width:200px;flex-shrink:0">Service / Path</div>' +
+                '<div style="flex:1;display:flex;justify-content:space-between"><span>0ms</span><span>' + totalDuration + 'ms</span></div>';
+            container.appendChild(header);
+
+            spans.forEach(function(span) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--bg-secondary);min-height:32px';
+
+                // Label
+                const label = document.createElement('div');
+                label.style.cssText = 'width:200px;flex-shrink:0;font-size:0.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+                label.title = span.service + ' ' + span.method + ' ' + span.path_template;
+                label.innerHTML = '<strong>' + span.service + '</strong> ' + span.method;
+
+                // Bar container
+                const barContainer = document.createElement('div');
+                barContainer.style.cssText = 'flex:1;position:relative;height:24px';
+
+                const offset = ((new Date(span.event_time).getTime() - minStart) / totalDuration) * 100;
+                const width = Math.max((span.latency_ms / totalDuration) * 100, 1);
+                const color = getServiceColor(span.service);
+
+                const bar = document.createElement('div');
+                bar.style.cssText = 'position:absolute;top:2px;height:20px;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:0.7rem;color:white;white-space:nowrap;overflow:hidden';
+                bar.style.left = offset + '%';
+                bar.style.width = width + '%';
+                bar.style.background = color;
+                bar.style.minWidth = '30px';
+
+                const statusIcon = span.status_code >= 400 ? ' !' : '';
+                bar.textContent = span.latency_ms + 'ms' + statusIcon;
+                bar.title = span.path_template + ' [' + span.status_code + '] ' + span.latency_ms + 'ms';
+
+                barContainer.appendChild(bar);
+                row.appendChild(label);
+                row.appendChild(barContainer);
+                container.appendChild(row);
+            });
+        }
+
+        window.showTracesList = function() {
+            document.getElementById('trace-waterfall').style.display = 'none';
+            document.getElementById('traces-list').style.display = 'block';
+        };
+
+        // Expose for onclick handlers
+        window.loadTracesPage = loadTracesPage;
+        window.loadTraceDetail = loadTraceDetail;
+
+        // ─── Data Management Page ───
+
+        async function loadDataPage() {
+            // Set default date range (last 7 days)
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 7);
+            document.getElementById('export-start-date').value = startDate.toISOString().split('T')[0];
+            document.getElementById('export-end-date').value = endDate.toISOString().split('T')[0];
+
+            // Load retention info
+            const loadingEl = document.getElementById('retention-loading');
+            const infoEl = document.getElementById('retention-info');
+            loadingEl.style.display = 'block';
+            infoEl.style.display = 'none';
+
+            try {
+                const resp = await cachedFetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/retention', {
+                    headers: { 'Authorization': 'Bearer ' + getJWT() }
+                });
+                const data = await resp.json();
+                document.getElementById('retention-plan').textContent = (data.plan || 'unknown').toUpperCase();
+                const defaultDays = data.plan_default_facts_days || 30;
+                document.getElementById('retention-facts').textContent = (data.facts_days || defaultDays) + ' days';
+                document.getElementById('retention-metrics').textContent = (data.metrics_days || defaultDays) + ' days';
+                document.getElementById('retention-traces').textContent = (data.traces_days || 7) + ' days';
+                loadingEl.style.display = 'none';
+                infoEl.style.display = 'block';
+            } catch (err) {
+                loadingEl.innerHTML = '<p style="color: var(--text-secondary);">Unable to load retention info.</p>';
+            }
+        }
+
+        async function startExport() {
+            const btn = document.getElementById('export-btn');
+            const statusEl = document.getElementById('export-status');
+            const dataType = document.getElementById('export-data-type').value;
+            const startDate = document.getElementById('export-start-date').value;
+            const endDate = document.getElementById('export-end-date').value;
+
+            if (!startDate || !endDate) {
+                statusEl.style.display = 'block';
+                statusEl.innerHTML = '<span style="color: var(--warning);">Please select start and end dates.</span>';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Exporting...';
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = '<span style="color: var(--text-secondary);">Preparing export...</span>';
+
+            try {
+                const resp = await fetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/export', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + getJWT(),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ data_type: dataType, start_date: startDate, end_date: endDate })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.error || 'Export failed');
+                }
+
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'gravix-export-' + dataType + '-' + startDate + '-to-' + endDate + '.tar.gz';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                statusEl.innerHTML = '<span style="color: var(--success);">Export downloaded successfully.</span>';
+            } catch (err) {
+                statusEl.innerHTML = '<span style="color: var(--error);">' + err.message + '</span>';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Export';
+            }
+        }
+
+        window.startExport = startExport;
+        window.loadDataPage = loadDataPage;
+
     })();

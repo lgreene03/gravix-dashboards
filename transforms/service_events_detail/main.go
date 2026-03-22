@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -166,12 +167,13 @@ func main() {
 		tenantDBPath = os.Getenv("TENANT_DB_PATH")
 	}
 
-	lockFile, err := acquireLock(outputDir)
-	if err != nil {
-		slog.Error("cannot start event detail rollup", "error", err)
+	elector := leaderelect.NewFileElector(outputDir, "service-events-detail-rollup")
+	acquired, err := elector.Acquire(context.Background())
+	if err != nil || !acquired {
+		slog.Error("cannot start event detail rollup: another instance is running", "error", err)
 		os.Exit(1)
 	}
-	defer releaseLock(lockFile)
+	defer elector.Release(context.Background())
 
 	var days []time.Time
 	if startDay != "" && endDay != "" {
@@ -384,12 +386,17 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 	}
 
 	outputPrefix := strings.TrimPrefix(outputDir, "./data/")
+	partitionDir := fmt.Sprintf("%s/event_day=%s", outputPrefix, dayStr)
 
 	if len(rows) == 0 {
 		// Idempotency: clear stale output even when no new data
-		existing, _ := store.List(ctx, outputPrefix)
+		existing, _ := store.List(ctx, partitionDir)
 		for _, k := range existing {
-			if strings.Contains(k, dayStr) {
+			store.Delete(ctx, k)
+		}
+		legacyKeys, _ := store.List(ctx, outputPrefix)
+		for _, k := range legacyKeys {
+			if strings.Contains(k, dayStr) && !strings.Contains(k, "event_day=") {
 				store.Delete(ctx, k)
 			}
 		}
@@ -402,9 +409,9 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		return rows[i].EventTime < rows[j].EventTime
 	})
 
-	// Write Parquet
+	// Write Parquet (Hive-partitioned path)
 	idx := uuid.New().String()
-	destKey := fmt.Sprintf("%s/detail_%s_%s.parquet", outputPrefix, idx, dayStr)
+	destKey := fmt.Sprintf("%s/detail_%s.parquet", partitionDir, idx)
 
 	var parquetBuf bytes.Buffer
 	writer := parquet.NewGenericWriter[EventDetailRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
@@ -420,10 +427,16 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		return fmt.Errorf("failed to upload event details: %w", err)
 	}
 
-	// Idempotency: remove previous objects for this day (now safe -- new file exists)
-	existing, _ := store.List(ctx, outputPrefix)
+	// Idempotency: remove previous objects for this partition
+	existing, _ := store.List(ctx, partitionDir)
 	for _, k := range existing {
-		if strings.Contains(k, dayStr) && k != destKey {
+		if k != destKey {
+			store.Delete(ctx, k)
+		}
+	}
+	legacyKeys, _ := store.List(ctx, outputPrefix)
+	for _, k := range legacyKeys {
+		if strings.Contains(k, dayStr) && !strings.Contains(k, "event_day=") {
 			store.Delete(ctx, k)
 		}
 	}

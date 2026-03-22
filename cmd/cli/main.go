@@ -55,6 +55,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Unknown tail subcommand: %s\nUsage: gravix tail <dlq> [flags]\n", os.Args[2])
 			os.Exit(1)
 		}
+	case "replay":
+		runReplay(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version":
@@ -74,6 +76,7 @@ Usage:
   gravix send event   Send a service lifecycle event
   gravix status       Check ingestion service health
   gravix tail dlq     Tail the dead-letter queue
+  gravix replay       Replay DLQ entries back to ingestion
   gravix version      Print version
   gravix help         Show this help
 

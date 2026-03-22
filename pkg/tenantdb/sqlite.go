@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tenants (
 	stripe_customer_id TEXT DEFAULT '',
 	stripe_subscription_id TEXT DEFAULT '',
 	status      TEXT NOT NULL DEFAULT 'active',
+	overage_allowed INTEGER NOT NULL DEFAULT 0,
 	created_at  TEXT NOT NULL DEFAULT (datetime('now')),
 	updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -120,6 +121,30 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 	created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_audit_tenant_time ON audit_logs(tenant_id, created_at);
+
+CREATE TABLE IF NOT EXISTS monthly_usage (
+	tenant_id  TEXT NOT NULL,
+	month      TEXT NOT NULL,
+	count      INTEGER NOT NULL DEFAULT 0,
+	plan       TEXT NOT NULL DEFAULT 'free',
+	snapped_at TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY (tenant_id, month)
+);
+
+CREATE TABLE IF NOT EXISTS retention_policies (
+	tenant_id    TEXT PRIMARY KEY REFERENCES tenants(id),
+	facts_days   INTEGER NOT NULL DEFAULT 0,
+	metrics_days INTEGER NOT NULL DEFAULT 0,
+	traces_days  INTEGER NOT NULL DEFAULT 0,
+	updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS leader_locks (
+	lock_name    TEXT PRIMARY KEY,
+	holder_id    TEXT NOT NULL,
+	acquired_at  TEXT NOT NULL DEFAULT (datetime('now')),
+	expires_at   TEXT NOT NULL
+);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -183,6 +208,10 @@ func (s *SQLiteDB) NotificationChannels() NotificationChannelRepo {
 func (s *SQLiteDB) AlertRules() AlertRuleRepo     { return &sqliteAlertRuleRepo{db: s.db} }
 func (s *SQLiteDB) AlertHistory() AlertHistoryRepo { return &sqliteAlertHistoryRepo{db: s.db} }
 func (s *SQLiteDB) AuditLog() AuditRepo            { return &sqliteAuditRepo{db: s.db} }
+func (s *SQLiteDB) MonthlyUsage() MonthlyUsageRepo  { return &sqliteMonthlyUsageRepo{db: s.db} }
+func (s *SQLiteDB) RetentionPolicies() RetentionPolicyRepo {
+	return &sqliteRetentionPolicyRepo{db: s.db}
+}
 
 // --- Tenant Repo ---
 
@@ -193,10 +222,14 @@ func (r *sqliteTenantRepo) Create(ctx context.Context, t *Tenant) error {
 		t.ID = uuid.New().String()
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	overageInt := 0
+	if t.OverageAllowed {
+		overageInt = 1
+	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO tenants (id, name, email, plan, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.Name, t.Email, t.Plan, t.Status, now, now,
+		`INSERT INTO tenants (id, name, email, plan, status, overage_allowed, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.Name, t.Email, t.Plan, t.Status, overageInt, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("create tenant: %w", err)
@@ -209,18 +242,23 @@ func (r *sqliteTenantRepo) Create(ctx context.Context, t *Tenant) error {
 func (r *sqliteTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) {
 	return r.scanTenant(r.db.QueryRowContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, created_at, updated_at FROM tenants WHERE id = ?`, id))
+		        status, overage_allowed, created_at, updated_at FROM tenants WHERE id = ?`, id))
 }
 
 func (r *sqliteTenantRepo) GetByEmail(ctx context.Context, email string) (*Tenant, error) {
 	return r.scanTenant(r.db.QueryRowContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, created_at, updated_at FROM tenants WHERE email = ?`, email))
+		        status, overage_allowed, created_at, updated_at FROM tenants WHERE email = ?`, email))
 }
 
 func (r *sqliteTenantRepo) UpdatePlan(ctx context.Context, id, plan string) error {
+	// Set overage_allowed based on plan: free=0, paid=1
+	overageAllowed := 0
+	if plan != "free" {
+		overageAllowed = 1
+	}
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE tenants SET plan = ?, updated_at = datetime('now') WHERE id = ?`, plan, id)
+		`UPDATE tenants SET plan = ?, overage_allowed = ?, updated_at = datetime('now') WHERE id = ?`, plan, overageAllowed, id)
 	return err
 }
 
@@ -240,7 +278,7 @@ func (r *sqliteTenantRepo) UpdateStripe(ctx context.Context, id, customerID, sub
 func (r *sqliteTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, created_at, updated_at FROM tenants ORDER BY created_at`)
+		        status, overage_allowed, created_at, updated_at FROM tenants ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -260,12 +298,14 @@ func (r *sqliteTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 func (r *sqliteTenantRepo) scanTenant(row *sql.Row) (*Tenant, error) {
 	t := &Tenant{}
 	var createdAt, updatedAt string
+	var overageInt int
 	err := row.Scan(&t.ID, &t.Name, &t.Email, &t.Plan,
 		&t.StripeCustomerID, &t.StripeSubscriptionID,
-		&t.Status, &createdAt, &updatedAt)
+		&t.Status, &overageInt, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
+	t.OverageAllowed = overageInt != 0
 	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return t, nil
@@ -278,12 +318,14 @@ type tenantScanner interface {
 func (r *sqliteTenantRepo) scanTenantRow(row tenantScanner) (*Tenant, error) {
 	t := &Tenant{}
 	var createdAt, updatedAt string
+	var overageInt int
 	err := row.Scan(&t.ID, &t.Name, &t.Email, &t.Plan,
 		&t.StripeCustomerID, &t.StripeSubscriptionID,
-		&t.Status, &createdAt, &updatedAt)
+		&t.Status, &overageInt, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
+	t.OverageAllowed = overageInt != 0
 	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return t, nil
@@ -352,13 +394,15 @@ func (r *sqliteAPIKeyRepo) ValidateKey(ctx context.Context, rawKey string) (*API
 	hash := hashKey(rawKey)
 
 	var info APIKeyInfo
+	var overageInt int
 	err := r.db.QueryRowContext(ctx,
-		`SELECT t.id, t.plan, t.status
+		`SELECT t.id, t.plan, t.status, t.overage_allowed
 		 FROM api_keys k JOIN tenants t ON k.tenant_id = t.id
 		 WHERE k.key_hash = ? AND k.status = 'active'
 		   AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))`,
 		hash,
-	).Scan(&info.TenantID, &info.Plan, &info.Status)
+	).Scan(&info.TenantID, &info.Plan, &info.Status, &overageInt)
+	info.OverageAllowed = overageInt != 0
 	if err != nil {
 		return nil, fmt.Errorf("invalid api key")
 	}
@@ -923,4 +967,79 @@ func (r *sqliteAuditRepo) ListByTenant(ctx context.Context, tenantID string, lim
 		entries = append(entries, e)
 	}
 	return entries, total, rows.Err()
+}
+
+// --- Monthly Usage Repo ---
+
+type sqliteMonthlyUsageRepo struct{ db *sql.DB }
+
+func (r *sqliteMonthlyUsageRepo) Snapshot(ctx context.Context, tenantID, month string, count int64, plan string) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO monthly_usage (tenant_id, month, count, plan, snapped_at)
+		 VALUES (?, ?, ?, ?, datetime('now'))
+		 ON CONFLICT(tenant_id, month) DO UPDATE SET count = ?, plan = ?, snapped_at = datetime('now')`,
+		tenantID, month, count, plan, count, plan)
+	return err
+}
+
+func (r *sqliteMonthlyUsageRepo) GetByTenant(ctx context.Context, tenantID string, limit int) ([]*MonthlyUsage, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT tenant_id, month, count, plan, snapped_at
+		 FROM monthly_usage WHERE tenant_id = ? ORDER BY month DESC LIMIT ?`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*MonthlyUsage
+	for rows.Next() {
+		m := &MonthlyUsage{}
+		var snappedAt string
+		if err := rows.Scan(&m.TenantID, &m.Month, &m.Count, &m.Plan, &snappedAt); err != nil {
+			return nil, err
+		}
+		m.SnappedAt, _ = time.Parse(time.RFC3339, snappedAt)
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// --- Retention Policy Repo ---
+
+type sqliteRetentionPolicyRepo struct{ db *sql.DB }
+
+func (r *sqliteRetentionPolicyRepo) Upsert(ctx context.Context, p *RetentionPolicy) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO retention_policies (tenant_id, facts_days, metrics_days, traces_days, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET
+		   facts_days = excluded.facts_days,
+		   metrics_days = excluded.metrics_days,
+		   traces_days = excluded.traces_days,
+		   updated_at = excluded.updated_at`,
+		p.TenantID, p.FactsDays, p.MetricsDays, p.TracesDays, now,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert retention policy: %w", err)
+	}
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, now)
+	return nil
+}
+
+func (r *sqliteRetentionPolicyRepo) GetByTenantID(ctx context.Context, tenantID string) (*RetentionPolicy, error) {
+	p := &RetentionPolicy{}
+	var updatedAt string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT tenant_id, facts_days, metrics_days, traces_days, updated_at
+		 FROM retention_policies WHERE tenant_id = ?`, tenantID,
+	).Scan(&p.TenantID, &p.FactsDays, &p.MetricsDays, &p.TracesDays, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get retention policy: %w", err)
+	}
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return p, nil
 }

@@ -59,6 +59,11 @@ func (l *LocalStore) Put(ctx context.Context, key string, reader io.Reader) erro
 	return f.Sync()
 }
 
+// PutWithStorageClass on local storage ignores the storage class (dev mode).
+func (l *LocalStore) PutWithStorageClass(ctx context.Context, key string, reader io.Reader, class StorageClass) error {
+	return l.Put(ctx, key, reader)
+}
+
 func (l *LocalStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	path, err := l.sanitizeKey(key)
 	if err != nil {

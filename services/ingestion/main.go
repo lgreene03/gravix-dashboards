@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,12 +14,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/circuitbreaker"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
@@ -91,6 +96,14 @@ func getTenantPlan(r *http.Request) string {
 	return ""
 }
 
+// getTenantOverageAllowed extracts the tenant's overage_allowed flag from context.
+func getTenantOverageAllowed(r *http.Request) bool {
+	if info, ok := r.Context().Value(tenantInfoKey).(*tenantdb.APIKeyInfo); ok {
+		return info.OverageAllowed
+	}
+	return false
+}
+
 // topicForTenant returns the storage topic prefixed with tenant ID.
 // In legacy mode (empty tenantID), returns the base topic unchanged.
 func topicForTenant(tenantID, baseTopic string) string {
@@ -146,15 +159,58 @@ var (
 			Help: "Total storage upload failures.",
 		},
 	)
+	ingestionOverageEventsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingestion_overage_events_total",
+			Help: "Total events accepted over plan limit (paid plans only).",
+		},
+		[]string{"tenant_id"},
+	)
+	ingestionQuotaRejectedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingestion_quota_rejected_total",
+			Help: "Total requests rejected due to quota exceeded.",
+		},
+		[]string{"tenant_id"},
+	)
+	ingestionTraceSamplesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingestion_trace_samples_total",
+			Help: "Total trace samples received.",
+		},
+		[]string{"tenant", "sampled"},
+	)
+	circuitBreakerState = prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "circuit_breaker_state",
+			Help: "Current circuit breaker state (0=closed, 1=open, 2=half_open).",
+		},
+		func() float64 { return circuitBreakerStateValue.Load().(float64) },
+	)
+	circuitBreakerTripsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "circuit_breaker_trips_total",
+			Help: "Total number of times the circuit breaker has tripped open.",
+		},
+	)
 )
 
+// circuitBreakerStateValue stores the current CB state as a float64 for the gauge.
+var circuitBreakerStateValue atomic.Value
+
 func init() {
+	circuitBreakerStateValue.Store(float64(0))
 	prometheus.MustRegister(ingestionRequestsTotal)
 	prometheus.MustRegister(ingestionBatchSizeBytes)
 	prometheus.MustRegister(collectors.NewBuildInfoCollector())
 	prometheus.MustRegister(ingestionFsyncDurationSeconds)
 	prometheus.MustRegister(ingestionDLQWriteErrorsTotal)
 	prometheus.MustRegister(ingestionUploadErrorsTotal)
+	prometheus.MustRegister(ingestionOverageEventsTotal)
+	prometheus.MustRegister(ingestionQuotaRejectedTotal)
+	prometheus.MustRegister(ingestionTraceSamplesTotal)
+	prometheus.MustRegister(circuitBreakerState)
+	prometheus.MustRegister(circuitBreakerTripsTotal)
 }
 
 func tenantRateLimitMiddleware(trl *ratelimit.TenantLimiter, next http.HandlerFunc) http.HandlerFunc {
@@ -180,20 +236,25 @@ type DurableSink struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	cb             *circuitbreaker.CircuitBreaker
+	maxBufferBytes int64 // max buffer size before returning 503
 }
 
-func NewDurableSink(bufferDir string, store storage.ObjectStore) (*DurableSink, error) {
+func NewDurableSink(bufferDir string, store storage.ObjectStore, cb *circuitbreaker.CircuitBreaker, maxBufferBytes int64) (*DurableSink, error) {
 	if err := os.MkdirAll(bufferDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create buffer dir: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ds := &DurableSink{
-		bufferDir:   bufferDir,
-		store:       store,
-		activeFiles: make(map[string]*os.File),
-		ctx:         ctx,
-		cancel:      cancel,
+		bufferDir:      bufferDir,
+		store:          store,
+		activeFiles:    make(map[string]*os.File),
+		ctx:            ctx,
+		cancel:         cancel,
+		cb:             cb,
+		maxBufferBytes: maxBufferBytes,
 	}
 
 	// Startup: Check for any previously rotated but not uploaded files
@@ -404,7 +465,7 @@ func (ds *DurableSink) rotateTopic(topic string) {
 	}()
 }
 
-// uploadFile uploads the local batch to the object store
+// uploadFile uploads the local batch to the object store, wrapped in a circuit breaker.
 func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 	// Destination Key: raw/<topic>/YYYY-MM-DD/HH/<uuid>.jsonl
 	dayStr := t.Format("2006-01-02")
@@ -418,7 +479,17 @@ func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 	}
 	defer f.Close()
 
-	if err := ds.store.Put(ds.ctx, destKey, f); err != nil {
+	uploadFn := func() error {
+		return ds.store.Put(ds.ctx, destKey, f)
+	}
+
+	if ds.cb != nil {
+		err = ds.cb.Execute(uploadFn)
+	} else {
+		err = uploadFn()
+	}
+
+	if err != nil {
 		slog.Error("error uploading to storage, file preserved for retry", "path", sourcePath, "error", err)
 		ingestionUploadErrorsTotal.Inc()
 		return // Do NOT delete the local file — it will be retried on next startup scan
@@ -429,6 +500,27 @@ func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 		slog.Warn("uploaded but failed to remove local file", "path", sourcePath, "error", err)
 	}
 	slog.Info("uploaded to storage", "path", sourcePath, "key", destKey)
+}
+
+// bufferSizeBytes returns the total size of all files in the buffer directory.
+func (ds *DurableSink) bufferSizeBytes() int64 {
+	var total int64
+	filepath.Walk(ds.bufferDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
+}
+
+// IsBufferFull returns true if the buffer has exceeded the max allowed size.
+func (ds *DurableSink) IsBufferFull() bool {
+	if ds.maxBufferBytes <= 0 {
+		return false
+	}
+	return ds.bufferSizeBytes() > ds.maxBufferBytes
 }
 
 // startupScan checks for any leftover batch files in buffer and uploads them
@@ -460,6 +552,91 @@ func (ds *DurableSink) startupScan() {
 	}
 }
 
+// shouldSampleTrace performs deterministic head-based sampling using trace_id.
+// All spans from the same trace will get the same decision.
+func shouldSampleTrace(traceID string, rate float64) bool {
+	if rate >= 1.0 {
+		return true
+	}
+	if rate <= 0 {
+		return false
+	}
+	h := sha256.Sum256([]byte(traceID))
+	// Use first 4 bytes as a uint32 to get a uniform distribution
+	n := binary.BigEndian.Uint32(h[:4])
+	threshold := uint32(rate * float64(1<<32-1))
+	return n <= threshold
+}
+
+// getTraceSampleRate reads TRACE_SAMPLE_RATE from env (default 0.01 = 1%).
+func getTraceSampleRate() float64 {
+	s := os.Getenv("TRACE_SAMPLE_RATE")
+	if s == "" {
+		return 0.01
+	}
+	rate, err := strconv.ParseFloat(s, 64)
+	if err != nil || rate < 0 || rate > 1 {
+		slog.Warn("invalid TRACE_SAMPLE_RATE, using default 0.01", "value", s)
+		return 0.01
+	}
+	return rate
+}
+
+func handleTraces(sink *DurableSink, tdb tenantdb.DB, sampleRate float64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
+			return
+		}
+		if !requireJSON(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, "request body too large (max 1MB)")
+			return
+		}
+		defer r.Body.Close()
+
+		ts, err := schemas.ParseTraceSample(body)
+		if err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid TraceSample: %v", err))
+			return
+		}
+
+		tenantID := getTenantID(r)
+
+		// Deterministic sampling: all spans from the same trace get the same decision
+		if !shouldSampleTrace(ts.TraceId, sampleRate) {
+			ingestionTraceSamplesTotal.WithLabelValues(tenantID, "false").Inc()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"sampled": false})
+			return
+		}
+
+		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
+		cleanData, err := marshalOpts.Marshal(ts)
+		if err != nil {
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to marshal trace sample")
+			return
+		}
+
+		topic := topicForTenant(tenantID, "trace_samples")
+		if err := sink.Write(topic, cleanData); err != nil {
+			slog.Error("sink write error for trace", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist trace sample")
+			return
+		}
+
+		ingestionTraceSamplesTotal.WithLabelValues(tenantID, "true").Inc()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{"sampled": true})
+	}
+}
+
 func main() {
 	logging.Init("ingestion")
 
@@ -486,7 +663,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	if tenantDBPath != "" {
+	if dbDriver := os.Getenv("DB_DRIVER"); dbDriver != "" {
+		var err error
+		tdb, err = tenantdb.OpenFromEnv()
+		if err != nil {
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
+		}
+		defer tdb.Close()
+		authMW = func(next http.HandlerFunc) http.HandlerFunc {
+			return multiTenantAuthMiddleware(tdb.APIKeys(), next)
+		}
+		slog.Info("multi-tenant auth enabled", "driver", dbDriver)
+	} else if tenantDBPath != "" {
 		var err error
 		tdb, err = tenantdb.Open(tenantDBPath)
 		if err != nil {
@@ -537,8 +726,23 @@ func main() {
 		}
 	}
 
-	slog.Info("initializing durable sink", "buffer_dir", bufferDir)
-	sink, err := NewDurableSink(bufferDir, store)
+	// Circuit breaker for S3 uploads
+	cb := circuitbreaker.New(circuitbreaker.Options{
+		FailureThreshold: getEnvInt("CB_FAILURE_THRESHOLD", 5),
+		ResetTimeout:     time.Duration(getEnvInt("CB_RESET_TIMEOUT_SEC", 30)) * time.Second,
+		OnStateChange: func(from, to circuitbreaker.State) {
+			slog.Warn("circuit breaker state change", "from", from.String(), "to", to.String())
+			circuitBreakerStateValue.Store(float64(to))
+			if to == circuitbreaker.StateOpen {
+				circuitBreakerTripsTotal.Inc()
+			}
+		},
+	})
+
+	maxBufferMB := int64(getEnvInt("MAX_BUFFER_SIZE_MB", 500))
+
+	slog.Info("initializing durable sink", "buffer_dir", bufferDir, "max_buffer_mb", maxBufferMB)
+	sink, err := NewDurableSink(bufferDir, store, cb, maxBufferMB*1024*1024)
 	if err != nil {
 		slog.Error("failed to create sink", "error", err)
 		os.Exit(1)
@@ -549,10 +753,27 @@ func main() {
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
 
-	// Wrap handlers: auth first (sets tenant context), then rate limit, then handler
-	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, handleFacts(sink, tdb))))
-	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, handleBatchFacts(sink, tdb))))
-	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, handleEvents(sink, tdb))))
+	// Trace sampling rate
+	traceSampleRate := getTraceSampleRate()
+	slog.Info("trace sampling configured", "rate", traceSampleRate)
+
+	// Buffer-full middleware: reject new data when buffer exceeds limit
+	bufferCheck := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if sink.IsBufferFull() {
+				w.Header().Set("Retry-After", "30")
+				writeErrorJSON(w, http.StatusServiceUnavailable, "buffer capacity exceeded, try again later")
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	// Wrap handlers: auth first (sets tenant context), then rate limit, then buffer check, then handler
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleFacts(sink, tdb)))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleBatchFacts(sink, tdb)))))
+	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleEvents(sink, tdb)))))
+	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleTraces(sink, tdb, traceSampleRate)))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -562,14 +783,24 @@ func main() {
 	})
 
 	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		// In a real app, check DB connectivity or sink status.
-		// For now, if the sink is initialized, we are ready.
-		if sink != nil {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ready"))
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
+		w.Header().Set("Content-Type", "application/json")
+		status := map[string]string{
+			"db":      "ok",
+			"storage": "ok",
+			"circuit": cb.State().String(),
 		}
+		if sink == nil {
+			status["storage"] = "unavailable"
+		}
+		if cb.State() == circuitbreaker.StateOpen {
+			status["storage"] = "degraded"
+		}
+		if sink == nil || cb.State() == circuitbreaker.StateOpen {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		json.NewEncoder(w).Encode(status)
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
@@ -681,6 +912,13 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 
 		tenantID := getTenantID(r)
 
+		// Check quota before processing
+		if checkQuota(tdb, tenantID, getTenantPlan(r), getTenantOverageAllowed(r)) {
+			writeErrorJSON(w, http.StatusTooManyRequests, "monthly event quota exceeded — upgrade your plan")
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "429", tenantID).Inc()
+			return
+		}
+
 		reqID := logging.GetRequestID(r.Context())
 
 		fact, err := schemas.ParseRequestFact(body)
@@ -739,13 +977,21 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
+		tenantID := getTenantID(r)
+
+		// Check quota before processing batch
+		if checkQuota(tdb, tenantID, getTenantPlan(r), getTenantOverageAllowed(r)) {
+			writeErrorJSON(w, http.StatusTooManyRequests, "monthly event quota exceeded — upgrade your plan")
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "429", tenantID).Inc()
+			return
+		}
+
 		lines := splitJSONL(body)
 		if len(lines) == 0 {
 			writeErrorJSON(w, http.StatusBadRequest, "empty request body")
 			return
 		}
 
-		tenantID := getTenantID(r)
 		reqID := logging.GetRequestID(r.Context())
 		now := time.Now().UTC()
 
@@ -914,4 +1160,64 @@ func incrementEventCounter(tdb tenantdb.DB, tenantID string, count int64) {
 			slog.Warn("failed to increment event counter", "tenant_id", tenantID, "error", err)
 		}
 	}()
+}
+
+// checkQuota verifies a tenant hasn't exceeded their monthly event limit.
+// Returns true if the request should be rejected, false if allowed.
+// For paid plans with overage_allowed=true, allows but flags the overage.
+func checkQuota(tdb tenantdb.DB, tenantID, plan string, overageAllowed bool) bool {
+	if tdb == nil || tenantID == "" {
+		return false // no tenant DB → single tenant mode, no quota
+	}
+
+	var eventLimit int64
+	switch plan {
+	case "pro":
+		eventLimit = 50_000_000
+	case "starter":
+		eventLimit = 10_000_000
+	default:
+		eventLimit = 1_000_000
+	}
+
+	// Sum current month's usage
+	ctx := context.Background()
+	year, month, _ := time.Now().UTC().Date()
+	var monthTotal int64
+	for day := 1; day <= 31; day++ {
+		d := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+		if d.Month() != month {
+			break
+		}
+		dayStr := d.Format("2006-01-02")
+		count, _ := tdb.EventCounters().GetCount(ctx, tenantID, dayStr)
+		monthTotal += count
+	}
+
+	if monthTotal < eventLimit {
+		return false // under limit
+	}
+
+	if overageAllowed {
+		// Paid plan: allow but flag
+		ingestionOverageEventsTotal.WithLabelValues(tenantID).Inc()
+		return false
+	}
+
+	// Free plan: reject
+	ingestionQuotaRejectedTotal.WithLabelValues(tenantID).Inc()
+	return true
+}
+
+// getEnvInt reads an integer from env, returning def if missing/invalid.
+func getEnvInt(key string, def int) int {
+	s := os.Getenv(key)
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }
