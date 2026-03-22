@@ -76,6 +76,12 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 2
+          startupProbe:
+            httpGet:
+              path: /live
+              port: {{ .Values.ingestion.service.port }}
+            failureThreshold: 10
+            periodSeconds: 3
           volumeMounts:
             - name: data
               mountPath: {{ .Values.ingestion.persistence.mountPath }}

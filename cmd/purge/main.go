@@ -171,7 +171,16 @@ func main() {
 	var targets []purgeTarget
 	var tdb tenantdb.DB
 
-	if tenantDBPath != "" {
+	if dbDriver := os.Getenv("DB_DRIVER"); dbDriver != "" {
+		var err error
+		tdb, err = tenantdb.OpenFromEnv()
+		if err != nil {
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
+		}
+		defer tdb.Close()
+		slog.Info("tenant database opened", "driver", dbDriver)
+	} else if tenantDBPath != "" {
 		var err error
 		tdb, err = tenantdb.Open(tenantDBPath)
 		if err != nil {
@@ -179,7 +188,9 @@ func main() {
 			os.Exit(1)
 		}
 		defer tdb.Close()
+	}
 
+	if tdb != nil {
 		tenants, err := tdb.Tenants().List(ctx)
 		if err != nil {
 			slog.Error("failed to list tenants", "error", err)

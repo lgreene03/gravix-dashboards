@@ -663,7 +663,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	if tenantDBPath != "" {
+	if dbDriver := os.Getenv("DB_DRIVER"); dbDriver != "" {
+		var err error
+		tdb, err = tenantdb.OpenFromEnv()
+		if err != nil {
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
+		}
+		defer tdb.Close()
+		authMW = func(next http.HandlerFunc) http.HandlerFunc {
+			return multiTenantAuthMiddleware(tdb.APIKeys(), next)
+		}
+		slog.Info("multi-tenant auth enabled", "driver", dbDriver)
+	} else if tenantDBPath != "" {
 		var err error
 		tdb, err = tenantdb.Open(tenantDBPath)
 		if err != nil {

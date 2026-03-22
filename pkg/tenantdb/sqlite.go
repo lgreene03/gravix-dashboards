@@ -138,6 +138,13 @@ CREATE TABLE IF NOT EXISTS retention_policies (
 	traces_days  INTEGER NOT NULL DEFAULT 0,
 	updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS leader_locks (
+	lock_name    TEXT PRIMARY KEY,
+	holder_id    TEXT NOT NULL,
+	acquired_at  TEXT NOT NULL DEFAULT (datetime('now')),
+	expires_at   TEXT NOT NULL
+);
 `
 
 // SQLiteDB implements DB using a SQLite database.

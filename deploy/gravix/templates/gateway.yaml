@@ -47,8 +47,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-secrets
                   key: jwt-secret
+            - name: DB_DRIVER
+              value: {{ .Values.gateway.dbDriver | default "sqlite" | quote }}
             - name: TENANT_DB_PATH
               value: {{ .Values.gateway.tenantDBPath | default "/data/gravix.db" | quote }}
+            {{- if eq (.Values.gateway.dbDriver | default "sqlite") "postgres" }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: database-url
+            {{- end }}
             - name: CUBE_API_URL
               value: "http://{{ .Release.Name }}-cube:4000/cubejs-api/v1/load"
             {{- if .Values.gateway.stripe.enabled }}
@@ -79,6 +88,12 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 2
+          startupProbe:
+            httpGet:
+              path: /live
+              port: {{ .Values.gateway.service.port }}
+            failureThreshold: 10
+            periodSeconds: 3
           volumeMounts:
             - name: data
               mountPath: /data

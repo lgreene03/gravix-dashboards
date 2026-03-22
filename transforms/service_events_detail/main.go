@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -166,12 +167,13 @@ func main() {
 		tenantDBPath = os.Getenv("TENANT_DB_PATH")
 	}
 
-	lockFile, err := acquireLock(outputDir)
-	if err != nil {
-		slog.Error("cannot start event detail rollup", "error", err)
+	elector := leaderelect.NewFileElector(outputDir, "service-events-detail-rollup")
+	acquired, err := elector.Acquire(context.Background())
+	if err != nil || !acquired {
+		slog.Error("cannot start event detail rollup: another instance is running", "error", err)
 		os.Exit(1)
 	}
-	defer releaseLock(lockFile)
+	defer elector.Release(context.Background())
 
 	var days []time.Time
 	if startDay != "" && endDay != "" {

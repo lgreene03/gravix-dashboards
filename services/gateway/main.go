@@ -179,8 +179,8 @@ func main() {
 		*jwtSecret = os.Getenv("JWT_SECRET")
 	}
 
-	if *tenantDBPath == "" {
-		slog.Error("TENANT_DB_PATH is required")
+	if *tenantDBPath == "" && os.Getenv("DB_DRIVER") == "" {
+		slog.Error("TENANT_DB_PATH or DB_DRIVER is required")
 		os.Exit(1)
 	}
 	if *jwtSecret == "" {
@@ -208,10 +208,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := tenantdb.Open(*tenantDBPath)
-	if err != nil {
-		slog.Error("failed to open tenant database", "error", err)
-		os.Exit(1)
+	var db tenantdb.DB
+	if dbDriver := os.Getenv("DB_DRIVER"); dbDriver != "" {
+		var err error
+		db, err = tenantdb.OpenFromEnv()
+		if err != nil {
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("tenant database opened", "driver", dbDriver)
+	} else {
+		var err error
+		db, err = tenantdb.Open(*tenantDBPath)
+		if err != nil {
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
+		}
 	}
 	defer db.Close()
 
@@ -308,16 +320,31 @@ func main() {
 		w.Write([]byte("up"))
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		// Lightweight DB probe — confirm SQLite is responsive
+		w.Header().Set("Content-Type", "application/json")
+		status := map[string]string{
+			"db": "ok",
+		}
+		ready := true
+
+		// DB probe
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if _, err := gw.db.Tenants().List(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("not ready"))
-			return
+			status["db"] = "unavailable"
+			ready = false
 		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ready"))
+
+		// Stripe probe (optional)
+		if os.Getenv("STRIPE_SECRET_KEY") != "" {
+			status["stripe"] = "configured"
+		}
+
+		if !ready {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		json.NewEncoder(w).Encode(status)
 	})
 	mux.Handle("/metrics", promhttp.Handler())
 

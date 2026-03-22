@@ -430,6 +430,30 @@ services:
     networks:
       - backend
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: gravix-postgres
+    profiles: ["postgres"]
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-gravix}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gravix}
+      - POSTGRES_DB=${POSTGRES_DB:-gravix}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gravix}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
+
   minio:
     image: minio/minio:RELEASE.2024-03-15T01-07-19Z
     container_name: gravix-minio

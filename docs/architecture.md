@@ -26,6 +26,7 @@ foundational constraints, see `docs/00-system-truth.md`.
 12. [Kubernetes Deployment (Helm)](#kubernetes-deployment-helm)
 13. [CI/CD Pipeline](#cicd-pipeline)
 14. [Design Decisions](#design-decisions)
+15. [High Availability & Multi-Region](#high-availability--multi-region)
 
 ---
 
@@ -673,6 +674,124 @@ dispatch for production.
 | 30-day default retention | Cost-conscious default; configurable per environment via Helm values |
 | External Secrets support | Integrates with AWS Secrets Manager, Vault, or GCP without changes to the Helm chart |
 | MAX for percentile re-aggregation | Conservative approach: reports the worst case across sub-intervals rather than an inaccurate merge of quantiles |
+
+---
+
+## High Availability & Multi-Region
+
+Gravix supports progressive HA tiers depending on deployment scale.
+
+### Single-Node (Default)
+
+The default deployment uses SQLite for the tenant database and file-based
+leader election for rollup transforms. All components run on a single host.
+
+- **Tenant DB:** SQLite with WAL mode for concurrent reads.
+- **Rollup Locking:** File-based (`FileElector` in `pkg/leaderelect/`).
+- **Object Storage:** Local disk or single MinIO instance.
+
+### Multi-Node (PostgreSQL)
+
+For multi-node deployments, switch the tenant database to PostgreSQL:
+
+1. Set `DB_DRIVER=postgres` and `DATABASE_URL` in the environment.
+2. Enable the `postgres` Docker Compose profile or deploy an external
+   PostgreSQL instance.
+3. Rollup transforms can use `DBElector` (database advisory locks via the
+   `leader_locks` table) for cross-node leader election.
+
+**Configuration:**
+
+```bash
+# .env
+DB_DRIVER=postgres
+DATABASE_URL=postgres://gravix:gravix@postgres:5432/gravix?sslmode=disable
+```
+
+**Helm:**
+
+```yaml
+gateway:
+  dbDriver: "postgres"
+```
+
+The PostgreSQL backend (`pkg/tenantdb/postgres.go`) is compiled with the
+`postgres` build tag. Connection pool defaults: 25 max open, 5 idle,
+5-minute lifetime.
+
+### Leader Election
+
+The `pkg/leaderelect/` package provides two `Elector` implementations:
+
+| Implementation | Use Case | Mechanism |
+|---------------|----------|-----------|
+| `FileElector` | Single-node | Exclusive lock file with PID-based stale detection |
+| `DBElector` | Multi-node | Row-level locking in `leader_locks` table with TTL |
+
+Both implement the same `Elector` interface:
+
+```go
+type Elector interface {
+    Acquire(ctx context.Context) (bool, error)
+    Renew(ctx context.Context) (bool, error)
+    Release(ctx context.Context) error
+}
+```
+
+The `RunWithLeadership` helper acquires leadership and starts a background
+goroutine to renew at `ttl/2` intervals.
+
+### Resilience Features
+
+| Feature | Component | Behavior |
+|---------|-----------|----------|
+| Circuit Breaker | Ingestion → S3 | Opens after 5 consecutive failures; half-opens after 30s |
+| Buffer Backpressure | Ingestion | Returns 503 + `Retry-After: 30` when local buffer exceeds limit |
+| Graceful Degradation | Dashboard | Falls back to localStorage cache on Cube API failure; shows stale-data banner |
+| Cache-Control | Gateway | `max-age=60, stale-while-revalidate=300` on GET endpoints |
+| DLQ Replay | CLI | `gravix replay --dry-run --since` re-submits dead-letter entries |
+
+### Health Endpoints
+
+All services expose structured health endpoints:
+
+| Endpoint | Purpose | Response |
+|----------|---------|----------|
+| `/live` | Liveness probe | `200 "up"` — process is running |
+| `/ready` | Readiness probe | JSON object with component status (db, storage, circuit) |
+| `/metrics` | Prometheus scrape | Standard Prometheus exposition format |
+
+The ingestion `/ready` endpoint returns:
+
+```json
+{"db": "ok", "storage": "ok", "circuit": "closed"}
+```
+
+The gateway `/ready` endpoint returns:
+
+```json
+{"db": "ok", "stripe": "configured"}
+```
+
+### Multi-Region Considerations
+
+For multi-region deployments, Gravix recommends an active-passive model:
+
+1. **Ingestion:** Run ingestion replicas in each region, writing to a
+   regional S3 bucket. Use S3 cross-region replication to sync raw facts
+   to the primary region.
+2. **Rollup & Query:** Run rollup transforms and the query layer in the
+   primary region only. The `DBElector` prevents duplicate processing
+   across regions.
+3. **Dashboard:** Serve from a CDN. The gateway in the primary region
+   handles all API requests.
+4. **Failover:** Promote the secondary region by updating DNS and
+   switching the `DBElector` TTL to allow the secondary's rollup jobs
+   to acquire leadership.
+
+This model keeps the architecture simple (no distributed consensus,
+no multi-master writes) while providing geographic redundancy for
+ingestion availability.
 
 ---
 

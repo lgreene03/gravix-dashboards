@@ -126,6 +126,9 @@ gateway:
     type: ClusterIP
     port: 8080
   tenantDBPath: "/data/gravix.db"
+  # Database driver: "sqlite" (default) or "postgres"
+  # When "postgres", set database.url in secrets
+  dbDriver: "sqlite"
   stripe:
     enabled: false
   resources:
