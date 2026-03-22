@@ -2536,6 +2536,100 @@ app.listen(8080, () => {
             }
         }
 
+        // Auto-show wizard on first login (if not previously completed)
+        if (!localStorage.getItem('gravix_wizard_done')) {
+            // Delay slightly to ensure the dashboard is loaded
+            setTimeout(() => {
+                const epInput = document.getElementById('wizEndpoint');
+                if (!epInput.value) {
+                    epInput.value = (window.GRAVIX_ENDPOINT || 'http://localhost:8090');
+                }
+                const storedKey = localStorage.getItem('gravix_api_key');
+                const keyInput = document.getElementById('wizApiKey');
+                if (!keyInput.value && storedKey) {
+                    keyInput.value = storedKey;
+                }
+                currentStep = 1;
+                renderStep();
+                overlay.classList.add('open');
+            }, 800);
+        }
+
+        // Mark wizard done when user closes it or completes step 4
+        function markWizardDone() {
+            localStorage.setItem('gravix_wizard_done', '1');
+        }
+        document.getElementById('wizardClose').addEventListener('click', markWizardDone);
+        const origNextClick = btnNext.onclick;
+        btnNext.addEventListener('click', () => {
+            if (currentStep > totalSteps) markWizardDone();
+        });
+
+        // Verify button on step 4 — polls usage endpoint
+        const verifySection = document.querySelector('.wizard-step[data-step="4"]');
+        if (verifySection) {
+            const verifyBtn = document.createElement('button');
+            verifyBtn.className = 'wizard-btn wizard-btn-primary';
+            verifyBtn.style.marginTop = '16px';
+            verifyBtn.style.width = '100%';
+            verifyBtn.textContent = 'Verify Connection';
+            verifySection.insertBefore(verifyBtn, verifySection.querySelector('[style*="Need help"]'));
+
+            let verifyInterval = null;
+            verifyBtn.addEventListener('click', async () => {
+                verifyBtn.textContent = 'Checking...';
+                verifyBtn.disabled = true;
+
+                const checkIcon = (id, done) => {
+                    const el = document.getElementById(id);
+                    if (el && done) {
+                        el.classList.remove('pending');
+                        el.classList.add('done');
+                        el.textContent = '\u2713';
+                    }
+                };
+
+                // Mark SDK + code as done (user is on step 4, they followed the steps)
+                checkIcon('wizCheckSDK', true);
+                checkIcon('wizCheckCode', true);
+
+                try {
+                    const token = localStorage.getItem('gravix_jwt');
+                    const headers = {};
+                    if (token) headers['Authorization'] = 'Bearer ' + token;
+                    const apiKey = localStorage.getItem('gravix_api_key');
+                    if (apiKey) headers['X-API-Key'] = apiKey;
+
+                    const resp = await fetch((window.GATEWAY_URL || window.GRAVIX_ENDPOINT || 'http://localhost:8091') + '/api/gateway/billing/usage', { headers });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const count = data.todayEventCount || data.total_events || 0;
+                        if (count > 0) {
+                            checkIcon('wizCheckTraffic', true);
+                            checkIcon('wizCheckDash', true);
+                            verifyBtn.textContent = 'Verified! Events detected.';
+                            verifyBtn.style.background = 'var(--success-color)';
+                            markWizardDone();
+                        } else {
+                            checkIcon('wizCheckTraffic', false);
+                            verifyBtn.textContent = 'No events yet — send some traffic and try again';
+                        }
+                    } else {
+                        verifyBtn.textContent = 'Could not reach server — check endpoint';
+                    }
+                } catch (e) {
+                    verifyBtn.textContent = 'Connection error — check endpoint';
+                }
+
+                setTimeout(() => {
+                    verifyBtn.disabled = false;
+                    if (!verifyBtn.textContent.startsWith('Verified')) {
+                        verifyBtn.textContent = 'Verify Connection';
+                    }
+                }, 3000);
+            });
+        }
+
         // --- USAGE & BILLING PAGE ---
         let usageChart = null;
 
