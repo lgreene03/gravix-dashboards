@@ -40,11 +40,18 @@ import (
 	"math"
 	"sync"
 
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/billing"
+	"github.com/lgreene/gravix-dashboards/pkg/email"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
+	"github.com/lgreene/gravix-dashboards/pkg/password"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -256,8 +263,10 @@ func main() {
 		notifier:      notify.NewDispatcher(),
 		store:         objStore,
 		rateLimiter:   trl,
+		emailSender:   email.NewSenderFromEnv(),
 		cubeAPIURL:    cubeURL,
 		jwtSecret:     *jwtSecret,
+		baseURL:       email.BaseURLFromEnv(),
 		activeExports: make(map[string]bool),
 	}
 
@@ -293,6 +302,10 @@ func main() {
 	// Public endpoints (no rate limiting by tenant plan)
 	mux.HandleFunc("/api/gateway/login", gw.handleLogin)
 	mux.HandleFunc("/api/gateway/register", gw.handleRegister)
+	mux.HandleFunc("/api/gateway/forgot-password", gw.handleForgotPassword)
+	mux.HandleFunc("/api/gateway/reset-password", gw.handleResetPassword)
+	mux.HandleFunc("/api/gateway/verify-email", gw.handleVerifyEmail)
+	mux.HandleFunc("/api/gateway/resend-verification", gw.requireAuth(gw.handleResendVerification))
 	mux.HandleFunc("/api/gateway/webhooks/stripe", gw.handleStripeWebhook)
 
 	// Authenticated + rate-limited API endpoints
@@ -436,8 +449,10 @@ type gateway struct {
 	notifier        *notify.Dispatcher
 	store           storage.ObjectStore // for DLQ reads
 	rateLimiter     *ratelimit.TenantLimiter
+	emailSender     email.Sender
 	cubeAPIURL      string
 	jwtSecret       string
+	baseURL         string // for email links (e.g., https://app.gravix.io)
 	activeExports   map[string]bool // tracks in-progress exports per tenant
 	activeExportsMu sync.Mutex
 }
@@ -968,15 +983,19 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update last login time
+	_ = gw.db.Users().UpdateLastLogin(r.Context(), user.ID, time.Now())
+
 	gw.auditDirect(user.TenantID, user.ID, "user.login", "user", user.ID, "", r.RemoteAddr)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"token":     token,
-		"tenant_id": user.TenantID,
-		"user_id":   user.ID,
-		"email":     user.Email,
-		"role":      user.Role,
-		"plan":      tenant.Plan,
+		"token":          token,
+		"tenant_id":      user.TenantID,
+		"user_id":        user.ID,
+		"email":          user.Email,
+		"role":           user.Role,
+		"plan":           tenant.Plan,
+		"email_verified": user.EmailVerified,
 	})
 }
 
@@ -1003,8 +1022,8 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+	if err := password.Validate(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1056,14 +1075,10 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create initial API key
-	plainKey, apiKey, err := gw.db.APIKeys().Create(ctx, tenant.ID, "default", nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create API key")
-		return
-	}
+	// Send email verification token
+	gw.sendVerificationEmail(ctx, user)
 
-	// Generate JWT for immediate login
+	// Generate JWT for immediate login (limited until email verified)
 	token, err := gw.tokens.Generate(tenant.ID, user.ID, user.Email, user.Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
@@ -1074,14 +1089,308 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf(`{"name":%q,"email":%q}`, req.Name, req.Email), r.RemoteAddr)
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"token":      token,
-		"tenant_id":  tenant.ID,
-		"user_id":    user.ID,
-		"email":      user.Email,
-		"role":       user.Role,
-		"plan":       tenant.Plan,
-		"api_key":    plainKey,
-		"key_prefix": apiKey.KeyPrefix,
+		"token":                      token,
+		"tenant_id":                  tenant.ID,
+		"user_id":                    user.ID,
+		"email":                      user.Email,
+		"role":                       user.Role,
+		"plan":                       tenant.Plan,
+		"email_verification_required": true,
+	})
+}
+
+// generateSecureToken creates a cryptographically random token and returns (plaintext, sha256hash).
+func generateSecureToken() (string, string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", fmt.Errorf("generate token: %w", err)
+	}
+	plain := base64.RawURLEncoding.EncodeToString(b)
+	hash := sha256.Sum256([]byte(plain))
+	return plain, hex.EncodeToString(hash[:]), nil
+}
+
+// sendVerificationEmail creates a verification token and sends the verification email.
+func (gw *gateway) sendVerificationEmail(ctx context.Context, user *tenantdb.User) {
+	plain, tokenHash, err := generateSecureToken()
+	if err != nil {
+		slog.Error("failed to generate verification token", "error", err)
+		return
+	}
+
+	token := &tenantdb.EmailVerificationToken{
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := gw.db.EmailVerifications().Create(ctx, token); err != nil {
+		slog.Error("failed to store verification token", "error", err)
+		return
+	}
+
+	htmlBody, textBody, err := email.RenderEmailVerification(email.TemplateData{
+		UserName: user.Email,
+		Token:    plain,
+		BaseURL:  gw.baseURL,
+	})
+	if err != nil {
+		slog.Error("failed to render verification email", "error", err)
+		return
+	}
+
+	if err := gw.emailSender.Send(ctx, user.Email, "Verify your Gravix email", htmlBody, textBody); err != nil {
+		slog.Error("failed to send verification email", "error", err, "to", user.Email)
+	}
+}
+
+// handleForgotPassword initiates a password reset flow.
+// Always returns 200 regardless of whether the email exists (prevents enumeration).
+func (gw *gateway) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	// Always return success to prevent email enumeration
+	defer func() {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"message": "If that email is registered, a password reset link has been sent.",
+		})
+	}()
+
+	if req.Email == "" {
+		return
+	}
+
+	ctx := r.Context()
+	user, err := gw.db.Users().GetByEmail(ctx, req.Email)
+	if err != nil {
+		return // user not found, but return 200 anyway
+	}
+
+	plain, tokenHash, err := generateSecureToken()
+	if err != nil {
+		slog.Error("failed to generate reset token", "error", err)
+		return
+	}
+
+	resetToken := &tenantdb.PasswordResetToken{
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+	if err := gw.db.PasswordResets().Create(ctx, resetToken); err != nil {
+		slog.Error("failed to store reset token", "error", err)
+		return
+	}
+
+	htmlBody, textBody, err := email.RenderPasswordReset(email.TemplateData{
+		UserName: user.Email,
+		Token:    plain,
+		BaseURL:  gw.baseURL,
+	})
+	if err != nil {
+		slog.Error("failed to render reset email", "error", err)
+		return
+	}
+
+	if err := gw.emailSender.Send(ctx, user.Email, "Reset your Gravix password", htmlBody, textBody); err != nil {
+		slog.Error("failed to send reset email", "error", err, "to", user.Email)
+	}
+
+	gw.auditDirect(user.TenantID, user.ID, "user.password_reset_requested", "user", user.ID, "", r.RemoteAddr)
+}
+
+// handleResetPassword completes a password reset using a valid token.
+func (gw *gateway) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if req.Token == "" || req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "token and new_password are required")
+		return
+	}
+
+	if err := password.Validate(req.NewPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	hash := sha256.Sum256([]byte(req.Token))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	resetToken, err := gw.db.PasswordResets().FindByTokenHash(ctx, tokenHash)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or expired reset token")
+		return
+	}
+
+	if resetToken.UsedAt != nil {
+		writeError(w, http.StatusBadRequest, "reset token has already been used")
+		return
+	}
+
+	if time.Now().After(resetToken.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "reset token has expired")
+		return
+	}
+
+	// Hash the new password
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
+	if err := gw.db.Users().UpdatePassword(ctx, resetToken.UserID, string(bcryptHash)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	if err := gw.db.PasswordResets().MarkUsed(ctx, resetToken.ID); err != nil {
+		slog.Error("failed to mark reset token used", "error", err)
+	}
+
+	// Look up user for audit
+	user, _ := gw.db.Users().GetByID(ctx, resetToken.UserID)
+	if user != nil {
+		gw.auditDirect(user.TenantID, user.ID, "user.password_reset", "user", user.ID, "", r.RemoteAddr)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Password has been reset successfully. You can now log in.",
+	})
+}
+
+// handleVerifyEmail verifies a user's email address using a verification token.
+func (gw *gateway) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST required")
+		return
+	}
+
+	tokenStr := r.URL.Query().Get("token")
+	if tokenStr == "" {
+		// Try JSON body for POST
+		if r.Method == http.MethodPost {
+			var req struct {
+				Token string `json:"token"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			tokenStr = req.Token
+		}
+	}
+
+	if tokenStr == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+
+	ctx := r.Context()
+	hash := sha256.Sum256([]byte(tokenStr))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	verifyToken, err := gw.db.EmailVerifications().FindByTokenHash(ctx, tokenHash)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or expired verification token")
+		return
+	}
+
+	if verifyToken.VerifiedAt != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"verified": true,
+			"message":  "Email already verified.",
+		})
+		return
+	}
+
+	if time.Now().After(verifyToken.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "verification token has expired, please request a new one")
+		return
+	}
+
+	// Mark token as verified
+	if err := gw.db.EmailVerifications().MarkVerified(ctx, verifyToken.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to verify email")
+		return
+	}
+
+	// Mark user as verified
+	if err := gw.db.Users().UpdateEmailVerified(ctx, verifyToken.UserID, true); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
+
+	// Create the initial API key now that email is verified
+	user, _ := gw.db.Users().GetByID(ctx, verifyToken.UserID)
+	var apiKeyPlain string
+	if user != nil {
+		plainKey, _, err := gw.db.APIKeys().Create(ctx, user.TenantID, "default", nil)
+		if err != nil {
+			slog.Error("failed to create API key after verification", "error", err)
+		} else {
+			apiKeyPlain = plainKey
+		}
+		gw.auditDirect(user.TenantID, user.ID, "user.email_verified", "user", user.ID, "", r.RemoteAddr)
+	}
+
+	resp := map[string]interface{}{
+		"verified": true,
+		"message":  "Email verified successfully.",
+	}
+	if apiKeyPlain != "" {
+		resp["api_key"] = apiKeyPlain
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleResendVerification resends the email verification link (JWT required).
+func (gw *gateway) handleResendVerification(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	user, err := gw.db.Users().GetByID(ctx, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	if user.EmailVerified {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"message": "Email is already verified.",
+		})
+		return
+	}
+
+	gw.sendVerificationEmail(ctx, user)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Verification email has been resent.",
 	})
 }
 
@@ -1147,6 +1456,17 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		if claims.Role != "admin" {
 			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		// Block unverified users from creating API keys
+		user, err := gw.db.Users().GetByID(r.Context(), claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get user")
+			return
+		}
+		if !user.EmailVerified {
+			writeError(w, http.StatusForbidden, "email verification required before creating API keys")
 			return
 		}
 

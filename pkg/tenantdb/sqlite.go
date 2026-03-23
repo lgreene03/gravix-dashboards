@@ -145,6 +145,26 @@ CREATE TABLE IF NOT EXISTS leader_locks (
 	acquired_at  TEXT NOT NULL DEFAULT (datetime('now')),
 	expires_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+	id          TEXT PRIMARY KEY,
+	user_id     TEXT NOT NULL REFERENCES users(id),
+	token_hash  TEXT NOT NULL UNIQUE,
+	expires_at  TEXT NOT NULL,
+	used_at     TEXT,
+	created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_prt_token ON password_reset_tokens(token_hash);
+
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+	id          TEXT PRIMARY KEY,
+	user_id     TEXT NOT NULL REFERENCES users(id),
+	token_hash  TEXT NOT NULL UNIQUE,
+	expires_at  TEXT NOT NULL,
+	verified_at TEXT,
+	created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_evt_token ON email_verification_tokens(token_hash);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -186,11 +206,17 @@ func Open(dbPath string) (*SQLiteDB, error) {
 	// Incremental migrations for existing databases
 	migrations := []string{
 		`ALTER TABLE api_keys ADD COLUMN expires_at TEXT`,
+		`ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+		`ALTER TABLE users ADD COLUMN last_login_at TEXT`,
 	}
 	for _, m := range migrations {
 		// Ignore "duplicate column" errors from re-running migrations
 		db.Exec(m)
 	}
+
+	// Backfill existing users as verified (they registered before verification was required)
+	db.Exec(`UPDATE users SET email_verified = 1 WHERE email_verified = 0 AND created_at < datetime('now', '-1 minute')`)
 
 	return &SQLiteDB{db: db}, nil
 }
@@ -211,6 +237,12 @@ func (s *SQLiteDB) AuditLog() AuditRepo            { return &sqliteAuditRepo{db:
 func (s *SQLiteDB) MonthlyUsage() MonthlyUsageRepo  { return &sqliteMonthlyUsageRepo{db: s.db} }
 func (s *SQLiteDB) RetentionPolicies() RetentionPolicyRepo {
 	return &sqliteRetentionPolicyRepo{db: s.db}
+}
+func (s *SQLiteDB) PasswordResets() PasswordResetRepo {
+	return &sqlitePasswordResetRepo{db: s.db}
+}
+func (s *SQLiteDB) EmailVerifications() EmailVerificationRepo {
+	return &sqliteEmailVerificationRepo{db: s.db}
 }
 
 // --- Tenant Repo ---
@@ -503,10 +535,17 @@ func (r *sqliteUserRepo) Create(ctx context.Context, u *User) error {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	if u.Status == "" {
+		u.Status = "active"
+	}
+	emailVerified := 0
+	if u.EmailVerified {
+		emailVerified = 1
+	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (id, tenant_id, email, password_hash, role, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		u.ID, u.TenantID, u.Email, u.PasswordHash, u.Role, now,
+		`INSERT INTO users (id, tenant_id, email, password_hash, role, email_verified, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.TenantID, u.Email, u.PasswordHash, u.Role, emailVerified, u.Status, now,
 	)
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -515,37 +554,50 @@ func (r *sqliteUserRepo) Create(ctx context.Context, u *User) error {
 	return nil
 }
 
+func scanUser(u *User, createdAt string, emailVerified int, lastLoginAt *string) {
+	u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	u.EmailVerified = emailVerified != 0
+	if lastLoginAt != nil && *lastLoginAt != "" {
+		t, _ := time.Parse(time.RFC3339, *lastLoginAt)
+		u.LastLoginAt = &t
+	}
+}
+
 func (r *sqliteUserRepo) GetByEmail(ctx context.Context, email string) (*User, error) {
 	u := &User{}
 	var createdAt string
+	var emailVerified int
+	var lastLoginAt *string
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
 		 FROM users WHERE email = ?`, email,
-	).Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &createdAt)
+	).Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &emailVerified, &u.Status, &lastLoginAt, &createdAt)
 	if err != nil {
 		return nil, err
 	}
-	u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	scanUser(u, createdAt, emailVerified, lastLoginAt)
 	return u, nil
 }
 
 func (r *sqliteUserRepo) GetByID(ctx context.Context, id string) (*User, error) {
 	u := &User{}
 	var createdAt string
+	var emailVerified int
+	var lastLoginAt *string
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
 		 FROM users WHERE id = ?`, id,
-	).Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &createdAt)
+	).Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &emailVerified, &u.Status, &lastLoginAt, &createdAt)
 	if err != nil {
 		return nil, err
 	}
-	u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	scanUser(u, createdAt, emailVerified, lastLoginAt)
 	return u, nil
 }
 
 func (r *sqliteUserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
 		 FROM users WHERE tenant_id = ? ORDER BY created_at`, tenantID)
 	if err != nil {
 		return nil, err
@@ -556,13 +608,37 @@ func (r *sqliteUserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*
 	for rows.Next() {
 		u := &User{}
 		var createdAt string
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &createdAt); err != nil {
+		var emailVerified int
+		var lastLoginAt *string
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &emailVerified, &u.Status, &lastLoginAt, &createdAt); err != nil {
 			return nil, err
 		}
-		u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		scanUser(u, createdAt, emailVerified, lastLoginAt)
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+func (r *sqliteUserRepo) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, userID)
+	return err
+}
+
+func (r *sqliteUserRepo) UpdateEmailVerified(ctx context.Context, userID string, verified bool) error {
+	v := 0
+	if verified {
+		v = 1
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET email_verified = ? WHERE id = ?`, v, userID)
+	return err
+}
+
+func (r *sqliteUserRepo) UpdateLastLogin(ctx context.Context, userID string, t time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET last_login_at = ? WHERE id = ?`, t.UTC().Format(time.RFC3339), userID)
+	return err
 }
 
 // --- Event Counter Repo ---
@@ -1042,4 +1118,114 @@ func (r *sqliteRetentionPolicyRepo) GetByTenantID(ctx context.Context, tenantID 
 	}
 	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return p, nil
+}
+
+// --- Password Reset Token Repo ---
+
+type sqlitePasswordResetRepo struct{ db *sql.DB }
+
+func (r *sqlitePasswordResetRepo) Create(ctx context.Context, token *PasswordResetToken) error {
+	if token.ID == "" {
+		token.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	token.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		token.ID, token.UserID, token.TokenHash, token.ExpiresAt.UTC().Format(time.RFC3339), now,
+	)
+	if err != nil {
+		return fmt.Errorf("create password reset token: %w", err)
+	}
+	return nil
+}
+
+func (r *sqlitePasswordResetRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*PasswordResetToken, error) {
+	t := &PasswordResetToken{}
+	var expiresAt, createdAt string
+	var usedAt *string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, token_hash, expires_at, used_at, created_at
+		 FROM password_reset_tokens WHERE token_hash = ?`, tokenHash,
+	).Scan(&t.ID, &t.UserID, &t.TokenHash, &expiresAt, &usedAt, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	t.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	if usedAt != nil && *usedAt != "" {
+		u, _ := time.Parse(time.RFC3339, *usedAt)
+		t.UsedAt = &u
+	}
+	return t, nil
+}
+
+func (r *sqlitePasswordResetRepo) MarkUsed(ctx context.Context, id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE password_reset_tokens SET used_at = ? WHERE id = ?`, now, id)
+	return err
+}
+
+func (r *sqlitePasswordResetRepo) DeleteExpired(ctx context.Context) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM password_reset_tokens WHERE expires_at < ?`, now)
+	return err
+}
+
+// --- Email Verification Token Repo ---
+
+type sqliteEmailVerificationRepo struct{ db *sql.DB }
+
+func (r *sqliteEmailVerificationRepo) Create(ctx context.Context, token *EmailVerificationToken) error {
+	if token.ID == "" {
+		token.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	token.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		token.ID, token.UserID, token.TokenHash, token.ExpiresAt.UTC().Format(time.RFC3339), now,
+	)
+	if err != nil {
+		return fmt.Errorf("create email verification token: %w", err)
+	}
+	return nil
+}
+
+func (r *sqliteEmailVerificationRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*EmailVerificationToken, error) {
+	t := &EmailVerificationToken{}
+	var expiresAt, createdAt string
+	var verifiedAt *string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, token_hash, expires_at, verified_at, created_at
+		 FROM email_verification_tokens WHERE token_hash = ?`, tokenHash,
+	).Scan(&t.ID, &t.UserID, &t.TokenHash, &expiresAt, &verifiedAt, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	t.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	if verifiedAt != nil && *verifiedAt != "" {
+		v, _ := time.Parse(time.RFC3339, *verifiedAt)
+		t.VerifiedAt = &v
+	}
+	return t, nil
+}
+
+func (r *sqliteEmailVerificationRepo) MarkVerified(ctx context.Context, id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE email_verification_tokens SET verified_at = ? WHERE id = ?`, now, id)
+	return err
+}
+
+func (r *sqliteEmailVerificationRepo) DeleteExpired(ctx context.Context) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM email_verification_tokens WHERE expires_at < ?`, now)
+	return err
 }

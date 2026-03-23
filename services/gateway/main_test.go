@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
+	"github.com/lgreene/gravix-dashboards/pkg/email"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
@@ -38,9 +39,11 @@ func newTestGateway(t *testing.T) *gateway {
 		db:          db,
 		tokens:      tokens,
 		notifier:    notify.NewDispatcher(),
+		emailSender: &email.NoopSender{},
 		rateLimiter: trl,
 		cubeAPIURL:  "http://localhost:4000/cubejs-api/v1/load",
 		jwtSecret:   "test-secret-key-32chars!!",
+		baseURL:     "http://localhost:8000",
 	}
 }
 
@@ -61,10 +64,11 @@ func createTestTenantWithUser(t *testing.T, gw *gateway) (*tenantdb.Tenant, *ten
 	}
 
 	user := &tenantdb.User{
-		TenantID:     tenant.ID,
-		Email:        "admin@corp.com",
-		PasswordHash: "password123", // will be bcrypt-hashed by the repo
-		Role:         "admin",
+		TenantID:      tenant.ID,
+		Email:         "admin@corp.com",
+		PasswordHash:  "password123", // will be bcrypt-hashed by the repo
+		Role:          "admin",
+		EmailVerified: true,
 	}
 	if err := gw.db.Users().Create(ctx, user); err != nil {
 		t.Fatalf("Create user: %v", err)
@@ -231,7 +235,7 @@ func TestRegisterSuccess(t *testing.T) {
 	body := jsonBody(t, map[string]string{
 		"name":     "New Corp",
 		"email":    "new@corp.com",
-		"password": "securepass123",
+		"password": "S3cur3P@ss!",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -250,8 +254,9 @@ func TestRegisterSuccess(t *testing.T) {
 	if resp["tenant_id"] == nil {
 		t.Error("expected tenant_id")
 	}
-	if resp["api_key"] == nil {
-		t.Error("expected api_key")
+	// API key is no longer returned at registration — deferred until email verification
+	if resp["email_verification_required"] != true {
+		t.Error("expected email_verification_required=true")
 	}
 	if resp["plan"] != "free" {
 		t.Errorf("plan = %v, want free", resp["plan"])
@@ -263,7 +268,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 
 	// Register first user
 	body := jsonBody(t, map[string]string{
-		"name": "Corp A", "email": "dup@corp.com", "password": "securepass123",
+		"name": "Corp A", "email": "dup@corp.com", "password": "S3cur3P@ss!",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -274,7 +279,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 
 	// Try duplicate
 	body = jsonBody(t, map[string]string{
-		"name": "Corp B", "email": "dup@corp.com", "password": "securepass456",
+		"name": "Corp B", "email": "dup@corp.com", "password": "S3cur3P@ss2",
 	})
 	req = httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr = httptest.NewRecorder()
@@ -1725,7 +1730,7 @@ func TestRegisterCreatesAuditEntry(t *testing.T) {
 	gw := newTestGateway(t)
 
 	body := jsonBody(t, map[string]string{
-		"name": "Audit Corp", "email": "audit@corp.com", "password": "securepass123",
+		"name": "Audit Corp", "email": "audit@corp.com", "password": "S3cur3P@ss!",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -2465,9 +2470,9 @@ func TestLoginCreatesAuditEntry(t *testing.T) {
 	// Wait for async audit
 	time.Sleep(100 * time.Millisecond)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	tenantID := resp["tenant_id"]
+	tenantID := resp["tenant_id"].(string)
 
 	entries, _, err := gw.db.AuditLog().ListByTenant(context.Background(), tenantID, 10, 0)
 	if err != nil {

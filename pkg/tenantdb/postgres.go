@@ -21,17 +21,19 @@ var postgresSchema string
 
 // PostgresDB implements the DB interface using PostgreSQL.
 type PostgresDB struct {
-	db                  *sql.DB
-	tenants             *pgTenantRepo
-	apiKeys             *pgAPIKeyRepo
-	users               *pgUserRepo
-	eventCounters       *pgEventCounterRepo
-	monthlyUsage        *pgMonthlyUsageRepo
-	notificationChannels *pgNotificationChannelRepo
-	alertRules          *pgAlertRuleRepo
-	alertHistory        *pgAlertHistoryRepo
-	auditLog            *pgAuditRepo
-	retentionPolicies   *pgRetentionPolicyRepo
+	db                    *sql.DB
+	tenants               *pgTenantRepo
+	apiKeys               *pgAPIKeyRepo
+	users                 *pgUserRepo
+	eventCounters         *pgEventCounterRepo
+	monthlyUsage          *pgMonthlyUsageRepo
+	notificationChannels  *pgNotificationChannelRepo
+	alertRules            *pgAlertRuleRepo
+	alertHistory          *pgAlertHistoryRepo
+	auditLog              *pgAuditRepo
+	retentionPolicies     *pgRetentionPolicyRepo
+	passwordResets        *pgPasswordResetRepo
+	emailVerifications    *pgEmailVerificationRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -67,6 +69,8 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.alertHistory = &pgAlertHistoryRepo{db: db}
 	pdb.auditLog = &pgAuditRepo{db: db}
 	pdb.retentionPolicies = &pgRetentionPolicyRepo{db: db}
+	pdb.passwordResets = &pgPasswordResetRepo{db: db}
+	pdb.emailVerifications = &pgEmailVerificationRepo{db: db}
 	return pdb, nil
 }
 
@@ -80,6 +84,8 @@ func (p *PostgresDB) AlertRules() AlertRuleRepo                 { return p.alert
 func (p *PostgresDB) AlertHistory() AlertHistoryRepo             { return p.alertHistory }
 func (p *PostgresDB) AuditLog() AuditRepo                       { return p.auditLog }
 func (p *PostgresDB) RetentionPolicies() RetentionPolicyRepo     { return p.retentionPolicies }
+func (p *PostgresDB) PasswordResets() PasswordResetRepo          { return p.passwordResets }
+func (p *PostgresDB) EmailVerifications() EmailVerificationRepo  { return p.emailVerifications }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -290,17 +296,22 @@ func (r *pgUserRepo) Create(ctx context.Context, u *User) error {
 	if u.CreatedAt.IsZero() {
 		u.CreatedAt = time.Now().UTC()
 	}
+	if u.Status == "" {
+		u.Status = "active"
+	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (id, tenant_id, email, password_hash, role, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		u.ID, u.TenantID, u.Email, u.PasswordHash, u.Role, u.CreatedAt)
+		`INSERT INTO users (id, tenant_id, email, password_hash, role, email_verified, status, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		u.ID, u.TenantID, u.Email, u.PasswordHash, u.Role, u.EmailVerified, u.Status, u.CreatedAt)
 	return err
 }
 
 func (r *pgUserRepo) GetByEmail(ctx context.Context, email string) (*User, error) {
 	u := &User{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at FROM users WHERE email = $1`, email).
-		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
+		 FROM users WHERE email = $1`, email).
+		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.EmailVerified, &u.Status, &u.LastLoginAt, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user not found")
 	}
@@ -310,8 +321,9 @@ func (r *pgUserRepo) GetByEmail(ctx context.Context, email string) (*User, error
 func (r *pgUserRepo) GetByID(ctx context.Context, id string) (*User, error) {
 	u := &User{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at FROM users WHERE id = $1`, id).
-		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
+		 FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.EmailVerified, &u.Status, &u.LastLoginAt, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user not found")
 	}
@@ -320,7 +332,8 @@ func (r *pgUserRepo) GetByID(ctx context.Context, id string) (*User, error) {
 
 func (r *pgUserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at FROM users WHERE tenant_id = $1 ORDER BY created_at`, tenantID)
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
+		 FROM users WHERE tenant_id = $1 ORDER BY created_at`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -328,12 +341,30 @@ func (r *pgUserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*User
 	var users []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.EmailVerified, &u.Status, &u.LastLoginAt, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+func (r *pgUserRepo) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = $1 WHERE id = $2`, passwordHash, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateEmailVerified(ctx context.Context, userID string, verified bool) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET email_verified = $1 WHERE id = $2`, verified, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateLastLogin(ctx context.Context, userID string, t time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET last_login_at = $1 WHERE id = $2`, t.UTC(), userID)
+	return err
 }
 
 // --- Event Counter Repo ---
@@ -660,4 +691,84 @@ func (r *pgRetentionPolicyRepo) GetByTenantID(ctx context.Context, tenantID stri
 		return nil, nil
 	}
 	return p, err
+}
+
+// --- Password Reset Token Repo ---
+
+type pgPasswordResetRepo struct{ db *sql.DB }
+
+func (r *pgPasswordResetRepo) Create(ctx context.Context, token *PasswordResetToken) error {
+	if token.ID == "" {
+		token.ID = uuid.New().String()
+	}
+	token.CreatedAt = time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		token.ID, token.UserID, token.TokenHash, token.ExpiresAt.UTC(), token.CreatedAt)
+	return err
+}
+
+func (r *pgPasswordResetRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*PasswordResetToken, error) {
+	t := &PasswordResetToken{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, token_hash, expires_at, used_at, created_at
+		 FROM password_reset_tokens WHERE token_hash = $1`, tokenHash).
+		Scan(&t.ID, &t.UserID, &t.TokenHash, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func (r *pgPasswordResetRepo) MarkUsed(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgPasswordResetRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM password_reset_tokens WHERE expires_at < NOW()`)
+	return err
+}
+
+// --- Email Verification Token Repo ---
+
+type pgEmailVerificationRepo struct{ db *sql.DB }
+
+func (r *pgEmailVerificationRepo) Create(ctx context.Context, token *EmailVerificationToken) error {
+	if token.ID == "" {
+		token.ID = uuid.New().String()
+	}
+	token.CreatedAt = time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		token.ID, token.UserID, token.TokenHash, token.ExpiresAt.UTC(), token.CreatedAt)
+	return err
+}
+
+func (r *pgEmailVerificationRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*EmailVerificationToken, error) {
+	t := &EmailVerificationToken{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, token_hash, expires_at, verified_at, created_at
+		 FROM email_verification_tokens WHERE token_hash = $1`, tokenHash).
+		Scan(&t.ID, &t.UserID, &t.TokenHash, &t.ExpiresAt, &t.VerifiedAt, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func (r *pgEmailVerificationRepo) MarkVerified(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE email_verification_tokens SET verified_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgEmailVerificationRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM email_verification_tokens WHERE expires_at < NOW()`)
+	return err
 }

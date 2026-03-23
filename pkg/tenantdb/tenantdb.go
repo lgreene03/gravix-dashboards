@@ -46,12 +46,35 @@ type APIKeyInfo struct {
 
 // User represents a dashboard user belonging to a tenant.
 type User struct {
-	ID           string
-	TenantID     string
-	Email        string
-	PasswordHash string
-	Role         string // admin, viewer
-	CreatedAt    time.Time
+	ID            string
+	TenantID      string
+	Email         string
+	PasswordHash  string
+	Role          string // admin, viewer
+	EmailVerified bool
+	Status        string // active, deactivated
+	LastLoginAt   *time.Time
+	CreatedAt     time.Time
+}
+
+// PasswordResetToken represents a one-time password reset token.
+type PasswordResetToken struct {
+	ID        string
+	UserID    string
+	TokenHash string // SHA-256 hash of the token
+	ExpiresAt time.Time
+	UsedAt    *time.Time
+	CreatedAt time.Time
+}
+
+// EmailVerificationToken represents a one-time email verification token.
+type EmailVerificationToken struct {
+	ID         string
+	UserID     string
+	TokenHash  string // SHA-256 hash of the token
+	ExpiresAt  time.Time
+	VerifiedAt *time.Time
+	CreatedAt  time.Time
 }
 
 // TenantRepo manages tenant records.
@@ -96,6 +119,33 @@ type UserRepo interface {
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByID(ctx context.Context, id string) (*User, error)
 	ListByTenant(ctx context.Context, tenantID string) ([]*User, error)
+	UpdatePassword(ctx context.Context, userID, passwordHash string) error
+	UpdateEmailVerified(ctx context.Context, userID string, verified bool) error
+	UpdateLastLogin(ctx context.Context, userID string, t time.Time) error
+}
+
+// PasswordResetRepo manages password reset tokens.
+type PasswordResetRepo interface {
+	// Create stores a new password reset token (hashed). Returns the token ID.
+	Create(ctx context.Context, token *PasswordResetToken) error
+	// FindByTokenHash looks up a token by its SHA-256 hash.
+	FindByTokenHash(ctx context.Context, tokenHash string) (*PasswordResetToken, error)
+	// MarkUsed marks a token as used.
+	MarkUsed(ctx context.Context, id string) error
+	// DeleteExpired removes tokens that have expired.
+	DeleteExpired(ctx context.Context) error
+}
+
+// EmailVerificationRepo manages email verification tokens.
+type EmailVerificationRepo interface {
+	// Create stores a new email verification token (hashed).
+	Create(ctx context.Context, token *EmailVerificationToken) error
+	// FindByTokenHash looks up a token by its SHA-256 hash.
+	FindByTokenHash(ctx context.Context, tokenHash string) (*EmailVerificationToken, error)
+	// MarkVerified marks a token as verified.
+	MarkVerified(ctx context.Context, id string) error
+	// DeleteExpired removes tokens that have expired.
+	DeleteExpired(ctx context.Context) error
 }
 
 // EventCounterRepo tracks per-tenant daily event counts for billing metering.
@@ -242,5 +292,7 @@ type DB interface {
 	AlertHistory() AlertHistoryRepo
 	AuditLog() AuditRepo
 	RetentionPolicies() RetentionPolicyRepo
+	PasswordResets() PasswordResetRepo
+	EmailVerifications() EmailVerificationRepo
 	Close() error
 }
