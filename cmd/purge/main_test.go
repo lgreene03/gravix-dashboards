@@ -20,21 +20,47 @@ func TestPlanRetentionDaysFree(t *testing.T) {
 	}
 }
 
+func TestPlanRetentionDaysTeam(t *testing.T) {
+	if got := planRetentionDays("team"); got != 30 {
+		t.Errorf("planRetentionDays(team) = %d, want 30", got)
+	}
+}
+
 func TestPlanRetentionDaysStarter(t *testing.T) {
+	// Legacy name maps to team tier
 	if got := planRetentionDays("starter"); got != 30 {
 		t.Errorf("planRetentionDays(starter) = %d, want 30", got)
 	}
 }
 
+func TestPlanRetentionDaysBusiness(t *testing.T) {
+	if got := planRetentionDays("business"); got != 90 {
+		t.Errorf("planRetentionDays(business) = %d, want 90", got)
+	}
+}
+
 func TestPlanRetentionDaysPro(t *testing.T) {
+	// Legacy name maps to business tier
 	if got := planRetentionDays("pro"); got != 90 {
 		t.Errorf("planRetentionDays(pro) = %d, want 90", got)
 	}
 }
 
+func TestPlanRetentionDaysScale(t *testing.T) {
+	if got := planRetentionDays("scale"); got != 365 {
+		t.Errorf("planRetentionDays(scale) = %d, want 365", got)
+	}
+}
+
+func TestPlanRetentionDaysEnterprise(t *testing.T) {
+	if got := planRetentionDays("enterprise"); got != 365 {
+		t.Errorf("planRetentionDays(enterprise) = %d, want 365", got)
+	}
+}
+
 func TestPlanRetentionDaysUnknown(t *testing.T) {
-	if got := planRetentionDays("enterprise"); got != 30 {
-		t.Errorf("planRetentionDays(enterprise) = %d, want 30 (default)", got)
+	if got := planRetentionDays("nonexistent"); got != 30 {
+		t.Errorf("planRetentionDays(nonexistent) = %d, want 30 (default)", got)
 	}
 }
 

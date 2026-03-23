@@ -110,9 +110,9 @@ func (r *pgTenantRepo) Create(ctx context.Context, t *Tenant) error {
 	t.CreatedAt = now
 	t.UpdatedAt = now
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO tenants (id, name, email, plan, stripe_customer_id, stripe_subscription_id, status, overage_allowed, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		t.ID, t.Name, t.Email, t.Plan, t.StripeCustomerID, t.StripeSubscriptionID, t.Status, t.OverageAllowed, t.CreatedAt, t.UpdatedAt)
+		`INSERT INTO tenants (id, name, email, plan, stripe_customer_id, stripe_subscription_id, status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		t.ID, t.Name, t.Email, t.Plan, t.StripeCustomerID, t.StripeSubscriptionID, t.Status, t.OverageAllowed, t.TrialStartedAt, t.TrialEndsAt, t.CreatedAt, t.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create tenant: %w", err)
 	}
@@ -122,8 +122,8 @@ func (r *pgTenantRepo) Create(ctx context.Context, t *Tenant) error {
 func (r *pgTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) {
 	t := &Tenant{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, created_at, updated_at FROM tenants WHERE id = $1`, id).
-		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.CreatedAt, &t.UpdatedAt)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE id = $1`, id).
+		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("tenant not found: %s", id)
 	}
@@ -133,8 +133,8 @@ func (r *pgTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) 
 func (r *pgTenantRepo) GetByEmail(ctx context.Context, email string) (*Tenant, error) {
 	t := &Tenant{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, created_at, updated_at FROM tenants WHERE email = $1`, email).
-		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.CreatedAt, &t.UpdatedAt)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE email = $1`, email).
+		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("tenant not found: %s", email)
 	}
@@ -158,9 +158,16 @@ func (r *pgTenantRepo) UpdateStripe(ctx context.Context, id, customerID, subscri
 	return err
 }
 
+func (r *pgTenantRepo) UpdateTrial(ctx context.Context, id string, trialStart, trialEnd *time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE tenants SET trial_started_at = $1, trial_ends_at = $2, updated_at = NOW() WHERE id = $3`,
+		trialStart, trialEnd, id)
+	return err
+}
+
 func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, created_at, updated_at FROM tenants ORDER BY created_at`)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +175,7 @@ func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	var list []*Tenant
 	for rows.Next() {
 		t := &Tenant{}
-		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, t)

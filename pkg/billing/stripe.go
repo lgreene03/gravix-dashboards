@@ -142,6 +142,32 @@ func (s *StripeService) extractEvent(event stripe.Event) (*WebhookEvent, error) 
 			we.PlanName = s.PlanForPriceID(we.PriceID)
 		}
 
+	case "customer.subscription.trial_will_end":
+		var sub stripe.Subscription
+		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
+			return nil, fmt.Errorf("unmarshal subscription: %w", err)
+		}
+		we.CustomerID = sub.Customer.ID
+		we.SubscriptionID = sub.ID
+		we.Status = "trialing"
+		if len(sub.Items.Data) > 0 {
+			we.PriceID = sub.Items.Data[0].Price.ID
+			we.PlanName = s.PlanForPriceID(we.PriceID)
+		}
+
+	case "checkout.session.completed":
+		var sess struct {
+			Customer     struct{ ID string } `json:"customer"`
+			Subscription struct{ ID string } `json:"subscription"`
+			Mode         string              `json:"mode"`
+		}
+		if err := json.Unmarshal(event.Data.Raw, &sess); err != nil {
+			return nil, fmt.Errorf("unmarshal checkout session: %w", err)
+		}
+		we.CustomerID = sess.Customer.ID
+		we.SubscriptionID = sess.Subscription.ID
+		we.Status = "active"
+
 	case "invoice.payment_failed":
 		var inv stripe.Invoice
 		if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {

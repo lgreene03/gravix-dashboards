@@ -14,11 +14,13 @@ type Tenant struct {
 	ID                   string
 	Name                 string
 	Email                string
-	Plan                 string // free, starter, pro, business, enterprise
+	Plan                 string // free, team, business, scale, enterprise
 	StripeCustomerID     string
 	StripeSubscriptionID string
 	Status               string // active, suspended, churned
 	OverageAllowed       bool   // false=reject over limit (free), true=allow+flag (paid)
+	TrialStartedAt       *time.Time // nil if never on trial
+	TrialEndsAt          *time.Time // nil if no trial or trial expired
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -121,6 +123,7 @@ type TenantRepo interface {
 	UpdatePlan(ctx context.Context, id, plan string) error
 	UpdateStatus(ctx context.Context, id, status string) error
 	UpdateStripe(ctx context.Context, id, customerID, subscriptionID string) error
+	UpdateTrial(ctx context.Context, id string, trialStart, trialEnd *time.Time) error
 	List(ctx context.Context) ([]*Tenant, error)
 }
 

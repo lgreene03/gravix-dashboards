@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lgreene/gravix-dashboards/pkg/billing"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -69,16 +70,7 @@ func startMetricsServer(addr string) *http.Server {
 // planRetentionDays returns the data retention period in days for a given billing plan.
 // Used in "auto" mode to enforce per-tenant retention based on their subscription tier.
 func planRetentionDays(plan string) int {
-	switch plan {
-	case "free":
-		return 7
-	case "starter":
-		return 30
-	case "pro":
-		return 90
-	default:
-		return 30 // unknown plans default to starter-level retention
-	}
+	return billing.PlanRetentionDays(plan)
 }
 
 func main() {

@@ -295,10 +295,17 @@ func (r *sqliteTenantRepo) Create(ctx context.Context, t *Tenant) error {
 	if t.OverageAllowed {
 		overageInt = 1
 	}
+	var trialStarted, trialEnds interface{}
+	if t.TrialStartedAt != nil {
+		trialStarted = t.TrialStartedAt.UTC().Format(time.RFC3339)
+	}
+	if t.TrialEndsAt != nil {
+		trialEnds = t.TrialEndsAt.UTC().Format(time.RFC3339)
+	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO tenants (id, name, email, plan, status, overage_allowed, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.Name, t.Email, t.Plan, t.Status, overageInt, now, now,
+		`INSERT INTO tenants (id, name, email, plan, status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.Name, t.Email, t.Plan, t.Status, overageInt, trialStarted, trialEnds, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("create tenant: %w", err)
@@ -311,13 +318,13 @@ func (r *sqliteTenantRepo) Create(ctx context.Context, t *Tenant) error {
 func (r *sqliteTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) {
 	return r.scanTenant(r.db.QueryRowContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, overage_allowed, created_at, updated_at FROM tenants WHERE id = ?`, id))
+		        status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE id = ?`, id))
 }
 
 func (r *sqliteTenantRepo) GetByEmail(ctx context.Context, email string) (*Tenant, error) {
 	return r.scanTenant(r.db.QueryRowContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, overage_allowed, created_at, updated_at FROM tenants WHERE email = ?`, email))
+		        status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE email = ?`, email))
 }
 
 func (r *sqliteTenantRepo) UpdatePlan(ctx context.Context, id, plan string) error {
@@ -344,10 +351,24 @@ func (r *sqliteTenantRepo) UpdateStripe(ctx context.Context, id, customerID, sub
 	return err
 }
 
+func (r *sqliteTenantRepo) UpdateTrial(ctx context.Context, id string, trialStart, trialEnd *time.Time) error {
+	var startVal, endVal interface{}
+	if trialStart != nil {
+		startVal = trialStart.UTC().Format(time.RFC3339)
+	}
+	if trialEnd != nil {
+		endVal = trialEnd.UTC().Format(time.RFC3339)
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE tenants SET trial_started_at = ?, trial_ends_at = ?, updated_at = datetime('now') WHERE id = ?`,
+		startVal, endVal, id)
+	return err
+}
+
 func (r *sqliteTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, overage_allowed, created_at, updated_at FROM tenants ORDER BY created_at`)
+		        status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -367,14 +388,23 @@ func (r *sqliteTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 func (r *sqliteTenantRepo) scanTenant(row *sql.Row) (*Tenant, error) {
 	t := &Tenant{}
 	var createdAt, updatedAt string
+	var trialStarted, trialEnds sql.NullString
 	var overageInt int
 	err := row.Scan(&t.ID, &t.Name, &t.Email, &t.Plan,
 		&t.StripeCustomerID, &t.StripeSubscriptionID,
-		&t.Status, &overageInt, &createdAt, &updatedAt)
+		&t.Status, &overageInt, &trialStarted, &trialEnds, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	t.OverageAllowed = overageInt != 0
+	if trialStarted.Valid {
+		ts, _ := time.Parse(time.RFC3339, trialStarted.String)
+		t.TrialStartedAt = &ts
+	}
+	if trialEnds.Valid {
+		te, _ := time.Parse(time.RFC3339, trialEnds.String)
+		t.TrialEndsAt = &te
+	}
 	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return t, nil
@@ -387,14 +417,23 @@ type tenantScanner interface {
 func (r *sqliteTenantRepo) scanTenantRow(row tenantScanner) (*Tenant, error) {
 	t := &Tenant{}
 	var createdAt, updatedAt string
+	var trialStarted, trialEnds sql.NullString
 	var overageInt int
 	err := row.Scan(&t.ID, &t.Name, &t.Email, &t.Plan,
 		&t.StripeCustomerID, &t.StripeSubscriptionID,
-		&t.Status, &overageInt, &createdAt, &updatedAt)
+		&t.Status, &overageInt, &trialStarted, &trialEnds, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	t.OverageAllowed = overageInt != 0
+	if trialStarted.Valid {
+		ts, _ := time.Parse(time.RFC3339, trialStarted.String)
+		t.TrialStartedAt = &ts
+	}
+	if trialEnds.Valid {
+		te, _ := time.Parse(time.RFC3339, trialEnds.String)
+		t.TrialEndsAt = &te
+	}
 	t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return t, nil

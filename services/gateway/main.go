@@ -11,6 +11,7 @@
 //	DELETE /api/gateway/api-keys/:id   — Revoke API key (JWT required, admin only)
 //	POST /api/gateway/webhooks/stripe  — Handle Stripe webhooks (no auth, signature verified)
 //	POST /api/gateway/billing/portal   — Get Stripe Customer Portal URL (JWT required)
+//	POST /api/gateway/billing/checkout — Create Stripe Checkout Session (JWT required, admin)
 //	GET  /api/gateway/billing/usage    — Get current usage stats (JWT required)
 //	GET  /live                         — Health check
 package main
@@ -289,8 +290,10 @@ func main() {
 	if stripeKey != "" {
 		plans := billing.DefaultPlans(
 			os.Getenv("STRIPE_PRICE_FREE"),
-			os.Getenv("STRIPE_PRICE_STARTER"),
-			os.Getenv("STRIPE_PRICE_PRO"),
+			os.Getenv("STRIPE_PRICE_TEAM"),
+			os.Getenv("STRIPE_PRICE_BUSINESS"),
+			os.Getenv("STRIPE_PRICE_SCALE"),
+			os.Getenv("STRIPE_PRICE_ENTERPRISE"),
 		)
 		gw.billing = billing.NewStripeService(
 			stripeKey,
@@ -332,6 +335,7 @@ func main() {
 	mux.HandleFunc("/api/gateway/api-keys", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeys)))
 	mux.HandleFunc("/api/gateway/api-keys/expiring", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeysExpiring)))
 	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingPortal)))
+	mux.HandleFunc("/api/gateway/billing/checkout", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingCheckout)))
 	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsage))))
 	mux.HandleFunc("/api/gateway/billing/invoices", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingInvoices)))
 	mux.HandleFunc("/api/gateway/billing/usage/history", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsageHistory))))
@@ -668,20 +672,9 @@ func (gw *gateway) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// seatLimits returns the max users per plan.
+// seatLimit returns the max users per plan.
 func seatLimit(plan string) int {
-	switch plan {
-	case "free":
-		return 2
-	case "team":
-		return 5
-	case "business":
-		return 20
-	case "scale", "enterprise":
-		return 100
-	default:
-		return 2
-	}
+	return billing.PlanSeatLimit(plan)
 }
 
 // handleInvitations manages team invitations (POST to send, GET to list).
@@ -2271,6 +2264,80 @@ func (gw *gateway) handleBillingPortal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("failed to create portal session", "tenant_id", tenant.ID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create billing portal session")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"url": url})
+}
+
+func (gw *gateway) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	if gw.billing == nil {
+		writeError(w, http.StatusServiceUnavailable, "billing not configured")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+
+	tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "tenant not found")
+		return
+	}
+
+	if tenant.StripeCustomerID == "" {
+		writeError(w, http.StatusBadRequest, "no billing account found")
+		return
+	}
+
+	var req struct {
+		PriceID    string `json:"price_id"`
+		SuccessURL string `json:"success_url"`
+		CancelURL  string `json:"cancel_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.PriceID == "" {
+		writeError(w, http.StatusBadRequest, "price_id required")
+		return
+	}
+	if req.SuccessURL == "" {
+		req.SuccessURL = "/"
+	}
+	if req.CancelURL == "" {
+		req.CancelURL = "/"
+	}
+
+	// Determine trial days for the target plan
+	planName := gw.billing.PlanForPriceID(req.PriceID)
+	trialDays := billing.DefaultTrialDays(planName)
+
+	svc, ok := gw.billing.(*billing.StripeService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "checkout not available")
+		return
+	}
+
+	url, err := svc.CreateCheckoutSession(r.Context(), billing.CheckoutParams{
+		CustomerID: tenant.StripeCustomerID,
+		PriceID:    req.PriceID,
+		SuccessURL: req.SuccessURL,
+		CancelURL:  req.CancelURL,
+		TrialDays:  trialDays,
+	})
+	if err != nil {
+		slog.Error("failed to create checkout session", "tenant_id", tenant.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to create checkout session")
 		return
 	}
 

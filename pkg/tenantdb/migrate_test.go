@@ -45,13 +45,13 @@ func TestRunMigrationsFreshDB(t *testing.T) {
 		t.Fatalf("RunMigrations: %v", err)
 	}
 
-	// Verify schema_migrations has version 1
+	// Verify schema_migrations has the latest version
 	var version int
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("query version: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("version = %d, want 1", version)
+	if version < 3 {
+		t.Errorf("version = %d, want >= 3", version)
 	}
 
 	// Verify tables were created
@@ -73,8 +73,14 @@ func TestRunMigrationsPreExistingDB(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Simulate pre-existing DB: create tenants table manually
-	_, err = db.Exec("CREATE TABLE tenants (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+	// Simulate pre-existing DB: create tenants table with plan column
+	_, err = db.Exec("CREATE TABLE tenants (id TEXT PRIMARY KEY, name TEXT NOT NULL, plan TEXT NOT NULL DEFAULT 'free')")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a legacy "starter" plan tenant to verify migration renames it
+	_, err = db.Exec("INSERT INTO tenants (id, name, plan) VALUES ('t1', 'Legacy Tenant', 'starter')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,13 +89,22 @@ func TestRunMigrationsPreExistingDB(t *testing.T) {
 		t.Fatalf("RunMigrations on existing DB: %v", err)
 	}
 
-	// Should force version 1 without re-running migration
+	// Should have applied up to latest version
 	var version int
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("query version: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("version = %d, want 1", version)
+	if version < 3 {
+		t.Errorf("version = %d, want >= 3", version)
+	}
+
+	// Verify legacy plan was renamed
+	var plan string
+	if err := db.QueryRow("SELECT plan FROM tenants WHERE id = 't1'").Scan(&plan); err != nil {
+		t.Fatalf("query plan: %v", err)
+	}
+	if plan != "team" {
+		t.Errorf("plan = %q, want 'team' (migrated from 'starter')", plan)
 	}
 }
 
