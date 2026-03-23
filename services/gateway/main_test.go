@@ -2857,3 +2857,169 @@ func TestGatewayRequestIDHeader(t *testing.T) {
 		t.Errorf("X-Request-ID = %q, want %q", got, "custom-trace-id")
 	}
 }
+
+// --- Sprint 25.1: Change Password, Token Refresh ---
+
+func TestChangePasswordSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, token := createTestTenantWithUser(t, gw)
+
+	body := `{"current_password":"password123","new_password":"N3wP@ssw0rd!"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	_ = token
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ChangePassword status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify login with new password works
+	loginBody := `{"email":"admin@corp.com","password":"N3wP@ssw0rd!"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/gateway/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRR := httptest.NewRecorder()
+	gw.handleLogin(loginRR, loginReq)
+
+	if loginRR.Code != http.StatusOK {
+		t.Fatalf("Login with new password status = %d; body: %s", loginRR.Code, loginRR.Body.String())
+	}
+}
+
+func TestChangePasswordWrongCurrent(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	body := `{"current_password":"wrongpass","new_password":"N3wP@ssw0rd!"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("ChangePassword wrong current status = %d, want 401", rr.Code)
+	}
+}
+
+func TestChangePasswordWeakNew(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	body := `{"current_password":"password123","new_password":"weak"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("ChangePassword weak new status = %d, want 400", rr.Code)
+	}
+}
+
+func TestChangePasswordMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/password", nil)
+	claims := &auth.Claims{TenantID: "t1", UserID: "u1", Email: "a@b.com", Role: "admin"}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("ChangePassword GET status = %d, want 405", rr.Code)
+	}
+}
+
+func TestRefreshTokenSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, token := createTestTenantWithUser(t, gw)
+
+	// Parse original token to get claims with JTI
+	origClaims, err := gw.tokens.Validate(token)
+	if err != nil {
+		t.Fatalf("Validate original token: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/refresh", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), origClaims))
+	_ = tenant
+	_ = user
+	rr := httptest.NewRecorder()
+
+	gw.handleRefreshToken(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("RefreshToken status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+
+	newToken, ok := resp["token"].(string)
+	if !ok || newToken == "" {
+		t.Fatal("expected non-empty token in refresh response")
+	}
+	if newToken == token {
+		t.Error("refreshed token should be different from original")
+	}
+
+	// Old token JTI should be blacklisted
+	if !gw.isTokenBlacklisted(origClaims.ID) {
+		t.Error("old token JTI should be blacklisted after refresh")
+	}
+}
+
+func TestRefreshTokenMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/refresh", nil)
+	claims := &auth.Claims{TenantID: "t1", UserID: "u1", Email: "a@b.com", Role: "admin"}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleRefreshToken(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("RefreshToken GET status = %d, want 405", rr.Code)
+	}
+}
+
+func TestMeIncludesProfileFields(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/me", nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleMe(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Me status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+
+	if _, ok := resp["email_verified"]; !ok {
+		t.Error("expected email_verified in /me response")
+	}
+	if _, ok := resp["tenant_name"]; !ok {
+		t.Error("expected tenant_name in /me response")
+	}
+	if _, ok := resp["plan"]; !ok {
+		t.Error("expected plan in /me response")
+	}
+}

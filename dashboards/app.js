@@ -375,7 +375,7 @@
             // Show/hide dashboard filters depending on page
             const headerEl = document.querySelector('.header');
             if (headerEl) {
-                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data') ? 'none' : '';
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data' || pageName === 'settings') ? 'none' : '';
             }
 
             if (pageName === 'endpoints') {
@@ -390,6 +390,8 @@
                 loadTracesPage();
             } else if (pageName === 'data') {
                 loadDataPage();
+            } else if (pageName === 'settings') {
+                loadSettingsPage();
             }
 
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3148,5 +3150,166 @@ app.listen(8080, () => {
 
         window.startExport = startExport;
         window.loadDataPage = loadDataPage;
+
+        // --- SETTINGS PAGE ---
+
+        async function loadSettingsPage() {
+            const loading = document.getElementById('settings-loading');
+            const profile = document.getElementById('settings-profile');
+
+            if (!IS_MULTI_TENANT) {
+                if (loading) loading.style.display = 'none';
+                if (profile) {
+                    profile.style.display = 'block';
+                    document.getElementById('settings-email').textContent = 'Self-hosted';
+                    document.getElementById('settings-role').textContent = 'admin';
+                    document.getElementById('settings-org').textContent = 'Local';
+                    document.getElementById('settings-plan').textContent = 'Self-hosted';
+                    document.getElementById('settings-verified').textContent = 'N/A';
+                    document.getElementById('settings-last-login').textContent = 'N/A';
+                }
+                return;
+            }
+
+            if (loading) loading.style.display = '';
+            if (profile) profile.style.display = 'none';
+
+            try {
+                const token = sessionStorage.getItem('gravix_token');
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) throw new Error('Failed to load profile');
+                const data = await resp.json();
+
+                if (loading) loading.style.display = 'none';
+                if (profile) profile.style.display = 'block';
+
+                document.getElementById('settings-email').textContent = data.email || '-';
+                document.getElementById('settings-role').textContent = (data.role || '-').charAt(0).toUpperCase() + (data.role || '').slice(1);
+                document.getElementById('settings-org').textContent = data.tenant_name || '-';
+                document.getElementById('settings-plan').textContent = (data.plan || '-').charAt(0).toUpperCase() + (data.plan || '').slice(1);
+                document.getElementById('settings-verified').textContent = data.email_verified ? 'Yes' : 'No';
+                document.getElementById('settings-last-login').textContent = data.last_login_at ? new Date(data.last_login_at).toLocaleString() : 'N/A';
+            } catch (err) {
+                if (loading) loading.style.display = 'none';
+                if (profile) {
+                    profile.style.display = 'block';
+                    profile.innerHTML = '<p style="color: var(--danger-color);">Failed to load profile.</p>';
+                }
+            }
+        }
+
+        // Change password form handler
+        const changePwForm = document.getElementById('change-password-form');
+        if (changePwForm) {
+            changePwForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const msgEl = document.getElementById('change-pw-msg');
+                const btn = document.getElementById('change-pw-btn');
+                const currentPw = document.getElementById('settings-current-pw').value;
+                const newPw = document.getElementById('settings-new-pw').value;
+                const confirmPw = document.getElementById('settings-confirm-pw').value;
+
+                if (newPw !== confirmPw) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = '#ef4444';
+                    msgEl.textContent = 'New passwords do not match.';
+                    return;
+                }
+
+                btn.disabled = true;
+                btn.textContent = 'Changing...';
+                msgEl.style.display = 'none';
+
+                try {
+                    const token = sessionStorage.getItem('gravix_token');
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/password', {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            current_password: currentPw,
+                            new_password: newPw
+                        })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        msgEl.style.display = 'block';
+                        msgEl.style.color = 'var(--success-color, #22c55e)';
+                        msgEl.textContent = 'Password changed successfully.';
+                        changePwForm.reset();
+                    } else {
+                        msgEl.style.display = 'block';
+                        msgEl.style.color = '#ef4444';
+                        msgEl.textContent = data.error || 'Failed to change password.';
+                    }
+                } catch (err) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = '#ef4444';
+                    msgEl.textContent = 'Connection error.';
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Change Password';
+                }
+            });
+        }
+
+        // Logout handler (both sidebar button and settings page button)
+        async function doLogout() {
+            try {
+                const token = sessionStorage.getItem('gravix_token');
+                if (token) {
+                    await fetch(GATEWAY_URL + '/api/gateway/logout', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                }
+            } catch (e) {
+                // Ignore errors — we're logging out regardless
+            }
+            sessionStorage.removeItem('gravix_token');
+            localStorage.removeItem('gravix_api_key');
+            window.location.reload();
+        }
+
+        const settingsLogoutBtn = document.getElementById('settings-logout-btn');
+        if (settingsLogoutBtn) {
+            settingsLogoutBtn.addEventListener('click', doLogout);
+        }
+        const sidebarLogoutBtn = document.getElementById('sidebarLogoutBtn');
+        if (sidebarLogoutBtn) {
+            sidebarLogoutBtn.addEventListener('click', doLogout);
+            // Show logout button in sidebar when user is authenticated
+            if (sessionStorage.getItem('gravix_token')) {
+                sidebarLogoutBtn.style.display = 'flex';
+            }
+        }
+
+        // --- TOKEN AUTO-REFRESH ---
+        // Refresh the JWT every 20 minutes to keep the session alive
+        if (IS_MULTI_TENANT && sessionStorage.getItem('gravix_token')) {
+            setInterval(async function() {
+                try {
+                    const token = sessionStorage.getItem('gravix_token');
+                    if (!token) return;
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/refresh', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data.token) {
+                            sessionStorage.setItem('gravix_token', data.token);
+                            dashboardApiToken = data.token;
+                        }
+                    }
+                } catch (e) {
+                    // Silent failure — next refresh will retry
+                }
+            }, 20 * 60 * 1000); // 20 minutes
+        }
 
     })();

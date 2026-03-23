@@ -323,6 +323,8 @@ func main() {
 	mux.HandleFunc("/api/gateway/verify-email", gw.handleVerifyEmail)
 	mux.HandleFunc("/api/gateway/resend-verification", gw.requireAuth(gw.ipRateLimitMiddleware(gw.handleResendVerification)))
 	mux.HandleFunc("/api/gateway/logout", gw.requireAuth(gw.handleLogout))
+	mux.HandleFunc("/api/gateway/password", gw.requireAuth(bodyLimit(gw.handleChangePassword)))
+	mux.HandleFunc("/api/gateway/refresh", gw.requireAuth(gw.handleRefreshToken))
 	mux.HandleFunc("/api/gateway/webhooks/stripe", gw.handleStripeWebhook)
 
 	// Authenticated + rate-limited API endpoints
@@ -567,6 +569,95 @@ func (gw *gateway) isTokenBlacklisted(jti string) bool {
 		return false
 	}
 	return true
+}
+
+// handleChangePassword lets an authenticated user change their password.
+// PUT /api/gateway/password  body: {"current_password": "...", "new_password": "..."}
+func (gw *gateway) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeError(w, http.StatusMethodNotAllowed, "PUT required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "current_password and new_password are required")
+		return
+	}
+
+	// Validate new password strength
+	if err := password.Validate(req.NewPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Verify current password
+	user, err := gw.db.Users().GetByEmail(r.Context(), claims.Email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to retrieve user")
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	// Hash and update
+	hashed, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+	if err := gw.db.Users().UpdatePassword(r.Context(), user.ID, string(hashed)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "user.password_changed", "user", claims.UserID, "", r.RemoteAddr)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "password changed successfully",
+	})
+}
+
+// handleRefreshToken exchanges a valid JWT for a fresh one with a new expiry.
+// POST /api/gateway/refresh
+func (gw *gateway) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+
+	// Generate a fresh token with same claims but new expiry and JTI
+	newToken, err := gw.tokens.Generate(claims.TenantID, claims.UserID, claims.Email, claims.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	// Blacklist the old token so it can't be reused
+	if claims.ID != "" {
+		gw.tokenBlacklist.Store(claims.ID, claims.ExpiresAt.Time)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"token":     newToken,
+		"tenant_id": claims.TenantID,
+		"user_id":   claims.UserID,
+		"email":     claims.Email,
+		"role":      claims.Role,
+	})
 }
 
 // requireRole returns middleware that checks if the authenticated user has one of the given roles.
@@ -1558,14 +1649,25 @@ func (gw *gateway) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"user_id":     claims.UserID,
-		"email":       claims.Email,
-		"role":        claims.Role,
-		"tenant_id":   claims.TenantID,
-		"tenant_name": tenant.Name,
-		"plan":        tenant.Plan,
-	})
+	// Fetch user for additional profile info
+	user, _ := gw.db.Users().GetByEmail(r.Context(), claims.Email)
+	result := map[string]interface{}{
+		"user_id":        claims.UserID,
+		"email":          claims.Email,
+		"role":           claims.Role,
+		"tenant_id":      claims.TenantID,
+		"tenant_name":    tenant.Name,
+		"plan":           tenant.Plan,
+		"email_verified": false,
+	}
+	if user != nil {
+		result["email_verified"] = user.EmailVerified
+		result["status"] = user.Status
+		if user.LastLoginAt != nil {
+			result["last_login_at"] = user.LastLoginAt.Format(time.RFC3339)
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleAPIKeys handles CRUD for API keys.
