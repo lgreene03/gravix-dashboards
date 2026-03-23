@@ -161,3 +161,18 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_evt_token ON email_verification_tokens(token_hash);
+
+CREATE TABLE IF NOT EXISTS invitations (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'viewer',
+    token_hash TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    invited_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_inv_token ON invitations(token_hash);
+CREATE INDEX IF NOT EXISTS idx_inv_tenant ON invitations(tenant_id);

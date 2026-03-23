@@ -34,6 +34,7 @@ type PostgresDB struct {
 	retentionPolicies     *pgRetentionPolicyRepo
 	passwordResets        *pgPasswordResetRepo
 	emailVerifications    *pgEmailVerificationRepo
+	invitations           *pgInvitationRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -71,6 +72,7 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.retentionPolicies = &pgRetentionPolicyRepo{db: db}
 	pdb.passwordResets = &pgPasswordResetRepo{db: db}
 	pdb.emailVerifications = &pgEmailVerificationRepo{db: db}
+	pdb.invitations = &pgInvitationRepo{db: db}
 	return pdb, nil
 }
 
@@ -86,6 +88,7 @@ func (p *PostgresDB) AuditLog() AuditRepo                       { return p.audit
 func (p *PostgresDB) RetentionPolicies() RetentionPolicyRepo     { return p.retentionPolicies }
 func (p *PostgresDB) PasswordResets() PasswordResetRepo          { return p.passwordResets }
 func (p *PostgresDB) EmailVerifications() EmailVerificationRepo  { return p.emailVerifications }
+func (p *PostgresDB) Invitations() InvitationRepo               { return p.invitations }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -364,6 +367,86 @@ func (r *pgUserRepo) UpdateEmailVerified(ctx context.Context, userID string, ver
 func (r *pgUserRepo) UpdateLastLogin(ctx context.Context, userID string, t time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE users SET last_login_at = $1 WHERE id = $2`, t.UTC(), userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateRole(ctx context.Context, userID, role string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET role = $1 WHERE id = $2`, role, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateStatus(ctx context.Context, userID, status string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET status = $1 WHERE id = $2`, status, userID)
+	return err
+}
+
+func (r *pgUserRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND status = 'active'`, tenantID).Scan(&count)
+	return count, err
+}
+
+// --- Invitation Repo ---
+
+type pgInvitationRepo struct{ db *sql.DB }
+
+func (r *pgInvitationRepo) Create(ctx context.Context, inv *Invitation) error {
+	if inv.ID == "" {
+		inv.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO invitations (id, tenant_id, email, role, token_hash, status, invited_by, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		inv.ID, inv.TenantID, inv.Email, inv.Role, inv.TokenHash, inv.Status, inv.InvitedBy,
+		inv.CreatedAt.UTC(), inv.ExpiresAt.UTC())
+	return err
+}
+
+func (r *pgInvitationRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error) {
+	var inv Invitation
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, email, role, token_hash, status, invited_by, created_at, expires_at
+		 FROM invitations WHERE token_hash = $1`, tokenHash).Scan(
+		&inv.ID, &inv.TenantID, &inv.Email, &inv.Role, &inv.TokenHash, &inv.Status, &inv.InvitedBy,
+		&inv.CreatedAt, &inv.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func (r *pgInvitationRepo) ListByTenant(ctx context.Context, tenantID string) ([]*Invitation, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, email, role, status, invited_by, created_at, expires_at
+		 FROM invitations WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var invitations []*Invitation
+	for rows.Next() {
+		var inv Invitation
+		if err := rows.Scan(&inv.ID, &inv.TenantID, &inv.Email, &inv.Role, &inv.Status, &inv.InvitedBy,
+			&inv.CreatedAt, &inv.ExpiresAt); err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, &inv)
+	}
+	return invitations, nil
+}
+
+func (r *pgInvitationRepo) MarkAccepted(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE invitations SET status = 'accepted' WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgInvitationRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM invitations WHERE status = 'pending' AND expires_at < NOW()`)
 	return err
 }
 

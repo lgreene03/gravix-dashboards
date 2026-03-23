@@ -347,6 +347,9 @@ func main() {
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
 	mux.HandleFunc("/api/gateway/retention", gw.requireAuth(gw.rateLimitMiddleware(gw.handleRetention)))
 	mux.HandleFunc("/api/gateway/export", gw.requireAuth(gw.rateLimitMiddleware(gw.handleExport)))
+	mux.HandleFunc("/api/gateway/invitations", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleInvitations))))
+	mux.HandleFunc("/api/gateway/invitations/accept", gw.ipRateLimitMiddleware(bodyLimit(gw.handleAcceptInvitation)))
+	mux.HandleFunc("/api/gateway/team", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTeam))))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -658,6 +661,321 @@ func (gw *gateway) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		"email":     claims.Email,
 		"role":      claims.Role,
 	})
+}
+
+// seatLimits returns the max users per plan.
+func seatLimit(plan string) int {
+	switch plan {
+	case "free":
+		return 2
+	case "team":
+		return 5
+	case "business":
+		return 20
+	case "scale", "enterprise":
+		return 100
+	default:
+		return 2
+	}
+}
+
+// handleInvitations manages team invitations (POST to send, GET to list).
+func (gw *gateway) handleInvitations(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+
+	switch r.Method {
+	case http.MethodGet:
+		invitations, err := gw.db.Invitations().ListByTenant(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list invitations")
+			return
+		}
+		if invitations == nil {
+			invitations = []*tenantdb.Invitation{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"invitations": invitations,
+		})
+
+	case http.MethodPost:
+		if !claims.HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		var req struct {
+			Email string `json:"email"`
+			Role  string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Email == "" {
+			writeError(w, http.StatusBadRequest, "email is required")
+			return
+		}
+		if req.Role == "" {
+			req.Role = "viewer"
+		}
+		if req.Role != "editor" && req.Role != "viewer" && req.Role != "admin" {
+			writeError(w, http.StatusBadRequest, "role must be viewer, editor, or admin")
+			return
+		}
+
+		// Check seat limits
+		tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load tenant")
+			return
+		}
+		userCount, _ := gw.db.Users().CountByTenant(r.Context(), claims.TenantID)
+		limit := seatLimit(tenant.Plan)
+		if userCount >= limit {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("seat limit reached (%d/%d). Upgrade your plan.", userCount, limit))
+			return
+		}
+
+		// Check if email is already a member
+		if existingUser, _ := gw.db.Users().GetByEmail(r.Context(), req.Email); existingUser != nil {
+			writeError(w, http.StatusConflict, "user already exists with this email")
+			return
+		}
+
+		// Generate invite token
+		plainToken, tokenHash, err := generateSecureToken()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate invite token")
+			return
+		}
+
+		inv := &tenantdb.Invitation{
+			TenantID:  claims.TenantID,
+			Email:     req.Email,
+			Role:      req.Role,
+			TokenHash: tokenHash,
+			Status:    "pending",
+			InvitedBy: claims.UserID,
+			CreatedAt: time.Now().UTC(),
+			ExpiresAt: time.Now().UTC().Add(7 * 24 * time.Hour), // 7 days
+		}
+		if err := gw.db.Invitations().Create(r.Context(), inv); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create invitation")
+			return
+		}
+
+		// Send invitation email
+		inviteURL := gw.baseURL + "/accept-invite?token=" + plainToken
+		go func() {
+			subject := "You've been invited to join " + tenant.Name + " on Gravix"
+			body := fmt.Sprintf(`<h2>Team Invitation</h2>
+<p>You've been invited to join <strong>%s</strong> on Gravix as a <strong>%s</strong>.</p>
+<p><a href="%s" style="display:inline-block;padding:12px 24px;background:#3b82f6;color:white;text-decoration:none;border-radius:8px;font-weight:600;">Accept Invitation</a></p>
+<p>This invitation expires in 7 days.</p>
+<p style="color:#64748b;font-size:0.875rem;">If you didn't expect this invitation, you can safely ignore this email.</p>`,
+				tenant.Name, req.Role, inviteURL)
+
+			textBody := fmt.Sprintf("You've been invited to join %s on Gravix as a %s.\n\nAccept: %s\n\nThis invitation expires in 7 days.", tenant.Name, req.Role, inviteURL)
+			if err := gw.emailSender.Send(context.Background(), req.Email, subject, body, textBody); err != nil {
+				slog.Error("failed to send invitation email", "email", req.Email, "error", err)
+			}
+		}()
+
+		gw.auditDirect(claims.TenantID, claims.UserID, "team.invite_sent", "invitation", inv.ID, req.Email, r.RemoteAddr)
+
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"id":      inv.ID,
+			"message": "invitation sent",
+		})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST required")
+	}
+}
+
+// handleAcceptInvitation accepts a team invite and creates the user account.
+// POST /api/gateway/invitations/accept  body: {"token": "...", "password": "..."}
+func (gw *gateway) handleAcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Token == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "token and password are required")
+		return
+	}
+
+	if err := password.Validate(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Find invitation by token hash
+	hash := sha256.Sum256([]byte(req.Token))
+	tokenHash := hex.EncodeToString(hash[:])
+	inv, err := gw.db.Invitations().FindByTokenHash(r.Context(), tokenHash)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "invitation not found or expired")
+		return
+	}
+
+	if inv.Status != "pending" {
+		writeError(w, http.StatusBadRequest, "invitation has already been used")
+		return
+	}
+	if time.Now().After(inv.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "invitation has expired")
+		return
+	}
+
+	// Check if email is already registered
+	if existingUser, _ := gw.db.Users().GetByEmail(r.Context(), inv.Email); existingUser != nil {
+		writeError(w, http.StatusConflict, "a user with this email already exists")
+		return
+	}
+
+	// Create user
+	user := &tenantdb.User{
+		TenantID:      inv.TenantID,
+		Email:         inv.Email,
+		PasswordHash:  req.Password, // will be hashed by repo
+		Role:          inv.Role,
+		EmailVerified: true, // invited users are pre-verified
+	}
+	if err := gw.db.Users().Create(r.Context(), user); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	// Mark invitation as accepted
+	_ = gw.db.Invitations().MarkAccepted(r.Context(), inv.ID)
+
+	// Generate JWT
+	token, err := gw.tokens.Generate(inv.TenantID, user.ID, user.Email, user.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"token":     token,
+		"tenant_id": inv.TenantID,
+		"user_id":   user.ID,
+		"email":     user.Email,
+		"role":      user.Role,
+	})
+}
+
+// handleTeam manages team members (GET to list, PUT to update role/status).
+func (gw *gateway) handleTeam(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+
+	switch r.Method {
+	case http.MethodGet:
+		users, err := gw.db.Users().ListByTenant(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list team members")
+			return
+		}
+		// Sanitize — don't expose password hashes
+		type teamMember struct {
+			ID            string  `json:"id"`
+			Email         string  `json:"email"`
+			Role          string  `json:"role"`
+			Status        string  `json:"status"`
+			EmailVerified bool    `json:"email_verified"`
+			LastLoginAt   *string `json:"last_login_at,omitempty"`
+		}
+		members := make([]teamMember, 0, len(users))
+		for _, u := range users {
+			m := teamMember{
+				ID:            u.ID,
+				Email:         u.Email,
+				Role:          u.Role,
+				Status:        u.Status,
+				EmailVerified: u.EmailVerified,
+			}
+			if u.LastLoginAt != nil {
+				s := u.LastLoginAt.Format(time.RFC3339)
+				m.LastLoginAt = &s
+			}
+			members = append(members, m)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"members": members,
+		})
+
+	case http.MethodPut:
+		if !claims.HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		var req struct {
+			UserID string `json:"user_id"`
+			Role   string `json:"role,omitempty"`
+			Status string `json:"status,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.UserID == "" {
+			writeError(w, http.StatusBadRequest, "user_id is required")
+			return
+		}
+		// Don't allow admins to modify themselves
+		if req.UserID == claims.UserID {
+			writeError(w, http.StatusBadRequest, "cannot modify your own role/status")
+			return
+		}
+
+		// Verify user belongs to same tenant
+		targetUser, err := gw.db.Users().GetByID(r.Context(), req.UserID)
+		if err != nil || targetUser.TenantID != claims.TenantID {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+
+		if req.Role != "" {
+			if req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
+				writeError(w, http.StatusBadRequest, "role must be admin, editor, or viewer")
+				return
+			}
+			if err := gw.db.Users().UpdateRole(r.Context(), req.UserID, req.Role); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update role")
+				return
+			}
+			gw.auditDirect(claims.TenantID, claims.UserID, "team.role_changed",
+				"user", req.UserID, fmt.Sprintf("role=%s", req.Role), r.RemoteAddr)
+		}
+		if req.Status != "" {
+			if req.Status != "active" && req.Status != "deactivated" {
+				writeError(w, http.StatusBadRequest, "status must be active or deactivated")
+				return
+			}
+			if err := gw.db.Users().UpdateStatus(r.Context(), req.UserID, req.Status); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update status")
+				return
+			}
+			gw.auditDirect(claims.TenantID, claims.UserID, "team.status_changed",
+				"user", req.UserID, fmt.Sprintf("status=%s", req.Status), r.RemoteAddr)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"message": "user updated"})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or PUT required")
+	}
 }
 
 // requireRole returns middleware that checks if the authenticated user has one of the given roles.
@@ -1170,6 +1488,12 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	// Check if user is deactivated
+	if user.Status == "deactivated" {
+		writeError(w, http.StatusForbidden, "account has been deactivated")
 		return
 	}
 

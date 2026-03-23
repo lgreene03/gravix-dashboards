@@ -165,6 +165,20 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
 	created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_evt_token ON email_verification_tokens(token_hash);
+
+CREATE TABLE IF NOT EXISTS invitations (
+	id          TEXT PRIMARY KEY,
+	tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+	email       TEXT NOT NULL,
+	role        TEXT NOT NULL DEFAULT 'viewer',
+	token_hash  TEXT NOT NULL UNIQUE,
+	status      TEXT NOT NULL DEFAULT 'pending',
+	invited_by  TEXT NOT NULL,
+	created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+	expires_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inv_token ON invitations(token_hash);
+CREATE INDEX IF NOT EXISTS idx_inv_tenant ON invitations(tenant_id);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -243,6 +257,9 @@ func (s *SQLiteDB) PasswordResets() PasswordResetRepo {
 }
 func (s *SQLiteDB) EmailVerifications() EmailVerificationRepo {
 	return &sqliteEmailVerificationRepo{db: s.db}
+}
+func (s *SQLiteDB) Invitations() InvitationRepo {
+	return &sqliteInvitationRepo{db: s.db}
 }
 
 // --- Tenant Repo ---
@@ -638,6 +655,90 @@ func (r *sqliteUserRepo) UpdateEmailVerified(ctx context.Context, userID string,
 func (r *sqliteUserRepo) UpdateLastLogin(ctx context.Context, userID string, t time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE users SET last_login_at = ? WHERE id = ?`, t.UTC().Format(time.RFC3339), userID)
+	return err
+}
+
+func (r *sqliteUserRepo) UpdateRole(ctx context.Context, userID, role string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET role = ? WHERE id = ?`, role, userID)
+	return err
+}
+
+func (r *sqliteUserRepo) UpdateStatus(ctx context.Context, userID, status string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET status = ? WHERE id = ?`, status, userID)
+	return err
+}
+
+func (r *sqliteUserRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE tenant_id = ? AND status = 'active'`, tenantID).Scan(&count)
+	return count, err
+}
+
+// --- Invitation Repo ---
+
+type sqliteInvitationRepo struct{ db *sql.DB }
+
+func (r *sqliteInvitationRepo) Create(ctx context.Context, inv *Invitation) error {
+	if inv.ID == "" {
+		inv.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO invitations (id, tenant_id, email, role, token_hash, status, invited_by, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		inv.ID, inv.TenantID, inv.Email, inv.Role, inv.TokenHash, inv.Status, inv.InvitedBy,
+		inv.CreatedAt.UTC().Format(time.RFC3339), inv.ExpiresAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (r *sqliteInvitationRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error) {
+	var inv Invitation
+	var createdAt, expiresAt string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, email, role, token_hash, status, invited_by, created_at, expires_at
+		 FROM invitations WHERE token_hash = ?`, tokenHash).Scan(
+		&inv.ID, &inv.TenantID, &inv.Email, &inv.Role, &inv.TokenHash, &inv.Status, &inv.InvitedBy, &createdAt, &expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	inv.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	inv.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	return &inv, nil
+}
+
+func (r *sqliteInvitationRepo) ListByTenant(ctx context.Context, tenantID string) ([]*Invitation, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, email, role, status, invited_by, created_at, expires_at
+		 FROM invitations WHERE tenant_id = ? ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var invitations []*Invitation
+	for rows.Next() {
+		var inv Invitation
+		var createdAt, expiresAt string
+		if err := rows.Scan(&inv.ID, &inv.TenantID, &inv.Email, &inv.Role, &inv.Status, &inv.InvitedBy, &createdAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		inv.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		inv.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+		invitations = append(invitations, &inv)
+	}
+	return invitations, nil
+}
+
+func (r *sqliteInvitationRepo) MarkAccepted(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE invitations SET status = 'accepted' WHERE id = ?`, id)
+	return err
+}
+
+func (r *sqliteInvitationRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM invitations WHERE status = 'pending' AND expires_at < datetime('now')`)
 	return err
 }
 

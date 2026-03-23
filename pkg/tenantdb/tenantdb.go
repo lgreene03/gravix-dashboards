@@ -77,6 +77,19 @@ type EmailVerificationToken struct {
 	CreatedAt  time.Time
 }
 
+// Invitation represents a team invite sent by an admin.
+type Invitation struct {
+	ID        string
+	TenantID  string
+	Email     string
+	Role      string // editor, viewer
+	TokenHash string // SHA-256 hash of invite token
+	Status    string // pending, accepted, expired
+	InvitedBy string // user ID of inviter
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
 // TenantRepo manages tenant records.
 type TenantRepo interface {
 	Create(ctx context.Context, t *Tenant) error
@@ -122,6 +135,18 @@ type UserRepo interface {
 	UpdatePassword(ctx context.Context, userID, passwordHash string) error
 	UpdateEmailVerified(ctx context.Context, userID string, verified bool) error
 	UpdateLastLogin(ctx context.Context, userID string, t time.Time) error
+	UpdateRole(ctx context.Context, userID, role string) error
+	UpdateStatus(ctx context.Context, userID, status string) error
+	CountByTenant(ctx context.Context, tenantID string) (int, error)
+}
+
+// InvitationRepo manages team invitations.
+type InvitationRepo interface {
+	Create(ctx context.Context, inv *Invitation) error
+	FindByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error)
+	ListByTenant(ctx context.Context, tenantID string) ([]*Invitation, error)
+	MarkAccepted(ctx context.Context, id string) error
+	DeleteExpired(ctx context.Context) error
 }
 
 // PasswordResetRepo manages password reset tokens.
@@ -294,5 +319,6 @@ type DB interface {
 	RetentionPolicies() RetentionPolicyRepo
 	PasswordResets() PasswordResetRepo
 	EmailVerifications() EmailVerificationRepo
+	Invitations() InvitationRepo
 	Close() error
 }
