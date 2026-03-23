@@ -56,9 +56,10 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	if _, err := db.Exec(postgresSchema); err != nil {
+	// Run schema via migration framework
+	if err := RunMigrations(db, "postgres"); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("init schema: %w", err)
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	pdb := &PostgresDB{db: db}

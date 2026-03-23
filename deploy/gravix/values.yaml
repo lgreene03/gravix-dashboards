@@ -5,7 +5,9 @@ global:
   # REQUIRED: Override these in a separate values file or --set flags.
   # Deploy will fail if these are left empty.
   apiKey: ""
-  cubeApiSecret: ""
+  jwtSecret: ""      # REQUIRED: JWT signing secret (min 32 chars)
+  cubeApiSecret: ""   # REQUIRED: Cube.js API secret
+  databaseUrl: ""     # PostgreSQL connection string (when gateway.dbDriver=postgres)
 
   # Container registry configuration.
   # For GHCR: ghcr.io/<org>/gravix
@@ -156,13 +158,23 @@ storage:
       tag: "RELEASE.2024-03-15T01-07-19Z"
     persistence:
       enabled: true
-      size: 10Gi
+      size: 100Gi
       # storageClass: ""  # Use cluster default if empty
   trino:
     enabled: true
     image:
       repository: trinodb/trino
       tag: "351"
+    workers:
+      enabled: false
+      replicaCount: 2
+      resources:
+        limits:
+          cpu: "2"
+          memory: 4Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
   cube:
     enabled: true
     devMode: false  # Set to true only for local development
@@ -216,6 +228,40 @@ monitoring:
     dashboards:
       enabled: false
       # annotations: {}              # Extra annotations for the dashboard ConfigMap
+
+# Log aggregation (Loki + Promtail).
+# Requires: Loki and Promtail images available.
+logging:
+  loki:
+    enabled: false
+    image:
+      repository: grafana/loki
+      tag: "2.9.4"
+    persistence:
+      size: 10Gi
+  promtail:
+    image:
+      repository: grafana/promtail
+      tag: "2.9.4"
+
+# Alertmanager for alert routing (Slack, PagerDuty, email).
+alertmanager:
+  enabled: false
+  image:
+    repository: prom/alertmanager
+    tag: "v0.27.0"
+  # receivers:
+  #   - name: slack
+  #     slack_configs:
+  #       - api_url: "https://hooks.slack.com/services/..."
+  #         channel: "#alerts"
+
+# Database backup CronJob.
+# SQLite: copies the .db file. PostgreSQL: runs pg_dump.
+dbBackup:
+  enabled: false
+  schedule: "0 1 * * *"  # Daily at 01:00 UTC
+  retentionDays: 7
 
 autoscaling:
   enabled: false

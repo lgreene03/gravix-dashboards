@@ -1,5 +1,5 @@
-const isDuckDB = process.env.CUBEJS_DB_TYPE === 'duckdb';
-const isMultiTenant = !!process.env.TENANT_DB_PATH;
+const isDuckDB = (typeof process !== 'undefined' && process.env && process.env.CUBEJS_DB_TYPE === 'duckdb');
+const isMultiTenant = (typeof process !== 'undefined' && process.env && !!process.env.TENANT_DB_PATH);
 
 const serviceEventsSql = isDuckDB
   ? isMultiTenant
@@ -30,7 +30,7 @@ cube(`ServiceEvents`, {
     },
 
     eventTime: {
-      sql: `event_time`,
+      sql: isDuckDB ? `event_time` : `CAST(event_time AS TIMESTAMP)`,
       type: `time`,
       title: `Event Time`
     },

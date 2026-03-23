@@ -1,0 +1,82 @@
+# Production value overrides for Gravix Helm chart.
+# Usage: helm install gravix ./deploy/gravix -f deploy/gravix/values-production.yaml --set global.apiKey=... --set global.jwtSecret=... --set global.cubeApiSecret=...
+
+global:
+  # REQUIRED: set these via --set or a separate secrets file
+  # apiKey: ""
+  # jwtSecret: ""
+  # cubeApiSecret: ""
+  storage:
+    endpoint: ""        # Set to actual S3 endpoint (e.g., "https://s3.us-east-1.amazonaws.com")
+    region: "us-east-1"
+    bucket: "gravix-prod"
+    # accessKey: ""
+    # secretKey: ""
+
+ingestion:
+  replicaCount: 2
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+loadGenerator:
+  enabled: false  # Disable in production
+
+gateway:
+  replicaCount: 2
+  dbDriver: "postgres"
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+storage:
+  minio:
+    enabled: false  # Use real S3 in production
+  trino:
+    workers:
+      enabled: true
+      replicaCount: 2
+      resources:
+        limits:
+          cpu: "2"
+          memory: 4Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+  cube:
+    devMode: false
+
+retentionJob:
+  mode: "auto"  # Per-plan retention in production
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
+  grafana:
+    dashboards:
+      enabled: true
+
+logging:
+  loki:
+    enabled: true
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionDays: 30

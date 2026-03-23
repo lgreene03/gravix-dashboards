@@ -227,6 +227,12 @@ func Open(dbPath string) (*SQLiteDB, error) {
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
+	// Enforce WAL mode for better read concurrency
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable WAL mode: %w", err)
+	}
+
 	// Connection pool tuning: SQLite serializes writes, so a single
 	// connection avoids SQLITE_BUSY contention while WAL mode still
 	// allows concurrent reads from the same connection.
@@ -234,26 +240,11 @@ func Open(dbPath string) (*SQLiteDB, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0) // no lifetime limit for single-conn pool
 
-	// Run schema migrations (idempotent)
-	if _, err := db.Exec(schema); err != nil {
+	// Run schema via migration framework (handles both fresh and pre-existing DBs)
+	if err := RunMigrations(db, "sqlite"); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("run schema: %w", err)
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-
-	// Incremental migrations for existing databases
-	migrations := []string{
-		`ALTER TABLE api_keys ADD COLUMN expires_at TEXT`,
-		`ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
-		`ALTER TABLE users ADD COLUMN last_login_at TEXT`,
-	}
-	for _, m := range migrations {
-		// Ignore "duplicate column" errors from re-running migrations
-		db.Exec(m)
-	}
-
-	// Backfill existing users as verified (they registered before verification was required)
-	db.Exec(`UPDATE users SET email_verified = 1 WHERE email_verified = 0 AND created_at < datetime('now', '-1 minute')`)
 
 	return &SQLiteDB{db: db}, nil
 }

@@ -1,5 +1,5 @@
-const isDuckDB = process.env.CUBEJS_DB_TYPE === 'duckdb';
-const isMultiTenant = !!process.env.TENANT_DB_PATH;
+const isDuckDB = (typeof process !== 'undefined' && process.env && process.env.CUBEJS_DB_TYPE === 'duckdb');
+const isMultiTenant = (typeof process !== 'undefined' && process.env && !!process.env.TENANT_DB_PATH);
 
 const requestMetricsSql = isDuckDB
   ? isMultiTenant
@@ -70,7 +70,7 @@ cube(`RequestMetricsMinute`, {
     },
 
     bucketStart: {
-      sql: `bucket_start`,
+      sql: isDuckDB ? `bucket_start` : `CAST(bucket_start AS TIMESTAMP)`,
       type: `time`,
       title: `Time`
     },
