@@ -359,6 +359,7 @@ func main() {
 	mux.HandleFunc("/api/gateway/consent", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleConsent))))
 	mux.HandleFunc("/api/gateway/account", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleAccountDeletion))))
 	mux.HandleFunc("/api/gateway/account/cancel-deletion", gw.requireAuth(gw.rateLimitMiddleware(gw.handleCancelDeletion)))
+	mux.HandleFunc("/api/gateway/openapi.json", gw.handleOpenAPI)
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))

@@ -1,0 +1,92 @@
+name: Publish SDKs
+
+on:
+  push:
+    tags:
+      - 'sdk-go-v*'
+      - 'sdk-python-v*'
+      - 'sdk-node-v*'
+      - 'sdk-java-v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  detect-sdk:
+    runs-on: ubuntu-latest
+    outputs:
+      sdk: ${{ steps.detect.outputs.sdk }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - id: detect
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == sdk-go-v* ]]; then
+            echo "sdk=go" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#sdk-go-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == sdk-python-v* ]]; then
+            echo "sdk=python" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#sdk-python-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == sdk-node-v* ]]; then
+            echo "sdk=node" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#sdk-node-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == sdk-java-v* ]]; then
+            echo "sdk=java" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#sdk-java-v}" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish-python:
+    needs: detect-sdk
+    if: needs.detect-sdk.outputs.sdk == 'python'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and publish
+        working-directory: sdk/python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          pip install build twine
+          python -m build
+          twine upload dist/*
+
+  publish-node:
+    needs: detect-sdk
+    if: needs.detect-sdk.outputs.sdk == 'node'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Publish
+        working-directory: sdk/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm ci
+          npm publish --access public
+
+  publish-java:
+    needs: detect-sdk
+    if: needs.detect-sdk.outputs.sdk == 'java'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Build and publish
+        working-directory: sdk/java
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          mvn -B deploy -DskipTests
