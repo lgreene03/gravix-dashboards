@@ -266,13 +266,19 @@
                 errorEl.style.display = 'block';
                 return;
             }
+            const acceptTOS = document.getElementById('signupTOS')?.checked;
+            if (!acceptTOS) {
+                errorEl.textContent = 'You must accept the Terms of Service and Privacy Policy.';
+                errorEl.style.display = 'block';
+                return;
+            }
 
             document.getElementById('signupSubmit').textContent = 'Creating...';
             try {
                 const resp = await fetch(GATEWAY_URL + '/api/gateway/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, email, password })
+                    body: JSON.stringify({ name, email, password, accept_tos: true })
                 });
                 const data = await resp.json();
                 if (resp.ok) {
@@ -3506,6 +3512,105 @@ app.listen(8080, () => {
             }
         }
 
+        // --- ACCOUNT DELETION ---
+        const deleteAccountBtn = document.getElementById('delete-account-btn');
+        const deleteConfirmModal = document.getElementById('delete-confirm-modal');
+        const deleteConfirmInput = document.getElementById('delete-confirm-input');
+        const deleteConfirmBtn = document.getElementById('delete-confirm-btn');
+        const deleteCancelModalBtn = document.getElementById('delete-cancel-modal-btn');
+        const cancelDeletionBtn = document.getElementById('cancel-deletion-btn');
+
+        if (deleteAccountBtn) {
+            deleteAccountBtn.addEventListener('click', function() {
+                if (deleteConfirmModal) {
+                    deleteConfirmModal.style.display = 'flex';
+                    if (deleteConfirmInput) deleteConfirmInput.value = '';
+                }
+            });
+        }
+        if (deleteCancelModalBtn) {
+            deleteCancelModalBtn.addEventListener('click', function() {
+                if (deleteConfirmModal) deleteConfirmModal.style.display = 'none';
+            });
+        }
+        if (deleteConfirmBtn) {
+            deleteConfirmBtn.addEventListener('click', async function() {
+                if (!deleteConfirmInput || deleteConfirmInput.value !== 'DELETE') {
+                    showToast('Please type DELETE to confirm', 'error');
+                    return;
+                }
+                try {
+                    const tok = sessionStorage.getItem('gravix_token');
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/account', {
+                        method: 'DELETE',
+                        headers: { 'Authorization': 'Bearer ' + tok }
+                    });
+                    const data = await resp.json();
+                    if (resp.ok || resp.status === 202) {
+                        showToast('Account scheduled for deletion in 30 days', 'warning', 5000);
+                        if (deleteConfirmModal) deleteConfirmModal.style.display = 'none';
+                        checkDeletionStatus();
+                    } else {
+                        showToast(data.error || 'Failed to delete account', 'error');
+                    }
+                } catch (e) {
+                    showToast('Failed to reach server', 'error');
+                }
+            });
+        }
+        if (cancelDeletionBtn) {
+            cancelDeletionBtn.addEventListener('click', async function() {
+                try {
+                    const tok = sessionStorage.getItem('gravix_token');
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/account/cancel-deletion', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + tok }
+                    });
+                    if (resp.ok) {
+                        showToast('Deletion request cancelled', 'success');
+                        const statusEl = document.getElementById('deletion-status');
+                        if (statusEl) statusEl.style.display = 'none';
+                        const delBtn = document.getElementById('delete-account-btn');
+                        if (delBtn) delBtn.style.display = 'inline-block';
+                    } else {
+                        const data = await resp.json();
+                        showToast(data.error || 'Failed to cancel deletion', 'error');
+                    }
+                } catch (e) {
+                    showToast('Failed to reach server', 'error');
+                }
+            });
+        }
+
+        async function checkDeletionStatus() {
+            try {
+                const tok = sessionStorage.getItem('gravix_token');
+                if (!tok) return;
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/account', {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + tok }
+                });
+                // A 200 with "deletion already requested" means pending
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.status === 'pending') {
+                        const statusEl = document.getElementById('deletion-status');
+                        const infoEl = document.getElementById('deletion-info');
+                        if (statusEl) statusEl.style.display = 'block';
+                        if (infoEl) {
+                            const expires = new Date(data.expires_at);
+                            const days = Math.ceil((expires - new Date()) / (1000 * 60 * 60 * 24));
+                            infoEl.textContent = 'Your account will be permanently deleted in ' + days + ' days (by ' + expires.toLocaleDateString() + ').';
+                        }
+                        const delBtn = document.getElementById('delete-account-btn');
+                        if (delBtn) delBtn.style.display = 'none';
+                    }
+                }
+            } catch (e) {
+                // ignore — non-critical
+            }
+        }
+
         // --- TOKEN AUTO-REFRESH ---
         // Refresh the JWT every 20 minutes to keep the session alive
         if (IS_MULTI_TENANT && sessionStorage.getItem('gravix_token')) {
@@ -3529,5 +3634,32 @@ app.listen(8080, () => {
                 }
             }, 20 * 60 * 1000); // 20 minutes
         }
+
+        // Cookie consent banner
+        function initCookieConsent() {
+            if (localStorage.getItem('gravix_cookie_consent')) return;
+            const banner = document.getElementById('cookie-consent');
+            if (!banner) return;
+            banner.style.display = 'block';
+
+            document.getElementById('cookie-accept')?.addEventListener('click', function() {
+                localStorage.setItem('gravix_cookie_consent', 'accepted');
+                banner.style.display = 'none';
+                // Record cookie consent if logged in
+                const tok = sessionStorage.getItem('gravix_token');
+                if (tok) {
+                    fetch(GATEWAY_URL + '/api/gateway/consent', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ type: 'cookies', version: '1.0', accepted: true })
+                    }).catch(function() {});
+                }
+            });
+            document.getElementById('cookie-decline')?.addEventListener('click', function() {
+                localStorage.setItem('gravix_cookie_consent', 'declined');
+                banner.style.display = 'none';
+            });
+        }
+        initCookieConsent();
 
     })();

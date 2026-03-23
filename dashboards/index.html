@@ -67,6 +67,10 @@
                 <input type="email" id="signupEmail" placeholder="Email" autocomplete="email" aria-label="Email address" style="margin-bottom:8px;">
                 <input type="password" id="signupPassword" placeholder="Password (min 8 chars)" autocomplete="new-password" aria-label="Password" style="margin-bottom:8px;">
                 <input type="password" id="signupPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password" aria-label="Confirm password">
+                <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; color:#64748b; margin:8px 0;">
+                    <input type="checkbox" id="signupTOS" aria-label="Accept Terms of Service">
+                    I agree to the <a href="terms.html" target="_blank" style="color:#3b82f6;">Terms of Service</a> and <a href="privacy.html" target="_blank" style="color:#3b82f6;">Privacy Policy</a>
+                </label>
                 <button type="submit" id="signupSubmit">Create Account</button>
             </form>
         </div>
@@ -936,6 +940,39 @@
                     <button id="settings-logout-btn" style="padding: 10px 24px; background: #ef4444; color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Log Out</button>
                 </div>
             </div>
+
+            <!-- Delete Account -->
+            <div class="card" style="margin-top: 24px; border: 1px solid var(--danger-color, #ef4444);">
+                <div class="card-header" style="display:flex; align-items:center; gap:12px;">
+                    <div style="width:40px;height:40px;border-radius:10px;background:rgba(239,68,68,0.1);display:flex;align-items:center;justify-content:center;font-size:1.2rem;">&#9888;</div>
+                    <div>
+                        <div class="card-title" style="color: var(--danger-color, #ef4444);">Danger Zone</div>
+                        <div class="card-subtitle">Permanently delete your account and all data</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="deletion-status" style="display:none; padding: 12px 16px; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; margin-bottom: 16px;">
+                        <strong>Deletion scheduled</strong>
+                        <p id="deletion-info" style="margin: 4px 0 0; font-size: 0.875rem; color: var(--text-secondary);"></p>
+                        <button id="cancel-deletion-btn" style="margin-top: 8px; padding: 6px 16px; background: var(--brand-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">Cancel Deletion</button>
+                    </div>
+                    <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 12px;">Once deleted, your account, data, and API keys will be permanently removed after a 30-day grace period. This action cannot be undone after the grace period.</p>
+                    <button id="delete-account-btn" style="padding: 10px 24px; background: var(--danger-color, #ef4444); color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Delete Account</button>
+                </div>
+            </div>
+
+            <!-- Delete Account Confirmation Modal -->
+            <div id="delete-confirm-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:9999; display:none; align-items:center; justify-content:center;">
+                <div style="background: var(--bg-card, #fff); border-radius: 12px; padding: 32px; max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+                    <h3 style="margin: 0 0 8px; color: var(--danger-color, #ef4444);">Delete Account</h3>
+                    <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 16px;">This will schedule your account for permanent deletion in 30 days. Type <strong>DELETE</strong> to confirm.</p>
+                    <input type="text" id="delete-confirm-input" placeholder="Type DELETE" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit; margin-bottom: 12px; box-sizing: border-box;" aria-label="Type DELETE to confirm">
+                    <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                        <button id="delete-cancel-modal-btn" style="padding: 8px 20px; background: var(--bg-secondary, #f1f5f9); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; font-family: inherit;">Cancel</button>
+                        <button id="delete-confirm-btn" style="padding: 8px 20px; background: var(--danger-color, #ef4444); color: white; border: none; border-radius: 6px; cursor: pointer; font-family: inherit; font-weight: 600;">Delete</button>
+                    </div>
+                </div>
+            </div>
         </div><!-- end page-settings -->
 
     </main>
@@ -1039,6 +1076,20 @@
                     <button class="wizard-btn wizard-btn-secondary" id="wizBack" style="display:none;">Back</button>
                     <button class="wizard-btn wizard-btn-primary" id="wizNext">Next</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cookie Consent Banner -->
+    <div id="cookie-consent" class="cookie-consent" role="dialog" aria-label="Cookie consent" style="display:none;">
+        <div class="cookie-consent-content">
+            <p>We use essential cookies for authentication. No tracking cookies are used. By continuing, you accept our
+                <a href="terms.html" target="_blank">Terms of Service</a> and
+                <a href="privacy.html" target="_blank">Privacy Policy</a>.
+            </p>
+            <div class="cookie-consent-actions">
+                <button id="cookie-accept" class="btn btn-primary btn-sm">Accept</button>
+                <button id="cookie-decline" class="btn btn-outline btn-sm">Decline Non-Essential</button>
             </div>
         </div>
     </div>

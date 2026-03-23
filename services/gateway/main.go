@@ -350,6 +350,11 @@ func main() {
 	mux.HandleFunc("/api/gateway/invitations", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleInvitations))))
 	mux.HandleFunc("/api/gateway/invitations/accept", gw.ipRateLimitMiddleware(bodyLimit(gw.handleAcceptInvitation)))
 	mux.HandleFunc("/api/gateway/team", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTeam))))
+	mux.HandleFunc("/api/gateway/gdpr/access", gw.requireAuth(gw.rateLimitMiddleware(gw.handleGDPRAccess)))
+	mux.HandleFunc("/api/gateway/gdpr/portability", gw.requireAuth(gw.rateLimitMiddleware(gw.handleGDPRPortability)))
+	mux.HandleFunc("/api/gateway/consent", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleConsent))))
+	mux.HandleFunc("/api/gateway/account", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleAccountDeletion))))
+	mux.HandleFunc("/api/gateway/account/cancel-deletion", gw.requireAuth(gw.rateLimitMiddleware(gw.handleCancelDeletion)))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -1539,6 +1544,7 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Email        string `json:"email"`
 		Password     string `json:"password"`
 		CaptchaToken string `json:"captcha_token"`
+		AcceptTOS    bool   `json:"accept_tos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1547,6 +1553,10 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	if req.Name == "" || req.Email == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "name, email, and password are required")
+		return
+	}
+	if !req.AcceptTOS {
+		writeError(w, http.StatusBadRequest, "you must accept the Terms of Service")
 		return
 	}
 
@@ -1611,6 +1621,26 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create user")
 		return
 	}
+
+	// Record TOS consent
+	_ = gw.db.ConsentRecords().Create(ctx, &tenantdb.ConsentRecord{
+		TenantID:  tenant.ID,
+		UserID:    user.ID,
+		Type:      "tos",
+		Version:   "1.0",
+		Accepted:  true,
+		IPAddress: ratelimit.ExtractIP(r),
+		CreatedAt: time.Now().UTC(),
+	})
+	_ = gw.db.ConsentRecords().Create(ctx, &tenantdb.ConsentRecord{
+		TenantID:  tenant.ID,
+		UserID:    user.ID,
+		Type:      "privacy",
+		Version:   "1.0",
+		Accepted:  true,
+		IPAddress: ratelimit.ExtractIP(r),
+		CreatedAt: time.Now().UTC(),
+	})
 
 	// Send email verification token
 	gw.sendVerificationEmail(ctx, user)
@@ -3758,5 +3788,234 @@ func (gw *gateway) handleTraceByID(w http.ResponseWriter, r *http.Request) {
 		"trace_id": traceID,
 		"spans":    spans,
 		"total":    len(spans),
+	})
+}
+
+// handleGDPRAccess returns all personal data held for the authenticated user (GDPR Article 15).
+func (gw *gateway) handleGDPRAccess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	user, err := gw.db.Users().GetByID(ctx, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	tenant, _ := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	consents, _ := gw.db.ConsentRecords().ListByUser(ctx, claims.UserID)
+
+	result := map[string]interface{}{
+		"user": map[string]interface{}{
+			"id":             user.ID,
+			"email":          user.Email,
+			"role":           user.Role,
+			"email_verified": user.EmailVerified,
+			"status":         user.Status,
+			"created_at":     user.CreatedAt.Format(time.RFC3339),
+		},
+		"consent_records": consents,
+	}
+	if tenant != nil {
+		result["tenant"] = map[string]interface{}{
+			"id":         tenant.ID,
+			"name":       tenant.Name,
+			"plan":       tenant.Plan,
+			"status":     tenant.Status,
+			"created_at": tenant.CreatedAt.Format(time.RFC3339),
+		}
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "gdpr.access", "user", claims.UserID, "", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleGDPRPortability exports personal data as a downloadable JSON file (GDPR Article 20).
+func (gw *gateway) handleGDPRPortability(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	user, err := gw.db.Users().GetByID(ctx, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	tenant, _ := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	consents, _ := gw.db.ConsentRecords().ListByUser(ctx, claims.UserID)
+
+	export := map[string]interface{}{
+		"exported_at": time.Now().UTC().Format(time.RFC3339),
+		"user": map[string]interface{}{
+			"id":             user.ID,
+			"email":          user.Email,
+			"role":           user.Role,
+			"email_verified": user.EmailVerified,
+			"status":         user.Status,
+			"created_at":     user.CreatedAt.Format(time.RFC3339),
+		},
+		"consent_records": consents,
+	}
+	if tenant != nil {
+		export["tenant"] = map[string]interface{}{
+			"id":         tenant.ID,
+			"name":       tenant.Name,
+			"plan":       tenant.Plan,
+			"status":     tenant.Status,
+			"created_at": tenant.CreatedAt.Format(time.RFC3339),
+		}
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "gdpr.portability", "user", claims.UserID, "", r.RemoteAddr)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"gravix-data-export.json\"")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(export)
+}
+
+// handleConsent manages consent records (GET = list, POST = record new consent).
+func (gw *gateway) handleConsent(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	switch r.Method {
+	case http.MethodGet:
+		records, err := gw.db.ConsentRecords().ListByUser(ctx, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list consent records")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"consent_records": records,
+		})
+
+	case http.MethodPost:
+		var req struct {
+			Type     string `json:"type"`
+			Version  string `json:"version"`
+			Accepted bool   `json:"accepted"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Type == "" || req.Version == "" {
+			writeError(w, http.StatusBadRequest, "type and version are required")
+			return
+		}
+		validTypes := map[string]bool{"tos": true, "privacy": true, "cookies": true}
+		if !validTypes[req.Type] {
+			writeError(w, http.StatusBadRequest, "type must be tos, privacy, or cookies")
+			return
+		}
+
+		record := &tenantdb.ConsentRecord{
+			TenantID:  claims.TenantID,
+			UserID:    claims.UserID,
+			Type:      req.Type,
+			Version:   req.Version,
+			Accepted:  req.Accepted,
+			IPAddress: ratelimit.ExtractIP(r),
+			CreatedAt: time.Now().UTC(),
+		}
+		if err := gw.db.ConsentRecords().Create(ctx, record); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record consent")
+			return
+		}
+		gw.auditDirect(claims.TenantID, claims.UserID, "consent.record", "consent", record.ID,
+			fmt.Sprintf(`{"type":%q,"version":%q,"accepted":%v}`, req.Type, req.Version, req.Accepted), r.RemoteAddr)
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"id":      record.ID,
+			"type":    record.Type,
+			"version": record.Version,
+		})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST required")
+	}
+}
+
+// handleAccountDeletion requests account deletion with 30-day grace period.
+func (gw *gateway) handleAccountDeletion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "DELETE required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+	ctx := r.Context()
+
+	// Check if deletion already pending
+	existing, _ := gw.db.DeletionRequests().GetByTenantID(ctx, claims.TenantID)
+	if existing != nil && existing.Status == "pending" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id":           existing.ID,
+			"status":       existing.Status,
+			"requested_at": existing.RequestedAt.Format(time.RFC3339),
+			"expires_at":   existing.ExpiresAt.Format(time.RFC3339),
+			"message":      "deletion already requested",
+		})
+		return
+	}
+
+	dr := &tenantdb.DeletionRequest{
+		TenantID:    claims.TenantID,
+		RequestedBy: claims.UserID,
+		Status:      "pending",
+		RequestedAt: time.Now().UTC(),
+		ExpiresAt:   time.Now().UTC().Add(30 * 24 * time.Hour),
+	}
+	if err := gw.db.DeletionRequests().Create(ctx, dr); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create deletion request")
+		return
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "account.delete_request", "tenant", claims.TenantID, "", r.RemoteAddr)
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"id":           dr.ID,
+		"status":       "pending",
+		"requested_at": dr.RequestedAt.Format(time.RFC3339),
+		"expires_at":   dr.ExpiresAt.Format(time.RFC3339),
+		"message":      "account scheduled for deletion in 30 days",
+	})
+}
+
+// handleCancelDeletion cancels a pending account deletion request.
+func (gw *gateway) handleCancelDeletion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+	ctx := r.Context()
+
+	dr, err := gw.db.DeletionRequests().GetByTenantID(ctx, claims.TenantID)
+	if err != nil || dr == nil || dr.Status != "pending" {
+		writeError(w, http.StatusNotFound, "no pending deletion request found")
+		return
+	}
+
+	if err := gw.db.DeletionRequests().Cancel(ctx, dr.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to cancel deletion")
+		return
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "account.cancel_deletion", "tenant", claims.TenantID, "", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "deletion request cancelled",
 	})
 }

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Processing Agreement — Gravix</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem 1rem; line-height: 1.7; color: #1e293b; }
+        h1 { color: #3b82f6; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.5rem; }
+        h2 { color: #334155; margin-top: 2rem; }
+        h3 { color: #475569; }
+        p, li { color: #475569; }
+        a { color: #3b82f6; }
+        .effective-date { color: #64748b; font-size: 0.9rem; }
+        table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+        th, td { border: 1px solid #e2e8f0; padding: 0.5rem 1rem; text-align: left; }
+        th { background: #f1f5f9; }
+        .signature-block { display: flex; gap: 40px; margin-top: 2rem; }
+        .signature-line { flex: 1; }
+        .signature-line hr { border: none; border-top: 1px solid #1e293b; margin-top: 60px; }
+        .signature-line p { margin: 4px 0; font-size: 0.85rem; color: #64748b; }
+        @media print { body { padding: 0; } a { color: #1e293b; text-decoration: none; } .no-print { display: none; } }
+    </style>
+</head>
+<body>
+    <div class="no-print" style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 0.875rem;">
+        <strong>Download:</strong> Use your browser's Print function (Ctrl+P / Cmd+P) and select "Save as PDF" to download this document.
+        <br><a href="index.html">&larr; Back to Dashboard</a>
+    </div>
+
+    <h1>Data Processing Agreement (DPA)</h1>
+    <p class="effective-date">Version 1.0 — March 2026</p>
+
+    <p>This Data Processing Agreement ("DPA") forms part of the agreement between the Customer (the "Controller") and Gravix (the "Processor") for the provision of the Gravix observability platform (the "Service").</p>
+
+    <h2>1. Definitions</h2>
+    <p>"Personal Data" means any information relating to an identified or identifiable natural person, as defined in Article 4 of the GDPR. "Processing" has the meaning given in the GDPR.</p>
+
+    <h2>2. Scope of Processing</h2>
+    <table>
+        <tr><th>Category</th><th>Details</th></tr>
+        <tr><td>Subject matter</td><td>Provision of HTTP observability monitoring services</td></tr>
+        <tr><td>Duration</td><td>Term of the Service agreement</td></tr>
+        <tr><td>Nature and purpose</td><td>Collection, storage, and analysis of HTTP service metrics</td></tr>
+        <tr><td>Types of personal data</td><td>Account email, name, IP address (authentication only)</td></tr>
+        <tr><td>Categories of data subjects</td><td>Customer employees (dashboard users)</td></tr>
+    </table>
+
+    <h2>3. Obligations of the Processor</h2>
+    <ul>
+        <li>Process Personal Data only on documented instructions from the Controller</li>
+        <li>Ensure persons authorized to process have committed to confidentiality</li>
+        <li>Implement appropriate technical and organizational security measures</li>
+        <li>Not engage sub-processors without prior written authorization</li>
+        <li>Assist the Controller with data subject rights requests</li>
+        <li>Delete or return all Personal Data upon termination of the agreement</li>
+        <li>Make available all information necessary to demonstrate compliance</li>
+    </ul>
+
+    <h2>4. Security Measures</h2>
+    <p>The Processor implements the following technical and organizational measures:</p>
+    <ul>
+        <li>Encryption in transit (TLS 1.2+)</li>
+        <li>Password hashing (bcrypt, cost 12)</li>
+        <li>API key hashing (SHA-256)</li>
+        <li>Rate limiting and IP-based protection</li>
+        <li>Role-based access control</li>
+        <li>Audit logging of all administrative actions</li>
+        <li>Automated data retention and deletion</li>
+    </ul>
+
+    <h2>5. Sub-Processors</h2>
+    <table>
+        <tr><th>Sub-Processor</th><th>Purpose</th><th>Location</th></tr>
+        <tr><td>Stripe, Inc.</td><td>Payment processing</td><td>United States</td></tr>
+        <tr><td>Cloud infrastructure provider</td><td>Hosting and compute</td><td>As specified in Order Form</td></tr>
+    </table>
+
+    <h2>6. Data Transfers</h2>
+    <p>Where Personal Data is transferred outside the EEA, the Processor ensures appropriate safeguards through Standard Contractual Clauses (SCCs) as approved by the European Commission.</p>
+
+    <h2>7. Data Breach Notification</h2>
+    <p>The Processor shall notify the Controller without undue delay (and in any event within 72 hours) after becoming aware of a Personal Data breach.</p>
+
+    <h2>8. Data Subject Rights</h2>
+    <p>The Processor shall assist the Controller in responding to requests from data subjects exercising their rights under the GDPR, including access, rectification, erasure, restriction, portability, and objection.</p>
+
+    <h2>9. Return and Deletion</h2>
+    <p>Upon termination, the Processor shall, at the Controller's choice, delete or return all Personal Data within 30 days and certify deletion in writing.</p>
+
+    <h2>10. Audit Rights</h2>
+    <p>The Controller may audit the Processor's compliance with this DPA upon reasonable notice, no more than once per year.</p>
+
+    <h2>11. Governing Law</h2>
+    <p>This DPA shall be governed by the laws applicable to the main Service agreement.</p>
+
+    <div class="signature-block">
+        <div class="signature-line">
+            <hr>
+            <p><strong>Controller (Customer)</strong></p>
+            <p>Name: _________________________</p>
+            <p>Title: _________________________</p>
+            <p>Date: _________________________</p>
+        </div>
+        <div class="signature-line">
+            <hr>
+            <p><strong>Processor (Gravix)</strong></p>
+            <p>Name: _________________________</p>
+            <p>Title: _________________________</p>
+            <p>Date: _________________________</p>
+        </div>
+    </div>
+</body>
+</html>

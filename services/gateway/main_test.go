@@ -238,10 +238,11 @@ func TestLoginSuspendedTenant(t *testing.T) {
 func TestRegisterSuccess(t *testing.T) {
 	gw := newTestGateway(t)
 
-	body := jsonBody(t, map[string]string{
-		"name":     "New Corp",
-		"email":    "new@corp.com",
-		"password": "S3cur3P@ss!",
+	body := jsonBody(t, map[string]interface{}{
+		"name":       "New Corp",
+		"email":      "new@corp.com",
+		"password":   "S3cur3P@ss!",
+		"accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -273,8 +274,8 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	gw := newTestGateway(t)
 
 	// Register first user
-	body := jsonBody(t, map[string]string{
-		"name": "Corp A", "email": "dup@corp.com", "password": "S3cur3P@ss!",
+	body := jsonBody(t, map[string]interface{}{
+		"name": "Corp A", "email": "dup@corp.com", "password": "S3cur3P@ss!", "accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -284,8 +285,8 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	}
 
 	// Try duplicate
-	body = jsonBody(t, map[string]string{
-		"name": "Corp B", "email": "dup@corp.com", "password": "S3cur3P@ss2",
+	body = jsonBody(t, map[string]interface{}{
+		"name": "Corp B", "email": "dup@corp.com", "password": "S3cur3P@ss2", "accept_tos": true,
 	})
 	req = httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr = httptest.NewRecorder()
@@ -299,8 +300,8 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 func TestRegisterShortPassword(t *testing.T) {
 	gw := newTestGateway(t)
 
-	body := jsonBody(t, map[string]string{
-		"name": "Corp", "email": "new@corp.com", "password": "short",
+	body := jsonBody(t, map[string]interface{}{
+		"name": "Corp", "email": "new@corp.com", "password": "short", "accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -1735,8 +1736,8 @@ func TestAuditLogPagination(t *testing.T) {
 func TestRegisterCreatesAuditEntry(t *testing.T) {
 	gw := newTestGateway(t)
 
-	body := jsonBody(t, map[string]string{
-		"name": "Audit Corp", "email": "audit@corp.com", "password": "S3cur3P@ss!",
+	body := jsonBody(t, map[string]interface{}{
+		"name": "Audit Corp", "email": "audit@corp.com", "password": "S3cur3P@ss!", "accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -3021,5 +3022,212 @@ func TestMeIncludesProfileFields(t *testing.T) {
 	}
 	if _, ok := resp["plan"]; !ok {
 		t.Error("expected plan in /me response")
+	}
+}
+
+// ============================================================
+// GDPR / Consent / Account Deletion tests
+// ============================================================
+
+func TestGDPRAccessReturnsUserData(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/gdpr/access", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleGDPRAccess(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["user"] == nil {
+		t.Error("expected user in response")
+	}
+	if resp["tenant"] == nil {
+		t.Error("expected tenant in response")
+	}
+}
+
+func TestGDPRPortabilityDownload(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/gdpr/portability", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleGDPRPortability(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	cd := rr.Header().Get("Content-Disposition")
+	if cd == "" {
+		t.Error("expected Content-Disposition header")
+	}
+	if !strings.Contains(cd, "gravix-data-export.json") {
+		t.Errorf("Content-Disposition = %q, want attachment filename", cd)
+	}
+}
+
+func TestConsentListEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/consent", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleConsent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
+
+func TestConsentCreateAndList(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+
+	// Create consent
+	body := jsonBody(t, map[string]interface{}{
+		"type": "cookies", "version": "1.0", "accepted": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/consent", body)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+	gw.handleConsent(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+
+	// List consent
+	req = httptest.NewRequest(http.MethodGet, "/api/gateway/consent", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr = httptest.NewRecorder()
+	gw.handleConsent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", rr.Code)
+	}
+}
+
+func TestConsentInvalidType(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	body := jsonBody(t, map[string]interface{}{
+		"type": "invalid", "version": "1.0", "accepted": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/consent", body)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+	gw.handleConsent(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestAccountDeletionAndCancel(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+
+	// Request deletion
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+	gw.handleAccountDeletion(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("delete status = %d, want 202; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["status"] != "pending" {
+		t.Errorf("status = %v, want pending", resp["status"])
+	}
+
+	// Cancel deletion
+	req = httptest.NewRequest(http.MethodPost, "/api/gateway/account/cancel-deletion", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr = httptest.NewRecorder()
+	gw.handleCancelDeletion(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAccountDeletionRequiresAdmin(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "viewer"}
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+	gw.handleAccountDeletion(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+}
+
+func TestAccountDeletionDuplicateReturnsPending(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+
+	// First request
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+	gw.handleAccountDeletion(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("first delete status = %d", rr.Code)
+	}
+
+	// Second request — should return 200 with existing
+	req = httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr = httptest.NewRecorder()
+	gw.handleAccountDeletion(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second delete status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["message"] != "deletion already requested" {
+		t.Errorf("message = %v", resp["message"])
+	}
+}
+
+func TestRegisterRequiresTOS(t *testing.T) {
+	gw := newTestGateway(t)
+
+	body := jsonBody(t, map[string]interface{}{
+		"name": "No TOS Corp", "email": "notos@corp.com", "password": "S3cur3P@ss!", "accept_tos": false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
+	rr := httptest.NewRecorder()
+	gw.handleRegister(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }

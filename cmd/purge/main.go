@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -356,6 +357,11 @@ func main() {
 		}
 	}
 
+	// Process expired deletion requests
+	if tdb != nil {
+		processExpiredDeletionRequests(ctx, tdb, store, dryRun)
+	}
+
 	action := "deleted"
 	if dryRun {
 		action = "would delete"
@@ -454,4 +460,78 @@ func archiveToTier(ctx context.Context, store storage.ObjectStore, prefix, cutof
 		}
 	}
 	return archived, nil
+}
+
+// processExpiredDeletionRequests handles accounts past their 30-day grace period.
+// It deletes all storage files and DB records for each expired tenant, then marks the request complete.
+func processExpiredDeletionRequests(ctx context.Context, tdb tenantdb.DB, store storage.ObjectStore, dryRun bool) {
+	pending, err := tdb.DeletionRequests().ListPending(ctx)
+	if err != nil {
+		slog.Error("failed to list pending deletion requests", "error", err)
+		return
+	}
+
+	now := time.Now().UTC()
+	for _, dr := range pending {
+		if ctx.Err() != nil {
+			return
+		}
+		if now.Before(dr.ExpiresAt) {
+			slog.Info("deletion request still in grace period", "tenant_id", dr.TenantID,
+				"expires_at", dr.ExpiresAt.Format(time.RFC3339))
+			continue
+		}
+
+		slog.Info("processing expired deletion request", "tenant_id", dr.TenantID, "request_id", dr.ID)
+
+		if dryRun {
+			slog.Info("would delete all data for tenant", "tenant_id", dr.TenantID)
+			continue
+		}
+
+		// Delete all storage files for this tenant
+		storagePrefixes := []string{
+			fmt.Sprintf("raw/%s/", dr.TenantID),
+			fmt.Sprintf("warehouse/%s/", dr.TenantID),
+		}
+		for _, prefix := range storagePrefixes {
+			keys, err := store.List(ctx, strings.TrimSuffix(prefix, "/"))
+			if err != nil {
+				slog.Error("failed to list files for deletion", "prefix", prefix, "error", err)
+				continue
+			}
+			for _, key := range keys {
+				if err := store.Delete(ctx, key); err != nil {
+					slog.Error("failed to delete file", "key", key, "error", err)
+				}
+			}
+			slog.Info("deleted storage files", "prefix", prefix, "count", len(keys))
+		}
+
+		// Mark the deletion request as complete
+		if err := tdb.DeletionRequests().Complete(ctx, dr.ID); err != nil {
+			slog.Error("failed to mark deletion complete", "request_id", dr.ID, "error", err)
+			continue
+		}
+
+		// Suspend the tenant (prevents further API access)
+		if err := tdb.Tenants().UpdateStatus(ctx, dr.TenantID, "deleted"); err != nil {
+			slog.Error("failed to update tenant status", "tenant_id", dr.TenantID, "error", err)
+		}
+
+		// Audit log entry
+		entry := &tenantdb.AuditEntry{
+			TenantID:   dr.TenantID,
+			UserID:     "system",
+			Action:     "account.deleted",
+			Resource:   "tenant",
+			ResourceID: dr.TenantID,
+			Detail:     fmt.Sprintf(`{"deletion_request_id":%q}`, dr.ID),
+		}
+		if err := tdb.AuditLog().Log(ctx, entry); err != nil {
+			slog.Error("audit log error", "error", err)
+		}
+
+		slog.Info("account deletion complete", "tenant_id", dr.TenantID)
+	}
 }

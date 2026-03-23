@@ -35,6 +35,8 @@ type PostgresDB struct {
 	passwordResets        *pgPasswordResetRepo
 	emailVerifications    *pgEmailVerificationRepo
 	invitations           *pgInvitationRepo
+	consentRecords        *pgConsentRecordRepo
+	deletionRequests      *pgDeletionRequestRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -73,6 +75,8 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.passwordResets = &pgPasswordResetRepo{db: db}
 	pdb.emailVerifications = &pgEmailVerificationRepo{db: db}
 	pdb.invitations = &pgInvitationRepo{db: db}
+	pdb.consentRecords = &pgConsentRecordRepo{db: db}
+	pdb.deletionRequests = &pgDeletionRequestRepo{db: db}
 	return pdb, nil
 }
 
@@ -89,6 +93,8 @@ func (p *PostgresDB) RetentionPolicies() RetentionPolicyRepo     { return p.rete
 func (p *PostgresDB) PasswordResets() PasswordResetRepo          { return p.passwordResets }
 func (p *PostgresDB) EmailVerifications() EmailVerificationRepo  { return p.emailVerifications }
 func (p *PostgresDB) Invitations() InvitationRepo               { return p.invitations }
+func (p *PostgresDB) ConsentRecords() ConsentRecordRepo         { return p.consentRecords }
+func (p *PostgresDB) DeletionRequests() DeletionRequestRepo     { return p.deletionRequests }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -448,6 +454,108 @@ func (r *pgInvitationRepo) DeleteExpired(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM invitations WHERE status = 'pending' AND expires_at < NOW()`)
 	return err
+}
+
+// --- Consent Record Repo ---
+
+type pgConsentRecordRepo struct{ db *sql.DB }
+
+func (r *pgConsentRecordRepo) Create(ctx context.Context, cr *ConsentRecord) error {
+	if cr.ID == "" {
+		cr.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO consent_records (id, tenant_id, user_id, type, version, accepted, ip_address, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		cr.ID, cr.TenantID, cr.UserID, cr.Type, cr.Version,
+		cr.Accepted, cr.IPAddress, cr.CreatedAt.UTC())
+	return err
+}
+
+func (r *pgConsentRecordRepo) ListByUser(ctx context.Context, userID string) ([]*ConsentRecord, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, user_id, type, version, accepted, ip_address, created_at
+		 FROM consent_records WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []*ConsentRecord
+	for rows.Next() {
+		var cr ConsentRecord
+		if err := rows.Scan(&cr.ID, &cr.TenantID, &cr.UserID, &cr.Type, &cr.Version,
+			&cr.Accepted, &cr.IPAddress, &cr.CreatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, &cr)
+	}
+	return records, nil
+}
+
+func (r *pgConsentRecordRepo) HasAccepted(ctx context.Context, userID, consentType, version string) (bool, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM consent_records WHERE user_id = $1 AND type = $2 AND version = $3 AND accepted = true`,
+		userID, consentType, version).Scan(&count)
+	return count > 0, err
+}
+
+// --- Deletion Request Repo ---
+
+type pgDeletionRequestRepo struct{ db *sql.DB }
+
+func (r *pgDeletionRequestRepo) Create(ctx context.Context, dr *DeletionRequest) error {
+	if dr.ID == "" {
+		dr.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO deletion_requests (id, tenant_id, requested_by, status, requested_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		dr.ID, dr.TenantID, dr.RequestedBy, dr.Status, dr.RequestedAt.UTC(), dr.ExpiresAt.UTC())
+	return err
+}
+
+func (r *pgDeletionRequestRepo) GetByTenantID(ctx context.Context, tenantID string) (*DeletionRequest, error) {
+	var dr DeletionRequest
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, requested_by, status, requested_at, expires_at, completed_at
+		 FROM deletion_requests WHERE tenant_id = $1 AND status = 'pending' ORDER BY requested_at DESC LIMIT 1`,
+		tenantID).Scan(&dr.ID, &dr.TenantID, &dr.RequestedBy, &dr.Status, &dr.RequestedAt, &dr.ExpiresAt, &dr.CompletedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &dr, nil
+}
+
+func (r *pgDeletionRequestRepo) Cancel(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE deletion_requests SET status = 'cancelled' WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgDeletionRequestRepo) Complete(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE deletion_requests SET status = 'completed', completed_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgDeletionRequestRepo) ListPending(ctx context.Context) ([]*DeletionRequest, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, requested_by, status, requested_at, expires_at
+		 FROM deletion_requests WHERE status = 'pending' AND expires_at <= NOW()`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var requests []*DeletionRequest
+	for rows.Next() {
+		var dr DeletionRequest
+		if err := rows.Scan(&dr.ID, &dr.TenantID, &dr.RequestedBy, &dr.Status, &dr.RequestedAt, &dr.ExpiresAt); err != nil {
+			return nil, err
+		}
+		requests = append(requests, &dr)
+	}
+	return requests, nil
 }
 
 // --- Event Counter Repo ---

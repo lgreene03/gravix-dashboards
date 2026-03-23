@@ -179,6 +179,29 @@ CREATE TABLE IF NOT EXISTS invitations (
 );
 CREATE INDEX IF NOT EXISTS idx_inv_token ON invitations(token_hash);
 CREATE INDEX IF NOT EXISTS idx_inv_tenant ON invitations(tenant_id);
+
+CREATE TABLE IF NOT EXISTS consent_records (
+	id          TEXT PRIMARY KEY,
+	tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+	user_id     TEXT NOT NULL,
+	type        TEXT NOT NULL,
+	version     TEXT NOT NULL DEFAULT '1.0',
+	accepted    INTEGER NOT NULL DEFAULT 1,
+	ip_address  TEXT NOT NULL DEFAULT '',
+	created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_consent_user ON consent_records(user_id);
+
+CREATE TABLE IF NOT EXISTS deletion_requests (
+	id           TEXT PRIMARY KEY,
+	tenant_id    TEXT NOT NULL REFERENCES tenants(id),
+	requested_by TEXT NOT NULL,
+	status       TEXT NOT NULL DEFAULT 'pending',
+	requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+	expires_at   TEXT NOT NULL,
+	completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_deletion_tenant ON deletion_requests(tenant_id);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -260,6 +283,12 @@ func (s *SQLiteDB) EmailVerifications() EmailVerificationRepo {
 }
 func (s *SQLiteDB) Invitations() InvitationRepo {
 	return &sqliteInvitationRepo{db: s.db}
+}
+func (s *SQLiteDB) ConsentRecords() ConsentRecordRepo {
+	return &sqliteConsentRecordRepo{db: s.db}
+}
+func (s *SQLiteDB) DeletionRequests() DeletionRequestRepo {
+	return &sqliteDeletionRequestRepo{db: s.db}
 }
 
 // --- Tenant Repo ---
@@ -740,6 +769,131 @@ func (r *sqliteInvitationRepo) DeleteExpired(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM invitations WHERE status = 'pending' AND expires_at < datetime('now')`)
 	return err
+}
+
+// --- Consent Record Repo ---
+
+type sqliteConsentRecordRepo struct{ db *sql.DB }
+
+func (r *sqliteConsentRecordRepo) Create(ctx context.Context, cr *ConsentRecord) error {
+	if cr.ID == "" {
+		cr.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO consent_records (id, tenant_id, user_id, type, version, accepted, ip_address, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		cr.ID, cr.TenantID, cr.UserID, cr.Type, cr.Version,
+		boolToInt(cr.Accepted), cr.IPAddress, cr.CreatedAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (r *sqliteConsentRecordRepo) ListByUser(ctx context.Context, userID string) ([]*ConsentRecord, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, user_id, type, version, accepted, ip_address, created_at
+		 FROM consent_records WHERE user_id = ? ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []*ConsentRecord
+	for rows.Next() {
+		var cr ConsentRecord
+		var accepted int
+		var createdAt string
+		if err := rows.Scan(&cr.ID, &cr.TenantID, &cr.UserID, &cr.Type, &cr.Version,
+			&accepted, &cr.IPAddress, &createdAt); err != nil {
+			return nil, err
+		}
+		cr.Accepted = accepted != 0
+		cr.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		records = append(records, &cr)
+	}
+	return records, nil
+}
+
+func (r *sqliteConsentRecordRepo) HasAccepted(ctx context.Context, userID, consentType, version string) (bool, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM consent_records WHERE user_id = ? AND type = ? AND version = ? AND accepted = 1`,
+		userID, consentType, version).Scan(&count)
+	return count > 0, err
+}
+
+// --- Deletion Request Repo ---
+
+type sqliteDeletionRequestRepo struct{ db *sql.DB }
+
+func (r *sqliteDeletionRequestRepo) Create(ctx context.Context, dr *DeletionRequest) error {
+	if dr.ID == "" {
+		dr.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO deletion_requests (id, tenant_id, requested_by, status, requested_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		dr.ID, dr.TenantID, dr.RequestedBy, dr.Status,
+		dr.RequestedAt.UTC().Format(time.RFC3339), dr.ExpiresAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (r *sqliteDeletionRequestRepo) GetByTenantID(ctx context.Context, tenantID string) (*DeletionRequest, error) {
+	var dr DeletionRequest
+	var requestedAt, expiresAt string
+	var completedAt sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, requested_by, status, requested_at, expires_at, completed_at
+		 FROM deletion_requests WHERE tenant_id = ? AND status = 'pending' ORDER BY requested_at DESC LIMIT 1`,
+		tenantID).Scan(&dr.ID, &dr.TenantID, &dr.RequestedBy, &dr.Status, &requestedAt, &expiresAt, &completedAt)
+	if err != nil {
+		return nil, err
+	}
+	dr.RequestedAt, _ = time.Parse(time.RFC3339, requestedAt)
+	dr.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	if completedAt.Valid {
+		t, _ := time.Parse(time.RFC3339, completedAt.String)
+		dr.CompletedAt = &t
+	}
+	return &dr, nil
+}
+
+func (r *sqliteDeletionRequestRepo) Cancel(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE deletion_requests SET status = 'cancelled' WHERE id = ?`, id)
+	return err
+}
+
+func (r *sqliteDeletionRequestRepo) Complete(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE deletion_requests SET status = 'completed', completed_at = datetime('now') WHERE id = ?`, id)
+	return err
+}
+
+func (r *sqliteDeletionRequestRepo) ListPending(ctx context.Context) ([]*DeletionRequest, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, requested_by, status, requested_at, expires_at
+		 FROM deletion_requests WHERE status = 'pending' AND expires_at <= datetime('now')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var requests []*DeletionRequest
+	for rows.Next() {
+		var dr DeletionRequest
+		var requestedAt, expiresAt string
+		if err := rows.Scan(&dr.ID, &dr.TenantID, &dr.RequestedBy, &dr.Status, &requestedAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		dr.RequestedAt, _ = time.Parse(time.RFC3339, requestedAt)
+		dr.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+		requests = append(requests, &dr)
+	}
+	return requests, nil
 }
 
 // --- Event Counter Repo ---

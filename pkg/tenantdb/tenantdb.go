@@ -90,6 +90,29 @@ type Invitation struct {
 	ExpiresAt time.Time
 }
 
+// ConsentRecord tracks user acceptance of legal documents (TOS, privacy policy).
+type ConsentRecord struct {
+	ID        string
+	TenantID  string
+	UserID    string
+	Type      string // tos, privacy, cookies
+	Version   string // e.g., "1.0"
+	Accepted  bool
+	IPAddress string
+	CreatedAt time.Time
+}
+
+// DeletionRequest tracks account deletion requests with grace period.
+type DeletionRequest struct {
+	ID          string
+	TenantID    string
+	RequestedBy string
+	Status      string // pending, cancelled, completed
+	RequestedAt time.Time
+	ExpiresAt   time.Time // 30 days after request
+	CompletedAt *time.Time
+}
+
 // TenantRepo manages tenant records.
 type TenantRepo interface {
 	Create(ctx context.Context, t *Tenant) error
@@ -147,6 +170,22 @@ type InvitationRepo interface {
 	ListByTenant(ctx context.Context, tenantID string) ([]*Invitation, error)
 	MarkAccepted(ctx context.Context, id string) error
 	DeleteExpired(ctx context.Context) error
+}
+
+// ConsentRecordRepo manages legal consent records.
+type ConsentRecordRepo interface {
+	Create(ctx context.Context, r *ConsentRecord) error
+	ListByUser(ctx context.Context, userID string) ([]*ConsentRecord, error)
+	HasAccepted(ctx context.Context, userID, consentType, version string) (bool, error)
+}
+
+// DeletionRequestRepo manages account deletion requests.
+type DeletionRequestRepo interface {
+	Create(ctx context.Context, r *DeletionRequest) error
+	GetByTenantID(ctx context.Context, tenantID string) (*DeletionRequest, error)
+	Cancel(ctx context.Context, id string) error
+	Complete(ctx context.Context, id string) error
+	ListPending(ctx context.Context) ([]*DeletionRequest, error)
 }
 
 // PasswordResetRepo manages password reset tokens.
@@ -320,5 +359,7 @@ type DB interface {
 	PasswordResets() PasswordResetRepo
 	EmailVerifications() EmailVerificationRepo
 	Invitations() InvitationRepo
+	ConsentRecords() ConsentRecordRepo
+	DeletionRequests() DeletionRequestRepo
 	Close() error
 }

@@ -176,3 +176,28 @@ CREATE TABLE IF NOT EXISTS invitations (
 
 CREATE INDEX IF NOT EXISTS idx_inv_token ON invitations(token_hash);
 CREATE INDEX IF NOT EXISTS idx_inv_tenant ON invitations(tenant_id);
+
+CREATE TABLE IF NOT EXISTS consent_records (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    user_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    version TEXT NOT NULL DEFAULT '1.0',
+    accepted BOOLEAN NOT NULL DEFAULT true,
+    ip_address TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_consent_user ON consent_records(user_id);
+
+CREATE TABLE IF NOT EXISTS deletion_requests (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    requested_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_deletion_tenant ON deletion_requests(tenant_id);
