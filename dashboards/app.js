@@ -1339,13 +1339,13 @@
                 });
 
                 if (result.accepted > 0) {
-                    alert('Replay successful: ' + result.accepted + ' fact(s) accepted.');
+                    showToast('Replay successful: ' + result.accepted + ' fact(s) accepted.', 'success');
                     refreshDLQ();
                 } else {
-                    alert('Replay result: ' + (result.rejected || 0) + ' rejected. ' + (result.errors ? result.errors.join('; ') : ''));
+                    showToast('Replay: ' + (result.rejected || 0) + ' rejected. ' + (result.errors ? result.errors.join('; ') : ''), 'warning');
                 }
             } catch (err) {
-                alert('Replay failed: ' + err.message);
+                showToast('Replay failed: ' + err.message, 'error');
             }
         }
 
@@ -2191,16 +2191,16 @@
                 await loadChannels();
                 populateChannelSelect();
             } catch (err) {
-                alert('Failed to delete channel: ' + err.message);
+                showToast('Failed to delete channel: ' + err.message, 'error');
             }
         }
 
         async function testChannel(id) {
             try {
                 await gatewayFetch('/api/gateway/channels/' + id + '/test', { method: 'POST' });
-                alert('Test notification sent successfully!');
+                showToast('Test notification sent successfully!', 'success');
             } catch (err) {
-                alert('Test failed: ' + err.message);
+                showToast('Test failed: ' + err.message, 'error');
             }
         }
 
@@ -2219,7 +2219,7 @@
                 await loadAlertRules();
                 await loadAlertHistory();
             } catch (err) {
-                alert('Failed to delete rule: ' + err.message);
+                showToast('Failed to delete rule: ' + err.message, 'error');
             }
         }
 
@@ -2245,7 +2245,7 @@
                 });
                 await loadAlertRules();
             } catch (err) {
-                alert('Failed to update rule: ' + err.message);
+                showToast('Failed to update rule: ' + err.message, 'error');
             }
         }
 
@@ -2310,15 +2310,15 @@
             if (operator === 'anomaly') {
                 threshold = parseFloat(document.getElementById('anomalyStddevInput').value);
                 windowMinutes = parseInt(document.getElementById('anomalyLookbackSelect').value, 10);
-                if (isNaN(threshold) || threshold <= 0) { alert('Stddev multiplier must be > 0'); return; }
+                if (isNaN(threshold) || threshold <= 0) { showToast('Stddev multiplier must be > 0', 'warning'); return; }
             } else {
                 threshold = parseFloat(document.getElementById('ruleThresholdInput').value);
                 windowMinutes = parseInt(document.getElementById('ruleWindowSelect').value, 10);
-                if (isNaN(threshold) || threshold < 0) { alert('Threshold must be a non-negative number'); return; }
+                if (isNaN(threshold) || threshold < 0) { showToast('Threshold must be a non-negative number', 'warning'); return; }
             }
 
-            if (!name) { alert('Name is required'); return; }
-            if (!channelId) { alert('Please select a notification channel'); return; }
+            if (!name) { showToast('Name is required', 'warning'); return; }
+            if (!channelId) { showToast('Please select a notification channel', 'warning'); return; }
 
             try {
                 await createAlertRule({
@@ -2330,7 +2330,7 @@
                 });
                 document.getElementById('rule-modal').style.display = 'none';
             } catch (err) {
-                alert('Failed to create rule: ' + err.message);
+                showToast('Failed to create rule: ' + err.message, 'error');
             }
         });
 
@@ -2367,14 +2367,14 @@
             const webhookUrl = document.getElementById('channelWebhookInput').value.trim();
             const authHeader = document.getElementById('channelAuthInput').value.trim();
 
-            if (!name) { alert('Name is required'); return; }
-            if (!webhookUrl) { alert('Webhook URL is required'); return; }
+            if (!name) { showToast('Name is required', 'warning'); return; }
+            if (!webhookUrl) { showToast('Webhook URL is required', 'warning'); return; }
 
             try {
                 await createChannel(name, type, webhookUrl, authHeader);
                 document.getElementById('channel-modal').style.display = 'none';
             } catch (err) {
-                alert('Failed to create channel: ' + err.message);
+                showToast('Failed to create channel: ' + err.message, 'error');
             }
         });
 
@@ -2817,7 +2817,7 @@ app.listen(8080, () => {
                 const data = await resp.json();
                 if (data.url) window.location.href = data.url;
             } catch (err) {
-                alert('Could not open billing portal. ' + err.message);
+                showToast('Could not open billing portal. ' + err.message, 'error');
             }
         }
 

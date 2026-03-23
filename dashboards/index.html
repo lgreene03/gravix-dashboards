@@ -27,6 +27,14 @@
     <!-- Toast notification container -->
     <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
+    <!-- Noscript fallback -->
+    <noscript>
+        <div style="padding: 32px; text-align: center; font-family: system-ui, sans-serif; background: #fee2e2; color: #b91c1c;">
+            <h2>JavaScript Required</h2>
+            <p>Gravix Dashboard requires JavaScript to function. Please enable JavaScript in your browser settings.</p>
+        </div>
+    </noscript>
+
     <!-- Skip to main content link for keyboard navigation -->
     <a href="#dashboardGrid" class="skip-link" id="skipLink">Skip to dashboard</a>
 
@@ -49,16 +57,16 @@
             <div id="authError" class="auth-error">Invalid credentials. Please try again.</div>
             <!-- Login form -->
             <form id="authForm" onsubmit="return false;">
-                <input type="email" id="authEmail" placeholder="Email" autocomplete="email" style="display:none; margin-bottom: 8px;">
-                <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+                <input type="email" id="authEmail" placeholder="Email" autocomplete="email" aria-label="Email address" style="display:none; margin-bottom: 8px;">
+                <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" aria-label="Password">
                 <button type="submit" id="authSubmit">Sign In</button>
             </form>
             <!-- Signup form (multi-tenant only) -->
             <form id="signupForm" onsubmit="return false;" style="display:none;">
-                <input type="text" id="signupName" placeholder="Company Name" autocomplete="organization" style="margin-bottom:8px;">
-                <input type="email" id="signupEmail" placeholder="Email" autocomplete="email" style="margin-bottom:8px;">
-                <input type="password" id="signupPassword" placeholder="Password (min 8 chars)" autocomplete="new-password" style="margin-bottom:8px;">
-                <input type="password" id="signupPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password">
+                <input type="text" id="signupName" placeholder="Company Name" autocomplete="organization" aria-label="Company name" style="margin-bottom:8px;">
+                <input type="email" id="signupEmail" placeholder="Email" autocomplete="email" aria-label="Email address" style="margin-bottom:8px;">
+                <input type="password" id="signupPassword" placeholder="Password (min 8 chars)" autocomplete="new-password" aria-label="Password" style="margin-bottom:8px;">
+                <input type="password" id="signupPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password" aria-label="Confirm password">
                 <button type="submit" id="signupSubmit">Create Account</button>
             </form>
         </div>
@@ -152,15 +160,15 @@
                 </div>
             </div>
             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                <select id="serviceFilter" class="filter-input">
+                <select id="serviceFilter" class="filter-input" aria-label="Filter by service">
                     <option value="">All Services</option>
                 </select>
                 <div style="display: flex; align-items: center; gap: 4px;">
-                    <input type="date" id="dateFrom" class="filter-input" title="From date">
+                    <input type="date" id="dateFrom" class="filter-input" title="From date" aria-label="Start date">
                     <span style="color: var(--text-secondary); font-size: 0.8rem;">to</span>
-                    <input type="date" id="dateTo" class="filter-input" title="To date">
+                    <input type="date" id="dateTo" class="filter-input" title="To date" aria-label="End date">
                 </div>
-                <select id="compareFilter" class="filter-input">
+                <select id="compareFilter" class="filter-input" aria-label="Comparison period">
                     <option value="">No Comparison</option>
                     <option value="day">Day-over-Day</option>
                     <option value="week">Week-over-Week</option>
