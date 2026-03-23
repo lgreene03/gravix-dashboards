@@ -375,7 +375,7 @@
             // Show/hide dashboard filters depending on page
             const headerEl = document.querySelector('.header');
             if (headerEl) {
-                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data' || pageName === 'settings') ? 'none' : '';
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data' || pageName === 'apikeys' || pageName === 'settings') ? 'none' : '';
             }
 
             if (pageName === 'endpoints') {
@@ -390,6 +390,8 @@
                 loadTracesPage();
             } else if (pageName === 'data') {
                 loadDataPage();
+            } else if (pageName === 'apikeys') {
+                loadAPIKeysPage();
             } else if (pageName === 'settings') {
                 loadSettingsPage();
             }
@@ -3150,6 +3152,222 @@ app.listen(8080, () => {
 
         window.startExport = startExport;
         window.loadDataPage = loadDataPage;
+
+        // --- TOAST NOTIFICATIONS ---
+        function showToast(message, type, duration) {
+            type = type || 'info';
+            duration = duration || 3000;
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            toast.style.animationDuration = '0.3s, 0.3s';
+            toast.style.animationDelay = '0s, ' + (duration - 300) + 'ms';
+            container.appendChild(toast);
+            setTimeout(function() { toast.remove(); }, duration);
+        }
+        window.showToast = showToast;
+
+        // --- API KEYS PAGE ---
+
+        async function loadAPIKeysPage() {
+            const loading = document.getElementById('apikeys-loading');
+            const listEl = document.getElementById('apikeys-list');
+            const emptyEl = document.getElementById('apikeys-empty');
+            const errorEl = document.getElementById('apikeys-error');
+
+            if (!IS_MULTI_TENANT) {
+                if (loading) loading.style.display = 'none';
+                if (emptyEl) {
+                    emptyEl.style.display = 'block';
+                    emptyEl.textContent = 'API key management is available in multi-tenant mode.';
+                }
+                return;
+            }
+
+            loading.style.display = '';
+            listEl.style.display = 'none';
+            emptyEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            try {
+                const token = sessionStorage.getItem('gravix_token');
+                const [keysResp, usageResp] = await Promise.all([
+                    fetch(GATEWAY_URL + '/api/gateway/api-keys', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }),
+                    fetch(GATEWAY_URL + '/api/gateway/billing/usage', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    })
+                ]);
+
+                if (!keysResp.ok) throw new Error('Failed to load API keys');
+                const keysData = await keysResp.json();
+                const keys = keysData.keys || [];
+
+                loading.style.display = 'none';
+
+                if (keys.length === 0) {
+                    emptyEl.style.display = 'block';
+                } else {
+                    listEl.style.display = 'block';
+                    renderAPIKeysList(keys);
+                }
+
+                // Quota banner
+                if (usageResp.ok) {
+                    const usage = await usageResp.json();
+                    renderQuotaBanner(usage);
+                }
+            } catch (err) {
+                loading.style.display = 'none';
+                errorEl.style.display = 'flex';
+                errorEl.innerHTML = '&#x26A0; Failed to load API keys. <button class="section-error-retry" onclick="loadAPIKeysPage()">Retry</button>';
+            }
+        }
+
+        function renderAPIKeysList(keys) {
+            const listEl = document.getElementById('apikeys-list');
+            listEl.innerHTML = '';
+
+            keys.forEach(function(key) {
+                const row = document.createElement('div');
+                row.className = 'api-key-row';
+
+                const masked = key.key_prefix ? key.key_prefix + '...' : '****...';
+                const expiry = key.expires_at ? new Date(key.expires_at).toLocaleDateString() : 'Never';
+                const created = key.created_at ? new Date(key.created_at).toLocaleDateString() : '-';
+
+                row.innerHTML =
+                    '<div>' +
+                        '<div style="font-weight: 600;">' + escapeHtml(key.name || 'Unnamed') + '</div>' +
+                        '<div class="api-key-masked">' + masked + '</div>' +
+                        '<div style="font-size: 0.75rem; color: var(--text-secondary);">Created: ' + created + ' | Expires: ' + expiry + '</div>' +
+                    '</div>' +
+                    '<button class="revoke-key-btn" data-key-id="' + key.id + '" style="padding: 6px 14px; background: var(--danger-color, #ef4444); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">Revoke</button>';
+
+                listEl.appendChild(row);
+            });
+
+            // Attach revoke handlers
+            listEl.querySelectorAll('.revoke-key-btn').forEach(function(btn) {
+                btn.addEventListener('click', async function() {
+                    const keyId = this.getAttribute('data-key-id');
+                    if (!confirm('Revoke this API key? This cannot be undone.')) return;
+                    this.disabled = true;
+                    this.textContent = 'Revoking...';
+                    try {
+                        const token = sessionStorage.getItem('gravix_token');
+                        const resp = await fetch(GATEWAY_URL + '/api/gateway/api-keys/' + keyId, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': 'Bearer ' + token }
+                        });
+                        if (resp.ok) {
+                            showToast('API key revoked.', 'success');
+                            loadAPIKeysPage();
+                        } else {
+                            showToast('Failed to revoke key.', 'error');
+                            this.disabled = false;
+                            this.textContent = 'Revoke';
+                        }
+                    } catch (e) {
+                        showToast('Connection error.', 'error');
+                        this.disabled = false;
+                        this.textContent = 'Revoke';
+                    }
+                });
+            });
+        }
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function renderQuotaBanner(usage) {
+            const banner = document.getElementById('quota-banner');
+            if (!banner) return;
+
+            const limit = usage.event_limit || usage.eventLimit || 0;
+            const used = usage.todayEventCount || usage.total_events || 0;
+            if (limit <= 0) { banner.style.display = 'none'; return; }
+
+            const pct = (used / limit) * 100;
+            if (pct >= 100) {
+                banner.className = 'quota-banner danger';
+                banner.innerHTML = '&#x26A0; You have reached your event limit (' + used.toLocaleString() + '/' + limit.toLocaleString() + '). Events are being dropped. <a href="#" onclick="switchPage(\'usage\'); return false;" style="color: inherit; text-decoration: underline;">Upgrade plan</a>';
+                banner.style.display = 'flex';
+            } else if (pct >= 90) {
+                banner.className = 'quota-banner danger';
+                banner.innerHTML = '&#x26A0; ' + Math.round(pct) + '% of event quota used (' + used.toLocaleString() + '/' + limit.toLocaleString() + '). <a href="#" onclick="switchPage(\'usage\'); return false;" style="color: inherit; text-decoration: underline;">Upgrade plan</a>';
+                banner.style.display = 'flex';
+            } else if (pct >= 80) {
+                banner.className = 'quota-banner warning';
+                banner.innerHTML = '&#x26A0; ' + Math.round(pct) + '% of event quota used. Consider upgrading your plan.';
+                banner.style.display = 'flex';
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+
+        // Create API key form handler
+        const createKeyForm = document.getElementById('create-apikey-form');
+        if (createKeyForm) {
+            createKeyForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const btn = document.getElementById('create-apikey-btn');
+                const nameInput = document.getElementById('apikey-name');
+                const expiryInput = document.getElementById('apikey-expiry');
+                const displayEl = document.getElementById('new-key-display');
+
+                btn.disabled = true;
+                btn.textContent = 'Creating...';
+
+                try {
+                    const token = sessionStorage.getItem('gravix_token');
+                    const body = { name: nameInput.value.trim() };
+                    if (expiryInput.value) {
+                        body.expires_at = expiryInput.value + 'T23:59:59Z';
+                    }
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/api-keys', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(body)
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        document.getElementById('new-key-value').textContent = data.api_key || data.key;
+                        displayEl.style.display = 'block';
+                        showToast('API key created successfully.', 'success');
+                        createKeyForm.reset();
+                        loadAPIKeysPage();
+                    } else {
+                        showToast(data.error || 'Failed to create key.', 'error');
+                    }
+                } catch (err) {
+                    showToast('Connection error.', 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Create Key';
+                }
+            });
+        }
+
+        // Copy new key button
+        const copyKeyBtn = document.getElementById('copy-new-key-btn');
+        if (copyKeyBtn) {
+            copyKeyBtn.addEventListener('click', function() {
+                const keyVal = document.getElementById('new-key-value').textContent;
+                navigator.clipboard.writeText(keyVal).then(function() {
+                    showToast('API key copied to clipboard.', 'success');
+                });
+            });
+        }
 
         // --- SETTINGS PAGE ---
 
