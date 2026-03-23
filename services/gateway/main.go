@@ -257,12 +257,17 @@ func main() {
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
 
+	// Per-IP rate limiting: 10 requests/minute, burst of 5 for auth endpoints
+	iprl := ratelimit.NewIPLimiter(10, 5)
+	defer iprl.Close()
+
 	gw := &gateway{
 		db:            db,
 		tokens:        tokens,
 		notifier:      notify.NewDispatcher(),
 		store:         objStore,
 		rateLimiter:   trl,
+		ipLimiter:     iprl,
 		emailSender:   email.NewSenderFromEnv(),
 		cubeAPIURL:    cubeURL,
 		jwtSecret:     *jwtSecret,
@@ -298,14 +303,24 @@ func main() {
 		slog.Info("stripe billing disabled, STRIPE_SECRET_KEY not set")
 	}
 
+	// Body size limit: 1MB default, configurable
+	maxBodyBytes := int64(1 << 20) // 1MB
+	if envMax := os.Getenv("GATEWAY_MAX_BODY_BYTES"); envMax != "" {
+		if v, err := strconv.ParseInt(envMax, 10, 64); err == nil && v > 0 {
+			maxBodyBytes = v
+		}
+	}
+	bodyLimit := bodyLimitMiddleware(maxBodyBytes)
+
 	mux := http.NewServeMux()
-	// Public endpoints (no rate limiting by tenant plan)
-	mux.HandleFunc("/api/gateway/login", gw.handleLogin)
-	mux.HandleFunc("/api/gateway/register", gw.handleRegister)
-	mux.HandleFunc("/api/gateway/forgot-password", gw.handleForgotPassword)
-	mux.HandleFunc("/api/gateway/reset-password", gw.handleResetPassword)
+	// Public auth endpoints — IP rate limited + body limited
+	mux.HandleFunc("/api/gateway/login", gw.ipRateLimitMiddleware(bodyLimit(gw.handleLogin)))
+	mux.HandleFunc("/api/gateway/register", gw.ipRateLimitMiddleware(bodyLimit(gw.handleRegister)))
+	mux.HandleFunc("/api/gateway/forgot-password", gw.ipRateLimitMiddleware(bodyLimit(gw.handleForgotPassword)))
+	mux.HandleFunc("/api/gateway/reset-password", gw.ipRateLimitMiddleware(bodyLimit(gw.handleResetPassword)))
 	mux.HandleFunc("/api/gateway/verify-email", gw.handleVerifyEmail)
-	mux.HandleFunc("/api/gateway/resend-verification", gw.requireAuth(gw.handleResendVerification))
+	mux.HandleFunc("/api/gateway/resend-verification", gw.requireAuth(gw.ipRateLimitMiddleware(gw.handleResendVerification)))
+	mux.HandleFunc("/api/gateway/logout", gw.requireAuth(gw.handleLogout))
 	mux.HandleFunc("/api/gateway/webhooks/stripe", gw.handleStripeWebhook)
 
 	// Authenticated + rate-limited API endpoints
@@ -401,32 +416,59 @@ func main() {
 }
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
-	allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
-	if allowedOrigin == "" {
-		allowedOrigin = "*"
+	// CORS: comma-separated list of allowed origins, or "*" for dev
+	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		allowedOrigins = os.Getenv("CORS_ALLOWED_ORIGIN") // backward compat
+	}
+	if allowedOrigins == "" {
+		allowedOrigins = "*"
+	}
+	originSet := make(map[string]bool)
+	allowAll := false
+	for _, o := range strings.Split(allowedOrigins, ",") {
+		o = strings.TrimSpace(o)
+		if o == "*" {
+			allowAll = true
+		}
+		originSet[o] = true
 	}
 
+	// CSP: configurable connect-src and script-src
+	cspConnectSrc := os.Getenv("CSP_CONNECT_SRC")
+	if cspConnectSrc == "" {
+		cspConnectSrc = "'self' http://localhost:4000 http://localhost:8091"
+	}
+	cspScriptSrc := os.Getenv("CSP_SCRIPT_SRC")
+	if cspScriptSrc == "" {
+		cspScriptSrc = "'self' 'unsafe-inline' https://cdn.jsdelivr.net"
+	}
+
+	csp := fmt.Sprintf(
+		"default-src 'self'; script-src %s; style-src 'self' 'unsafe-inline'; connect-src %s; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+		cspScriptSrc, cspConnectSrc,
+	)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// CORS
-		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		// CORS: match Origin header against allowed list
+		origin := r.Header.Get("Origin")
+		if allowAll {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" && originSet[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		// If origin doesn't match and not allowAll, no ACAO header is set (browser blocks)
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400")
 
 		// Security headers
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; "+
-				"script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "+
-				"style-src 'self' 'unsafe-inline'; "+
-				"connect-src 'self' http://localhost:4000 http://localhost:8091; "+
-				"img-src 'self' data:; "+
-				"font-src 'self'; "+
-				"frame-ancestors 'none'; "+
-				"base-uri 'self'; "+
-				"form-action 'self'",
-		)
+		w.Header().Set("Content-Security-Policy", csp)
 
 		// HSTS only when behind TLS-terminating proxy
 		if r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil {
@@ -449,12 +491,79 @@ type gateway struct {
 	notifier        *notify.Dispatcher
 	store           storage.ObjectStore // for DLQ reads
 	rateLimiter     *ratelimit.TenantLimiter
+	ipLimiter       *ratelimit.IPLimiter // per-IP rate limiting for auth endpoints
 	emailSender     email.Sender
 	cubeAPIURL      string
 	jwtSecret       string
 	baseURL         string // for email links (e.g., https://app.gravix.io)
+	tokenBlacklist  sync.Map // JTI → expiry time for revoked tokens
 	activeExports   map[string]bool // tracks in-progress exports per tenant
 	activeExportsMu sync.Mutex
+}
+
+// ipRateLimitMiddleware applies per-IP rate limiting. Returns 429 with Retry-After header when exceeded.
+func (gw *gateway) ipRateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := ratelimit.ExtractIP(r)
+		if !gw.ipLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "too many requests, please try again later")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// bodyLimitMiddleware wraps the request body with a size limit.
+func bodyLimitMiddleware(maxBytes int64) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			}
+			next(w, r)
+		}
+	}
+}
+
+// handleLogout revokes the current JWT by adding its JTI to the blacklist.
+func (gw *gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil || claims.ID == "" {
+		writeError(w, http.StatusBadRequest, "token has no ID")
+		return
+	}
+
+	// Store the JTI with its expiry so we can clean up later
+	gw.tokenBlacklist.Store(claims.ID, claims.ExpiresAt.Time)
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "user.logout", "user", claims.UserID, "", r.RemoteAddr)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "logged out successfully",
+	})
+}
+
+// isTokenBlacklisted checks if a JTI has been revoked.
+func (gw *gateway) isTokenBlacklisted(jti string) bool {
+	if jti == "" {
+		return false
+	}
+	val, ok := gw.tokenBlacklist.Load(jti)
+	if !ok {
+		return false
+	}
+	// Clean up expired blacklist entries
+	if expiry, ok := val.(time.Time); ok && time.Now().After(expiry) {
+		gw.tokenBlacklist.Delete(jti)
+		return false
+	}
+	return true
 }
 
 // requireRole returns middleware that checks if the authenticated user has one of the given roles.
@@ -1407,6 +1516,12 @@ func (gw *gateway) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		claims, err := gw.tokens.Validate(tokenStr)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
+			return
+		}
+
+		// Check token blacklist (logout revocation)
+		if gw.isTokenBlacklisted(claims.ID) {
+			writeError(w, http.StatusUnauthorized, "token has been revoked")
 			return
 		}
 

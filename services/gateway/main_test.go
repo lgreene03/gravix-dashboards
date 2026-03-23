@@ -35,12 +35,16 @@ func newTestGateway(t *testing.T) *gateway {
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	t.Cleanup(func() { trl.Close() })
 
+	iprl := ratelimit.NewIPLimiter(600, 100) // generous limits for tests
+	t.Cleanup(func() { iprl.Close() })
+
 	return &gateway{
 		db:          db,
 		tokens:      tokens,
 		notifier:    notify.NewDispatcher(),
 		emailSender: &email.NoopSender{},
 		rateLimiter: trl,
+		ipLimiter:   iprl,
 		cubeAPIURL:  "http://localhost:4000/cubejs-api/v1/load",
 		jwtSecret:   "test-secret-key-32chars!!",
 		baseURL:     "http://localhost:8000",
@@ -2202,6 +2206,7 @@ func TestSecurityHeadersCORSOriginEnv(t *testing.T) {
 	handler := securityHeadersMiddleware(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Origin", "https://dashboard.gravix.io")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
