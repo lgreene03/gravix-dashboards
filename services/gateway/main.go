@@ -49,6 +49,7 @@ import (
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/billing"
+	"github.com/lgreene/gravix-dashboards/pkg/captcha"
 	"github.com/lgreene/gravix-dashboards/pkg/email"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
 	"github.com/lgreene/gravix-dashboards/pkg/password"
@@ -262,17 +263,18 @@ func main() {
 	defer iprl.Close()
 
 	gw := &gateway{
-		db:            db,
-		tokens:        tokens,
-		notifier:      notify.NewDispatcher(),
-		store:         objStore,
-		rateLimiter:   trl,
-		ipLimiter:     iprl,
-		emailSender:   email.NewSenderFromEnv(),
-		cubeAPIURL:    cubeURL,
-		jwtSecret:     *jwtSecret,
-		baseURL:       email.BaseURLFromEnv(),
-		activeExports: make(map[string]bool),
+		db:              db,
+		tokens:          tokens,
+		notifier:        notify.NewDispatcher(),
+		store:           objStore,
+		rateLimiter:     trl,
+		ipLimiter:       iprl,
+		emailSender:     email.NewSenderFromEnv(),
+		captchaVerifier: captcha.NewVerifierFromEnv(),
+		cubeAPIURL:      cubeURL,
+		jwtSecret:       *jwtSecret,
+		baseURL:         email.BaseURLFromEnv(),
+		activeExports:   make(map[string]bool),
 	}
 
 	// Master context for background goroutines — cancelled on shutdown
@@ -493,6 +495,7 @@ type gateway struct {
 	rateLimiter     *ratelimit.TenantLimiter
 	ipLimiter       *ratelimit.IPLimiter // per-IP rate limiting for auth endpoints
 	emailSender     email.Sender
+	captchaVerifier captcha.Verifier
 	cubeAPIURL      string
 	jwtSecret       string
 	baseURL         string // for email links (e.g., https://app.gravix.io)
@@ -1117,9 +1120,10 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     string `json:"name"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Name         string `json:"name"`
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		CaptchaToken string `json:"captcha_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1129,6 +1133,15 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" || req.Email == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "name, email, and password are required")
 		return
+	}
+
+	// Verify CAPTCHA if configured
+	if gw.captchaVerifier != nil {
+		ip := ratelimit.ExtractIP(r)
+		if err := gw.captchaVerifier.Verify(req.CaptchaToken, ip); err != nil {
+			writeError(w, http.StatusBadRequest, "CAPTCHA verification failed")
+			return
+		}
 	}
 
 	if err := password.Validate(req.Password); err != nil {
@@ -3023,11 +3036,15 @@ func (gw *gateway) handleDLQ(w http.ResponseWriter, r *http.Request) {
 
 // handleDLQReplay re-submits DLQ entries to the ingestion endpoint.
 // POST /api/gateway/dlq/replay  body: {"entries": [{"raw_json": ...}, ...]}
+// Security: validates each entry belongs to the authenticated tenant before replay.
 func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	tenantID := claims.TenantID
 
 	var req struct {
 		Entries []struct {
@@ -3044,13 +3061,38 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build JSONL body from raw entries
+	// Validate tenant scoping: each entry must belong to the authenticated tenant.
+	// This prevents cross-tenant data injection via DLQ replay.
 	var buf bytes.Buffer
+	skipped := 0
 	for i, e := range req.Entries {
-		if i > 0 {
+		// Parse just the tenant_id field from each entry to validate ownership
+		var entryMeta struct {
+			TenantID string `json:"tenant_id"`
+		}
+		if err := json.Unmarshal(e.RawJSON, &entryMeta); err != nil {
+			skipped++
+			continue
+		}
+		// If entry has a tenant_id, it must match the authenticated tenant
+		if entryMeta.TenantID != "" && entryMeta.TenantID != tenantID {
+			skipped++
+			slog.Warn("DLQ replay: skipped cross-tenant entry",
+				"authenticated_tenant", tenantID,
+				"entry_tenant", entryMeta.TenantID)
+			continue
+		}
+
+		if buf.Len() > 0 {
 			buf.WriteByte('\n')
 		}
+		_ = i
 		buf.Write(e.RawJSON)
+	}
+
+	if buf.Len() == 0 {
+		writeError(w, http.StatusBadRequest, "no valid entries to replay (all skipped due to tenant mismatch)")
+		return
 	}
 
 	// Forward to ingestion batch endpoint
@@ -3071,8 +3113,8 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 	logging.PropagateRequestID(r.Context(), fwdReq)
 
 	// Forward the Authorization header
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		fwdReq.Header.Set("Authorization", auth)
+	if authHdr := r.Header.Get("Authorization"); authHdr != "" {
+		fwdReq.Header.Set("Authorization", authHdr)
 	}
 	// Also try X-API-Key
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
@@ -3087,9 +3129,14 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Relay the ingestion response
+	// Relay the ingestion response with skipped count
 	body, _ := io.ReadAll(resp.Body)
 	w.Header().Set("Content-Type", "application/json")
+	if skipped > 0 {
+		slog.Info("DLQ replay completed with skipped entries",
+			"tenant_id", tenantID, "skipped", skipped,
+			"replayed", len(req.Entries)-skipped)
+	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
 }

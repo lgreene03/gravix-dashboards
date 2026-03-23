@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
+	"github.com/lgreene/gravix-dashboards/pkg/captcha"
 	"github.com/lgreene/gravix-dashboards/pkg/email"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
@@ -39,15 +40,16 @@ func newTestGateway(t *testing.T) *gateway {
 	t.Cleanup(func() { iprl.Close() })
 
 	return &gateway{
-		db:          db,
-		tokens:      tokens,
-		notifier:    notify.NewDispatcher(),
-		emailSender: &email.NoopSender{},
-		rateLimiter: trl,
-		ipLimiter:   iprl,
-		cubeAPIURL:  "http://localhost:4000/cubejs-api/v1/load",
-		jwtSecret:   "test-secret-key-32chars!!",
-		baseURL:     "http://localhost:8000",
+		db:              db,
+		tokens:          tokens,
+		notifier:        notify.NewDispatcher(),
+		emailSender:     &email.NoopSender{},
+		captchaVerifier: &captcha.NoopVerifier{},
+		rateLimiter:     trl,
+		ipLimiter:       iprl,
+		cubeAPIURL:      "http://localhost:4000/cubejs-api/v1/load",
+		jwtSecret:       "test-secret-key-32chars!!",
+		baseURL:         "http://localhost:8000",
 	}
 }
 

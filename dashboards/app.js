@@ -2657,7 +2657,7 @@ app.listen(8080, () => {
                 checkIcon('wizCheckCode', true);
 
                 try {
-                    const token = localStorage.getItem('gravix_jwt');
+                    const token = sessionStorage.getItem('gravix_token');
                     const headers = {};
                     if (token) headers['Authorization'] = 'Bearer ' + token;
                     const apiKey = localStorage.getItem('gravix_api_key');
@@ -2717,7 +2717,7 @@ app.listen(8080, () => {
             errorEl.style.display = 'none';
 
             try {
-                const token = localStorage.getItem('gravix_jwt');
+                const token = sessionStorage.getItem('gravix_token');
                 const [usageResp, historyResp, invoiceResp] = await Promise.all([
                     fetch(GATEWAY_URL + '/api/gateway/billing/usage', {
                         headers: { 'Authorization': 'Bearer ' + token }
@@ -2803,7 +2803,7 @@ app.listen(8080, () => {
         async function handleManageBilling() {
             if (!IS_MULTI_TENANT) return;
             try {
-                const token = localStorage.getItem('gravix_jwt');
+                const token = sessionStorage.getItem('gravix_token');
                 const resp = await fetch(GATEWAY_URL + '/api/gateway/billing/portal', {
                     method: 'POST',
                     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -2923,7 +2923,7 @@ app.listen(8080, () => {
 
             try {
                 const resp = await cachedFetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces/recent?limit=50', {
-                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') }
+                    headers: { 'Authorization': 'Bearer ' + sessionStorage.getItem('gravix_token') }
                 });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
@@ -2981,7 +2981,7 @@ app.listen(8080, () => {
             try {
                 const resp = await cachedFetch(
                     GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces?trace_id=' + encodeURIComponent(traceId),
-                    { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') } }
+                    { headers: { 'Authorization': 'Bearer ' + sessionStorage.getItem('gravix_token') } }
                 );
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
