@@ -1,0 +1,91 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: 'Image tag to deploy (SHA prefix, e.g., sha-abc1234)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-staging:
+    if: inputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v4
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+      - name: Deploy to staging
+        run: |
+          helm upgrade --install gravix deploy/gravix/ \
+            -f deploy/gravix/values.yaml \
+            --set ingestion.image.tag=${{ inputs.image_tag }} \
+            --set gateway.image.tag=${{ inputs.image_tag }} \
+            --set rollup.image.tag=${{ inputs.image_tag }} \
+            --set global.apiKey=${{ secrets.API_KEY }} \
+            --set global.storage.accessKey=${{ secrets.MINIO_ACCESS_KEY }} \
+            --set global.storage.secretKey=${{ secrets.MINIO_SECRET_KEY }} \
+            --set jwtSecret=${{ secrets.JWT_SECRET }} \
+            --set cubeApiSecret=${{ secrets.CUBE_API_SECRET }} \
+            --wait --timeout 5m
+
+      - name: Smoke test
+        run: |
+          GATEWAY_URL=$(kubectl get svc gravix-gateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          curl -sf "http://${GATEWAY_URL}/live" || { echo "Health check failed"; exit 1; }
+
+  deploy-production:
+    if: inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v4
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+
+      - name: Deploy to production
+        run: |
+          helm upgrade --install gravix deploy/gravix/ \
+            -f deploy/gravix/values.yaml \
+            -f deploy/gravix/values-production.yaml \
+            --set ingestion.image.tag=${{ inputs.image_tag }} \
+            --set gateway.image.tag=${{ inputs.image_tag }} \
+            --set rollup.image.tag=${{ inputs.image_tag }} \
+            --set global.apiKey=${{ secrets.API_KEY }} \
+            --set global.storage.accessKey=${{ secrets.S3_ACCESS_KEY }} \
+            --set global.storage.secretKey=${{ secrets.S3_SECRET_KEY }} \
+            --set jwtSecret=${{ secrets.JWT_SECRET }} \
+            --set cubeApiSecret=${{ secrets.CUBE_API_SECRET }} \
+            --set databaseUrl=${{ secrets.DATABASE_URL }} \
+            --wait --timeout 10m
+
+      - name: Production smoke test
+        run: |
+          GATEWAY_URL=$(kubectl get svc gravix-gateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          curl -sf "http://${GATEWAY_URL}/live" || { echo "Health check failed"; exit 1; }
+          curl -sf "http://${GATEWAY_URL}/ready" || { echo "Readiness check failed"; exit 1; }

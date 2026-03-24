@@ -971,7 +971,9 @@
 
         function resetFilters() {
             document.getElementById('serviceFilter').value = '';
-            document.getElementById('dateFrom').valueAsDate = new Date();
+            var sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            document.getElementById('dateFrom').valueAsDate = sevenDaysAgo;
             document.getElementById('dateTo').valueAsDate = new Date();
             currentDrilldownPath = null;
             document.getElementById('default-header').style.display = 'block';
@@ -1366,7 +1368,9 @@
         }
 
         // --- INIT ---
-        document.getElementById('dateFrom').valueAsDate = new Date();
+        var initSevenDaysAgo = new Date();
+        initSevenDaysAgo.setDate(initSevenDaysAgo.getDate() - 7);
+        document.getElementById('dateFrom').valueAsDate = initSevenDaysAgo;
         document.getElementById('dateTo').valueAsDate = new Date();
 
         function initDashboard() {

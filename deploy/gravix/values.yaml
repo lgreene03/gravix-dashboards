@@ -181,6 +181,16 @@ storage:
     image:
       repository: cubejs/cube
       tag: "v0.35"
+    hpa:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPU: 70
+
+# Synthetic monitoring CronJob — sends health checks to verify the pipeline.
+syntheticMonitor:
+  enabled: false
+  schedule: "*/5 * * * *"  # every 5 minutes
 
 # cert-manager ClusterIssuer for automatic TLS certificates.
 # Requires: cert-manager installed in the cluster.

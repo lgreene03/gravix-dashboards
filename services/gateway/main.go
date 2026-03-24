@@ -3631,7 +3631,7 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to build replay request")
 		return
 	}
-	fwdReq.Header.Set("Content-Type", "application/x-ndjson")
+	fwdReq.Header.Set("Content-Type", "application/json")
 
 	// Propagate request ID for cross-service tracing
 	logging.PropagateRequestID(r.Context(), fwdReq)
