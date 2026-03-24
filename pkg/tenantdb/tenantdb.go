@@ -19,6 +19,7 @@ type Tenant struct {
 	StripeSubscriptionID string
 	Status               string // active, suspended, churned
 	OverageAllowed       bool   // false=reject over limit (free), true=allow+flag (paid)
+	ParentTenantID       string     // non-empty for child orgs in multi-org setup
 	TrialStartedAt       *time.Time // nil if never on trial
 	TrialEndsAt          *time.Time // nil if no trial or trial expired
 	CreatedAt            time.Time
@@ -31,6 +32,7 @@ type APIKey struct {
 	TenantID   string
 	KeyPrefix  string // first 8 chars for display (e.g., "grvx_abc1...")
 	Name       string
+	Scopes     string // comma-separated: ingest:write,traces:write,admin:read,admin:write (empty = all)
 	Status     string // active, revoked
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
@@ -48,15 +50,17 @@ type APIKeyInfo struct {
 
 // User represents a dashboard user belonging to a tenant.
 type User struct {
-	ID            string
-	TenantID      string
-	Email         string
-	PasswordHash  string
-	Role          string // admin, viewer
-	EmailVerified bool
-	Status        string // active, deactivated
-	LastLoginAt   *time.Time
-	CreatedAt     time.Time
+	ID               string
+	TenantID         string
+	Email            string
+	PasswordHash     string
+	Role             string // admin, viewer
+	EmailVerified    bool
+	TwoFactorEnabled bool
+	TwoFactorSecret  string // encrypted TOTP secret (empty if 2FA not set up)
+	Status           string // active, deactivated
+	LastLoginAt      *time.Time
+	CreatedAt        time.Time
 }
 
 // PasswordResetToken represents a one-time password reset token.
@@ -124,6 +128,8 @@ type TenantRepo interface {
 	UpdateStatus(ctx context.Context, id, status string) error
 	UpdateStripe(ctx context.Context, id, customerID, subscriptionID string) error
 	UpdateTrial(ctx context.Context, id string, trialStart, trialEnd *time.Time) error
+	UpdateParentTenant(ctx context.Context, id, parentTenantID string) error
+	ListChildren(ctx context.Context, parentTenantID string) ([]*Tenant, error)
 	List(ctx context.Context) ([]*Tenant, error)
 }
 
@@ -163,6 +169,7 @@ type UserRepo interface {
 	UpdateLastLogin(ctx context.Context, userID string, t time.Time) error
 	UpdateRole(ctx context.Context, userID, role string) error
 	UpdateStatus(ctx context.Context, userID, status string) error
+	UpdateTwoFactor(ctx context.Context, userID string, enabled bool, secret string) error
 	CountByTenant(ctx context.Context, tenantID string) (int, error)
 }
 
@@ -347,6 +354,51 @@ type MonthlyUsageRepo interface {
 	GetByTenant(ctx context.Context, tenantID string, limit int) ([]*MonthlyUsage, error)
 }
 
+// SSOConfig represents per-tenant SSO configuration.
+type SSOConfig struct {
+	ID           string
+	TenantID     string
+	Provider     string // saml, oidc
+	Enabled      bool
+	EntityID     string // SAML IdP Entity ID
+	SSOURL       string // SAML IdP SSO URL
+	Certificate  string // SAML IdP X.509 certificate (PEM)
+	ClientID     string // OIDC Client ID
+	ClientSecret string // OIDC Client Secret (encrypted)
+	Issuer       string // OIDC Issuer URL
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// SSOConfigRepo manages per-tenant SSO configurations.
+type SSOConfigRepo interface {
+	Upsert(ctx context.Context, cfg *SSOConfig) error
+	GetByTenantID(ctx context.Context, tenantID string) (*SSOConfig, error)
+	Delete(ctx context.Context, tenantID string) error
+}
+
+// Session represents an active user session for session management.
+type Session struct {
+	ID        string
+	UserID    string
+	TenantID  string
+	IPAddress string
+	UserAgent string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RevokedAt *time.Time
+}
+
+// SessionRepo manages user sessions.
+type SessionRepo interface {
+	Create(ctx context.Context, s *Session) error
+	GetByID(ctx context.Context, id string) (*Session, error)
+	ListByUser(ctx context.Context, userID string) ([]*Session, error)
+	Revoke(ctx context.Context, id string) error
+	RevokeAllForUser(ctx context.Context, userID string) error
+	DeleteExpired(ctx context.Context) error
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
@@ -364,5 +416,7 @@ type DB interface {
 	Invitations() InvitationRepo
 	ConsentRecords() ConsentRecordRepo
 	DeletionRequests() DeletionRequestRepo
+	SSOConfigs() SSOConfigRepo
+	Sessions() SessionRepo
 	Close() error
 }

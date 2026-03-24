@@ -50,12 +50,12 @@ func TestRunMigrationsFreshDB(t *testing.T) {
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("query version: %v", err)
 	}
-	if version < 3 {
-		t.Errorf("version = %d, want >= 3", version)
+	if version < 4 {
+		t.Errorf("version = %d, want >= 4", version)
 	}
 
 	// Verify tables were created
-	tables := []string{"tenants", "api_keys", "users", "event_counters", "alert_rules"}
+	tables := []string{"tenants", "api_keys", "users", "event_counters", "alert_rules", "sso_configs", "sessions"}
 	for _, tbl := range tables {
 		if !tableExists(db, tbl) {
 			t.Errorf("table %s does not exist", tbl)
@@ -73,14 +73,28 @@ func TestRunMigrationsPreExistingDB(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Simulate pre-existing DB: create tenants table with plan column
-	_, err = db.Exec("CREATE TABLE tenants (id TEXT PRIMARY KEY, name TEXT NOT NULL, plan TEXT NOT NULL DEFAULT 'free')")
+	// Simulate pre-existing DB: create minimal schema with plan column + supporting tables
+	_, err = db.Exec(`CREATE TABLE tenants (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
+		plan TEXT NOT NULL DEFAULT 'free', stripe_customer_id TEXT DEFAULT '', stripe_subscription_id TEXT DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'active', overage_allowed INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE users (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
+		password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'admin', created_at TEXT NOT NULL DEFAULT (datetime('now')))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE api_keys (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE,
+		key_prefix TEXT NOT NULL, name TEXT NOT NULL DEFAULT 'default', status TEXT NOT NULL DEFAULT 'active',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')), last_used_at TEXT, expires_at TEXT)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert a legacy "starter" plan tenant to verify migration renames it
-	_, err = db.Exec("INSERT INTO tenants (id, name, plan) VALUES ('t1', 'Legacy Tenant', 'starter')")
+	_, err = db.Exec("INSERT INTO tenants (id, name, email, plan) VALUES ('t1', 'Legacy Tenant', 'legacy@test.com', 'starter')")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +108,8 @@ func TestRunMigrationsPreExistingDB(t *testing.T) {
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("query version: %v", err)
 	}
-	if version < 3 {
-		t.Errorf("version = %d, want >= 3", version)
+	if version < 4 {
+		t.Errorf("version = %d, want >= 4", version)
 	}
 
 	// Verify legacy plan was renamed

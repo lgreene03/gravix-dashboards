@@ -360,6 +360,14 @@ func main() {
 	mux.HandleFunc("/api/gateway/account", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleAccountDeletion))))
 	mux.HandleFunc("/api/gateway/account/cancel-deletion", gw.requireAuth(gw.rateLimitMiddleware(gw.handleCancelDeletion)))
 	mux.HandleFunc("/api/gateway/openapi.json", gw.handleOpenAPI)
+
+	// Enterprise features (Phase 31)
+	mux.HandleFunc("/api/gateway/sso", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleSSOConfig))))
+	mux.HandleFunc("/api/gateway/2fa/setup", gw.requireAuth(gw.rateLimitMiddleware(gw.handleTwoFactorSetup)))
+	mux.HandleFunc("/api/gateway/2fa/confirm", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTwoFactorConfirm))))
+	mux.HandleFunc("/api/gateway/2fa/disable", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTwoFactorDisable))))
+	mux.HandleFunc("/api/gateway/sessions", gw.requireAuth(gw.rateLimitMiddleware(gw.handleSessions)))
+	mux.HandleFunc("/api/gateway/orgs", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleMultiOrg))))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))

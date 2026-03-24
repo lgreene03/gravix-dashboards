@@ -281,6 +281,12 @@ func (s *SQLiteDB) ConsentRecords() ConsentRecordRepo {
 func (s *SQLiteDB) DeletionRequests() DeletionRequestRepo {
 	return &sqliteDeletionRequestRepo{db: s.db}
 }
+func (s *SQLiteDB) SSOConfigs() SSOConfigRepo {
+	return &sqliteSSOConfigRepo{db: s.db}
+}
+func (s *SQLiteDB) Sessions() SessionRepo {
+	return &sqliteSessionRepo{db: s.db}
+}
 
 // --- Tenant Repo ---
 
@@ -363,6 +369,53 @@ func (r *sqliteTenantRepo) UpdateTrial(ctx context.Context, id string, trialStar
 		`UPDATE tenants SET trial_started_at = ?, trial_ends_at = ?, updated_at = datetime('now') WHERE id = ?`,
 		startVal, endVal, id)
 	return err
+}
+
+func (r *sqliteTenantRepo) UpdateParentTenant(ctx context.Context, id, parentTenantID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE tenants SET parent_tenant_id = ?, updated_at = datetime('now') WHERE id = ?`,
+		parentTenantID, id)
+	return err
+}
+
+func (r *sqliteTenantRepo) ListChildren(ctx context.Context, parentTenantID string) ([]*Tenant, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
+		        status, overage_allowed, parent_tenant_id, trial_started_at, trial_ends_at, created_at, updated_at
+		 FROM tenants WHERE parent_tenant_id = ? ORDER BY created_at`, parentTenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tenants []*Tenant
+	for rows.Next() {
+		t := &Tenant{}
+		var createdAt, updatedAt string
+		var trialStarted, trialEnds, parentID sql.NullString
+		var overageInt int
+		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan,
+			&t.StripeCustomerID, &t.StripeSubscriptionID,
+			&t.Status, &overageInt, &parentID, &trialStarted, &trialEnds, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		t.OverageAllowed = overageInt != 0
+		if parentID.Valid {
+			t.ParentTenantID = parentID.String
+		}
+		if trialStarted.Valid {
+			ts, _ := time.Parse(time.RFC3339, trialStarted.String)
+			t.TrialStartedAt = &ts
+		}
+		if trialEnds.Valid {
+			te, _ := time.Parse(time.RFC3339, trialEnds.String)
+			t.TrialEndsAt = &te
+		}
+		t.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		t.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		tenants = append(tenants, t)
+	}
+	return tenants, rows.Err()
 }
 
 func (r *sqliteTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
@@ -726,6 +779,16 @@ func (r *sqliteUserRepo) UpdateRole(ctx context.Context, userID, role string) er
 func (r *sqliteUserRepo) UpdateStatus(ctx context.Context, userID, status string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE users SET status = ? WHERE id = ?`, status, userID)
+	return err
+}
+
+func (r *sqliteUserRepo) UpdateTwoFactor(ctx context.Context, userID string, enabled bool, secret string) error {
+	ev := 0
+	if enabled {
+		ev = 1
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET two_factor_enabled = ?, two_factor_secret = ? WHERE id = ?`, ev, secret, userID)
 	return err
 }
 
@@ -1512,5 +1575,145 @@ func (r *sqliteEmailVerificationRepo) DeleteExpired(ctx context.Context) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM email_verification_tokens WHERE expires_at < ?`, now)
+	return err
+}
+
+// --- SSO Config Repo ---
+
+type sqliteSSOConfigRepo struct{ db *sql.DB }
+
+func (r *sqliteSSOConfigRepo) Upsert(ctx context.Context, cfg *SSOConfig) error {
+	if cfg.ID == "" {
+		cfg.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	enabled := 0
+	if cfg.Enabled {
+		enabled = 1
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sso_configs (id, tenant_id, provider, enabled, entity_id, sso_url, certificate, client_id, client_secret, issuer, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET
+			provider = excluded.provider,
+			enabled = excluded.enabled,
+			entity_id = excluded.entity_id,
+			sso_url = excluded.sso_url,
+			certificate = excluded.certificate,
+			client_id = excluded.client_id,
+			client_secret = excluded.client_secret,
+			issuer = excluded.issuer,
+			updated_at = excluded.updated_at`,
+		cfg.ID, cfg.TenantID, cfg.Provider, enabled, cfg.EntityID, cfg.SSOURL, cfg.Certificate,
+		cfg.ClientID, cfg.ClientSecret, cfg.Issuer, now, now)
+	return err
+}
+
+func (r *sqliteSSOConfigRepo) GetByTenantID(ctx context.Context, tenantID string) (*SSOConfig, error) {
+	cfg := &SSOConfig{}
+	var enabled int
+	var createdAt, updatedAt string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, provider, enabled, entity_id, sso_url, certificate, client_id, client_secret, issuer, created_at, updated_at
+		 FROM sso_configs WHERE tenant_id = ?`, tenantID,
+	).Scan(&cfg.ID, &cfg.TenantID, &cfg.Provider, &enabled, &cfg.EntityID, &cfg.SSOURL, &cfg.Certificate,
+		&cfg.ClientID, &cfg.ClientSecret, &cfg.Issuer, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Enabled = enabled != 0
+	cfg.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	cfg.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return cfg, nil
+}
+
+func (r *sqliteSSOConfigRepo) Delete(ctx context.Context, tenantID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM sso_configs WHERE tenant_id = ?`, tenantID)
+	return err
+}
+
+// --- Session Repo ---
+
+type sqliteSessionRepo struct{ db *sql.DB }
+
+func (r *sqliteSessionRepo) Create(ctx context.Context, s *Session) error {
+	if s.ID == "" {
+		s.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sessions (id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.UserID, s.TenantID, s.IPAddress, s.UserAgent,
+		s.CreatedAt.UTC().Format(time.RFC3339), s.ExpiresAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (r *sqliteSessionRepo) GetByID(ctx context.Context, id string) (*Session, error) {
+	s := &Session{}
+	var createdAt, expiresAt string
+	var revokedAt sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at, revoked_at
+		 FROM sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.UserID, &s.TenantID, &s.IPAddress, &s.UserAgent, &createdAt, &expiresAt, &revokedAt)
+	if err != nil {
+		return nil, err
+	}
+	s.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	s.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	if revokedAt.Valid {
+		t, _ := time.Parse(time.RFC3339, revokedAt.String)
+		s.RevokedAt = &t
+	}
+	return s, nil
+}
+
+func (r *sqliteSessionRepo) ListByUser(ctx context.Context, userID string) ([]*Session, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at, revoked_at
+		 FROM sessions WHERE user_id = ? AND revoked_at IS NULL AND datetime(expires_at) > datetime('now')
+		 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*Session
+	for rows.Next() {
+		s := &Session{}
+		var createdAt, expiresAt string
+		var revokedAt sql.NullString
+		if err := rows.Scan(&s.ID, &s.UserID, &s.TenantID, &s.IPAddress, &s.UserAgent,
+			&createdAt, &expiresAt, &revokedAt); err != nil {
+			return nil, err
+		}
+		s.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		s.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+		if revokedAt.Valid {
+			t, _ := time.Parse(time.RFC3339, revokedAt.String)
+			s.RevokedAt = &t
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+func (r *sqliteSessionRepo) Revoke(ctx context.Context, id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = ? WHERE id = ?`, now, id)
+	return err
+}
+
+func (r *sqliteSessionRepo) RevokeAllForUser(ctx context.Context, userID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`, now, userID)
+	return err
+}
+
+func (r *sqliteSessionRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE datetime(expires_at) < datetime('now')`)
 	return err
 }

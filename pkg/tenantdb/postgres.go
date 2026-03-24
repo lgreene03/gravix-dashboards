@@ -37,6 +37,8 @@ type PostgresDB struct {
 	invitations           *pgInvitationRepo
 	consentRecords        *pgConsentRecordRepo
 	deletionRequests      *pgDeletionRequestRepo
+	ssoConfigs            *pgSSOConfigRepo
+	sessions              *pgSessionRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -78,6 +80,8 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.invitations = &pgInvitationRepo{db: db}
 	pdb.consentRecords = &pgConsentRecordRepo{db: db}
 	pdb.deletionRequests = &pgDeletionRequestRepo{db: db}
+	pdb.ssoConfigs = &pgSSOConfigRepo{db: db}
+	pdb.sessions = &pgSessionRepo{db: db}
 	return pdb, nil
 }
 
@@ -96,6 +100,8 @@ func (p *PostgresDB) EmailVerifications() EmailVerificationRepo  { return p.emai
 func (p *PostgresDB) Invitations() InvitationRepo               { return p.invitations }
 func (p *PostgresDB) ConsentRecords() ConsentRecordRepo         { return p.consentRecords }
 func (p *PostgresDB) DeletionRequests() DeletionRequestRepo     { return p.deletionRequests }
+func (p *PostgresDB) SSOConfigs() SSOConfigRepo                 { return p.ssoConfigs }
+func (p *PostgresDB) Sessions() SessionRepo                     { return p.sessions }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -163,6 +169,31 @@ func (r *pgTenantRepo) UpdateTrial(ctx context.Context, id string, trialStart, t
 		`UPDATE tenants SET trial_started_at = $1, trial_ends_at = $2, updated_at = NOW() WHERE id = $3`,
 		trialStart, trialEnd, id)
 	return err
+}
+
+func (r *pgTenantRepo) UpdateParentTenant(ctx context.Context, id, parentTenantID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE tenants SET parent_tenant_id = $1, updated_at = NOW() WHERE id = $2`,
+		parentTenantID, id)
+	return err
+}
+
+func (r *pgTenantRepo) ListChildren(ctx context.Context, parentTenantID string) ([]*Tenant, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, COALESCE(parent_tenant_id,''), trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE parent_tenant_id = $1 ORDER BY created_at`, parentTenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []*Tenant
+	for rows.Next() {
+		t := &Tenant{}
+		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.ParentTenantID, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, t)
+	}
+	return list, rows.Err()
 }
 
 func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
@@ -393,6 +424,12 @@ func (r *pgUserRepo) UpdateRole(ctx context.Context, userID, role string) error 
 func (r *pgUserRepo) UpdateStatus(ctx context.Context, userID, status string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE users SET status = $1 WHERE id = $2`, status, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateTwoFactor(ctx context.Context, userID string, enabled bool, secret string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET two_factor_enabled = $1, two_factor_secret = $2 WHERE id = $3`, enabled, secret, userID)
 	return err
 }
 
@@ -969,5 +1006,114 @@ func (r *pgEmailVerificationRepo) MarkVerified(ctx context.Context, id string) e
 func (r *pgEmailVerificationRepo) DeleteExpired(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM email_verification_tokens WHERE expires_at < NOW()`)
+	return err
+}
+
+// --- SSO Config Repo ---
+
+type pgSSOConfigRepo struct{ db *sql.DB }
+
+func (r *pgSSOConfigRepo) Upsert(ctx context.Context, cfg *SSOConfig) error {
+	if cfg.ID == "" {
+		cfg.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sso_configs (id, tenant_id, provider, enabled, entity_id, sso_url, certificate, client_id, client_secret, issuer, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+		 ON CONFLICT(tenant_id) DO UPDATE SET
+			provider = EXCLUDED.provider,
+			enabled = EXCLUDED.enabled,
+			entity_id = EXCLUDED.entity_id,
+			sso_url = EXCLUDED.sso_url,
+			certificate = EXCLUDED.certificate,
+			client_id = EXCLUDED.client_id,
+			client_secret = EXCLUDED.client_secret,
+			issuer = EXCLUDED.issuer,
+			updated_at = NOW()`,
+		cfg.ID, cfg.TenantID, cfg.Provider, cfg.Enabled, cfg.EntityID, cfg.SSOURL, cfg.Certificate,
+		cfg.ClientID, cfg.ClientSecret, cfg.Issuer)
+	return err
+}
+
+func (r *pgSSOConfigRepo) GetByTenantID(ctx context.Context, tenantID string) (*SSOConfig, error) {
+	cfg := &SSOConfig{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, provider, enabled, entity_id, sso_url, certificate, client_id, client_secret, issuer, created_at, updated_at
+		 FROM sso_configs WHERE tenant_id = $1`, tenantID,
+	).Scan(&cfg.ID, &cfg.TenantID, &cfg.Provider, &cfg.Enabled, &cfg.EntityID, &cfg.SSOURL, &cfg.Certificate,
+		&cfg.ClientID, &cfg.ClientSecret, &cfg.Issuer, &cfg.CreatedAt, &cfg.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (r *pgSSOConfigRepo) Delete(ctx context.Context, tenantID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM sso_configs WHERE tenant_id = $1`, tenantID)
+	return err
+}
+
+// --- Session Repo ---
+
+type pgSessionRepo struct{ db *sql.DB }
+
+func (r *pgSessionRepo) Create(ctx context.Context, s *Session) error {
+	if s.ID == "" {
+		s.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sessions (id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		s.ID, s.UserID, s.TenantID, s.IPAddress, s.UserAgent, s.CreatedAt.UTC(), s.ExpiresAt.UTC())
+	return err
+}
+
+func (r *pgSessionRepo) GetByID(ctx context.Context, id string) (*Session, error) {
+	s := &Session{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at, revoked_at
+		 FROM sessions WHERE id = $1`, id,
+	).Scan(&s.ID, &s.UserID, &s.TenantID, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.RevokedAt)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (r *pgSessionRepo) ListByUser(ctx context.Context, userID string) ([]*Session, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at, revoked_at
+		 FROM sessions WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+		 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []*Session
+	for rows.Next() {
+		s := &Session{}
+		if err := rows.Scan(&s.ID, &s.UserID, &s.TenantID, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.RevokedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, s)
+	}
+	return list, rows.Err()
+}
+
+func (r *pgSessionRepo) Revoke(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgSessionRepo) RevokeAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return err
+}
+
+func (r *pgSessionRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE expires_at < NOW()`)
 	return err
 }
