@@ -104,6 +104,14 @@
           "type": "string",
           "description": "Cube.js API secret for dashboard queries."
         },
+        "jwtSecret": {
+          "type": "string",
+          "description": "JWT signing secret (min 32 chars)."
+        },
+        "databaseUrl": {
+          "type": "string",
+          "description": "PostgreSQL connection string (when gateway.dbDriver=postgres)."
+        },
         "imageRegistry": {
           "type": "string",
           "description": "Container registry prefix (e.g. ghcr.io/org/gravix, ECR URI)"
@@ -360,6 +368,12 @@
           "type": "string",
           "description": "Path to tenant SQLite database inside the container"
         },
+        "dbDriver": {
+          "type": "string",
+          "enum": ["sqlite", "postgres"],
+          "default": "sqlite",
+          "description": "Database driver: sqlite or postgres"
+        },
         "stripe": {
           "type": "object",
           "additionalProperties": false,
@@ -419,6 +433,15 @@
                 "repository": { "type": "string" },
                 "tag": { "type": "string" }
               }
+            },
+            "workers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false },
+                "replicaCount": { "type": "integer", "minimum": 1 },
+                "resources": { "$ref": "#/definitions/resourceRequirements" }
+              }
             }
           }
         },
@@ -438,6 +461,16 @@
               "properties": {
                 "repository": { "type": "string" },
                 "tag": { "type": "string" }
+              }
+            },
+            "hpa": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false },
+                "minReplicas": { "type": "integer", "minimum": 1 },
+                "maxReplicas": { "type": "integer", "minimum": 1 },
+                "targetCPU": { "type": "integer", "minimum": 1, "maximum": 100 }
               }
             }
           }
@@ -627,6 +660,85 @@
           "pattern": "^[0-9]+$",
           "description": "Max pods in namespace"
         }
+      }
+    },
+    "syntheticMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Synthetic monitoring CronJob for pipeline health checks",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "schedule": { "type": "string", "description": "Cron schedule expression" }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Log aggregation with Loki and Promtail",
+      "properties": {
+        "loki": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            },
+            "persistence": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi|Ti)$" }
+              }
+            }
+          }
+        },
+        "promtail": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "alertmanager": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Alertmanager for alert routing",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "receivers": { "type": "array" }
+      }
+    },
+    "dbBackup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Database backup CronJob",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "schedule": { "type": "string" },
+        "retentionDays": { "type": "integer", "minimum": 1 }
       }
     },
     "backup": {

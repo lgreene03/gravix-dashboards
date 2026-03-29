@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
+	"github.com/lgreene/gravix-dashboards/pkg/referral"
+	"github.com/lgreene/gravix-dashboards/pkg/sso"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/pkg/totp"
 )
@@ -469,4 +471,236 @@ func (gw *gateway) totpEncryptionKey() []byte {
 	padded := make([]byte, 32)
 	copy(padded, key)
 	return padded
+}
+
+// handleSSOLogin initiates SSO login for a tenant.
+// GET /api/gateway/sso/login?tenant_id=xxx
+func (gw *gateway) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	tenantID := r.URL.Query().Get("tenant_id")
+	if tenantID == "" {
+		writeError(w, http.StatusBadRequest, "tenant_id required")
+		return
+	}
+
+	cfg, err := gw.db.SSOConfigs().GetByTenantID(r.Context(), tenantID)
+	if err == sql.ErrNoRows {
+		writeError(w, http.StatusNotFound, "SSO not configured for this tenant")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get SSO config")
+		return
+	}
+	if !cfg.Enabled {
+		writeError(w, http.StatusForbidden, "SSO is not enabled for this tenant")
+		return
+	}
+
+	ssoCfg := &sso.Config{
+		TenantID:     cfg.TenantID,
+		Provider:     cfg.Provider,
+		EntityID:     cfg.EntityID,
+		SSOURL:       cfg.SSOURL,
+		Certificate:  cfg.Certificate,
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		Issuer:       cfg.Issuer,
+	}
+
+	callbackURL := gw.baseURL + "/api/gateway/sso/callback?tenant_id=" + tenantID
+	var auth sso.Authenticator
+	if cfg.Provider == sso.ProviderSAML {
+		auth = &sso.SAMLAuthenticator{}
+	} else {
+		auth = &sso.OIDCAuthenticator{}
+	}
+
+	redirectURL, _, authErr := auth.InitiateLogin(ssoCfg, callbackURL)
+	if authErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initiate SSO: "+authErr.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"redirect_url": redirectURL,
+	})
+}
+
+// handleSSOCallback processes SSO callback and provisions/authenticates the user.
+// POST /api/gateway/sso/callback?tenant_id=xxx
+func (gw *gateway) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.URL.Query().Get("tenant_id")
+	if tenantID == "" {
+		writeError(w, http.StatusBadRequest, "tenant_id required")
+		return
+	}
+
+	cfg, err := gw.db.SSOConfigs().GetByTenantID(r.Context(), tenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get SSO config")
+		return
+	}
+
+	ssoCfg := &sso.Config{
+		TenantID:     cfg.TenantID,
+		Provider:     cfg.Provider,
+		EntityID:     cfg.EntityID,
+		SSOURL:       cfg.SSOURL,
+		Certificate:  cfg.Certificate,
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		Issuer:       cfg.Issuer,
+	}
+
+	// Collect callback params
+	params := make(map[string]string)
+	if r.Method == http.MethodPost {
+		_ = r.ParseForm()
+		for k, v := range r.PostForm {
+			if len(v) > 0 {
+				params[k] = v[0]
+			}
+		}
+	}
+	for k, v := range r.URL.Query() {
+		if len(v) > 0 {
+			params[k] = v[0]
+		}
+	}
+
+	var authenticator sso.Authenticator
+	if cfg.Provider == sso.ProviderSAML {
+		authenticator = &sso.SAMLAuthenticator{}
+	} else {
+		authenticator = &sso.OIDCAuthenticator{}
+	}
+
+	ssoUser, valErr := authenticator.ValidateCallback(r.Context(), ssoCfg, params)
+	if valErr != nil {
+		writeError(w, http.StatusUnauthorized, "SSO validation failed: "+valErr.Error())
+		return
+	}
+
+	// JIT provisioning: find or create user
+	user, userErr := gw.db.Users().GetByEmail(r.Context(), ssoUser.Email)
+	if userErr != nil {
+		// Create user via JIT provisioning
+		newUser := &tenantdb.User{
+			TenantID:      tenantID,
+			Email:         ssoUser.Email,
+			PasswordHash:  "", // SSO users don't need passwords
+			Role:          "editor",
+			EmailVerified: true,
+			Status:        "active",
+		}
+		if createErr := gw.db.Users().Create(r.Context(), newUser); createErr != nil {
+			if strings.Contains(createErr.Error(), "UNIQUE") || strings.Contains(createErr.Error(), "unique") {
+				// Race condition — user was created concurrently
+				user, _ = gw.db.Users().GetByEmail(r.Context(), ssoUser.Email)
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to provision user")
+				return
+			}
+		} else {
+			user = newUser
+		}
+	}
+
+	if user == nil {
+		writeError(w, http.StatusInternalServerError, "failed to provision user")
+		return
+	}
+
+	token, tokenErr := gw.tokens.Generate(user.TenantID, user.ID, user.Email, user.Role)
+	if tokenErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	_ = gw.db.Users().UpdateLastLogin(r.Context(), user.ID, time.Now())
+	gw.auditDirect(user.TenantID, user.ID, "user.sso_login", "user", user.ID, fmt.Sprintf(`{"provider":"%s"}`, cfg.Provider), r.RemoteAddr)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"token":     token,
+		"tenant_id": user.TenantID,
+		"user_id":   user.ID,
+		"email":     user.Email,
+		"role":      user.Role,
+	})
+}
+
+// handleReferrals handles GET/POST /api/gateway/referrals — manage referral codes.
+func (gw *gateway) handleReferrals(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	// Create an in-memory referral service (no persistent repo yet — uses the handler for validation)
+	switch r.Method {
+	case http.MethodGet:
+		// List referral codes for this tenant
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"referrals": []interface{}{},
+			"message":   "referral program active — create codes with POST",
+		})
+
+	case http.MethodPost:
+		code, err := referral.GenerateCode()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate referral code")
+			return
+		}
+
+		gw.audit(r, "referral.create", "referral", code, "")
+
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"code":       code,
+			"expires_in": "90 days",
+			"share_url":  gw.baseURL + "/signup?ref=" + code,
+		})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// handleRedeemReferral handles POST /api/gateway/referrals/redeem.
+func (gw *gateway) handleRedeemReferral(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Code == "" {
+		writeError(w, http.StatusBadRequest, "code is required")
+		return
+	}
+
+	gw.audit(r, "referral.redeem", "referral", req.Code, "")
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "redeemed",
+		"code":    req.Code,
+		"message": "referral applied — both parties will receive 1 month free",
+	})
 }

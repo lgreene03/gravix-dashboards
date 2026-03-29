@@ -3516,6 +3516,338 @@ app.listen(8080, () => {
             }
         }
 
+        // --- TWO-FACTOR AUTHENTICATION ---
+        async function load2FAStatus() {
+            if (!IS_MULTI_TENANT) return;
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const badge = document.getElementById('2fa-badge');
+                const setupSection = document.getElementById('2fa-setup-section');
+                const disableSection = document.getElementById('2fa-disable-section');
+                if (data.two_factor_enabled) {
+                    if (badge) { badge.textContent = 'Enabled'; badge.style.background = 'rgba(34,197,94,0.15)'; badge.style.color = '#22c55e'; }
+                    if (setupSection) setupSection.style.display = 'none';
+                    if (disableSection) disableSection.style.display = 'block';
+                } else {
+                    if (badge) { badge.textContent = 'Disabled'; badge.style.background = 'rgba(239,68,68,0.15)'; badge.style.color = '#ef4444'; }
+                    if (setupSection) setupSection.style.display = 'block';
+                    if (disableSection) disableSection.style.display = 'none';
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        const setupBtn2FA = document.getElementById('2fa-setup-btn');
+        if (setupBtn2FA) {
+            setupBtn2FA.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const msg = document.getElementById('2fa-msg');
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/2fa/setup', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        document.getElementById('2fa-secret').textContent = data.secret;
+                        document.getElementById('2fa-qr-section').style.display = 'block';
+                        document.getElementById('2fa-setup-section').style.display = 'none';
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Setup failed'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        const confirmBtn2FA = document.getElementById('2fa-confirm-btn');
+        if (confirmBtn2FA) {
+            confirmBtn2FA.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const code = document.getElementById('2fa-confirm-code').value;
+                const msg = document.getElementById('2fa-msg');
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/2fa/confirm', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ code: code })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        document.getElementById('2fa-qr-section').style.display = 'none';
+                        if (data.recovery_codes) {
+                            const rcSection = document.getElementById('2fa-recovery-codes');
+                            const rcList = document.getElementById('2fa-recovery-list');
+                            if (rcSection) rcSection.style.display = 'block';
+                            if (rcList) rcList.textContent = data.recovery_codes.join('\n');
+                            document.getElementById('2fa-qr-section').style.display = 'block';
+                        }
+                        load2FAStatus();
+                        if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--success-color, #22c55e)'; msg.textContent = '2FA enabled successfully'; }
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Invalid code'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        const disableBtn2FA = document.getElementById('2fa-disable-btn');
+        if (disableBtn2FA) {
+            disableBtn2FA.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const code = document.getElementById('2fa-disable-code').value;
+                const msg = document.getElementById('2fa-msg');
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/2fa/disable', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ code: code })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        load2FAStatus();
+                        if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--success-color, #22c55e)'; msg.textContent = '2FA disabled'; }
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Invalid code'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        // --- ACTIVE SESSIONS ---
+        async function loadSessions() {
+            if (!IS_MULTI_TENANT) return;
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            const listEl = document.getElementById('sessions-list');
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/sessions', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) { if (listEl) listEl.textContent = 'Failed to load sessions.'; return; }
+                const data = await resp.json();
+                const sessions = data.sessions || [];
+                if (!listEl) return;
+                if (sessions.length === 0) { listEl.textContent = 'No active sessions.'; return; }
+                listEl.innerHTML = sessions.map(function(s) {
+                    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">' +
+                        '<div><div style="font-weight:500;color:var(--text-primary);">' + escapeHtml(s.ip_address || 'Unknown') + '</div>' +
+                        '<div style="font-size:0.75rem;">' + escapeHtml((s.user_agent || '').substring(0, 60)) + '</div>' +
+                        '<div style="font-size:0.75rem;">Created: ' + new Date(s.created_at).toLocaleString() + '</div></div>' +
+                        '<button onclick="revokeSession(\'' + s.id + '\')" style="padding:4px 12px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem;">Revoke</button></div>';
+                }).join('');
+            } catch (e) {
+                if (listEl) listEl.textContent = 'Failed to load sessions.';
+            }
+        }
+
+        window.revokeSession = async function(sessionId) {
+            const token = sessionStorage.getItem('gravix_token');
+            try {
+                await fetch(GATEWAY_URL + '/api/gateway/sessions?id=' + sessionId, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                loadSessions();
+                showToast('Session revoked', 'success');
+            } catch (e) { showToast('Failed to revoke session', 'error'); }
+        };
+
+        const revokeAllBtn = document.getElementById('sessions-revoke-all-btn');
+        if (revokeAllBtn) {
+            revokeAllBtn.addEventListener('click', async function() {
+                if (!confirm('Revoke all sessions? You will be logged out.')) return;
+                const token = sessionStorage.getItem('gravix_token');
+                try {
+                    await fetch(GATEWAY_URL + '/api/gateway/sessions?id=all', {
+                        method: 'DELETE',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    showToast('All sessions revoked', 'success');
+                    setTimeout(doLogout, 1000);
+                } catch (e) { showToast('Failed to revoke sessions', 'error'); }
+            });
+        }
+
+        // --- SSO CONFIGURATION ---
+        const ssoProvider = document.getElementById('sso-provider');
+        if (ssoProvider) {
+            ssoProvider.addEventListener('change', function() {
+                document.getElementById('sso-saml-fields').style.display = this.value === 'saml' ? 'block' : 'none';
+                document.getElementById('sso-oidc-fields').style.display = this.value === 'oidc' ? 'block' : 'none';
+            });
+        }
+
+        async function loadSSOConfig() {
+            if (!IS_MULTI_TENANT) return;
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) return;
+                const me = await resp.json();
+                // Show SSO card only for admins on business+ plans
+                if (me.role === 'admin' && (me.plan === 'business' || me.plan === 'scale' || me.plan === 'enterprise')) {
+                    const ssoCard = document.getElementById('sso-card');
+                    if (ssoCard) ssoCard.style.display = 'block';
+
+                    const ssoResp = await fetch(GATEWAY_URL + '/api/gateway/sso', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    if (ssoResp.ok) {
+                        const ssoData = await ssoResp.json();
+                        const badge = document.getElementById('sso-badge');
+                        const deleteBtn = document.getElementById('sso-delete-btn');
+                        if (ssoData.configured) {
+                            if (badge) { badge.textContent = ssoData.provider.toUpperCase() + (ssoData.enabled ? ' (Active)' : ' (Inactive)'); badge.style.background = ssoData.enabled ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'; badge.style.color = ssoData.enabled ? '#22c55e' : '#f59e0b'; }
+                            if (deleteBtn) deleteBtn.style.display = 'inline-block';
+                        } else {
+                            if (badge) { badge.textContent = 'Not configured'; badge.style.background = 'rgba(107,114,128,0.15)'; badge.style.color = '#6b7280'; }
+                        }
+                    }
+                }
+                // Show multi-org card for admin on scale/enterprise
+                if (me.role === 'admin' && (me.plan === 'scale' || me.plan === 'enterprise')) {
+                    const orgCard = document.getElementById('multi-org-card');
+                    if (orgCard) orgCard.style.display = 'block';
+                    loadOrganizations();
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        const ssoSaveBtn = document.getElementById('sso-save-btn');
+        if (ssoSaveBtn) {
+            ssoSaveBtn.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const msg = document.getElementById('sso-msg');
+                const provider = document.getElementById('sso-provider').value;
+                const body = { provider: provider, enabled: true };
+                if (provider === 'saml') {
+                    body.entity_id = document.getElementById('sso-entity-id').value;
+                    body.sso_url = document.getElementById('sso-url').value;
+                    body.certificate = document.getElementById('sso-certificate').value;
+                } else {
+                    body.issuer = document.getElementById('sso-issuer').value;
+                    body.client_id = document.getElementById('sso-client-id').value;
+                    body.client_secret = document.getElementById('sso-client-secret').value;
+                }
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/sso', {
+                        method: 'PUT',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--success-color, #22c55e)'; msg.textContent = 'SSO configuration saved'; }
+                        loadSSOConfig();
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Failed to save'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        const ssoDeleteBtn = document.getElementById('sso-delete-btn');
+        if (ssoDeleteBtn) {
+            ssoDeleteBtn.addEventListener('click', async function() {
+                if (!confirm('Remove SSO configuration?')) return;
+                const token = sessionStorage.getItem('gravix_token');
+                try {
+                    await fetch(GATEWAY_URL + '/api/gateway/sso', {
+                        method: 'DELETE',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    showToast('SSO configuration removed', 'success');
+                    loadSSOConfig();
+                } catch (e) { showToast('Failed to remove SSO', 'error'); }
+            });
+        }
+
+        // --- MULTI-ORG MANAGEMENT ---
+        async function loadOrganizations() {
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            const listEl = document.getElementById('org-list');
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/orgs', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) { if (listEl) listEl.textContent = 'Failed to load organizations.'; return; }
+                const data = await resp.json();
+                const orgs = data.organizations || [];
+                if (!listEl) return;
+                if (orgs.length === 0) { listEl.textContent = 'No child organizations yet.'; return; }
+                listEl.innerHTML = orgs.map(function(o) {
+                    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">' +
+                        '<div><div style="font-weight:500;color:var(--text-primary);">' + escapeHtml(o.name) + '</div>' +
+                        '<div style="font-size:0.75rem;">Plan: ' + escapeHtml(o.plan) + ' | Status: ' + escapeHtml(o.status) + '</div></div>' +
+                        '<span style="font-size:0.75rem;color:var(--text-secondary);">' + new Date(o.created_at).toLocaleDateString() + '</span></div>';
+                }).join('');
+            } catch (e) {
+                if (listEl) listEl.textContent = 'Failed to load organizations.';
+            }
+        }
+
+        const orgCreateBtn = document.getElementById('org-create-btn');
+        if (orgCreateBtn) {
+            orgCreateBtn.addEventListener('click', function() {
+                const form = document.getElementById('org-create-form');
+                if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+            });
+        }
+
+        const orgSubmitBtn = document.getElementById('org-submit-btn');
+        if (orgSubmitBtn) {
+            orgSubmitBtn.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const name = document.getElementById('org-name').value;
+                const emailVal = document.getElementById('org-email').value;
+                const msg = document.getElementById('org-msg');
+                if (!name || !emailVal) { if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Name and email are required'; } return; }
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/orgs', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: name, email: emailVal })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        showToast('Organization created', 'success');
+                        document.getElementById('org-create-form').style.display = 'none';
+                        document.getElementById('org-name').value = '';
+                        document.getElementById('org-email').value = '';
+                        loadOrganizations();
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Failed to create'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        // Load enterprise features on settings page
+        if (IS_MULTI_TENANT && sessionStorage.getItem('gravix_token')) {
+            load2FAStatus();
+            loadSessions();
+            loadSSOConfig();
+        }
+
         // --- ACCOUNT DELETION ---
         const deleteAccountBtn = document.getElementById('delete-account-btn');
         const deleteConfirmModal = document.getElementById('delete-confirm-modal');

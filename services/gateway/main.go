@@ -57,6 +57,7 @@ import (
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
+	"github.com/lgreene/gravix-dashboards/pkg/totp"
 	"github.com/montanaflynn/stats"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -363,11 +364,17 @@ func main() {
 
 	// Enterprise features (Phase 31)
 	mux.HandleFunc("/api/gateway/sso", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleSSOConfig))))
+	mux.HandleFunc("/api/gateway/sso/login", gw.ipRateLimitMiddleware(gw.handleSSOLogin))
+	mux.HandleFunc("/api/gateway/sso/callback", gw.ipRateLimitMiddleware(gw.handleSSOCallback))
 	mux.HandleFunc("/api/gateway/2fa/setup", gw.requireAuth(gw.rateLimitMiddleware(gw.handleTwoFactorSetup)))
 	mux.HandleFunc("/api/gateway/2fa/confirm", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTwoFactorConfirm))))
 	mux.HandleFunc("/api/gateway/2fa/disable", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTwoFactorDisable))))
 	mux.HandleFunc("/api/gateway/sessions", gw.requireAuth(gw.rateLimitMiddleware(gw.handleSessions)))
 	mux.HandleFunc("/api/gateway/orgs", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleMultiOrg))))
+
+	// Growth features (Phase 32)
+	mux.HandleFunc("/api/gateway/referrals", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleReferrals))))
+	mux.HandleFunc("/api/gateway/referrals/redeem", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleRedeemReferral))))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -1509,6 +1516,38 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil || tenant.Status != "active" {
 		writeError(w, http.StatusForbidden, "tenant is not active")
 		return
+	}
+
+	// Check if 2FA is enabled — require TOTP code
+	if user.TwoFactorEnabled {
+		var totpCode string
+		// Check if TOTP code was provided in the login request
+		var loginReq struct {
+			TOTPCode string `json:"totp_code"`
+		}
+		// Re-parse won't work since body is consumed; check the original req fields
+		// The totp_code should be provided as a query param or we return requires_2fa
+		totpCode = r.URL.Query().Get("totp_code")
+		_ = loginReq // suppress unused
+		if totpCode == "" {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"requires_2fa": true,
+				"user_id":      user.ID,
+				"message":      "provide totp_code to complete login",
+			})
+			return
+		}
+
+		encKey := gw.totpEncryptionKey()
+		secret, decErr := totp.DecryptSecret(user.TwoFactorSecret, encKey)
+		if decErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate 2FA")
+			return
+		}
+		if !totp.Validate(totpCode, secret) {
+			writeError(w, http.StatusUnauthorized, "invalid TOTP code")
+			return
+		}
 	}
 
 	token, err := gw.tokens.Generate(user.TenantID, user.ID, user.Email, user.Role)

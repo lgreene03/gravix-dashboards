@@ -774,6 +774,8 @@ func main() {
 	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleBatchFacts(sink, tdb)))))
 	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleEvents(sink, tdb)))))
 	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleTraces(sink, tdb, traceSampleRate)))))
+	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleOTLPTraces(sink)))))
+	http.Handle("/api/v1/deploy", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleDeployWebhook(sink, tdb)))))
 
 	http.Handle("/metrics", promhttp.Handler())
 

@@ -941,6 +941,140 @@
                 </div>
             </div>
 
+            <!-- Two-Factor Authentication -->
+            <div class="card multi-tenant-only" style="margin-top: 24px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Two-Factor Authentication</div>
+                        <div class="card-subtitle">Add an extra layer of security to your account</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="2fa-status" style="margin-bottom: 16px;">
+                        <span id="2fa-badge" style="display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">Loading...</span>
+                    </div>
+                    <div id="2fa-setup-section" style="display: none;">
+                        <button id="2fa-setup-btn" style="padding: 10px 24px; background: var(--brand-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Enable 2FA</button>
+                    </div>
+                    <div id="2fa-qr-section" style="display: none;">
+                        <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 12px;">Scan this secret with your authenticator app, then enter the 6-digit code:</p>
+                        <code id="2fa-secret" style="display: block; padding: 8px 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; word-break: break-all;"></code>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="2fa-confirm-code" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: monospace; width: 160px;">
+                            <button id="2fa-confirm-btn" style="padding: 8px 16px; background: var(--success-color, #22c55e); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Confirm</button>
+                        </div>
+                        <div id="2fa-recovery-codes" style="display: none; margin-top: 16px; padding: 12px; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px;">
+                            <strong>Recovery Codes</strong>
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 4px 0 8px;">Save these codes securely. They cannot be shown again.</p>
+                            <code id="2fa-recovery-list" style="display: block; white-space: pre-line; font-size: 0.85rem;"></code>
+                        </div>
+                    </div>
+                    <div id="2fa-disable-section" style="display: none;">
+                        <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 12px;">2FA is currently enabled. Enter a code to disable.</p>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="2fa-disable-code" placeholder="Enter 6-digit code" maxlength="6" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: monospace; width: 160px;">
+                            <button id="2fa-disable-btn" style="padding: 8px 16px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Disable 2FA</button>
+                        </div>
+                    </div>
+                    <p id="2fa-msg" style="display: none; margin-top: 12px; font-size: 0.875rem;"></p>
+                </div>
+            </div>
+
+            <!-- Active Sessions -->
+            <div class="card multi-tenant-only" style="margin-top: 24px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Active Sessions</div>
+                        <div class="card-subtitle">Manage your active login sessions</div>
+                    </div>
+                    <button id="sessions-revoke-all-btn" style="padding: 6px 16px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;">Revoke All</button>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="sessions-list" style="font-size: 0.875rem; color: var(--text-secondary);">Loading sessions...</div>
+                </div>
+            </div>
+
+            <!-- SSO Configuration (Admin Only) -->
+            <div class="card multi-tenant-only" id="sso-card" style="margin-top: 24px; display: none;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Single Sign-On (SSO)</div>
+                        <div class="card-subtitle">Configure SAML or OIDC for your organization</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="sso-status" style="margin-bottom: 16px;">
+                        <span id="sso-badge" style="display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">Not configured</span>
+                    </div>
+                    <div id="sso-form-section">
+                        <div style="margin-bottom: 12px;">
+                            <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Provider</label>
+                            <select id="sso-provider" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); width: 100%;">
+                                <option value="saml">SAML 2.0</option>
+                                <option value="oidc">OpenID Connect (OIDC)</option>
+                            </select>
+                        </div>
+                        <div id="sso-saml-fields">
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Entity ID</label>
+                                <input type="text" id="sso-entity-id" placeholder="https://idp.example.com/entity" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">SSO URL</label>
+                                <input type="url" id="sso-url" placeholder="https://idp.example.com/sso" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">X.509 Certificate (PEM)</label>
+                                <textarea id="sso-certificate" rows="3" placeholder="-----BEGIN CERTIFICATE-----" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: monospace; font-size: 0.8rem;"></textarea>
+                            </div>
+                        </div>
+                        <div id="sso-oidc-fields" style="display: none;">
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Issuer URL</label>
+                                <input type="url" id="sso-issuer" placeholder="https://accounts.google.com" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Client ID</label>
+                                <input type="text" id="sso-client-id" placeholder="your-client-id" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Client Secret</label>
+                                <input type="password" id="sso-client-secret" placeholder="your-client-secret" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="sso-save-btn" style="padding: 10px 24px; background: var(--brand-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">Save SSO Config</button>
+                            <button id="sso-delete-btn" style="padding: 10px 24px; background: #ef4444; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: none;">Remove SSO</button>
+                        </div>
+                    </div>
+                    <p id="sso-msg" style="display: none; margin-top: 12px; font-size: 0.875rem;"></p>
+                </div>
+            </div>
+
+            <!-- Multi-Org Management (Admin + Scale/Enterprise Only) -->
+            <div class="card multi-tenant-only" id="multi-org-card" style="margin-top: 24px; display: none;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Organizations</div>
+                        <div class="card-subtitle">Manage child organizations under your account</div>
+                    </div>
+                    <button id="org-create-btn" style="padding: 6px 16px; background: var(--brand-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;">+ New Org</button>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="org-create-form" style="display: none; margin-bottom: 16px; padding: 16px; background: var(--bg-secondary); border-radius: 8px;">
+                        <div style="margin-bottom: 8px;">
+                            <input type="text" id="org-name" placeholder="Organization name" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <div style="margin-bottom: 8px;">
+                            <input type="email" id="org-email" placeholder="Admin email" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <button id="org-submit-btn" style="padding: 8px 16px; background: var(--success-color, #22c55e); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Create</button>
+                    </div>
+                    <div id="org-list" style="font-size: 0.875rem; color: var(--text-secondary);">Loading organizations...</div>
+                    <p id="org-msg" style="display: none; margin-top: 12px; font-size: 0.875rem;"></p>
+                </div>
+            </div>
+
             <!-- Delete Account -->
             <div class="card" style="margin-top: 24px; border: 1px solid var(--danger-color, #ef4444);">
                 <div class="card-header" style="display:flex; align-items:center; gap:12px;">
