@@ -6,6 +6,7 @@
 //	STATUS_ENDPOINTS — comma-separated list of name=url pairs to monitor
 //	STATUS_PORT — HTTP port (default 8095)
 //	STATUS_POLL_INTERVAL — polling interval (default 30s)
+//	STATUS_DATA_FILE — JSON file for persisting check history (default status_data.json)
 package main
 
 import (
@@ -172,6 +173,70 @@ func (sp *StatusPage) getStatuses() []ServiceStatus {
 	return result
 }
 
+// persistedData is the JSON structure written to disk.
+type persistedData struct {
+	Services map[string]persistedService `json:"services"`
+}
+
+type persistedService struct {
+	DailyChecks   map[string]int `json:"daily_checks"`
+	DailyFailures map[string]int `json:"daily_failures"`
+}
+
+// save writes check history to a JSON file.
+func (sp *StatusPage) save(path string) {
+	sp.mu.RLock()
+	defer sp.mu.RUnlock()
+
+	data := persistedData{Services: make(map[string]persistedService)}
+	for name, svc := range sp.services {
+		data.Services[name] = persistedService{
+			DailyChecks:   svc.dailyChecks,
+			DailyFailures: svc.dailyFailures,
+		}
+	}
+
+	b, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("failed to marshal status data", "error", err)
+		return
+	}
+	if err := os.WriteFile(path, b, 0644); err != nil {
+		slog.Error("failed to write status data", "error", err)
+	}
+}
+
+// load restores check history from a JSON file.
+func (sp *StatusPage) load(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return // file doesn't exist yet — fresh start
+	}
+
+	var data persistedData
+	if err := json.Unmarshal(b, &data); err != nil {
+		slog.Warn("failed to parse status data file", "error", err)
+		return
+	}
+
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+
+	for name, saved := range data.Services {
+		svc, ok := sp.services[name]
+		if !ok {
+			continue // service no longer monitored
+		}
+		for date, checks := range saved.DailyChecks {
+			svc.dailyChecks[date] = checks
+		}
+		for date, failures := range saved.DailyFailures {
+			svc.dailyFailures[date] = failures
+		}
+	}
+	slog.Info("restored status history", "services", len(data.Services))
+}
+
 func (sp *StatusPage) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -296,6 +361,11 @@ func main() {
 		}
 	}
 
+	dataFile := os.Getenv("STATUS_DATA_FILE")
+	if dataFile == "" {
+		dataFile = "status_data.json"
+	}
+
 	sp := newStatusPage()
 
 	// Parse endpoints from env
@@ -311,11 +381,15 @@ func main() {
 		}
 	}
 
+	// Restore persisted history
+	sp.load(dataFile)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Initial poll
 	sp.poll(ctx)
+	sp.save(dataFile)
 
 	// Background polling
 	go func() {
@@ -327,6 +401,7 @@ func main() {
 				return
 			case <-ticker.C:
 				sp.poll(ctx)
+				sp.save(dataFile)
 			}
 		}
 	}()

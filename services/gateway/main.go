@@ -47,6 +47,7 @@ import (
 	"encoding/hex"
 
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
+	"github.com/lgreene/gravix-dashboards/pkg/pagination"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/billing"
@@ -1146,20 +1147,9 @@ func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := 50
-	offset := 0
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	pg := pagination.FromRequest(r)
 
-	entries, total, err := gw.db.AuditLog().ListByTenant(r.Context(), claims.TenantID, limit, offset)
+	entries, total, err := gw.db.AuditLog().ListByTenant(r.Context(), claims.TenantID, pg.Limit, pg.Offset())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list audit log")
 		return
@@ -1168,10 +1158,8 @@ func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 		entries = []*tenantdb.AuditEntry{}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"entries": entries,
-		"total":   total,
-		"limit":   limit,
-		"offset":  offset,
+		"data":       entries,
+		"pagination": pagination.NewResponse(pg, total),
 	})
 }
 
@@ -2922,6 +2910,7 @@ func (gw *gateway) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 
 	claims := auth.ClaimsFromContext(r.Context())
 
+	pg := pagination.FromRequest(r)
 	ruleID := r.URL.Query().Get("rule_id")
 	var entries []*tenantdb.AlertHistoryEntry
 	var err error
@@ -2933,9 +2922,9 @@ func (gw *gateway) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "rule not found")
 			return
 		}
-		entries, err = gw.db.AlertHistory().ListByRule(r.Context(), ruleID, 50)
+		entries, err = gw.db.AlertHistory().ListByRule(r.Context(), ruleID, pg.Limit)
 	} else {
-		entries, err = gw.db.AlertHistory().ListByTenant(r.Context(), claims.TenantID, 50)
+		entries, err = gw.db.AlertHistory().ListByTenant(r.Context(), claims.TenantID, pg.Limit)
 	}
 
 	if err != nil {
@@ -2945,7 +2934,10 @@ func (gw *gateway) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []*tenantdb.AlertHistoryEntry{}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"history": entries})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"data":       entries,
+		"pagination": pagination.NewResponse(pg, len(entries)),
+	})
 }
 
 // --- Alert Evaluator ---

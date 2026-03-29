@@ -1373,9 +1373,9 @@ func TestAlertHistoryListSuccess(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	history, ok := resp["history"].([]interface{})
+	history, ok := resp["data"].([]interface{})
 	if !ok {
-		t.Fatal("expected history array")
+		t.Fatal("expected data array")
 	}
 	if len(history) != 0 {
 		t.Errorf("history count = %d, want 0", len(history))
@@ -1412,9 +1412,9 @@ func TestAlertHistoryListByRule(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	history, ok := resp["history"].([]interface{})
+	history, ok := resp["data"].([]interface{})
 	if !ok {
-		t.Fatal("expected history array")
+		t.Fatal("expected data array")
 	}
 	if len(history) != 1 {
 		t.Errorf("history count = %d, want 1", len(history))
@@ -1623,15 +1623,19 @@ func TestAuditLogEndpointEmpty(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	entries, ok := resp["entries"].([]interface{})
+	entries, ok := resp["data"].([]interface{})
 	if !ok {
-		t.Fatal("expected entries array")
+		t.Fatal("expected data array")
 	}
 	if len(entries) != 0 {
-		t.Errorf("entries count = %d, want 0", len(entries))
+		t.Errorf("data count = %d, want 0", len(entries))
 	}
-	if resp["total"].(float64) != 0 {
-		t.Errorf("total = %v, want 0", resp["total"])
+	pg, ok := resp["pagination"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected pagination object")
+	}
+	if pg["total"].(float64) != 0 {
+		t.Errorf("total = %v, want 0", pg["total"])
 	}
 }
 
@@ -1695,8 +1699,9 @@ func TestAuditLogWithEntries(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	if resp["total"].(float64) != 2 {
-		t.Errorf("total = %v, want 2", resp["total"])
+	pg := resp["pagination"].(map[string]interface{})
+	if pg["total"].(float64) != 2 {
+		t.Errorf("total = %v, want 2", pg["total"])
 	}
 }
 
@@ -1711,7 +1716,7 @@ func TestAuditLogPagination(t *testing.T) {
 		})
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/gateway/audit-log?limit=2&offset=0", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/audit-log?page=1&limit=2", nil)
 	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
 	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
@@ -1724,12 +1729,13 @@ func TestAuditLogPagination(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	entries := resp["entries"].([]interface{})
+	entries := resp["data"].([]interface{})
 	if len(entries) != 2 {
-		t.Errorf("entries count = %d, want 2", len(entries))
+		t.Errorf("data count = %d, want 2", len(entries))
 	}
-	if resp["total"].(float64) != 5 {
-		t.Errorf("total = %v, want 5", resp["total"])
+	pg := resp["pagination"].(map[string]interface{})
+	if pg["total"].(float64) != 5 {
+		t.Errorf("total = %v, want 5", pg["total"])
 	}
 }
 
