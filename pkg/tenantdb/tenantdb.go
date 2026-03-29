@@ -6,6 +6,7 @@ package tenantdb
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -46,6 +47,20 @@ type APIKeyInfo struct {
 	Plan           string
 	Status         string // tenant status (active, suspended)
 	OverageAllowed bool   // whether overage is permitted (paid plans)
+	Scopes         string // comma-separated scopes (empty = unrestricted)
+}
+
+// HasScope returns true if the API key has the given scope (or has no scope restrictions).
+func (info *APIKeyInfo) HasScope(scope string) bool {
+	if info.Scopes == "" {
+		return true // empty = unrestricted
+	}
+	for _, s := range strings.Split(info.Scopes, ",") {
+		if strings.TrimSpace(s) == scope {
+			return true
+		}
+	}
+	return false
 }
 
 // User represents a dashboard user belonging to a tenant.

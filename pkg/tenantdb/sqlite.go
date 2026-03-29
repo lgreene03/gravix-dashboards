@@ -556,14 +556,18 @@ func (r *sqliteAPIKeyRepo) ValidateKey(ctx context.Context, rawKey string) (*API
 
 	var info APIKeyInfo
 	var overageInt int
+	var scopes sql.NullString
 	err := r.db.QueryRowContext(ctx,
-		`SELECT t.id, t.plan, t.status, t.overage_allowed
+		`SELECT t.id, t.plan, t.status, t.overage_allowed, k.scopes
 		 FROM api_keys k JOIN tenants t ON k.tenant_id = t.id
 		 WHERE k.key_hash = ? AND k.status = 'active'
 		   AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))`,
 		hash,
-	).Scan(&info.TenantID, &info.Plan, &info.Status, &overageInt)
+	).Scan(&info.TenantID, &info.Plan, &info.Status, &overageInt, &scopes)
 	info.OverageAllowed = overageInt != 0
+	if scopes.Valid {
+		info.Scopes = scopes.String
+	}
 	if err != nil {
 		return nil, fmt.Errorf("invalid api key")
 	}

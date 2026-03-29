@@ -248,11 +248,15 @@ func (r *pgAPIKeyRepo) ValidateKey(ctx context.Context, rawKey string) (*APIKeyI
 	var info APIKeyInfo
 	var keyStatus string
 	var expiresAt sql.NullTime
+	var scopes sql.NullString
 	err := r.db.QueryRowContext(ctx,
-		`SELECT k.status, k.expires_at, t.id, t.plan, t.status, t.overage_allowed
+		`SELECT k.status, k.expires_at, k.scopes, t.id, t.plan, t.status, t.overage_allowed
 		 FROM api_keys k JOIN tenants t ON k.tenant_id = t.id
 		 WHERE k.key_hash = $1`, keyHash).
-		Scan(&keyStatus, &expiresAt, &info.TenantID, &info.Plan, &info.Status, &info.OverageAllowed)
+		Scan(&keyStatus, &expiresAt, &scopes, &info.TenantID, &info.Plan, &info.Status, &info.OverageAllowed)
+	if scopes.Valid {
+		info.Scopes = scopes.String
+	}
 	if err != nil {
 		return nil, fmt.Errorf("invalid API key")
 	}

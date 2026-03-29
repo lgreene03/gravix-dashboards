@@ -104,6 +104,20 @@ func getTenantOverageAllowed(r *http.Request) bool {
 	return false
 }
 
+// requireScope returns middleware that checks the API key has the given scope.
+// In single-key mode (no tenant info), all scopes are allowed.
+func requireScope(scope string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if info, ok := r.Context().Value(tenantInfoKey).(*tenantdb.APIKeyInfo); ok {
+			if !info.HasScope(scope) {
+				writeErrorJSON(w, http.StatusForbidden, "API key missing required scope: "+scope)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
 // topicForTenant returns the storage topic prefixed with tenant ID.
 // In legacy mode (empty tenantID), returns the base topic unchanged.
 func topicForTenant(tenantID, baseTopic string) string {
@@ -769,12 +783,12 @@ func main() {
 		}
 	}
 
-	// Wrap handlers: auth first (sets tenant context), then rate limit, then buffer check, then handler
-	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleFacts(sink, tdb)))))
-	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleBatchFacts(sink, tdb)))))
-	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleEvents(sink, tdb)))))
-	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleTraces(sink, tdb, traceSampleRate)))))
-	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleOTLPTraces(sink)))))
+	// Wrap handlers: auth first (sets tenant context), then scope check, rate limit, buffer check, handler
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleFacts(sink, tdb))))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb))))))
+	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleEvents(sink, tdb))))))
+	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleTraces(sink, tdb, traceSampleRate))))))
+	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleOTLPTraces(sink))))))
 	http.Handle("/api/v1/deploy", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleDeployWebhook(sink, tdb)))))
 
 	http.Handle("/metrics", promhttp.Handler())
