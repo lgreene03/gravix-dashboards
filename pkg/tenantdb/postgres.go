@@ -21,17 +21,24 @@ var postgresSchema string
 
 // PostgresDB implements the DB interface using PostgreSQL.
 type PostgresDB struct {
-	db                  *sql.DB
-	tenants             *pgTenantRepo
-	apiKeys             *pgAPIKeyRepo
-	users               *pgUserRepo
-	eventCounters       *pgEventCounterRepo
-	monthlyUsage        *pgMonthlyUsageRepo
-	notificationChannels *pgNotificationChannelRepo
-	alertRules          *pgAlertRuleRepo
-	alertHistory        *pgAlertHistoryRepo
-	auditLog            *pgAuditRepo
-	retentionPolicies   *pgRetentionPolicyRepo
+	db                    *sql.DB
+	tenants               *pgTenantRepo
+	apiKeys               *pgAPIKeyRepo
+	users                 *pgUserRepo
+	eventCounters         *pgEventCounterRepo
+	monthlyUsage          *pgMonthlyUsageRepo
+	notificationChannels  *pgNotificationChannelRepo
+	alertRules            *pgAlertRuleRepo
+	alertHistory          *pgAlertHistoryRepo
+	auditLog              *pgAuditRepo
+	retentionPolicies     *pgRetentionPolicyRepo
+	passwordResets        *pgPasswordResetRepo
+	emailVerifications    *pgEmailVerificationRepo
+	invitations           *pgInvitationRepo
+	consentRecords        *pgConsentRecordRepo
+	deletionRequests      *pgDeletionRequestRepo
+	ssoConfigs            *pgSSOConfigRepo
+	sessions              *pgSessionRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -51,9 +58,10 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	if _, err := db.Exec(postgresSchema); err != nil {
+	// Run schema via migration framework
+	if err := RunMigrations(db, "postgres"); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("init schema: %w", err)
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	pdb := &PostgresDB{db: db}
@@ -67,6 +75,13 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.alertHistory = &pgAlertHistoryRepo{db: db}
 	pdb.auditLog = &pgAuditRepo{db: db}
 	pdb.retentionPolicies = &pgRetentionPolicyRepo{db: db}
+	pdb.passwordResets = &pgPasswordResetRepo{db: db}
+	pdb.emailVerifications = &pgEmailVerificationRepo{db: db}
+	pdb.invitations = &pgInvitationRepo{db: db}
+	pdb.consentRecords = &pgConsentRecordRepo{db: db}
+	pdb.deletionRequests = &pgDeletionRequestRepo{db: db}
+	pdb.ssoConfigs = &pgSSOConfigRepo{db: db}
+	pdb.sessions = &pgSessionRepo{db: db}
 	return pdb, nil
 }
 
@@ -80,6 +95,13 @@ func (p *PostgresDB) AlertRules() AlertRuleRepo                 { return p.alert
 func (p *PostgresDB) AlertHistory() AlertHistoryRepo             { return p.alertHistory }
 func (p *PostgresDB) AuditLog() AuditRepo                       { return p.auditLog }
 func (p *PostgresDB) RetentionPolicies() RetentionPolicyRepo     { return p.retentionPolicies }
+func (p *PostgresDB) PasswordResets() PasswordResetRepo          { return p.passwordResets }
+func (p *PostgresDB) EmailVerifications() EmailVerificationRepo  { return p.emailVerifications }
+func (p *PostgresDB) Invitations() InvitationRepo               { return p.invitations }
+func (p *PostgresDB) ConsentRecords() ConsentRecordRepo         { return p.consentRecords }
+func (p *PostgresDB) DeletionRequests() DeletionRequestRepo     { return p.deletionRequests }
+func (p *PostgresDB) SSOConfigs() SSOConfigRepo                 { return p.ssoConfigs }
+func (p *PostgresDB) Sessions() SessionRepo                     { return p.sessions }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -94,9 +116,9 @@ func (r *pgTenantRepo) Create(ctx context.Context, t *Tenant) error {
 	t.CreatedAt = now
 	t.UpdatedAt = now
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO tenants (id, name, email, plan, stripe_customer_id, stripe_subscription_id, status, overage_allowed, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		t.ID, t.Name, t.Email, t.Plan, t.StripeCustomerID, t.StripeSubscriptionID, t.Status, t.OverageAllowed, t.CreatedAt, t.UpdatedAt)
+		`INSERT INTO tenants (id, name, email, plan, stripe_customer_id, stripe_subscription_id, status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		t.ID, t.Name, t.Email, t.Plan, t.StripeCustomerID, t.StripeSubscriptionID, t.Status, t.OverageAllowed, t.TrialStartedAt, t.TrialEndsAt, t.CreatedAt, t.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create tenant: %w", err)
 	}
@@ -106,8 +128,8 @@ func (r *pgTenantRepo) Create(ctx context.Context, t *Tenant) error {
 func (r *pgTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) {
 	t := &Tenant{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, created_at, updated_at FROM tenants WHERE id = $1`, id).
-		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.CreatedAt, &t.UpdatedAt)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE id = $1`, id).
+		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("tenant not found: %s", id)
 	}
@@ -117,8 +139,8 @@ func (r *pgTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) 
 func (r *pgTenantRepo) GetByEmail(ctx context.Context, email string) (*Tenant, error) {
 	t := &Tenant{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, created_at, updated_at FROM tenants WHERE email = $1`, email).
-		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.CreatedAt, &t.UpdatedAt)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE email = $1`, email).
+		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("tenant not found: %s", email)
 	}
@@ -142,9 +164,23 @@ func (r *pgTenantRepo) UpdateStripe(ctx context.Context, id, customerID, subscri
 	return err
 }
 
-func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
+func (r *pgTenantRepo) UpdateTrial(ctx context.Context, id string, trialStart, trialEnd *time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE tenants SET trial_started_at = $1, trial_ends_at = $2, updated_at = NOW() WHERE id = $3`,
+		trialStart, trialEnd, id)
+	return err
+}
+
+func (r *pgTenantRepo) UpdateParentTenant(ctx context.Context, id, parentTenantID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE tenants SET parent_tenant_id = $1, updated_at = NOW() WHERE id = $2`,
+		parentTenantID, id)
+	return err
+}
+
+func (r *pgTenantRepo) ListChildren(ctx context.Context, parentTenantID string) ([]*Tenant, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, created_at, updated_at FROM tenants ORDER BY created_at`)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, COALESCE(parent_tenant_id,''), trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE parent_tenant_id = $1 ORDER BY created_at`, parentTenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +188,25 @@ func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	var list []*Tenant
 	for rows.Next() {
 		t := &Tenant{}
-		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.ParentTenantID, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, t)
+	}
+	return list, rows.Err()
+}
+
+func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []*Tenant
+	for rows.Next() {
+		t := &Tenant{}
+		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, t)
@@ -194,11 +248,15 @@ func (r *pgAPIKeyRepo) ValidateKey(ctx context.Context, rawKey string) (*APIKeyI
 	var info APIKeyInfo
 	var keyStatus string
 	var expiresAt sql.NullTime
+	var scopes sql.NullString
 	err := r.db.QueryRowContext(ctx,
-		`SELECT k.status, k.expires_at, t.id, t.plan, t.status, t.overage_allowed
+		`SELECT k.status, k.expires_at, k.scopes, t.id, t.plan, t.status, t.overage_allowed
 		 FROM api_keys k JOIN tenants t ON k.tenant_id = t.id
 		 WHERE k.key_hash = $1`, keyHash).
-		Scan(&keyStatus, &expiresAt, &info.TenantID, &info.Plan, &info.Status, &info.OverageAllowed)
+		Scan(&keyStatus, &expiresAt, &scopes, &info.TenantID, &info.Plan, &info.Status, &info.OverageAllowed)
+	if scopes.Valid {
+		info.Scopes = scopes.String
+	}
 	if err != nil {
 		return nil, fmt.Errorf("invalid API key")
 	}
@@ -290,17 +348,22 @@ func (r *pgUserRepo) Create(ctx context.Context, u *User) error {
 	if u.CreatedAt.IsZero() {
 		u.CreatedAt = time.Now().UTC()
 	}
+	if u.Status == "" {
+		u.Status = "active"
+	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (id, tenant_id, email, password_hash, role, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		u.ID, u.TenantID, u.Email, u.PasswordHash, u.Role, u.CreatedAt)
+		`INSERT INTO users (id, tenant_id, email, password_hash, role, email_verified, status, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		u.ID, u.TenantID, u.Email, u.PasswordHash, u.Role, u.EmailVerified, u.Status, u.CreatedAt)
 	return err
 }
 
 func (r *pgUserRepo) GetByEmail(ctx context.Context, email string) (*User, error) {
 	u := &User{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at FROM users WHERE email = $1`, email).
-		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
+		 FROM users WHERE email = $1`, email).
+		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.EmailVerified, &u.Status, &u.LastLoginAt, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user not found")
 	}
@@ -310,8 +373,9 @@ func (r *pgUserRepo) GetByEmail(ctx context.Context, email string) (*User, error
 func (r *pgUserRepo) GetByID(ctx context.Context, id string) (*User, error) {
 	u := &User{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at FROM users WHERE id = $1`, id).
-		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
+		 FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.EmailVerified, &u.Status, &u.LastLoginAt, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user not found")
 	}
@@ -320,7 +384,8 @@ func (r *pgUserRepo) GetByID(ctx context.Context, id string) (*User, error) {
 
 func (r *pgUserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*User, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, tenant_id, email, password_hash, role, created_at FROM users WHERE tenant_id = $1 ORDER BY created_at`, tenantID)
+		`SELECT id, tenant_id, email, password_hash, role, email_verified, status, last_login_at, created_at
+		 FROM users WHERE tenant_id = $1 ORDER BY created_at`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -328,12 +393,218 @@ func (r *pgUserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*User
 	var users []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Role, &u.EmailVerified, &u.Status, &u.LastLoginAt, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+func (r *pgUserRepo) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = $1 WHERE id = $2`, passwordHash, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateEmailVerified(ctx context.Context, userID string, verified bool) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET email_verified = $1 WHERE id = $2`, verified, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateLastLogin(ctx context.Context, userID string, t time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET last_login_at = $1 WHERE id = $2`, t.UTC(), userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateRole(ctx context.Context, userID, role string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET role = $1 WHERE id = $2`, role, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateStatus(ctx context.Context, userID, status string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET status = $1 WHERE id = $2`, status, userID)
+	return err
+}
+
+func (r *pgUserRepo) UpdateTwoFactor(ctx context.Context, userID string, enabled bool, secret string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET two_factor_enabled = $1, two_factor_secret = $2 WHERE id = $3`, enabled, secret, userID)
+	return err
+}
+
+func (r *pgUserRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND status = 'active'`, tenantID).Scan(&count)
+	return count, err
+}
+
+// --- Invitation Repo ---
+
+type pgInvitationRepo struct{ db *sql.DB }
+
+func (r *pgInvitationRepo) Create(ctx context.Context, inv *Invitation) error {
+	if inv.ID == "" {
+		inv.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO invitations (id, tenant_id, email, role, token_hash, status, invited_by, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		inv.ID, inv.TenantID, inv.Email, inv.Role, inv.TokenHash, inv.Status, inv.InvitedBy,
+		inv.CreatedAt.UTC(), inv.ExpiresAt.UTC())
+	return err
+}
+
+func (r *pgInvitationRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error) {
+	var inv Invitation
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, email, role, token_hash, status, invited_by, created_at, expires_at
+		 FROM invitations WHERE token_hash = $1`, tokenHash).Scan(
+		&inv.ID, &inv.TenantID, &inv.Email, &inv.Role, &inv.TokenHash, &inv.Status, &inv.InvitedBy,
+		&inv.CreatedAt, &inv.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func (r *pgInvitationRepo) ListByTenant(ctx context.Context, tenantID string) ([]*Invitation, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, email, role, status, invited_by, created_at, expires_at
+		 FROM invitations WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var invitations []*Invitation
+	for rows.Next() {
+		var inv Invitation
+		if err := rows.Scan(&inv.ID, &inv.TenantID, &inv.Email, &inv.Role, &inv.Status, &inv.InvitedBy,
+			&inv.CreatedAt, &inv.ExpiresAt); err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, &inv)
+	}
+	return invitations, nil
+}
+
+func (r *pgInvitationRepo) MarkAccepted(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE invitations SET status = 'accepted' WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgInvitationRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM invitations WHERE status = 'pending' AND expires_at < NOW()`)
+	return err
+}
+
+// --- Consent Record Repo ---
+
+type pgConsentRecordRepo struct{ db *sql.DB }
+
+func (r *pgConsentRecordRepo) Create(ctx context.Context, cr *ConsentRecord) error {
+	if cr.ID == "" {
+		cr.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO consent_records (id, tenant_id, user_id, type, version, accepted, ip_address, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		cr.ID, cr.TenantID, cr.UserID, cr.Type, cr.Version,
+		cr.Accepted, cr.IPAddress, cr.CreatedAt.UTC())
+	return err
+}
+
+func (r *pgConsentRecordRepo) ListByUser(ctx context.Context, userID string) ([]*ConsentRecord, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, user_id, type, version, accepted, ip_address, created_at
+		 FROM consent_records WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []*ConsentRecord
+	for rows.Next() {
+		var cr ConsentRecord
+		if err := rows.Scan(&cr.ID, &cr.TenantID, &cr.UserID, &cr.Type, &cr.Version,
+			&cr.Accepted, &cr.IPAddress, &cr.CreatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, &cr)
+	}
+	return records, nil
+}
+
+func (r *pgConsentRecordRepo) HasAccepted(ctx context.Context, userID, consentType, version string) (bool, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM consent_records WHERE user_id = $1 AND type = $2 AND version = $3 AND accepted = true`,
+		userID, consentType, version).Scan(&count)
+	return count > 0, err
+}
+
+// --- Deletion Request Repo ---
+
+type pgDeletionRequestRepo struct{ db *sql.DB }
+
+func (r *pgDeletionRequestRepo) Create(ctx context.Context, dr *DeletionRequest) error {
+	if dr.ID == "" {
+		dr.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO deletion_requests (id, tenant_id, requested_by, status, requested_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		dr.ID, dr.TenantID, dr.RequestedBy, dr.Status, dr.RequestedAt.UTC(), dr.ExpiresAt.UTC())
+	return err
+}
+
+func (r *pgDeletionRequestRepo) GetByTenantID(ctx context.Context, tenantID string) (*DeletionRequest, error) {
+	var dr DeletionRequest
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, requested_by, status, requested_at, expires_at, completed_at
+		 FROM deletion_requests WHERE tenant_id = $1 AND status = 'pending' ORDER BY requested_at DESC LIMIT 1`,
+		tenantID).Scan(&dr.ID, &dr.TenantID, &dr.RequestedBy, &dr.Status, &dr.RequestedAt, &dr.ExpiresAt, &dr.CompletedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &dr, nil
+}
+
+func (r *pgDeletionRequestRepo) Cancel(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE deletion_requests SET status = 'cancelled' WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgDeletionRequestRepo) Complete(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE deletion_requests SET status = 'completed', completed_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgDeletionRequestRepo) ListPending(ctx context.Context) ([]*DeletionRequest, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, requested_by, status, requested_at, expires_at
+		 FROM deletion_requests WHERE status = 'pending' AND expires_at <= NOW()`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var requests []*DeletionRequest
+	for rows.Next() {
+		var dr DeletionRequest
+		if err := rows.Scan(&dr.ID, &dr.TenantID, &dr.RequestedBy, &dr.Status, &dr.RequestedAt, &dr.ExpiresAt); err != nil {
+			return nil, err
+		}
+		requests = append(requests, &dr)
+	}
+	return requests, nil
 }
 
 // --- Event Counter Repo ---
@@ -660,4 +931,193 @@ func (r *pgRetentionPolicyRepo) GetByTenantID(ctx context.Context, tenantID stri
 		return nil, nil
 	}
 	return p, err
+}
+
+// --- Password Reset Token Repo ---
+
+type pgPasswordResetRepo struct{ db *sql.DB }
+
+func (r *pgPasswordResetRepo) Create(ctx context.Context, token *PasswordResetToken) error {
+	if token.ID == "" {
+		token.ID = uuid.New().String()
+	}
+	token.CreatedAt = time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		token.ID, token.UserID, token.TokenHash, token.ExpiresAt.UTC(), token.CreatedAt)
+	return err
+}
+
+func (r *pgPasswordResetRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*PasswordResetToken, error) {
+	t := &PasswordResetToken{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, token_hash, expires_at, used_at, created_at
+		 FROM password_reset_tokens WHERE token_hash = $1`, tokenHash).
+		Scan(&t.ID, &t.UserID, &t.TokenHash, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func (r *pgPasswordResetRepo) MarkUsed(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgPasswordResetRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM password_reset_tokens WHERE expires_at < NOW()`)
+	return err
+}
+
+// --- Email Verification Token Repo ---
+
+type pgEmailVerificationRepo struct{ db *sql.DB }
+
+func (r *pgEmailVerificationRepo) Create(ctx context.Context, token *EmailVerificationToken) error {
+	if token.ID == "" {
+		token.ID = uuid.New().String()
+	}
+	token.CreatedAt = time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		token.ID, token.UserID, token.TokenHash, token.ExpiresAt.UTC(), token.CreatedAt)
+	return err
+}
+
+func (r *pgEmailVerificationRepo) FindByTokenHash(ctx context.Context, tokenHash string) (*EmailVerificationToken, error) {
+	t := &EmailVerificationToken{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, token_hash, expires_at, verified_at, created_at
+		 FROM email_verification_tokens WHERE token_hash = $1`, tokenHash).
+		Scan(&t.ID, &t.UserID, &t.TokenHash, &t.ExpiresAt, &t.VerifiedAt, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func (r *pgEmailVerificationRepo) MarkVerified(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE email_verification_tokens SET verified_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgEmailVerificationRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM email_verification_tokens WHERE expires_at < NOW()`)
+	return err
+}
+
+// --- SSO Config Repo ---
+
+type pgSSOConfigRepo struct{ db *sql.DB }
+
+func (r *pgSSOConfigRepo) Upsert(ctx context.Context, cfg *SSOConfig) error {
+	if cfg.ID == "" {
+		cfg.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sso_configs (id, tenant_id, provider, enabled, entity_id, sso_url, certificate, client_id, client_secret, issuer, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+		 ON CONFLICT(tenant_id) DO UPDATE SET
+			provider = EXCLUDED.provider,
+			enabled = EXCLUDED.enabled,
+			entity_id = EXCLUDED.entity_id,
+			sso_url = EXCLUDED.sso_url,
+			certificate = EXCLUDED.certificate,
+			client_id = EXCLUDED.client_id,
+			client_secret = EXCLUDED.client_secret,
+			issuer = EXCLUDED.issuer,
+			updated_at = NOW()`,
+		cfg.ID, cfg.TenantID, cfg.Provider, cfg.Enabled, cfg.EntityID, cfg.SSOURL, cfg.Certificate,
+		cfg.ClientID, cfg.ClientSecret, cfg.Issuer)
+	return err
+}
+
+func (r *pgSSOConfigRepo) GetByTenantID(ctx context.Context, tenantID string) (*SSOConfig, error) {
+	cfg := &SSOConfig{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, provider, enabled, entity_id, sso_url, certificate, client_id, client_secret, issuer, created_at, updated_at
+		 FROM sso_configs WHERE tenant_id = $1`, tenantID,
+	).Scan(&cfg.ID, &cfg.TenantID, &cfg.Provider, &cfg.Enabled, &cfg.EntityID, &cfg.SSOURL, &cfg.Certificate,
+		&cfg.ClientID, &cfg.ClientSecret, &cfg.Issuer, &cfg.CreatedAt, &cfg.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (r *pgSSOConfigRepo) Delete(ctx context.Context, tenantID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM sso_configs WHERE tenant_id = $1`, tenantID)
+	return err
+}
+
+// --- Session Repo ---
+
+type pgSessionRepo struct{ db *sql.DB }
+
+func (r *pgSessionRepo) Create(ctx context.Context, s *Session) error {
+	if s.ID == "" {
+		s.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sessions (id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		s.ID, s.UserID, s.TenantID, s.IPAddress, s.UserAgent, s.CreatedAt.UTC(), s.ExpiresAt.UTC())
+	return err
+}
+
+func (r *pgSessionRepo) GetByID(ctx context.Context, id string) (*Session, error) {
+	s := &Session{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at, revoked_at
+		 FROM sessions WHERE id = $1`, id,
+	).Scan(&s.ID, &s.UserID, &s.TenantID, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.RevokedAt)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (r *pgSessionRepo) ListByUser(ctx context.Context, userID string) ([]*Session, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, tenant_id, ip_address, user_agent, created_at, expires_at, revoked_at
+		 FROM sessions WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+		 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []*Session
+	for rows.Next() {
+		s := &Session{}
+		if err := rows.Scan(&s.ID, &s.UserID, &s.TenantID, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.RevokedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, s)
+	}
+	return list, rows.Err()
+}
+
+func (r *pgSessionRepo) Revoke(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+func (r *pgSessionRepo) RevokeAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return err
+}
+
+func (r *pgSessionRepo) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE expires_at < NOW()`)
+	return err
 }

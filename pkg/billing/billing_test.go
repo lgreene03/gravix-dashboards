@@ -11,9 +11,9 @@ import (
 
 func testPlans() []PlanConfig {
 	return []PlanConfig{
-		{PriceID: "price_free_123", PlanName: "free", EventLimit: 1_000_000},
-		{PriceID: "price_starter_456", PlanName: "starter", EventLimit: 10_000_000},
-		{PriceID: "price_pro_789", PlanName: "pro", EventLimit: 50_000_000},
+		{PriceID: "price_free_123", PlanName: "free", EventLimit: 500_000, SeatLimit: 1, ServiceLimit: 2, RetentionDays: 7},
+		{PriceID: "price_team_456", PlanName: "team", EventLimit: 10_000_000, SeatLimit: 5, ServiceLimit: 5, RetentionDays: 30},
+		{PriceID: "price_business_789", PlanName: "business", EventLimit: 50_000_000, SeatLimit: 20, ServiceLimit: 20, RetentionDays: 90},
 	}
 }
 
@@ -25,8 +25,8 @@ func TestPlanForPriceID(t *testing.T) {
 		expected string
 	}{
 		{"price_free_123", "free"},
-		{"price_starter_456", "starter"},
-		{"price_pro_789", "pro"},
+		{"price_team_456", "team"},
+		{"price_business_789", "business"},
 		{"price_unknown", "unknown"},
 		{"", "unknown"},
 	}
@@ -47,9 +47,9 @@ func TestFreePriceID(t *testing.T) {
 }
 
 func TestDefaultPlans(t *testing.T) {
-	plans := DefaultPlans("pf", "ps", "pp")
-	if len(plans) != 3 {
-		t.Fatalf("expected 3 plans, got %d", len(plans))
+	plans := DefaultPlans("pf", "pt", "pb", "ps", "pe")
+	if len(plans) != 5 {
+		t.Fatalf("expected 5 plans, got %d", len(plans))
 	}
 
 	// Verify plan names
@@ -57,15 +57,67 @@ func TestDefaultPlans(t *testing.T) {
 	for _, p := range plans {
 		names[p.PlanName] = true
 	}
-	for _, want := range []string{"free", "starter", "pro"} {
+	for _, want := range []string{"free", "team", "business", "scale", "enterprise"} {
 		if !names[want] {
 			t.Errorf("missing plan %q", want)
 		}
 	}
 
-	// Verify event limits are ordered
-	if plans[0].EventLimit >= plans[1].EventLimit || plans[1].EventLimit >= plans[2].EventLimit {
-		t.Error("event limits should increase: free < starter < pro")
+	// Verify event limits are ordered (enterprise is 0 = unlimited)
+	for i := 0; i < 3; i++ {
+		if plans[i].EventLimit >= plans[i+1].EventLimit {
+			t.Errorf("event limits should increase: %s (%d) should be < %s (%d)",
+				plans[i].PlanName, plans[i].EventLimit, plans[i+1].PlanName, plans[i+1].EventLimit)
+		}
+	}
+
+	// Verify seat limits
+	if plans[0].SeatLimit != 1 {
+		t.Errorf("free seat limit = %d, want 1", plans[0].SeatLimit)
+	}
+	if plans[4].SeatLimit != 0 {
+		t.Errorf("enterprise seat limit = %d, want 0 (unlimited)", plans[4].SeatLimit)
+	}
+
+	// Verify retention days
+	if plans[0].RetentionDays != 7 {
+		t.Errorf("free retention = %d, want 7", plans[0].RetentionDays)
+	}
+}
+
+func TestPlanSeatLimit(t *testing.T) {
+	tests := []struct{ plan string; want int }{
+		{"free", 1}, {"team", 5}, {"business", 20}, {"scale", 0}, {"enterprise", 0},
+		{"starter", 5}, {"pro", 20}, // legacy
+	}
+	for _, tt := range tests {
+		if got := PlanSeatLimit(tt.plan); got != tt.want {
+			t.Errorf("PlanSeatLimit(%q) = %d, want %d", tt.plan, got, tt.want)
+		}
+	}
+}
+
+func TestPlanEventLimit(t *testing.T) {
+	if got := PlanEventLimit("free"); got != 500_000 {
+		t.Errorf("free = %d, want 500000", got)
+	}
+	if got := PlanEventLimit("scale"); got != 200_000_000 {
+		t.Errorf("scale = %d, want 200000000", got)
+	}
+	if got := PlanEventLimit("enterprise"); got != 0 {
+		t.Errorf("enterprise = %d, want 0 (unlimited)", got)
+	}
+}
+
+func TestPlanRetentionDays(t *testing.T) {
+	tests := []struct{ plan string; want int }{
+		{"free", 7}, {"team", 30}, {"business", 90}, {"scale", 365}, {"enterprise", 365},
+		{"starter", 30}, {"pro", 90}, // legacy
+	}
+	for _, tt := range tests {
+		if got := PlanRetentionDays(tt.plan); got != tt.want {
+			t.Errorf("PlanRetentionDays(%q) = %d, want %d", tt.plan, got, tt.want)
+		}
 	}
 }
 
@@ -84,7 +136,7 @@ func TestExtractEvent_SubscriptionCreated(t *testing.T) {
 				{
 					"id": "si_item1",
 					"price": map[string]interface{}{
-						"id": "price_starter_456",
+						"id": "price_team_456",
 					},
 				},
 			},
@@ -112,11 +164,11 @@ func TestExtractEvent_SubscriptionCreated(t *testing.T) {
 	if we.SubscriptionID != "sub_abc123" {
 		t.Errorf("SubscriptionID = %q, want %q", we.SubscriptionID, "sub_abc123")
 	}
-	if we.PriceID != "price_starter_456" {
-		t.Errorf("PriceID = %q, want %q", we.PriceID, "price_starter_456")
+	if we.PriceID != "price_team_456" {
+		t.Errorf("PriceID = %q, want %q", we.PriceID, "price_team_456")
 	}
-	if we.PlanName != "starter" {
-		t.Errorf("PlanName = %q, want %q", we.PlanName, "starter")
+	if we.PlanName != "team" {
+		t.Errorf("PlanName = %q, want %q", we.PlanName, "team")
 	}
 	if we.Status != "active" {
 		t.Errorf("Status = %q, want %q", we.Status, "active")
@@ -137,7 +189,7 @@ func TestExtractEvent_SubscriptionDeleted(t *testing.T) {
 				{
 					"id": "si_item2",
 					"price": map[string]interface{}{
-						"id": "price_pro_789",
+						"id": "price_business_789",
 					},
 				},
 			},
@@ -162,8 +214,8 @@ func TestExtractEvent_SubscriptionDeleted(t *testing.T) {
 	if we.Status != "canceled" {
 		t.Errorf("Status = %q, want %q", we.Status, "canceled")
 	}
-	if we.PlanName != "pro" {
-		t.Errorf("PlanName = %q, want %q", we.PlanName, "pro")
+	if we.PlanName != "business" {
+		t.Errorf("PlanName = %q, want %q", we.PlanName, "business")
 	}
 }
 
@@ -330,8 +382,8 @@ func TestExtractEvent_InvoiceWithoutSubscription(t *testing.T) {
 
 func TestNewStripeService_NoFreePlan(t *testing.T) {
 	plans := []PlanConfig{
-		{PriceID: "price_starter", PlanName: "starter", EventLimit: 10_000_000},
-		{PriceID: "price_pro", PlanName: "pro", EventLimit: 50_000_000},
+		{PriceID: "price_team", PlanName: "team", EventLimit: 10_000_000},
+		{PriceID: "price_business", PlanName: "business", EventLimit: 50_000_000},
 	}
 	svc := NewStripeService("sk_test_fake", "whsec_fake", plans)
 
@@ -352,7 +404,7 @@ func TestMockService_CallTracking(t *testing.T) {
 		SubscriptionID: "sub_mock",
 		PortalURL:      "https://billing.example.com",
 		FreePriceIDVal: "price_free",
-		PlanName:       "starter",
+		PlanName:       "team",
 	}
 
 	ctx := context.Background()
@@ -382,8 +434,8 @@ func TestMockService_CallTracking(t *testing.T) {
 		t.Errorf("CreatePortalCalls = %d, want 1", m.CreatePortalCalls)
 	}
 
-	if m.PlanForPriceID("any") != "starter" {
-		t.Errorf("PlanForPriceID = %q, want starter", m.PlanForPriceID("any"))
+	if m.PlanForPriceID("any") != "team" {
+		t.Errorf("PlanForPriceID = %q, want team", m.PlanForPriceID("any"))
 	}
 	if m.FreePriceID() != "price_free" {
 		t.Errorf("FreePriceID = %q, want price_free", m.FreePriceID())
@@ -400,7 +452,7 @@ func TestMockService_DefaultPlanName(t *testing.T) {
 func TestExtractEvent_SubscriptionUpdatedPlanChange(t *testing.T) {
 	svc := NewStripeService("sk_test_fake", "whsec_fake", testPlans())
 
-	// Simulate upgrade from starter to pro
+	// Simulate upgrade from team to business
 	subJSON, _ := json.Marshal(map[string]interface{}{
 		"id": "sub_upgrade",
 		"customer": map[string]interface{}{
@@ -412,7 +464,7 @@ func TestExtractEvent_SubscriptionUpdatedPlanChange(t *testing.T) {
 				{
 					"id": "si_new",
 					"price": map[string]interface{}{
-						"id": "price_pro_789",
+						"id": "price_business_789",
 					},
 				},
 			},
@@ -431,7 +483,7 @@ func TestExtractEvent_SubscriptionUpdatedPlanChange(t *testing.T) {
 		t.Fatalf("extractEvent error: %v", err)
 	}
 
-	if we.PlanName != "pro" {
-		t.Errorf("PlanName = %q, want %q", we.PlanName, "pro")
+	if we.PlanName != "business" {
+		t.Errorf("PlanName = %q, want %q", we.PlanName, "business")
 	}
 }

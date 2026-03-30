@@ -24,6 +24,17 @@
 
 <body>
 
+    <!-- Toast notification container -->
+    <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Noscript fallback -->
+    <noscript>
+        <div style="padding: 32px; text-align: center; font-family: system-ui, sans-serif; background: #fee2e2; color: #b91c1c;">
+            <h2>JavaScript Required</h2>
+            <p>Gravix Dashboard requires JavaScript to function. Please enable JavaScript in your browser settings.</p>
+        </div>
+    </noscript>
+
     <!-- Skip to main content link for keyboard navigation -->
     <a href="#dashboardGrid" class="skip-link" id="skipLink">Skip to dashboard</a>
 
@@ -46,16 +57,20 @@
             <div id="authError" class="auth-error">Invalid credentials. Please try again.</div>
             <!-- Login form -->
             <form id="authForm" onsubmit="return false;">
-                <input type="email" id="authEmail" placeholder="Email" autocomplete="email" style="display:none; margin-bottom: 8px;">
-                <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+                <input type="email" id="authEmail" placeholder="Email" autocomplete="email" aria-label="Email address" style="display:none; margin-bottom: 8px;">
+                <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" aria-label="Password">
                 <button type="submit" id="authSubmit">Sign In</button>
             </form>
             <!-- Signup form (multi-tenant only) -->
             <form id="signupForm" onsubmit="return false;" style="display:none;">
-                <input type="text" id="signupName" placeholder="Company Name" autocomplete="organization" style="margin-bottom:8px;">
-                <input type="email" id="signupEmail" placeholder="Email" autocomplete="email" style="margin-bottom:8px;">
-                <input type="password" id="signupPassword" placeholder="Password (min 8 chars)" autocomplete="new-password" style="margin-bottom:8px;">
-                <input type="password" id="signupPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password">
+                <input type="text" id="signupName" placeholder="Company Name" autocomplete="organization" aria-label="Company name" style="margin-bottom:8px;">
+                <input type="email" id="signupEmail" placeholder="Email" autocomplete="email" aria-label="Email address" style="margin-bottom:8px;">
+                <input type="password" id="signupPassword" placeholder="Password (min 8 chars)" autocomplete="new-password" aria-label="Password" style="margin-bottom:8px;">
+                <input type="password" id="signupPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password" aria-label="Confirm password">
+                <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; color:#64748b; margin:8px 0;">
+                    <input type="checkbox" id="signupTOS" aria-label="Accept Terms of Service">
+                    I agree to the <a href="terms.html" target="_blank" style="color:#3b82f6;">Terms of Service</a> and <a href="privacy.html" target="_blank" style="color:#3b82f6;">Privacy Policy</a>
+                </label>
                 <button type="submit" id="signupSubmit">Create Account</button>
             </form>
         </div>
@@ -120,14 +135,18 @@
             <a href="#" class="nav-link" data-page="usage" id="nav-usage">Usage &amp; Billing</a>
             <a href="#" class="nav-link" data-page="data" id="nav-data">Data</a>
             <a href="#" class="nav-link disabled" data-page="processing" title="Coming soon">Processing</a>
-            <a href="#" class="nav-link disabled" data-page="settings" title="Coming soon">Settings</a>
+            <a href="#" class="nav-link" data-page="apikeys" id="nav-apikeys">API Keys</a>
+            <a href="#" class="nav-link" data-page="settings">Settings</a>
         </nav>
         <div style="margin-top: auto; padding-top: 24px; border-top: 1px solid var(--sidebar-hover);">
             <button id="quickStartBtn" style="background: var(--brand-color); border: none; color: white; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 0.875rem; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: background 0.2s; margin-bottom: 8px; font-weight: 600;" title="Quick-start integration guide">
                 &#9889; Quick Start
             </button>
-            <button id="themeToggle" style="background: var(--sidebar-hover); border: none; color: white; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 0.875rem; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" title="Toggle dark mode">
+            <button id="themeToggle" style="background: var(--sidebar-hover); border: none; color: white; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 0.875rem; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: background 0.2s; margin-bottom: 8px;" title="Toggle dark mode">
                 <span id="themeIcon">🌙</span> <span id="themeLabel">Dark Mode</span>
+            </button>
+            <button id="sidebarLogoutBtn" style="background: #ef4444; border: none; color: white; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 0.875rem; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: background 0.2s; display: none;" title="Log out">
+                &#x23FB; Log Out
             </button>
         </div>
     </aside>
@@ -145,15 +164,15 @@
                 </div>
             </div>
             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                <select id="serviceFilter" class="filter-input">
+                <select id="serviceFilter" class="filter-input" aria-label="Filter by service">
                     <option value="">All Services</option>
                 </select>
                 <div style="display: flex; align-items: center; gap: 4px;">
-                    <input type="date" id="dateFrom" class="filter-input" title="From date">
+                    <input type="date" id="dateFrom" class="filter-input" title="From date" aria-label="Start date">
                     <span style="color: var(--text-secondary); font-size: 0.8rem;">to</span>
-                    <input type="date" id="dateTo" class="filter-input" title="To date">
+                    <input type="date" id="dateTo" class="filter-input" title="To date" aria-label="End date">
                 </div>
-                <select id="compareFilter" class="filter-input">
+                <select id="compareFilter" class="filter-input" aria-label="Comparison period">
                     <option value="">No Comparison</option>
                     <option value="day">Day-over-Day</option>
                     <option value="week">Week-over-Week</option>
@@ -787,6 +806,309 @@
             </div>
         </div><!-- end page-data -->
 
+        <div id="page-apikeys" class="page-content" style="display: none;">
+            <div id="quota-banner" class="quota-banner" style="display: none;"></div>
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">API Keys</div>
+                        <div class="card-subtitle">Manage keys for programmatic access</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="apikeys-loading" class="skeleton-container">
+                        <div class="skeleton-line" style="width:100%;height:60px"></div>
+                        <div class="skeleton-line" style="width:100%;height:60px;margin-top:8px"></div>
+                    </div>
+                    <div id="apikeys-error" class="section-error" style="display: none;"></div>
+                    <div id="apikeys-list" style="display: none;"></div>
+                    <div id="apikeys-empty" style="display: none; color: var(--text-secondary); text-align: center; padding: 32px 0;">
+                        No API keys yet. Create one below.
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Create New Key</div>
+                        <div class="card-subtitle">Keys are shown once — copy immediately after creation</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <form id="create-apikey-form" autocomplete="off" style="max-width: 500px;">
+                        <div style="margin-bottom: 16px;">
+                            <label for="apikey-name" style="display: block; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 4px;">Key Name</label>
+                            <input type="text" id="apikey-name" required placeholder="e.g. production-backend" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--input-bg); color: var(--text-primary); font-family: inherit;">
+                        </div>
+                        <div style="margin-bottom: 16px;">
+                            <label for="apikey-expiry" style="display: block; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 4px;">Expiry (optional)</label>
+                            <input type="date" id="apikey-expiry" style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--input-bg); color: var(--text-primary); font-family: inherit;">
+                        </div>
+                        <button type="submit" id="create-apikey-btn" style="padding: 10px 24px; background: var(--brand-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Create Key</button>
+                    </form>
+                    <div id="new-key-display" style="display: none; margin-top: 16px;">
+                        <div style="background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); border-radius: 8px; padding: 16px;">
+                            <div style="font-weight: 600; margin-bottom: 8px; color: var(--success-color, #22c55e);">Key created! Copy it now — it won't be shown again.</div>
+                            <div class="api-key-plain" id="new-key-value"></div>
+                            <button id="copy-new-key-btn" style="margin-top: 8px; padding: 6px 16px; background: var(--brand-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.875rem;">Copy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-apikeys -->
+
+        <div id="page-settings" class="page-content" style="display: none;">
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Profile</div>
+                        <div class="card-subtitle">Your account information</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="settings-loading" class="skeleton-container">
+                        <div class="skeleton-line" style="width:60%;height:20px"></div>
+                        <div class="skeleton-line" style="width:40%;height:20px;margin-top:8px"></div>
+                    </div>
+                    <div id="settings-profile" style="display: none;">
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                            <div class="stat-card">
+                                <div class="stat-label">Email</div>
+                                <div class="stat-value" id="settings-email" style="font-size: 1rem; word-break: break-all;">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Role</div>
+                                <div class="stat-value" id="settings-role" style="font-size: 1rem;">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Organization</div>
+                                <div class="stat-value" id="settings-org" style="font-size: 1rem;">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Plan</div>
+                                <div class="stat-value" id="settings-plan" style="font-size: 1rem;">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Email Verified</div>
+                                <div class="stat-value" id="settings-verified" style="font-size: 1rem;">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Last Login</div>
+                                <div class="stat-value" id="settings-last-login" style="font-size: 1rem;">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Change Password</div>
+                        <div class="card-subtitle">Update your account password</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <form id="change-password-form" autocomplete="off" style="max-width: 400px;">
+                        <div style="margin-bottom: 16px;">
+                            <label for="settings-current-pw" style="display: block; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 4px;">Current Password</label>
+                            <input type="password" id="settings-current-pw" required style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: inherit;">
+                        </div>
+                        <div style="margin-bottom: 16px;">
+                            <label for="settings-new-pw" style="display: block; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 4px;">New Password</label>
+                            <input type="password" id="settings-new-pw" required minlength="10" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: inherit;">
+                            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">Min 10 chars, uppercase, lowercase, digit, special character</div>
+                        </div>
+                        <div style="margin-bottom: 16px;">
+                            <label for="settings-confirm-pw" style="display: block; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 4px;">Confirm New Password</label>
+                            <input type="password" id="settings-confirm-pw" required minlength="10" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: inherit;">
+                        </div>
+                        <button type="submit" id="change-pw-btn" style="padding: 10px 24px; background: var(--brand-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Change Password</button>
+                        <div id="change-pw-msg" style="margin-top: 12px; display: none;"></div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Session</div>
+                        <div class="card-subtitle">Manage your current session</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <button id="settings-logout-btn" style="padding: 10px 24px; background: #ef4444; color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Log Out</button>
+                </div>
+            </div>
+
+            <!-- Two-Factor Authentication -->
+            <div class="card multi-tenant-only" style="margin-top: 24px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Two-Factor Authentication</div>
+                        <div class="card-subtitle">Add an extra layer of security to your account</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="2fa-status" style="margin-bottom: 16px;">
+                        <span id="2fa-badge" style="display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">Loading...</span>
+                    </div>
+                    <div id="2fa-setup-section" style="display: none;">
+                        <button id="2fa-setup-btn" style="padding: 10px 24px; background: var(--brand-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Enable 2FA</button>
+                    </div>
+                    <div id="2fa-qr-section" style="display: none;">
+                        <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 12px;">Scan this secret with your authenticator app, then enter the 6-digit code:</p>
+                        <code id="2fa-secret" style="display: block; padding: 8px 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; word-break: break-all;"></code>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="2fa-confirm-code" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: monospace; width: 160px;">
+                            <button id="2fa-confirm-btn" style="padding: 8px 16px; background: var(--success-color, #22c55e); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Confirm</button>
+                        </div>
+                        <div id="2fa-recovery-codes" style="display: none; margin-top: 16px; padding: 12px; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px;">
+                            <strong>Recovery Codes</strong>
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 4px 0 8px;">Save these codes securely. They cannot be shown again.</p>
+                            <code id="2fa-recovery-list" style="display: block; white-space: pre-line; font-size: 0.85rem;"></code>
+                        </div>
+                    </div>
+                    <div id="2fa-disable-section" style="display: none;">
+                        <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 12px;">2FA is currently enabled. Enter a code to disable.</p>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="2fa-disable-code" placeholder="Enter 6-digit code" maxlength="6" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: monospace; width: 160px;">
+                            <button id="2fa-disable-btn" style="padding: 8px 16px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Disable 2FA</button>
+                        </div>
+                    </div>
+                    <p id="2fa-msg" style="display: none; margin-top: 12px; font-size: 0.875rem;"></p>
+                </div>
+            </div>
+
+            <!-- Active Sessions -->
+            <div class="card multi-tenant-only" style="margin-top: 24px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Active Sessions</div>
+                        <div class="card-subtitle">Manage your active login sessions</div>
+                    </div>
+                    <button id="sessions-revoke-all-btn" style="padding: 6px 16px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;">Revoke All</button>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="sessions-list" style="font-size: 0.875rem; color: var(--text-secondary);">Loading sessions...</div>
+                </div>
+            </div>
+
+            <!-- SSO Configuration (Admin Only) -->
+            <div class="card multi-tenant-only" id="sso-card" style="margin-top: 24px; display: none;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Single Sign-On (SSO)</div>
+                        <div class="card-subtitle">Configure SAML or OIDC for your organization</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="sso-status" style="margin-bottom: 16px;">
+                        <span id="sso-badge" style="display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">Not configured</span>
+                    </div>
+                    <div id="sso-form-section">
+                        <div style="margin-bottom: 12px;">
+                            <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Provider</label>
+                            <select id="sso-provider" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); width: 100%;">
+                                <option value="saml">SAML 2.0</option>
+                                <option value="oidc">OpenID Connect (OIDC)</option>
+                            </select>
+                        </div>
+                        <div id="sso-saml-fields">
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Entity ID</label>
+                                <input type="text" id="sso-entity-id" placeholder="https://idp.example.com/entity" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">SSO URL</label>
+                                <input type="url" id="sso-url" placeholder="https://idp.example.com/sso" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">X.509 Certificate (PEM)</label>
+                                <textarea id="sso-certificate" rows="3" placeholder="-----BEGIN CERTIFICATE-----" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-family: monospace; font-size: 0.8rem;"></textarea>
+                            </div>
+                        </div>
+                        <div id="sso-oidc-fields" style="display: none;">
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Issuer URL</label>
+                                <input type="url" id="sso-issuer" placeholder="https://accounts.google.com" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Client ID</label>
+                                <input type="text" id="sso-client-id" placeholder="your-client-id" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px;">Client Secret</label>
+                                <input type="password" id="sso-client-secret" placeholder="your-client-secret" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="sso-save-btn" style="padding: 10px 24px; background: var(--brand-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">Save SSO Config</button>
+                            <button id="sso-delete-btn" style="padding: 10px 24px; background: #ef4444; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: none;">Remove SSO</button>
+                        </div>
+                    </div>
+                    <p id="sso-msg" style="display: none; margin-top: 12px; font-size: 0.875rem;"></p>
+                </div>
+            </div>
+
+            <!-- Multi-Org Management (Admin + Scale/Enterprise Only) -->
+            <div class="card multi-tenant-only" id="multi-org-card" style="margin-top: 24px; display: none;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Organizations</div>
+                        <div class="card-subtitle">Manage child organizations under your account</div>
+                    </div>
+                    <button id="org-create-btn" style="padding: 6px 16px; background: var(--brand-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;">+ New Org</button>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="org-create-form" style="display: none; margin-bottom: 16px; padding: 16px; background: var(--bg-secondary); border-radius: 8px;">
+                        <div style="margin-bottom: 8px;">
+                            <input type="text" id="org-name" placeholder="Organization name" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <div style="margin-bottom: 8px;">
+                            <input type="email" id="org-email" placeholder="Admin email" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        <button id="org-submit-btn" style="padding: 8px 16px; background: var(--success-color, #22c55e); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Create</button>
+                    </div>
+                    <div id="org-list" style="font-size: 0.875rem; color: var(--text-secondary);">Loading organizations...</div>
+                    <p id="org-msg" style="display: none; margin-top: 12px; font-size: 0.875rem;"></p>
+                </div>
+            </div>
+
+            <!-- Delete Account -->
+            <div class="card" style="margin-top: 24px; border: 1px solid var(--danger-color, #ef4444);">
+                <div class="card-header" style="display:flex; align-items:center; gap:12px;">
+                    <div style="width:40px;height:40px;border-radius:10px;background:rgba(239,68,68,0.1);display:flex;align-items:center;justify-content:center;font-size:1.2rem;">&#9888;</div>
+                    <div>
+                        <div class="card-title" style="color: var(--danger-color, #ef4444);">Danger Zone</div>
+                        <div class="card-subtitle">Permanently delete your account and all data</div>
+                    </div>
+                </div>
+                <div style="padding: 24px;">
+                    <div id="deletion-status" style="display:none; padding: 12px 16px; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; margin-bottom: 16px;">
+                        <strong>Deletion scheduled</strong>
+                        <p id="deletion-info" style="margin: 4px 0 0; font-size: 0.875rem; color: var(--text-secondary);"></p>
+                        <button id="cancel-deletion-btn" style="margin-top: 8px; padding: 6px 16px; background: var(--brand-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">Cancel Deletion</button>
+                    </div>
+                    <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 12px;">Once deleted, your account, data, and API keys will be permanently removed after a 30-day grace period. This action cannot be undone after the grace period.</p>
+                    <button id="delete-account-btn" style="padding: 10px 24px; background: var(--danger-color, #ef4444); color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 600;">Delete Account</button>
+                </div>
+            </div>
+
+            <!-- Delete Account Confirmation Modal -->
+            <div id="delete-confirm-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:9999; display:none; align-items:center; justify-content:center;">
+                <div style="background: var(--bg-card, #fff); border-radius: 12px; padding: 32px; max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+                    <h3 style="margin: 0 0 8px; color: var(--danger-color, #ef4444);">Delete Account</h3>
+                    <p style="font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 16px;">This will schedule your account for permanent deletion in 30 days. Type <strong>DELETE</strong> to confirm.</p>
+                    <input type="text" id="delete-confirm-input" placeholder="Type DELETE" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 6px; font-family: inherit; margin-bottom: 12px; box-sizing: border-box;" aria-label="Type DELETE to confirm">
+                    <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                        <button id="delete-cancel-modal-btn" style="padding: 8px 20px; background: var(--bg-secondary, #f1f5f9); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; font-family: inherit;">Cancel</button>
+                        <button id="delete-confirm-btn" style="padding: 8px 20px; background: var(--danger-color, #ef4444); color: white; border: none; border-radius: 6px; cursor: pointer; font-family: inherit; font-weight: 600;">Delete</button>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end page-settings -->
+
     </main>
 
 
@@ -888,6 +1210,20 @@
                     <button class="wizard-btn wizard-btn-secondary" id="wizBack" style="display:none;">Back</button>
                     <button class="wizard-btn wizard-btn-primary" id="wizNext">Next</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cookie Consent Banner -->
+    <div id="cookie-consent" class="cookie-consent" role="dialog" aria-label="Cookie consent" style="display:none;">
+        <div class="cookie-consent-content">
+            <p>We use essential cookies for authentication. No tracking cookies are used. By continuing, you accept our
+                <a href="terms.html" target="_blank">Terms of Service</a> and
+                <a href="privacy.html" target="_blank">Privacy Policy</a>.
+            </p>
+            <div class="cookie-consent-actions">
+                <button id="cookie-accept" class="btn btn-primary btn-sm">Accept</button>
+                <button id="cookie-decline" class="btn btn-outline btn-sm">Decline Non-Essential</button>
             </div>
         </div>
     </div>

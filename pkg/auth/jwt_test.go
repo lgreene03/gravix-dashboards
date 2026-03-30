@@ -75,8 +75,9 @@ func TestValidateTamperedSignature(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	// Flip last character of signature
-	tampered := token[:len(token)-1] + "X"
+	// Replace the last 8 characters of the signature to ensure a meaningful change
+	// (flipping a single char can be a no-op in base64url edge cases)
+	tampered := token[:len(token)-8] + "XXXXXXXX"
 	_, err = ts.Validate(tampered)
 	if err == nil {
 		t.Error("expected error for tampered signature")
@@ -104,6 +105,23 @@ func TestValidateWrongSigningMethod(t *testing.T) {
 	_, err := ts.Validate(rs256Token)
 	if err == nil {
 		t.Error("expected error for RS256 signing method")
+	}
+}
+
+func TestGenerateIncludesJTI(t *testing.T) {
+	ts := NewTokenService("test-secret-key-32-chars-long!!", 1*time.Hour)
+
+	token1, _ := ts.Generate("t1", "u1", "a@b.com", "admin")
+	token2, _ := ts.Generate("t1", "u1", "a@b.com", "admin")
+
+	claims1, _ := ts.Validate(token1)
+	claims2, _ := ts.Validate(token2)
+
+	if claims1.ID == "" {
+		t.Error("JTI should not be empty")
+	}
+	if claims1.ID == claims2.ID {
+		t.Error("JTI should be unique per token")
 	}
 }
 

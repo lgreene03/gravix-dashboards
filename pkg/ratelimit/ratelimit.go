@@ -83,9 +83,13 @@ func (rl *Limiter) Max() int64 {
 // PlanRateLimit returns the rate limit (requests/sec) and burst for a plan.
 func PlanRateLimit(plan string) (rate int64, burst int64) {
 	switch plan {
-	case "pro":
-		return 100, 200
-	case "starter":
+	case "enterprise":
+		return 1000, 2000
+	case "scale":
+		return 500, 1000
+	case "business", "pro":
+		return 200, 400
+	case "team", "starter":
 		return 50, 100
 	default: // free
 		return 10, 20

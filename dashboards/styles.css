@@ -124,6 +124,9 @@
             --badge-error-text: #b91c1c;
             --badge-info-bg: #dbeafe;
             --badge-info-text: #1d4ed8;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --bg-secondary: #f1f5f9;
             --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08);
             --shadow-heavy: 0 25px 50px rgba(0, 0, 0, 0.3);
         }
@@ -148,6 +151,9 @@
             --badge-error-text: #fca5a5;
             --badge-info-bg: #1e3a5f;
             --badge-info-text: #93c5fd;
+            --warning-color: #fbbf24;
+            --danger-color: #f87171;
+            --bg-secondary: #334155;
             --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
             --shadow-heavy: 0 25px 50px rgba(0, 0, 0, 0.6);
         }
@@ -173,6 +179,9 @@
                 --badge-error-text: #fca5a5;
                 --badge-info-bg: #1e3a5f;
                 --badge-info-text: #93c5fd;
+                --warning-color: #fbbf24;
+                --danger-color: #f87171;
+                --bg-secondary: #334155;
                 --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
                 --shadow-heavy: 0 25px 50px rgba(0, 0, 0, 0.6);
             }
@@ -776,3 +785,54 @@
         }
         .usage-progress-fill.warning { background: var(--warning-color, #f59e0b); }
         .usage-progress-fill.danger { background: var(--danger-color); }
+
+        /* Toast notifications */
+        .toast-container {
+            position: fixed; top: 20px; right: 20px; z-index: 10000;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .toast {
+            padding: 12px 20px; border-radius: 8px; color: white;
+            font-size: 0.875rem; font-family: var(--font-family);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+            max-width: 400px; word-wrap: break-word;
+        }
+        .toast.success { background: var(--success-color, #22c55e); }
+        .toast.error { background: var(--danger-color, #ef4444); }
+        .toast.warning { background: var(--warning-color, #f59e0b); color: #1e293b; }
+        .toast.info { background: var(--brand-color, #3b82f6); }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-10px); } }
+
+        /* API Keys page */
+        .api-key-masked { font-family: monospace; font-size: 0.875rem; color: var(--text-secondary); }
+        .api-key-plain { font-family: monospace; font-size: 0.875rem; background: var(--bg-secondary); padding: 8px 12px; border-radius: 6px; word-break: break-all; }
+        .api-key-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+        .api-key-row:last-child { border-bottom: none; }
+
+        /* Quota banner */
+        .quota-banner {
+            padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;
+            display: flex; align-items: center; gap: 8px;
+            font-size: 0.875rem; font-weight: 500;
+        }
+        .quota-banner.warning { background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); color: var(--warning-color); }
+        .quota-banner.danger { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--danger-color); }
+
+        /* Cookie consent banner */
+        .cookie-consent {
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 10000;
+            background: var(--bg-card, #ffffff); border-top: 1px solid var(--border-color);
+            box-shadow: 0 -4px 12px rgba(0,0,0,0.1); padding: 16px 24px;
+        }
+        .cookie-consent-content {
+            max-width: 1200px; margin: 0 auto;
+            display: flex; align-items: center; justify-content: space-between; gap: 16px;
+            flex-wrap: wrap;
+        }
+        .cookie-consent-content p { margin: 0; font-size: 0.875rem; color: var(--text-secondary); flex: 1; min-width: 300px; }
+        .cookie-consent-content a { color: var(--brand-color, #3b82f6); text-decoration: underline; }
+        .cookie-consent-actions { display: flex; gap: 8px; flex-shrink: 0; }
+        .btn-sm { padding: 6px 16px; font-size: 0.8rem; border-radius: 6px; cursor: pointer; border: none; }
+        .btn-outline { background: transparent; border: 1px solid var(--border-color); color: var(--text-primary); }

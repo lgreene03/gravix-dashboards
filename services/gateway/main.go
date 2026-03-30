@@ -11,6 +11,7 @@
 //	DELETE /api/gateway/api-keys/:id   — Revoke API key (JWT required, admin only)
 //	POST /api/gateway/webhooks/stripe  — Handle Stripe webhooks (no auth, signature verified)
 //	POST /api/gateway/billing/portal   — Get Stripe Customer Portal URL (JWT required)
+//	POST /api/gateway/billing/checkout — Create Stripe Checkout Session (JWT required, admin)
 //	GET  /api/gateway/billing/usage    — Get current usage stats (JWT required)
 //	GET  /live                         — Health check
 package main
@@ -40,14 +41,24 @@ import (
 	"math"
 	"sync"
 
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
+	"github.com/lgreene/gravix-dashboards/pkg/pagination"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/billing"
+	"github.com/lgreene/gravix-dashboards/pkg/captcha"
+	"github.com/lgreene/gravix-dashboards/pkg/email"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
+	"github.com/lgreene/gravix-dashboards/pkg/password"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
+	"github.com/lgreene/gravix-dashboards/pkg/totp"
 	"github.com/montanaflynn/stats"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -250,15 +261,23 @@ func main() {
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
 
+	// Per-IP rate limiting: 10 requests/minute, burst of 5 for auth endpoints
+	iprl := ratelimit.NewIPLimiter(10, 5)
+	defer iprl.Close()
+
 	gw := &gateway{
-		db:            db,
-		tokens:        tokens,
-		notifier:      notify.NewDispatcher(),
-		store:         objStore,
-		rateLimiter:   trl,
-		cubeAPIURL:    cubeURL,
-		jwtSecret:     *jwtSecret,
-		activeExports: make(map[string]bool),
+		db:              db,
+		tokens:          tokens,
+		notifier:        notify.NewDispatcher(),
+		store:           objStore,
+		rateLimiter:     trl,
+		ipLimiter:       iprl,
+		emailSender:     email.NewSenderFromEnv(),
+		captchaVerifier: captcha.NewVerifierFromEnv(),
+		cubeAPIURL:      cubeURL,
+		jwtSecret:       *jwtSecret,
+		baseURL:         email.BaseURLFromEnv(),
+		activeExports:   make(map[string]bool),
 	}
 
 	// Master context for background goroutines — cancelled on shutdown
@@ -273,8 +292,10 @@ func main() {
 	if stripeKey != "" {
 		plans := billing.DefaultPlans(
 			os.Getenv("STRIPE_PRICE_FREE"),
-			os.Getenv("STRIPE_PRICE_STARTER"),
-			os.Getenv("STRIPE_PRICE_PRO"),
+			os.Getenv("STRIPE_PRICE_TEAM"),
+			os.Getenv("STRIPE_PRICE_BUSINESS"),
+			os.Getenv("STRIPE_PRICE_SCALE"),
+			os.Getenv("STRIPE_PRICE_ENTERPRISE"),
 		)
 		gw.billing = billing.NewStripeService(
 			stripeKey,
@@ -289,10 +310,26 @@ func main() {
 		slog.Info("stripe billing disabled, STRIPE_SECRET_KEY not set")
 	}
 
+	// Body size limit: 1MB default, configurable
+	maxBodyBytes := int64(1 << 20) // 1MB
+	if envMax := os.Getenv("GATEWAY_MAX_BODY_BYTES"); envMax != "" {
+		if v, err := strconv.ParseInt(envMax, 10, 64); err == nil && v > 0 {
+			maxBodyBytes = v
+		}
+	}
+	bodyLimit := bodyLimitMiddleware(maxBodyBytes)
+
 	mux := http.NewServeMux()
-	// Public endpoints (no rate limiting by tenant plan)
-	mux.HandleFunc("/api/gateway/login", gw.handleLogin)
-	mux.HandleFunc("/api/gateway/register", gw.handleRegister)
+	// Public auth endpoints — IP rate limited + body limited
+	mux.HandleFunc("/api/gateway/login", gw.ipRateLimitMiddleware(bodyLimit(gw.handleLogin)))
+	mux.HandleFunc("/api/gateway/register", gw.ipRateLimitMiddleware(bodyLimit(gw.handleRegister)))
+	mux.HandleFunc("/api/gateway/forgot-password", gw.ipRateLimitMiddleware(bodyLimit(gw.handleForgotPassword)))
+	mux.HandleFunc("/api/gateway/reset-password", gw.ipRateLimitMiddleware(bodyLimit(gw.handleResetPassword)))
+	mux.HandleFunc("/api/gateway/verify-email", gw.handleVerifyEmail)
+	mux.HandleFunc("/api/gateway/resend-verification", gw.requireAuth(gw.ipRateLimitMiddleware(gw.handleResendVerification)))
+	mux.HandleFunc("/api/gateway/logout", gw.requireAuth(gw.handleLogout))
+	mux.HandleFunc("/api/gateway/password", gw.requireAuth(bodyLimit(gw.handleChangePassword)))
+	mux.HandleFunc("/api/gateway/refresh", gw.requireAuth(gw.handleRefreshToken))
 	mux.HandleFunc("/api/gateway/webhooks/stripe", gw.handleStripeWebhook)
 
 	// Authenticated + rate-limited API endpoints
@@ -300,6 +337,7 @@ func main() {
 	mux.HandleFunc("/api/gateway/api-keys", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeys)))
 	mux.HandleFunc("/api/gateway/api-keys/expiring", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeysExpiring)))
 	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingPortal)))
+	mux.HandleFunc("/api/gateway/billing/checkout", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingCheckout)))
 	mux.HandleFunc("/api/gateway/billing/usage", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsage))))
 	mux.HandleFunc("/api/gateway/billing/invoices", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingInvoices)))
 	mux.HandleFunc("/api/gateway/billing/usage/history", gw.requireAuth(gw.rateLimitMiddleware(gw.cacheableHandler(gw.handleBillingUsageHistory))))
@@ -315,6 +353,29 @@ func main() {
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
 	mux.HandleFunc("/api/gateway/retention", gw.requireAuth(gw.rateLimitMiddleware(gw.handleRetention)))
 	mux.HandleFunc("/api/gateway/export", gw.requireAuth(gw.rateLimitMiddleware(gw.handleExport)))
+	mux.HandleFunc("/api/gateway/invitations", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleInvitations))))
+	mux.HandleFunc("/api/gateway/invitations/accept", gw.ipRateLimitMiddleware(bodyLimit(gw.handleAcceptInvitation)))
+	mux.HandleFunc("/api/gateway/team", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTeam))))
+	mux.HandleFunc("/api/gateway/gdpr/access", gw.requireAuth(gw.rateLimitMiddleware(gw.handleGDPRAccess)))
+	mux.HandleFunc("/api/gateway/gdpr/portability", gw.requireAuth(gw.rateLimitMiddleware(gw.handleGDPRPortability)))
+	mux.HandleFunc("/api/gateway/consent", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleConsent))))
+	mux.HandleFunc("/api/gateway/account", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleAccountDeletion))))
+	mux.HandleFunc("/api/gateway/account/cancel-deletion", gw.requireAuth(gw.rateLimitMiddleware(gw.handleCancelDeletion)))
+	mux.HandleFunc("/api/gateway/openapi.json", gw.handleOpenAPI)
+
+	// Enterprise features (Phase 31)
+	mux.HandleFunc("/api/gateway/sso", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleSSOConfig))))
+	mux.HandleFunc("/api/gateway/sso/login", gw.ipRateLimitMiddleware(gw.handleSSOLogin))
+	mux.HandleFunc("/api/gateway/sso/callback", gw.ipRateLimitMiddleware(gw.handleSSOCallback))
+	mux.HandleFunc("/api/gateway/2fa/setup", gw.requireAuth(gw.rateLimitMiddleware(gw.handleTwoFactorSetup)))
+	mux.HandleFunc("/api/gateway/2fa/confirm", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTwoFactorConfirm))))
+	mux.HandleFunc("/api/gateway/2fa/disable", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTwoFactorDisable))))
+	mux.HandleFunc("/api/gateway/sessions", gw.requireAuth(gw.rateLimitMiddleware(gw.handleSessions)))
+	mux.HandleFunc("/api/gateway/orgs", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleMultiOrg))))
+
+	// Growth features (Phase 32)
+	mux.HandleFunc("/api/gateway/referrals", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleReferrals))))
+	mux.HandleFunc("/api/gateway/referrals/redeem", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleRedeemReferral))))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -388,32 +449,59 @@ func main() {
 }
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
-	allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
-	if allowedOrigin == "" {
-		allowedOrigin = "*"
+	// CORS: comma-separated list of allowed origins, or "*" for dev
+	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		allowedOrigins = os.Getenv("CORS_ALLOWED_ORIGIN") // backward compat
+	}
+	if allowedOrigins == "" {
+		allowedOrigins = "*"
+	}
+	originSet := make(map[string]bool)
+	allowAll := false
+	for _, o := range strings.Split(allowedOrigins, ",") {
+		o = strings.TrimSpace(o)
+		if o == "*" {
+			allowAll = true
+		}
+		originSet[o] = true
 	}
 
+	// CSP: configurable connect-src and script-src
+	cspConnectSrc := os.Getenv("CSP_CONNECT_SRC")
+	if cspConnectSrc == "" {
+		cspConnectSrc = "'self' http://localhost:4000 http://localhost:8091"
+	}
+	cspScriptSrc := os.Getenv("CSP_SCRIPT_SRC")
+	if cspScriptSrc == "" {
+		cspScriptSrc = "'self' 'unsafe-inline' https://cdn.jsdelivr.net"
+	}
+
+	csp := fmt.Sprintf(
+		"default-src 'self'; script-src %s; style-src 'self' 'unsafe-inline'; connect-src %s; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+		cspScriptSrc, cspConnectSrc,
+	)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// CORS
-		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		// CORS: match Origin header against allowed list
+		origin := r.Header.Get("Origin")
+		if allowAll {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" && originSet[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		// If origin doesn't match and not allowAll, no ACAO header is set (browser blocks)
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400")
 
 		// Security headers
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; "+
-				"script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "+
-				"style-src 'self' 'unsafe-inline'; "+
-				"connect-src 'self' http://localhost:4000 http://localhost:8091; "+
-				"img-src 'self' data:; "+
-				"font-src 'self'; "+
-				"frame-ancestors 'none'; "+
-				"base-uri 'self'; "+
-				"form-action 'self'",
-		)
+		w.Header().Set("Content-Security-Policy", csp)
 
 		// HSTS only when behind TLS-terminating proxy
 		if r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil {
@@ -436,10 +524,473 @@ type gateway struct {
 	notifier        *notify.Dispatcher
 	store           storage.ObjectStore // for DLQ reads
 	rateLimiter     *ratelimit.TenantLimiter
+	ipLimiter       *ratelimit.IPLimiter // per-IP rate limiting for auth endpoints
+	emailSender     email.Sender
+	captchaVerifier captcha.Verifier
 	cubeAPIURL      string
 	jwtSecret       string
+	baseURL         string // for email links (e.g., https://app.gravix.io)
+	tokenBlacklist  sync.Map // JTI → expiry time for revoked tokens
 	activeExports   map[string]bool // tracks in-progress exports per tenant
 	activeExportsMu sync.Mutex
+}
+
+// ipRateLimitMiddleware applies per-IP rate limiting. Returns 429 with Retry-After header when exceeded.
+func (gw *gateway) ipRateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := ratelimit.ExtractIP(r)
+		if !gw.ipLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "too many requests, please try again later")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// bodyLimitMiddleware wraps the request body with a size limit.
+func bodyLimitMiddleware(maxBytes int64) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			}
+			next(w, r)
+		}
+	}
+}
+
+// handleLogout revokes the current JWT by adding its JTI to the blacklist.
+func (gw *gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil || claims.ID == "" {
+		writeError(w, http.StatusBadRequest, "token has no ID")
+		return
+	}
+
+	// Store the JTI with its expiry so we can clean up later
+	gw.tokenBlacklist.Store(claims.ID, claims.ExpiresAt.Time)
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "user.logout", "user", claims.UserID, "", r.RemoteAddr)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "logged out successfully",
+	})
+}
+
+// isTokenBlacklisted checks if a JTI has been revoked.
+func (gw *gateway) isTokenBlacklisted(jti string) bool {
+	if jti == "" {
+		return false
+	}
+	val, ok := gw.tokenBlacklist.Load(jti)
+	if !ok {
+		return false
+	}
+	// Clean up expired blacklist entries
+	if expiry, ok := val.(time.Time); ok && time.Now().After(expiry) {
+		gw.tokenBlacklist.Delete(jti)
+		return false
+	}
+	return true
+}
+
+// handleChangePassword lets an authenticated user change their password.
+// PUT /api/gateway/password  body: {"current_password": "...", "new_password": "..."}
+func (gw *gateway) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeError(w, http.StatusMethodNotAllowed, "PUT required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "current_password and new_password are required")
+		return
+	}
+
+	// Validate new password strength
+	if err := password.Validate(req.NewPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Verify current password
+	user, err := gw.db.Users().GetByEmail(r.Context(), claims.Email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to retrieve user")
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	// Hash and update
+	hashed, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+	if err := gw.db.Users().UpdatePassword(r.Context(), user.ID, string(hashed)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "user.password_changed", "user", claims.UserID, "", r.RemoteAddr)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "password changed successfully",
+	})
+}
+
+// handleRefreshToken exchanges a valid JWT for a fresh one with a new expiry.
+// POST /api/gateway/refresh
+func (gw *gateway) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+
+	// Generate a fresh token with same claims but new expiry and JTI
+	newToken, err := gw.tokens.Generate(claims.TenantID, claims.UserID, claims.Email, claims.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	// Blacklist the old token so it can't be reused
+	if claims.ID != "" {
+		gw.tokenBlacklist.Store(claims.ID, claims.ExpiresAt.Time)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"token":     newToken,
+		"tenant_id": claims.TenantID,
+		"user_id":   claims.UserID,
+		"email":     claims.Email,
+		"role":      claims.Role,
+	})
+}
+
+// seatLimit returns the max users per plan.
+func seatLimit(plan string) int {
+	return billing.PlanSeatLimit(plan)
+}
+
+// handleInvitations manages team invitations (POST to send, GET to list).
+func (gw *gateway) handleInvitations(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+
+	switch r.Method {
+	case http.MethodGet:
+		invitations, err := gw.db.Invitations().ListByTenant(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list invitations")
+			return
+		}
+		if invitations == nil {
+			invitations = []*tenantdb.Invitation{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"invitations": invitations,
+		})
+
+	case http.MethodPost:
+		if !claims.HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		var req struct {
+			Email string `json:"email"`
+			Role  string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Email == "" {
+			writeError(w, http.StatusBadRequest, "email is required")
+			return
+		}
+		if req.Role == "" {
+			req.Role = "viewer"
+		}
+		if req.Role != "editor" && req.Role != "viewer" && req.Role != "admin" {
+			writeError(w, http.StatusBadRequest, "role must be viewer, editor, or admin")
+			return
+		}
+
+		// Check seat limits
+		tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load tenant")
+			return
+		}
+		userCount, _ := gw.db.Users().CountByTenant(r.Context(), claims.TenantID)
+		limit := seatLimit(tenant.Plan)
+		if userCount >= limit {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("seat limit reached (%d/%d). Upgrade your plan.", userCount, limit))
+			return
+		}
+
+		// Check if email is already a member
+		if existingUser, _ := gw.db.Users().GetByEmail(r.Context(), req.Email); existingUser != nil {
+			writeError(w, http.StatusConflict, "user already exists with this email")
+			return
+		}
+
+		// Generate invite token
+		plainToken, tokenHash, err := generateSecureToken()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate invite token")
+			return
+		}
+
+		inv := &tenantdb.Invitation{
+			TenantID:  claims.TenantID,
+			Email:     req.Email,
+			Role:      req.Role,
+			TokenHash: tokenHash,
+			Status:    "pending",
+			InvitedBy: claims.UserID,
+			CreatedAt: time.Now().UTC(),
+			ExpiresAt: time.Now().UTC().Add(7 * 24 * time.Hour), // 7 days
+		}
+		if err := gw.db.Invitations().Create(r.Context(), inv); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create invitation")
+			return
+		}
+
+		// Send invitation email
+		inviteURL := gw.baseURL + "/accept-invite?token=" + plainToken
+		go func() {
+			subject := "You've been invited to join " + tenant.Name + " on Gravix"
+			body := fmt.Sprintf(`<h2>Team Invitation</h2>
+<p>You've been invited to join <strong>%s</strong> on Gravix as a <strong>%s</strong>.</p>
+<p><a href="%s" style="display:inline-block;padding:12px 24px;background:#3b82f6;color:white;text-decoration:none;border-radius:8px;font-weight:600;">Accept Invitation</a></p>
+<p>This invitation expires in 7 days.</p>
+<p style="color:#64748b;font-size:0.875rem;">If you didn't expect this invitation, you can safely ignore this email.</p>`,
+				tenant.Name, req.Role, inviteURL)
+
+			textBody := fmt.Sprintf("You've been invited to join %s on Gravix as a %s.\n\nAccept: %s\n\nThis invitation expires in 7 days.", tenant.Name, req.Role, inviteURL)
+			if err := gw.emailSender.Send(context.Background(), req.Email, subject, body, textBody); err != nil {
+				slog.Error("failed to send invitation email", "email", req.Email, "error", err)
+			}
+		}()
+
+		gw.auditDirect(claims.TenantID, claims.UserID, "team.invite_sent", "invitation", inv.ID, req.Email, r.RemoteAddr)
+
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"id":      inv.ID,
+			"message": "invitation sent",
+		})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST required")
+	}
+}
+
+// handleAcceptInvitation accepts a team invite and creates the user account.
+// POST /api/gateway/invitations/accept  body: {"token": "...", "password": "..."}
+func (gw *gateway) handleAcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Token == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "token and password are required")
+		return
+	}
+
+	if err := password.Validate(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Find invitation by token hash
+	hash := sha256.Sum256([]byte(req.Token))
+	tokenHash := hex.EncodeToString(hash[:])
+	inv, err := gw.db.Invitations().FindByTokenHash(r.Context(), tokenHash)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "invitation not found or expired")
+		return
+	}
+
+	if inv.Status != "pending" {
+		writeError(w, http.StatusBadRequest, "invitation has already been used")
+		return
+	}
+	if time.Now().After(inv.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "invitation has expired")
+		return
+	}
+
+	// Check if email is already registered
+	if existingUser, _ := gw.db.Users().GetByEmail(r.Context(), inv.Email); existingUser != nil {
+		writeError(w, http.StatusConflict, "a user with this email already exists")
+		return
+	}
+
+	// Create user
+	user := &tenantdb.User{
+		TenantID:      inv.TenantID,
+		Email:         inv.Email,
+		PasswordHash:  req.Password, // will be hashed by repo
+		Role:          inv.Role,
+		EmailVerified: true, // invited users are pre-verified
+	}
+	if err := gw.db.Users().Create(r.Context(), user); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	// Mark invitation as accepted
+	_ = gw.db.Invitations().MarkAccepted(r.Context(), inv.ID)
+
+	// Generate JWT
+	token, err := gw.tokens.Generate(inv.TenantID, user.ID, user.Email, user.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"token":     token,
+		"tenant_id": inv.TenantID,
+		"user_id":   user.ID,
+		"email":     user.Email,
+		"role":      user.Role,
+	})
+}
+
+// handleTeam manages team members (GET to list, PUT to update role/status).
+func (gw *gateway) handleTeam(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+
+	switch r.Method {
+	case http.MethodGet:
+		users, err := gw.db.Users().ListByTenant(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list team members")
+			return
+		}
+		// Sanitize — don't expose password hashes
+		type teamMember struct {
+			ID            string  `json:"id"`
+			Email         string  `json:"email"`
+			Role          string  `json:"role"`
+			Status        string  `json:"status"`
+			EmailVerified bool    `json:"email_verified"`
+			LastLoginAt   *string `json:"last_login_at,omitempty"`
+		}
+		members := make([]teamMember, 0, len(users))
+		for _, u := range users {
+			m := teamMember{
+				ID:            u.ID,
+				Email:         u.Email,
+				Role:          u.Role,
+				Status:        u.Status,
+				EmailVerified: u.EmailVerified,
+			}
+			if u.LastLoginAt != nil {
+				s := u.LastLoginAt.Format(time.RFC3339)
+				m.LastLoginAt = &s
+			}
+			members = append(members, m)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"members": members,
+		})
+
+	case http.MethodPut:
+		if !claims.HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		var req struct {
+			UserID string `json:"user_id"`
+			Role   string `json:"role,omitempty"`
+			Status string `json:"status,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.UserID == "" {
+			writeError(w, http.StatusBadRequest, "user_id is required")
+			return
+		}
+		// Don't allow admins to modify themselves
+		if req.UserID == claims.UserID {
+			writeError(w, http.StatusBadRequest, "cannot modify your own role/status")
+			return
+		}
+
+		// Verify user belongs to same tenant
+		targetUser, err := gw.db.Users().GetByID(r.Context(), req.UserID)
+		if err != nil || targetUser.TenantID != claims.TenantID {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+
+		if req.Role != "" {
+			if req.Role != "admin" && req.Role != "editor" && req.Role != "viewer" {
+				writeError(w, http.StatusBadRequest, "role must be admin, editor, or viewer")
+				return
+			}
+			if err := gw.db.Users().UpdateRole(r.Context(), req.UserID, req.Role); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update role")
+				return
+			}
+			gw.auditDirect(claims.TenantID, claims.UserID, "team.role_changed",
+				"user", req.UserID, fmt.Sprintf("role=%s", req.Role), r.RemoteAddr)
+		}
+		if req.Status != "" {
+			if req.Status != "active" && req.Status != "deactivated" {
+				writeError(w, http.StatusBadRequest, "status must be active or deactivated")
+				return
+			}
+			if err := gw.db.Users().UpdateStatus(r.Context(), req.UserID, req.Status); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update status")
+				return
+			}
+			gw.auditDirect(claims.TenantID, claims.UserID, "team.status_changed",
+				"user", req.UserID, fmt.Sprintf("status=%s", req.Status), r.RemoteAddr)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"message": "user updated"})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or PUT required")
+	}
 }
 
 // requireRole returns middleware that checks if the authenticated user has one of the given roles.
@@ -596,20 +1147,9 @@ func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := 50
-	offset := 0
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	pg := pagination.FromRequest(r)
 
-	entries, total, err := gw.db.AuditLog().ListByTenant(r.Context(), claims.TenantID, limit, offset)
+	entries, total, err := gw.db.AuditLog().ListByTenant(r.Context(), claims.TenantID, pg.Limit, pg.Offset())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list audit log")
 		return
@@ -618,10 +1158,8 @@ func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 		entries = []*tenantdb.AuditEntry{}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"entries": entries,
-		"total":   total,
-		"limit":   limit,
-		"offset":  offset,
+		"data":       entries,
+		"pagination": pagination.NewResponse(pg, total),
 	})
 }
 
@@ -955,11 +1493,49 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if user is deactivated
+	if user.Status == "deactivated" {
+		writeError(w, http.StatusForbidden, "account has been deactivated")
+		return
+	}
+
 	// Get tenant info for the token
 	tenant, err := gw.db.Tenants().GetByID(r.Context(), user.TenantID)
 	if err != nil || tenant.Status != "active" {
 		writeError(w, http.StatusForbidden, "tenant is not active")
 		return
+	}
+
+	// Check if 2FA is enabled — require TOTP code
+	if user.TwoFactorEnabled {
+		var totpCode string
+		// Check if TOTP code was provided in the login request
+		var loginReq struct {
+			TOTPCode string `json:"totp_code"`
+		}
+		// Re-parse won't work since body is consumed; check the original req fields
+		// The totp_code should be provided as a query param or we return requires_2fa
+		totpCode = r.URL.Query().Get("totp_code")
+		_ = loginReq // suppress unused
+		if totpCode == "" {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"requires_2fa": true,
+				"user_id":      user.ID,
+				"message":      "provide totp_code to complete login",
+			})
+			return
+		}
+
+		encKey := gw.totpEncryptionKey()
+		secret, decErr := totp.DecryptSecret(user.TwoFactorSecret, encKey)
+		if decErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate 2FA")
+			return
+		}
+		if !totp.Validate(totpCode, secret) {
+			writeError(w, http.StatusUnauthorized, "invalid TOTP code")
+			return
+		}
 	}
 
 	token, err := gw.tokens.Generate(user.TenantID, user.ID, user.Email, user.Role)
@@ -968,15 +1544,19 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update last login time
+	_ = gw.db.Users().UpdateLastLogin(r.Context(), user.ID, time.Now())
+
 	gw.auditDirect(user.TenantID, user.ID, "user.login", "user", user.ID, "", r.RemoteAddr)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"token":     token,
-		"tenant_id": user.TenantID,
-		"user_id":   user.ID,
-		"email":     user.Email,
-		"role":      user.Role,
-		"plan":      tenant.Plan,
+		"token":          token,
+		"tenant_id":      user.TenantID,
+		"user_id":        user.ID,
+		"email":          user.Email,
+		"role":           user.Role,
+		"plan":           tenant.Plan,
+		"email_verified": user.EmailVerified,
 	})
 }
 
@@ -989,9 +1569,11 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     string `json:"name"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Name         string `json:"name"`
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		CaptchaToken string `json:"captcha_token"`
+		AcceptTOS    bool   `json:"accept_tos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1002,9 +1584,22 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name, email, and password are required")
 		return
 	}
+	if !req.AcceptTOS {
+		writeError(w, http.StatusBadRequest, "you must accept the Terms of Service")
+		return
+	}
 
-	if len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+	// Verify CAPTCHA if configured
+	if gw.captchaVerifier != nil {
+		ip := ratelimit.ExtractIP(r)
+		if err := gw.captchaVerifier.Verify(req.CaptchaToken, ip); err != nil {
+			writeError(w, http.StatusBadRequest, "CAPTCHA verification failed")
+			return
+		}
+	}
+
+	if err := password.Validate(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1056,14 +1651,30 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create initial API key
-	plainKey, apiKey, err := gw.db.APIKeys().Create(ctx, tenant.ID, "default", nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create API key")
-		return
-	}
+	// Record TOS consent
+	_ = gw.db.ConsentRecords().Create(ctx, &tenantdb.ConsentRecord{
+		TenantID:  tenant.ID,
+		UserID:    user.ID,
+		Type:      "tos",
+		Version:   "1.0",
+		Accepted:  true,
+		IPAddress: ratelimit.ExtractIP(r),
+		CreatedAt: time.Now().UTC(),
+	})
+	_ = gw.db.ConsentRecords().Create(ctx, &tenantdb.ConsentRecord{
+		TenantID:  tenant.ID,
+		UserID:    user.ID,
+		Type:      "privacy",
+		Version:   "1.0",
+		Accepted:  true,
+		IPAddress: ratelimit.ExtractIP(r),
+		CreatedAt: time.Now().UTC(),
+	})
 
-	// Generate JWT for immediate login
+	// Send email verification token
+	gw.sendVerificationEmail(ctx, user)
+
+	// Generate JWT for immediate login (limited until email verified)
 	token, err := gw.tokens.Generate(tenant.ID, user.ID, user.Email, user.Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
@@ -1074,14 +1685,308 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf(`{"name":%q,"email":%q}`, req.Name, req.Email), r.RemoteAddr)
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"token":      token,
-		"tenant_id":  tenant.ID,
-		"user_id":    user.ID,
-		"email":      user.Email,
-		"role":       user.Role,
-		"plan":       tenant.Plan,
-		"api_key":    plainKey,
-		"key_prefix": apiKey.KeyPrefix,
+		"token":                      token,
+		"tenant_id":                  tenant.ID,
+		"user_id":                    user.ID,
+		"email":                      user.Email,
+		"role":                       user.Role,
+		"plan":                       tenant.Plan,
+		"email_verification_required": true,
+	})
+}
+
+// generateSecureToken creates a cryptographically random token and returns (plaintext, sha256hash).
+func generateSecureToken() (string, string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", fmt.Errorf("generate token: %w", err)
+	}
+	plain := base64.RawURLEncoding.EncodeToString(b)
+	hash := sha256.Sum256([]byte(plain))
+	return plain, hex.EncodeToString(hash[:]), nil
+}
+
+// sendVerificationEmail creates a verification token and sends the verification email.
+func (gw *gateway) sendVerificationEmail(ctx context.Context, user *tenantdb.User) {
+	plain, tokenHash, err := generateSecureToken()
+	if err != nil {
+		slog.Error("failed to generate verification token", "error", err)
+		return
+	}
+
+	token := &tenantdb.EmailVerificationToken{
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := gw.db.EmailVerifications().Create(ctx, token); err != nil {
+		slog.Error("failed to store verification token", "error", err)
+		return
+	}
+
+	htmlBody, textBody, err := email.RenderEmailVerification(email.TemplateData{
+		UserName: user.Email,
+		Token:    plain,
+		BaseURL:  gw.baseURL,
+	})
+	if err != nil {
+		slog.Error("failed to render verification email", "error", err)
+		return
+	}
+
+	if err := gw.emailSender.Send(ctx, user.Email, "Verify your Gravix email", htmlBody, textBody); err != nil {
+		slog.Error("failed to send verification email", "error", err, "to", user.Email)
+	}
+}
+
+// handleForgotPassword initiates a password reset flow.
+// Always returns 200 regardless of whether the email exists (prevents enumeration).
+func (gw *gateway) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	// Always return success to prevent email enumeration
+	defer func() {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"message": "If that email is registered, a password reset link has been sent.",
+		})
+	}()
+
+	if req.Email == "" {
+		return
+	}
+
+	ctx := r.Context()
+	user, err := gw.db.Users().GetByEmail(ctx, req.Email)
+	if err != nil {
+		return // user not found, but return 200 anyway
+	}
+
+	plain, tokenHash, err := generateSecureToken()
+	if err != nil {
+		slog.Error("failed to generate reset token", "error", err)
+		return
+	}
+
+	resetToken := &tenantdb.PasswordResetToken{
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+	if err := gw.db.PasswordResets().Create(ctx, resetToken); err != nil {
+		slog.Error("failed to store reset token", "error", err)
+		return
+	}
+
+	htmlBody, textBody, err := email.RenderPasswordReset(email.TemplateData{
+		UserName: user.Email,
+		Token:    plain,
+		BaseURL:  gw.baseURL,
+	})
+	if err != nil {
+		slog.Error("failed to render reset email", "error", err)
+		return
+	}
+
+	if err := gw.emailSender.Send(ctx, user.Email, "Reset your Gravix password", htmlBody, textBody); err != nil {
+		slog.Error("failed to send reset email", "error", err, "to", user.Email)
+	}
+
+	gw.auditDirect(user.TenantID, user.ID, "user.password_reset_requested", "user", user.ID, "", r.RemoteAddr)
+}
+
+// handleResetPassword completes a password reset using a valid token.
+func (gw *gateway) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if req.Token == "" || req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "token and new_password are required")
+		return
+	}
+
+	if err := password.Validate(req.NewPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	hash := sha256.Sum256([]byte(req.Token))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	resetToken, err := gw.db.PasswordResets().FindByTokenHash(ctx, tokenHash)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or expired reset token")
+		return
+	}
+
+	if resetToken.UsedAt != nil {
+		writeError(w, http.StatusBadRequest, "reset token has already been used")
+		return
+	}
+
+	if time.Now().After(resetToken.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "reset token has expired")
+		return
+	}
+
+	// Hash the new password
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
+	if err := gw.db.Users().UpdatePassword(ctx, resetToken.UserID, string(bcryptHash)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	if err := gw.db.PasswordResets().MarkUsed(ctx, resetToken.ID); err != nil {
+		slog.Error("failed to mark reset token used", "error", err)
+	}
+
+	// Look up user for audit
+	user, _ := gw.db.Users().GetByID(ctx, resetToken.UserID)
+	if user != nil {
+		gw.auditDirect(user.TenantID, user.ID, "user.password_reset", "user", user.ID, "", r.RemoteAddr)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Password has been reset successfully. You can now log in.",
+	})
+}
+
+// handleVerifyEmail verifies a user's email address using a verification token.
+func (gw *gateway) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST required")
+		return
+	}
+
+	tokenStr := r.URL.Query().Get("token")
+	if tokenStr == "" {
+		// Try JSON body for POST
+		if r.Method == http.MethodPost {
+			var req struct {
+				Token string `json:"token"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			tokenStr = req.Token
+		}
+	}
+
+	if tokenStr == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+
+	ctx := r.Context()
+	hash := sha256.Sum256([]byte(tokenStr))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	verifyToken, err := gw.db.EmailVerifications().FindByTokenHash(ctx, tokenHash)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or expired verification token")
+		return
+	}
+
+	if verifyToken.VerifiedAt != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"verified": true,
+			"message":  "Email already verified.",
+		})
+		return
+	}
+
+	if time.Now().After(verifyToken.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "verification token has expired, please request a new one")
+		return
+	}
+
+	// Mark token as verified
+	if err := gw.db.EmailVerifications().MarkVerified(ctx, verifyToken.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to verify email")
+		return
+	}
+
+	// Mark user as verified
+	if err := gw.db.Users().UpdateEmailVerified(ctx, verifyToken.UserID, true); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
+
+	// Create the initial API key now that email is verified
+	user, _ := gw.db.Users().GetByID(ctx, verifyToken.UserID)
+	var apiKeyPlain string
+	if user != nil {
+		plainKey, _, err := gw.db.APIKeys().Create(ctx, user.TenantID, "default", nil)
+		if err != nil {
+			slog.Error("failed to create API key after verification", "error", err)
+		} else {
+			apiKeyPlain = plainKey
+		}
+		gw.auditDirect(user.TenantID, user.ID, "user.email_verified", "user", user.ID, "", r.RemoteAddr)
+	}
+
+	resp := map[string]interface{}{
+		"verified": true,
+		"message":  "Email verified successfully.",
+	}
+	if apiKeyPlain != "" {
+		resp["api_key"] = apiKeyPlain
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleResendVerification resends the email verification link (JWT required).
+func (gw *gateway) handleResendVerification(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	user, err := gw.db.Users().GetByID(ctx, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	if user.EmailVerified {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"message": "Email is already verified.",
+		})
+		return
+	}
+
+	gw.sendVerificationEmail(ctx, user)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Verification email has been resent.",
 	})
 }
 
@@ -1098,6 +2003,12 @@ func (gw *gateway) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		claims, err := gw.tokens.Validate(tokenStr)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
+			return
+		}
+
+		// Check token blacklist (logout revocation)
+		if gw.isTokenBlacklisted(claims.ID) {
+			writeError(w, http.StatusUnauthorized, "token has been revoked")
 			return
 		}
 
@@ -1121,14 +2032,25 @@ func (gw *gateway) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"user_id":     claims.UserID,
-		"email":       claims.Email,
-		"role":        claims.Role,
-		"tenant_id":   claims.TenantID,
-		"tenant_name": tenant.Name,
-		"plan":        tenant.Plan,
-	})
+	// Fetch user for additional profile info
+	user, _ := gw.db.Users().GetByEmail(r.Context(), claims.Email)
+	result := map[string]interface{}{
+		"user_id":        claims.UserID,
+		"email":          claims.Email,
+		"role":           claims.Role,
+		"tenant_id":      claims.TenantID,
+		"tenant_name":    tenant.Name,
+		"plan":           tenant.Plan,
+		"email_verified": false,
+	}
+	if user != nil {
+		result["email_verified"] = user.EmailVerified
+		result["status"] = user.Status
+		if user.LastLoginAt != nil {
+			result["last_login_at"] = user.LastLoginAt.Format(time.RFC3339)
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleAPIKeys handles CRUD for API keys.
@@ -1147,6 +2069,17 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		if claims.Role != "admin" {
 			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		// Block unverified users from creating API keys
+		user, err := gw.db.Users().GetByID(r.Context(), claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get user")
+			return
+		}
+		if !user.EmailVerified {
+			writeError(w, http.StatusForbidden, "email verification required before creating API keys")
 			return
 		}
 
@@ -1367,6 +2300,80 @@ func (gw *gateway) handleBillingPortal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("failed to create portal session", "tenant_id", tenant.ID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create billing portal session")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"url": url})
+}
+
+func (gw *gateway) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	if gw.billing == nil {
+		writeError(w, http.StatusServiceUnavailable, "billing not configured")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+
+	tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "tenant not found")
+		return
+	}
+
+	if tenant.StripeCustomerID == "" {
+		writeError(w, http.StatusBadRequest, "no billing account found")
+		return
+	}
+
+	var req struct {
+		PriceID    string `json:"price_id"`
+		SuccessURL string `json:"success_url"`
+		CancelURL  string `json:"cancel_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.PriceID == "" {
+		writeError(w, http.StatusBadRequest, "price_id required")
+		return
+	}
+	if req.SuccessURL == "" {
+		req.SuccessURL = "/"
+	}
+	if req.CancelURL == "" {
+		req.CancelURL = "/"
+	}
+
+	// Determine trial days for the target plan
+	planName := gw.billing.PlanForPriceID(req.PriceID)
+	trialDays := billing.DefaultTrialDays(planName)
+
+	svc, ok := gw.billing.(*billing.StripeService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "checkout not available")
+		return
+	}
+
+	url, err := svc.CreateCheckoutSession(r.Context(), billing.CheckoutParams{
+		CustomerID: tenant.StripeCustomerID,
+		PriceID:    req.PriceID,
+		SuccessURL: req.SuccessURL,
+		CancelURL:  req.CancelURL,
+		TrialDays:  trialDays,
+	})
+	if err != nil {
+		slog.Error("failed to create checkout session", "tenant_id", tenant.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to create checkout session")
 		return
 	}
 
@@ -1903,6 +2910,7 @@ func (gw *gateway) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 
 	claims := auth.ClaimsFromContext(r.Context())
 
+	pg := pagination.FromRequest(r)
 	ruleID := r.URL.Query().Get("rule_id")
 	var entries []*tenantdb.AlertHistoryEntry
 	var err error
@@ -1914,9 +2922,9 @@ func (gw *gateway) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "rule not found")
 			return
 		}
-		entries, err = gw.db.AlertHistory().ListByRule(r.Context(), ruleID, 50)
+		entries, err = gw.db.AlertHistory().ListByRule(r.Context(), ruleID, pg.Limit)
 	} else {
-		entries, err = gw.db.AlertHistory().ListByTenant(r.Context(), claims.TenantID, 50)
+		entries, err = gw.db.AlertHistory().ListByTenant(r.Context(), claims.TenantID, pg.Limit)
 	}
 
 	if err != nil {
@@ -1926,7 +2934,10 @@ func (gw *gateway) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []*tenantdb.AlertHistoryEntry{}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"history": entries})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"data":       entries,
+		"pagination": pagination.NewResponse(pg, len(entries)),
+	})
 }
 
 // --- Alert Evaluator ---
@@ -2588,11 +3599,15 @@ func (gw *gateway) handleDLQ(w http.ResponseWriter, r *http.Request) {
 
 // handleDLQReplay re-submits DLQ entries to the ingestion endpoint.
 // POST /api/gateway/dlq/replay  body: {"entries": [{"raw_json": ...}, ...]}
+// Security: validates each entry belongs to the authenticated tenant before replay.
 func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	tenantID := claims.TenantID
 
 	var req struct {
 		Entries []struct {
@@ -2609,13 +3624,38 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build JSONL body from raw entries
+	// Validate tenant scoping: each entry must belong to the authenticated tenant.
+	// This prevents cross-tenant data injection via DLQ replay.
 	var buf bytes.Buffer
+	skipped := 0
 	for i, e := range req.Entries {
-		if i > 0 {
+		// Parse just the tenant_id field from each entry to validate ownership
+		var entryMeta struct {
+			TenantID string `json:"tenant_id"`
+		}
+		if err := json.Unmarshal(e.RawJSON, &entryMeta); err != nil {
+			skipped++
+			continue
+		}
+		// If entry has a tenant_id, it must match the authenticated tenant
+		if entryMeta.TenantID != "" && entryMeta.TenantID != tenantID {
+			skipped++
+			slog.Warn("DLQ replay: skipped cross-tenant entry",
+				"authenticated_tenant", tenantID,
+				"entry_tenant", entryMeta.TenantID)
+			continue
+		}
+
+		if buf.Len() > 0 {
 			buf.WriteByte('\n')
 		}
+		_ = i
 		buf.Write(e.RawJSON)
+	}
+
+	if buf.Len() == 0 {
+		writeError(w, http.StatusBadRequest, "no valid entries to replay (all skipped due to tenant mismatch)")
+		return
 	}
 
 	// Forward to ingestion batch endpoint
@@ -2630,14 +3670,14 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to build replay request")
 		return
 	}
-	fwdReq.Header.Set("Content-Type", "application/x-ndjson")
+	fwdReq.Header.Set("Content-Type", "application/json")
 
 	// Propagate request ID for cross-service tracing
 	logging.PropagateRequestID(r.Context(), fwdReq)
 
 	// Forward the Authorization header
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		fwdReq.Header.Set("Authorization", auth)
+	if authHdr := r.Header.Get("Authorization"); authHdr != "" {
+		fwdReq.Header.Set("Authorization", authHdr)
 	}
 	// Also try X-API-Key
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
@@ -2652,9 +3692,14 @@ func (gw *gateway) handleDLQReplay(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Relay the ingestion response
+	// Relay the ingestion response with skipped count
 	body, _ := io.ReadAll(resp.Body)
 	w.Header().Set("Content-Type", "application/json")
+	if skipped > 0 {
+		slog.Info("DLQ replay completed with skipped entries",
+			"tenant_id", tenantID, "skipped", skipped,
+			"replayed", len(req.Entries)-skipped)
+	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
 }
@@ -2850,5 +3895,234 @@ func (gw *gateway) handleTraceByID(w http.ResponseWriter, r *http.Request) {
 		"trace_id": traceID,
 		"spans":    spans,
 		"total":    len(spans),
+	})
+}
+
+// handleGDPRAccess returns all personal data held for the authenticated user (GDPR Article 15).
+func (gw *gateway) handleGDPRAccess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	user, err := gw.db.Users().GetByID(ctx, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	tenant, _ := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	consents, _ := gw.db.ConsentRecords().ListByUser(ctx, claims.UserID)
+
+	result := map[string]interface{}{
+		"user": map[string]interface{}{
+			"id":             user.ID,
+			"email":          user.Email,
+			"role":           user.Role,
+			"email_verified": user.EmailVerified,
+			"status":         user.Status,
+			"created_at":     user.CreatedAt.Format(time.RFC3339),
+		},
+		"consent_records": consents,
+	}
+	if tenant != nil {
+		result["tenant"] = map[string]interface{}{
+			"id":         tenant.ID,
+			"name":       tenant.Name,
+			"plan":       tenant.Plan,
+			"status":     tenant.Status,
+			"created_at": tenant.CreatedAt.Format(time.RFC3339),
+		}
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "gdpr.access", "user", claims.UserID, "", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleGDPRPortability exports personal data as a downloadable JSON file (GDPR Article 20).
+func (gw *gateway) handleGDPRPortability(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	user, err := gw.db.Users().GetByID(ctx, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	tenant, _ := gw.db.Tenants().GetByID(ctx, claims.TenantID)
+	consents, _ := gw.db.ConsentRecords().ListByUser(ctx, claims.UserID)
+
+	export := map[string]interface{}{
+		"exported_at": time.Now().UTC().Format(time.RFC3339),
+		"user": map[string]interface{}{
+			"id":             user.ID,
+			"email":          user.Email,
+			"role":           user.Role,
+			"email_verified": user.EmailVerified,
+			"status":         user.Status,
+			"created_at":     user.CreatedAt.Format(time.RFC3339),
+		},
+		"consent_records": consents,
+	}
+	if tenant != nil {
+		export["tenant"] = map[string]interface{}{
+			"id":         tenant.ID,
+			"name":       tenant.Name,
+			"plan":       tenant.Plan,
+			"status":     tenant.Status,
+			"created_at": tenant.CreatedAt.Format(time.RFC3339),
+		}
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "gdpr.portability", "user", claims.UserID, "", r.RemoteAddr)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"gravix-data-export.json\"")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(export)
+}
+
+// handleConsent manages consent records (GET = list, POST = record new consent).
+func (gw *gateway) handleConsent(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	ctx := r.Context()
+
+	switch r.Method {
+	case http.MethodGet:
+		records, err := gw.db.ConsentRecords().ListByUser(ctx, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list consent records")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"consent_records": records,
+		})
+
+	case http.MethodPost:
+		var req struct {
+			Type     string `json:"type"`
+			Version  string `json:"version"`
+			Accepted bool   `json:"accepted"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Type == "" || req.Version == "" {
+			writeError(w, http.StatusBadRequest, "type and version are required")
+			return
+		}
+		validTypes := map[string]bool{"tos": true, "privacy": true, "cookies": true}
+		if !validTypes[req.Type] {
+			writeError(w, http.StatusBadRequest, "type must be tos, privacy, or cookies")
+			return
+		}
+
+		record := &tenantdb.ConsentRecord{
+			TenantID:  claims.TenantID,
+			UserID:    claims.UserID,
+			Type:      req.Type,
+			Version:   req.Version,
+			Accepted:  req.Accepted,
+			IPAddress: ratelimit.ExtractIP(r),
+			CreatedAt: time.Now().UTC(),
+		}
+		if err := gw.db.ConsentRecords().Create(ctx, record); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record consent")
+			return
+		}
+		gw.auditDirect(claims.TenantID, claims.UserID, "consent.record", "consent", record.ID,
+			fmt.Sprintf(`{"type":%q,"version":%q,"accepted":%v}`, req.Type, req.Version, req.Accepted), r.RemoteAddr)
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"id":      record.ID,
+			"type":    record.Type,
+			"version": record.Version,
+		})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST required")
+	}
+}
+
+// handleAccountDeletion requests account deletion with 30-day grace period.
+func (gw *gateway) handleAccountDeletion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "DELETE required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+	ctx := r.Context()
+
+	// Check if deletion already pending
+	existing, _ := gw.db.DeletionRequests().GetByTenantID(ctx, claims.TenantID)
+	if existing != nil && existing.Status == "pending" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id":           existing.ID,
+			"status":       existing.Status,
+			"requested_at": existing.RequestedAt.Format(time.RFC3339),
+			"expires_at":   existing.ExpiresAt.Format(time.RFC3339),
+			"message":      "deletion already requested",
+		})
+		return
+	}
+
+	dr := &tenantdb.DeletionRequest{
+		TenantID:    claims.TenantID,
+		RequestedBy: claims.UserID,
+		Status:      "pending",
+		RequestedAt: time.Now().UTC(),
+		ExpiresAt:   time.Now().UTC().Add(30 * 24 * time.Hour),
+	}
+	if err := gw.db.DeletionRequests().Create(ctx, dr); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create deletion request")
+		return
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "account.delete_request", "tenant", claims.TenantID, "", r.RemoteAddr)
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"id":           dr.ID,
+		"status":       "pending",
+		"requested_at": dr.RequestedAt.Format(time.RFC3339),
+		"expires_at":   dr.ExpiresAt.Format(time.RFC3339),
+		"message":      "account scheduled for deletion in 30 days",
+	})
+}
+
+// handleCancelDeletion cancels a pending account deletion request.
+func (gw *gateway) handleCancelDeletion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+	ctx := r.Context()
+
+	dr, err := gw.db.DeletionRequests().GetByTenantID(ctx, claims.TenantID)
+	if err != nil || dr == nil || dr.Status != "pending" {
+		writeError(w, http.StatusNotFound, "no pending deletion request found")
+		return
+	}
+
+	if err := gw.db.DeletionRequests().Cancel(ctx, dr.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to cancel deletion")
+		return
+	}
+
+	gw.auditDirect(claims.TenantID, claims.UserID, "account.cancel_deletion", "tenant", claims.TenantID, "", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "deletion request cancelled",
 	})
 }

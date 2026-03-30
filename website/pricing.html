@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pricing — Gravix</title>
+    <meta name="description" content="Simple, predictable pricing for HTTP observability. Free tier included. No per-host fees.">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="/" class="nav-logo">Gravix</a>
+            <div class="nav-links">
+                <a href="pricing.html" class="active">Pricing</a>
+                <a href="/docs">Docs</a>
+                <a href="/index.html" class="nav-btn-secondary">Dashboard</a>
+                <a href="signup.html" class="nav-btn-primary">Get Started Free</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="pricing-hero">
+        <div class="container">
+            <h1>Simple, Predictable Pricing</h1>
+            <p>No per-host fees. No surprises. Scale with your usage.</p>
+            <div class="billing-toggle">
+                <span class="toggle-label" id="monthly-label">Monthly</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="billing-toggle">
+                    <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label" id="annual-label">Annual <span class="save-badge">Save 20%</span></span>
+            </div>
+        </div>
+    </section>
+
+    <section class="pricing-cards">
+        <div class="container">
+            <div class="grid-5">
+                <div class="price-card">
+                    <h3>Free</h3>
+                    <div class="price">
+                        <span class="price-amount" data-monthly="0" data-annual="0">$0</span>
+                        <span class="price-period">/mo</span>
+                    </div>
+                    <p class="price-desc">For side projects and experimentation</p>
+                    <ul class="features-list">
+                        <li>500K events/month</li>
+                        <li>1 user</li>
+                        <li>2 services</li>
+                        <li>7-day retention</li>
+                        <li>Community support</li>
+                    </ul>
+                    <a href="signup.html?plan=free" class="btn btn-outline btn-block">Get Started</a>
+                </div>
+
+                <div class="price-card">
+                    <h3>Team</h3>
+                    <div class="price">
+                        <span class="price-amount" data-monthly="79" data-annual="63">$79</span>
+                        <span class="price-period">/mo</span>
+                    </div>
+                    <p class="price-desc">For small teams shipping fast</p>
+                    <span class="trial-badge">14-day free trial</span>
+                    <ul class="features-list">
+                        <li>10M events/month</li>
+                        <li>5 users</li>
+                        <li>5 services</li>
+                        <li>30-day retention</li>
+                        <li>Email support</li>
+                        <li>Slack alerts</li>
+                    </ul>
+                    <a href="signup.html?plan=team" class="btn btn-primary btn-block">Start Free Trial</a>
+                </div>
+
+                <div class="price-card popular">
+                    <div class="popular-badge">Most Popular</div>
+                    <h3>Business</h3>
+                    <div class="price">
+                        <span class="price-amount" data-monthly="249" data-annual="199">$249</span>
+                        <span class="price-period">/mo</span>
+                    </div>
+                    <p class="price-desc">For growing engineering teams</p>
+                    <span class="trial-badge">14-day free trial</span>
+                    <ul class="features-list">
+                        <li>50M events/month</li>
+                        <li>20 users</li>
+                        <li>20 services</li>
+                        <li>90-day retention</li>
+                        <li>Priority support</li>
+                        <li>PagerDuty integration</li>
+                        <li>SSO (SAML)</li>
+                    </ul>
+                    <a href="signup.html?plan=business" class="btn btn-primary btn-block">Start Free Trial</a>
+                </div>
+
+                <div class="price-card">
+                    <h3>Scale</h3>
+                    <div class="price">
+                        <span class="price-amount" data-monthly="599" data-annual="479">$599</span>
+                        <span class="price-period">/mo</span>
+                    </div>
+                    <p class="price-desc">For high-volume production workloads</p>
+                    <ul class="features-list">
+                        <li>200M events/month</li>
+                        <li>Unlimited users</li>
+                        <li>50 services</li>
+                        <li>365-day retention</li>
+                        <li>Dedicated support</li>
+                        <li>Custom dashboards</li>
+                        <li>Overage billing</li>
+                    </ul>
+                    <a href="signup.html?plan=scale" class="btn btn-outline btn-block">Contact Sales</a>
+                </div>
+
+                <div class="price-card">
+                    <h3>Enterprise</h3>
+                    <div class="price">
+                        <span class="price-amount">Custom</span>
+                    </div>
+                    <p class="price-desc">For organizations with specific needs</p>
+                    <ul class="features-list">
+                        <li>Unlimited events</li>
+                        <li>Unlimited users</li>
+                        <li>Unlimited services</li>
+                        <li>365-day retention</li>
+                        <li>24/7 support + SLA</li>
+                        <li>Dedicated infrastructure</li>
+                        <li>Custom integrations</li>
+                        <li>DPA included</li>
+                    </ul>
+                    <a href="mailto:sales@gravix.io" class="btn btn-outline btn-block">Contact Sales</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="feature-comparison">
+        <div class="container">
+            <h2>Feature Comparison</h2>
+            <table class="comparison-table full-width">
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Free</th>
+                        <th>Team</th>
+                        <th>Business</th>
+                        <th>Scale</th>
+                        <th>Enterprise</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Monthly events</td><td>500K</td><td>10M</td><td>50M</td><td>200M</td><td>Unlimited</td></tr>
+                    <tr><td>Users</td><td>1</td><td>5</td><td>20</td><td>Unlimited</td><td>Unlimited</td></tr>
+                    <tr><td>Monitored services</td><td>2</td><td>5</td><td>20</td><td>50</td><td>Unlimited</td></tr>
+                    <tr><td>Data retention</td><td>7 days</td><td>30 days</td><td>90 days</td><td>1 year</td><td>1 year</td></tr>
+                    <tr><td>API keys</td><td>1</td><td>5</td><td>20</td><td>Unlimited</td><td>Unlimited</td></tr>
+                    <tr><td>Alerting</td><td>-</td><td>Threshold</td><td>Threshold + Anomaly</td><td>All</td><td>All</td></tr>
+                    <tr><td>Slack integration</td><td>-</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+                    <tr><td>PagerDuty</td><td>-</td><td>-</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+                    <tr><td>SSO / SAML</td><td>-</td><td>-</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+                    <tr><td>Data export</td><td>-</td><td>-</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+                    <tr><td>Custom retention</td><td>-</td><td>-</td><td>-</td><td>Yes</td><td>Yes</td></tr>
+                    <tr><td>SLA</td><td>-</td><td>-</td><td>-</td><td>99.9%</td><td>99.95%</td></tr>
+                    <tr><td>Support</td><td>Community</td><td>Email</td><td>Priority</td><td>Dedicated</td><td>24/7 + TAM</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="faq">
+        <div class="container">
+            <h2>Frequently Asked Questions</h2>
+            <div class="faq-list">
+                <details class="faq-item">
+                    <summary>What counts as an "event"?</summary>
+                    <p>One HTTP request fact sent to the ingestion API counts as one event. Each event includes method, path, status code, latency, and metadata. Batch requests are counted individually.</p>
+                </details>
+                <details class="faq-item">
+                    <summary>What happens if I exceed my event limit?</summary>
+                    <p>On the Free tier, events beyond the limit are rejected with a 429 status. On paid plans, events are accepted and billed at $1 per 100K overage events, so you never lose data.</p>
+                </details>
+                <details class="faq-item">
+                    <summary>Can I switch plans at any time?</summary>
+                    <p>Yes. Upgrades take effect immediately with prorated billing. Downgrades take effect at the end of your billing cycle.</p>
+                </details>
+                <details class="faq-item">
+                    <summary>Do you offer annual billing?</summary>
+                    <p>Yes. Annual billing saves 20% compared to monthly. Toggle the switch above to see annual prices.</p>
+                </details>
+                <details class="faq-item">
+                    <summary>Is there a free trial?</summary>
+                    <p>Team and Business plans include a 14-day free trial. No credit card required to start. You'll be prompted to add payment before the trial ends.</p>
+                </details>
+                <details class="faq-item">
+                    <summary>Where is my data stored?</summary>
+                    <p>Data is stored in S3-compatible object storage in your selected region. Enterprise customers can specify custom storage locations. All data is encrypted at rest and in transit.</p>
+                </details>
+                <details class="faq-item">
+                    <summary>Do you sign DPAs?</summary>
+                    <p>Yes. A standard Data Processing Agreement is available for all paid plans. Enterprise customers can negotiate custom terms. See our <a href="/dpa.html">DPA template</a>.</p>
+                </details>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>Ready to Cut Your Observability Bill by 95%?</h2>
+            <p>Start with the free tier. Upgrade when you're ready.</p>
+            <a href="signup.html" class="btn btn-primary btn-lg">Get Started Free</a>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div>
+                    <h4>Gravix</h4>
+                    <p>Data-first HTTP observability.</p>
+                </div>
+                <div>
+                    <h4>Product</h4>
+                    <ul>
+                        <li><a href="pricing.html">Pricing</a></li>
+                        <li><a href="/docs">Documentation</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4>Legal</h4>
+                    <ul>
+                        <li><a href="/terms.html">Terms of Service</a></li>
+                        <li><a href="/privacy.html">Privacy Policy</a></li>
+                        <li><a href="/dpa.html">DPA</a></li>
+                    </ul>
+                </div>
+            </div>
+            <p class="footer-copy">&copy; 2026 Gravix. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="pricing.js"></script>
+</body>
+</html>

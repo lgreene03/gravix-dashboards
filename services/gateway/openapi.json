@@ -1,0 +1,506 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gravix API",
+    "version": "1.0.0",
+    "description": "HTTP observability platform — ingestion and gateway APIs",
+    "contact": { "email": "support@gravix.io" },
+    "license": { "name": "MIT" }
+  },
+  "servers": [
+    { "url": "http://localhost:8090", "description": "Ingestion (local)" },
+    { "url": "http://localhost:8091", "description": "Gateway (local)" }
+  ],
+  "paths": {
+    "/api/v1/facts": {
+      "post": {
+        "summary": "Ingest request facts",
+        "description": "Submit an array of RequestFact events for ingestion. Validated, buffered, and stored as JSONL.",
+        "operationId": "ingestFacts",
+        "tags": ["Ingestion"],
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/RequestFact" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "All facts accepted" },
+          "207": {
+            "description": "Partial success — some facts rejected",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PartialResponse" }
+              }
+            }
+          },
+          "400": { "description": "Invalid request body" },
+          "401": { "description": "Missing or invalid API key" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "post": {
+        "summary": "Ingest service events",
+        "description": "Submit an array of ServiceEvent records.",
+        "operationId": "ingestEvents",
+        "tags": ["Ingestion"],
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ServiceEvent" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "All events accepted" },
+          "400": { "description": "Invalid request body" },
+          "401": { "description": "Missing or invalid API key" }
+        }
+      }
+    },
+    "/api/gateway/register": {
+      "post": {
+        "summary": "Register new tenant",
+        "description": "Create a new tenant, admin user, and optionally a Stripe customer.",
+        "operationId": "register",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RegisterRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tenant created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RegisterResponse" }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "409": { "description": "Email already registered" }
+        }
+      }
+    },
+    "/api/gateway/login": {
+      "post": {
+        "summary": "Authenticate user",
+        "description": "Validate credentials and return a JWT token.",
+        "operationId": "login",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication successful",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "401": { "description": "Invalid credentials" }
+        }
+      }
+    },
+    "/api/gateway/me": {
+      "get": {
+        "summary": "Get current user",
+        "operationId": "getMe",
+        "tags": ["Auth"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Current user info",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserInfo" }
+              }
+            }
+          },
+          "401": { "description": "Not authenticated" }
+        }
+      }
+    },
+    "/api/gateway/api-keys": {
+      "get": {
+        "summary": "List API keys",
+        "operationId": "listAPIKeys",
+        "tags": ["API Keys"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of API keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/APIKey" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create API key",
+        "operationId": "createAPIKey",
+        "tags": ["API Keys"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateAPIKeyRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "API key created (plaintext key returned only once)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreateAPIKeyResponse" }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
+    "/api/gateway/billing/portal": {
+      "post": {
+        "summary": "Get Stripe billing portal URL",
+        "operationId": "billingPortal",
+        "tags": ["Billing"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "return_url": { "type": "string", "format": "uri" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Portal URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "url": { "type": "string", "format": "uri" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/billing/checkout": {
+      "post": {
+        "summary": "Create Stripe Checkout session",
+        "operationId": "billingCheckout",
+        "tags": ["Billing"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["price_id"],
+                "properties": {
+                  "price_id": { "type": "string" },
+                  "success_url": { "type": "string", "format": "uri" },
+                  "cancel_url": { "type": "string", "format": "uri" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Checkout session URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "url": { "type": "string", "format": "uri" } }
+                }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
+    "/api/gateway/billing/usage": {
+      "get": {
+        "summary": "Get current billing usage",
+        "operationId": "billingUsage",
+        "tags": ["Billing"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Usage stats",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UsageStats" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/analytics": {
+      "get": {
+        "summary": "Query analytics data",
+        "description": "Proxy analytics queries to Cube.js for dashboard rendering.",
+        "operationId": "analytics",
+        "tags": ["Analytics"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "measure", "in": "query", "schema": { "type": "string" } },
+          { "name": "dimension", "in": "query", "schema": { "type": "string" } },
+          { "name": "from", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "to", "in": "query", "schema": { "type": "string", "format": "date" } }
+        ],
+        "responses": {
+          "200": { "description": "Analytics result" }
+        }
+      }
+    },
+    "/api/gateway/alert-rules": {
+      "get": {
+        "summary": "List alert rules",
+        "operationId": "listAlertRules",
+        "tags": ["Alerting"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of alert rules"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create alert rule",
+        "operationId": "createAlertRule",
+        "tags": ["Alerting"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AlertRuleRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Alert rule created" }
+        }
+      }
+    },
+    "/api/gateway/openapi.json": {
+      "get": {
+        "summary": "OpenAPI specification",
+        "operationId": "openapi",
+        "tags": ["Meta"],
+        "responses": {
+          "200": { "description": "This specification document" }
+        }
+      }
+    },
+    "/live": {
+      "get": {
+        "summary": "Health check",
+        "operationId": "healthCheck",
+        "tags": ["Meta"],
+        "responses": {
+          "200": { "description": "Service is healthy" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key for ingestion (grvx_... prefix)"
+      },
+      "JWTAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT token from /api/gateway/login"
+      }
+    },
+    "schemas": {
+      "RequestFact": {
+        "type": "object",
+        "required": ["event_id", "event_time", "service", "method", "path_template", "status_code", "latency_ms"],
+        "properties": {
+          "event_id": { "type": "string", "format": "uuid", "description": "UUIDv7 event identifier" },
+          "event_time": { "type": "string", "format": "date-time" },
+          "service": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] },
+          "path_template": { "type": "string", "description": "URL path with {id} placeholders, no query params" },
+          "status_code": { "type": "integer", "minimum": 100, "maximum": 599 },
+          "latency_ms": { "type": "integer", "minimum": 0 },
+          "user_agent_family": { "type": "string" }
+        }
+      },
+      "ServiceEvent": {
+        "type": "object",
+        "required": ["event_id", "event_time", "service", "event_type"],
+        "properties": {
+          "event_id": { "type": "string", "format": "uuid" },
+          "event_time": { "type": "string", "format": "date-time" },
+          "service": { "type": "string" },
+          "event_type": { "type": "string", "enum": ["deploy", "rollback", "scale", "config_change", "incident", "alert", "maintenance"] },
+          "description": { "type": "string" },
+          "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": ["name", "email", "password", "accept_tos"],
+        "properties": {
+          "name": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string", "minLength": 8 },
+          "accept_tos": { "type": "boolean" }
+        }
+      },
+      "RegisterResponse": {
+        "type": "object",
+        "properties": {
+          "tenant_id": { "type": "string" },
+          "user_id": { "type": "string" },
+          "api_key": { "type": "string" },
+          "token": { "type": "string" }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string" }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string" },
+          "user": { "$ref": "#/components/schemas/UserInfo" }
+        }
+      },
+      "UserInfo": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string" },
+          "role": { "type": "string" },
+          "tenant_id": { "type": "string" },
+          "tenant_name": { "type": "string" },
+          "plan": { "type": "string" }
+        }
+      },
+      "APIKey": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "key_prefix": { "type": "string" },
+          "status": { "type": "string", "enum": ["active", "revoked"] },
+          "created_at": { "type": "string", "format": "date-time" },
+          "expires_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CreateAPIKeyRequest": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "expires_in_days": { "type": "integer" }
+        }
+      },
+      "CreateAPIKeyResponse": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string", "description": "Plaintext key (shown only once)" },
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "key_prefix": { "type": "string" }
+        }
+      },
+      "UsageStats": {
+        "type": "object",
+        "properties": {
+          "plan": { "type": "string" },
+          "event_count": { "type": "integer" },
+          "event_limit": { "type": "integer" },
+          "usage_percent": { "type": "number" }
+        }
+      },
+      "AlertRuleRequest": {
+        "type": "object",
+        "required": ["name", "service", "metric", "operator", "threshold"],
+        "properties": {
+          "name": { "type": "string" },
+          "service": { "type": "string" },
+          "metric": { "type": "string", "enum": ["error_rate", "p95_latency", "p99_latency", "throughput"] },
+          "operator": { "type": "string", "enum": [">", "<", ">=", "<="] },
+          "threshold": { "type": "number" },
+          "channel_id": { "type": "string" }
+        }
+      },
+      "PartialResponse": {
+        "type": "object",
+        "properties": {
+          "accepted": { "type": "integer" },
+          "rejected": { "type": "integer" },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "error": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

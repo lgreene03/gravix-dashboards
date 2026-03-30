@@ -1,0 +1,58 @@
+# Development value overrides for Gravix Helm chart.
+# Usage: helm install gravix ./deploy/gravix -f deploy/gravix/values-dev.yaml --set global.apiKey=dev-api-key-minimum16 --set global.jwtSecret=dev-jwt-secret-minimum-32-characters-long --set global.cubeApiSecret=dev-cube-secret
+
+global:
+  storage:
+    endpoint: "http://gravix-minio:9000"
+    region: "us-east-1"
+    bucket: "gravix"
+    accessKey: "minioadmin"
+    secretKey: "minioadmin-secret-key"
+
+ingestion:
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+loadGenerator:
+  enabled: true
+  config:
+    qps: 5
+    concurrency: 2
+
+gateway:
+  replicaCount: 1
+  dbDriver: "sqlite"
+
+storage:
+  minio:
+    enabled: true
+    persistence:
+      size: 10Gi
+  trino:
+    workers:
+      enabled: false
+  cube:
+    devMode: true
+
+retentionJob:
+  mode: "manual"
+  retentionDays: 7
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+
+logging:
+  loki:
+    enabled: false
+
+autoscaling:
+  enabled: false

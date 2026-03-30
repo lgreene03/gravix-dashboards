@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravix — HTTP Observability That Doesn't Break the Bank</title>
+    <meta name="description" content="Gravix is a data-first observability platform for HTTP services. 95% cheaper than Datadog. Facts in, metrics out.">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="/" class="nav-logo">Gravix</a>
+            <div class="nav-links">
+                <a href="pricing.html">Pricing</a>
+                <a href="/docs">Docs</a>
+                <a href="/index.html" class="nav-btn-secondary">Dashboard</a>
+                <a href="signup.html" class="nav-btn-primary">Get Started Free</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="container">
+            <h1>HTTP Observability.<br><span class="highlight">95% Cheaper Than Datadog.</span></h1>
+            <p class="hero-subtitle">
+                Gravix ingests raw request events, aggregates them into metrics, and gives you
+                a live dashboard — without agents, logs platforms, or surprise bills.
+            </p>
+            <div class="hero-cta">
+                <a href="signup.html" class="btn btn-primary btn-lg">Start Free — No Credit Card</a>
+                <a href="#how-it-works" class="btn btn-outline btn-lg">See How It Works</a>
+            </div>
+            <p class="hero-note">Free tier: 500K events/month. Upgrade anytime.</p>
+        </div>
+    </section>
+
+    <section class="social-proof">
+        <div class="container">
+            <p class="social-proof-text">Trusted by teams shipping fast on tight budgets</p>
+        </div>
+    </section>
+
+    <section class="value-props" id="features">
+        <div class="container">
+            <h2>Why Gravix?</h2>
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-icon">$</div>
+                    <h3>Predictable Pricing</h3>
+                    <p>Flat monthly pricing based on event volume. No per-host fees, no per-container fees, no surprise overages. Know your bill before the month ends.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">&lt;/&gt;</div>
+                    <h3>Facts, Not Metrics</h3>
+                    <p>Store immutable request events (facts). Metrics are computed, not stored — recompute any aggregation retroactively. Historical correctness guaranteed.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">@</div>
+                    <h3>Zero Agents</h3>
+                    <p>One HTTP POST per request. No sidecars, no collectors, no DaemonSets. Drop in our SDK middleware and you're live in 5 minutes.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">#</div>
+                    <h3>Multi-Tenant by Default</h3>
+                    <p>Per-tenant API keys, rate limits, billing, and data isolation. Built for SaaS teams from day one.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">%</div>
+                    <h3>Open Architecture</h3>
+                    <p>Trino for SQL queries, Cube.js for analytics, Parquet for storage. No proprietary query languages or vendor lock-in.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">!</div>
+                    <h3>Smart Alerting</h3>
+                    <p>Threshold and anomaly detection alerts with Slack, PagerDuty, and webhook integrations. Configurable per service.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="architecture" id="how-it-works">
+        <div class="container">
+            <h2>How It Works</h2>
+            <div class="arch-diagram">
+                <div class="arch-step">
+                    <div class="arch-num">1</div>
+                    <h3>Ingest</h3>
+                    <p>Your services send request events via HTTP POST or SDK middleware. JSONL format, batched automatically.</p>
+                </div>
+                <div class="arch-arrow">&rarr;</div>
+                <div class="arch-step">
+                    <div class="arch-num">2</div>
+                    <h3>Store</h3>
+                    <p>Raw facts land in S3-compatible object storage, partitioned by tenant and date. Append-only, immutable.</p>
+                </div>
+                <div class="arch-arrow">&rarr;</div>
+                <div class="arch-step">
+                    <div class="arch-num">3</div>
+                    <h3>Aggregate</h3>
+                    <p>ETL jobs compute minute-level metrics (p50/p95/p99, error rates, throughput) into Parquet files.</p>
+                </div>
+                <div class="arch-arrow">&rarr;</div>
+                <div class="arch-step">
+                    <div class="arch-num">4</div>
+                    <h3>Visualize</h3>
+                    <p>Live dashboard with latency charts, error breakdowns, service health — no setup required.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="comparison">
+        <div class="container">
+            <h2>Gravix vs. The Big Players</h2>
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th class="highlight-col">Gravix</th>
+                        <th>Datadog</th>
+                        <th>New Relic</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>10M events/mo</td>
+                        <td class="highlight-col"><strong>$79/mo</strong></td>
+                        <td>~$700/mo</td>
+                        <td>~$500/mo</td>
+                    </tr>
+                    <tr>
+                        <td>Per-host pricing</td>
+                        <td class="highlight-col">No</td>
+                        <td>Yes</td>
+                        <td>No</td>
+                    </tr>
+                    <tr>
+                        <td>Agents required</td>
+                        <td class="highlight-col">None</td>
+                        <td>Yes</td>
+                        <td>Yes</td>
+                    </tr>
+                    <tr>
+                        <td>Data recomputation</td>
+                        <td class="highlight-col">Yes</td>
+                        <td>No</td>
+                        <td>No</td>
+                    </tr>
+                    <tr>
+                        <td>Open query engine</td>
+                        <td class="highlight-col">Trino SQL</td>
+                        <td>Proprietary</td>
+                        <td>NRQL</td>
+                    </tr>
+                    <tr>
+                        <td>Free tier</td>
+                        <td class="highlight-col">500K events</td>
+                        <td>Limited</td>
+                        <td>100GB/mo</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>Start Monitoring in 5 Minutes</h2>
+            <p>No credit card. No agents. No surprises.</p>
+            <a href="signup.html" class="btn btn-primary btn-lg">Get Started Free</a>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div>
+                    <h4>Gravix</h4>
+                    <p>Data-first HTTP observability.</p>
+                </div>
+                <div>
+                    <h4>Product</h4>
+                    <ul>
+                        <li><a href="pricing.html">Pricing</a></li>
+                        <li><a href="/docs">Documentation</a></li>
+                        <li><a href="/index.html">Dashboard</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4>Legal</h4>
+                    <ul>
+                        <li><a href="/terms.html">Terms of Service</a></li>
+                        <li><a href="/privacy.html">Privacy Policy</a></li>
+                        <li><a href="/dpa.html">DPA</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/gravix">GitHub</a></li>
+                        <li><a href="https://status.gravix.io">Status</a></li>
+                    </ul>
+                </div>
+            </div>
+            <p class="footer-copy">&copy; 2026 Gravix. All rights reserved.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -266,13 +266,19 @@
                 errorEl.style.display = 'block';
                 return;
             }
+            const acceptTOS = document.getElementById('signupTOS')?.checked;
+            if (!acceptTOS) {
+                errorEl.textContent = 'You must accept the Terms of Service and Privacy Policy.';
+                errorEl.style.display = 'block';
+                return;
+            }
 
             document.getElementById('signupSubmit').textContent = 'Creating...';
             try {
                 const resp = await fetch(GATEWAY_URL + '/api/gateway/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, email, password })
+                    body: JSON.stringify({ name, email, password, accept_tos: true })
                 });
                 const data = await resp.json();
                 if (resp.ok) {
@@ -375,7 +381,7 @@
             // Show/hide dashboard filters depending on page
             const headerEl = document.querySelector('.header');
             if (headerEl) {
-                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data') ? 'none' : '';
+                headerEl.style.display = (pageName === 'alerts' || pageName === 'ingestion' || pageName === 'usage' || pageName === 'traces' || pageName === 'data' || pageName === 'apikeys' || pageName === 'settings') ? 'none' : '';
             }
 
             if (pageName === 'endpoints') {
@@ -390,6 +396,10 @@
                 loadTracesPage();
             } else if (pageName === 'data') {
                 loadDataPage();
+            } else if (pageName === 'apikeys') {
+                loadAPIKeysPage();
+            } else if (pageName === 'settings') {
+                loadSettingsPage();
             }
 
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -961,7 +971,9 @@
 
         function resetFilters() {
             document.getElementById('serviceFilter').value = '';
-            document.getElementById('dateFrom').valueAsDate = new Date();
+            var sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            document.getElementById('dateFrom').valueAsDate = sevenDaysAgo;
             document.getElementById('dateTo').valueAsDate = new Date();
             currentDrilldownPath = null;
             document.getElementById('default-header').style.display = 'block';
@@ -1335,13 +1347,13 @@
                 });
 
                 if (result.accepted > 0) {
-                    alert('Replay successful: ' + result.accepted + ' fact(s) accepted.');
+                    showToast('Replay successful: ' + result.accepted + ' fact(s) accepted.', 'success');
                     refreshDLQ();
                 } else {
-                    alert('Replay result: ' + (result.rejected || 0) + ' rejected. ' + (result.errors ? result.errors.join('; ') : ''));
+                    showToast('Replay: ' + (result.rejected || 0) + ' rejected. ' + (result.errors ? result.errors.join('; ') : ''), 'warning');
                 }
             } catch (err) {
-                alert('Replay failed: ' + err.message);
+                showToast('Replay failed: ' + err.message, 'error');
             }
         }
 
@@ -1356,7 +1368,9 @@
         }
 
         // --- INIT ---
-        document.getElementById('dateFrom').valueAsDate = new Date();
+        var initSevenDaysAgo = new Date();
+        initSevenDaysAgo.setDate(initSevenDaysAgo.getDate() - 7);
+        document.getElementById('dateFrom').valueAsDate = initSevenDaysAgo;
         document.getElementById('dateTo').valueAsDate = new Date();
 
         function initDashboard() {
@@ -2187,16 +2201,16 @@
                 await loadChannels();
                 populateChannelSelect();
             } catch (err) {
-                alert('Failed to delete channel: ' + err.message);
+                showToast('Failed to delete channel: ' + err.message, 'error');
             }
         }
 
         async function testChannel(id) {
             try {
                 await gatewayFetch('/api/gateway/channels/' + id + '/test', { method: 'POST' });
-                alert('Test notification sent successfully!');
+                showToast('Test notification sent successfully!', 'success');
             } catch (err) {
-                alert('Test failed: ' + err.message);
+                showToast('Test failed: ' + err.message, 'error');
             }
         }
 
@@ -2215,7 +2229,7 @@
                 await loadAlertRules();
                 await loadAlertHistory();
             } catch (err) {
-                alert('Failed to delete rule: ' + err.message);
+                showToast('Failed to delete rule: ' + err.message, 'error');
             }
         }
 
@@ -2241,7 +2255,7 @@
                 });
                 await loadAlertRules();
             } catch (err) {
-                alert('Failed to update rule: ' + err.message);
+                showToast('Failed to update rule: ' + err.message, 'error');
             }
         }
 
@@ -2306,15 +2320,15 @@
             if (operator === 'anomaly') {
                 threshold = parseFloat(document.getElementById('anomalyStddevInput').value);
                 windowMinutes = parseInt(document.getElementById('anomalyLookbackSelect').value, 10);
-                if (isNaN(threshold) || threshold <= 0) { alert('Stddev multiplier must be > 0'); return; }
+                if (isNaN(threshold) || threshold <= 0) { showToast('Stddev multiplier must be > 0', 'warning'); return; }
             } else {
                 threshold = parseFloat(document.getElementById('ruleThresholdInput').value);
                 windowMinutes = parseInt(document.getElementById('ruleWindowSelect').value, 10);
-                if (isNaN(threshold) || threshold < 0) { alert('Threshold must be a non-negative number'); return; }
+                if (isNaN(threshold) || threshold < 0) { showToast('Threshold must be a non-negative number', 'warning'); return; }
             }
 
-            if (!name) { alert('Name is required'); return; }
-            if (!channelId) { alert('Please select a notification channel'); return; }
+            if (!name) { showToast('Name is required', 'warning'); return; }
+            if (!channelId) { showToast('Please select a notification channel', 'warning'); return; }
 
             try {
                 await createAlertRule({
@@ -2326,7 +2340,7 @@
                 });
                 document.getElementById('rule-modal').style.display = 'none';
             } catch (err) {
-                alert('Failed to create rule: ' + err.message);
+                showToast('Failed to create rule: ' + err.message, 'error');
             }
         });
 
@@ -2363,14 +2377,14 @@
             const webhookUrl = document.getElementById('channelWebhookInput').value.trim();
             const authHeader = document.getElementById('channelAuthInput').value.trim();
 
-            if (!name) { alert('Name is required'); return; }
-            if (!webhookUrl) { alert('Webhook URL is required'); return; }
+            if (!name) { showToast('Name is required', 'warning'); return; }
+            if (!webhookUrl) { showToast('Webhook URL is required', 'warning'); return; }
 
             try {
                 await createChannel(name, type, webhookUrl, authHeader);
                 document.getElementById('channel-modal').style.display = 'none';
             } catch (err) {
-                alert('Failed to create channel: ' + err.message);
+                showToast('Failed to create channel: ' + err.message, 'error');
             }
         });
 
@@ -2657,7 +2671,7 @@ app.listen(8080, () => {
                 checkIcon('wizCheckCode', true);
 
                 try {
-                    const token = localStorage.getItem('gravix_jwt');
+                    const token = sessionStorage.getItem('gravix_token');
                     const headers = {};
                     if (token) headers['Authorization'] = 'Bearer ' + token;
                     const apiKey = localStorage.getItem('gravix_api_key');
@@ -2717,7 +2731,7 @@ app.listen(8080, () => {
             errorEl.style.display = 'none';
 
             try {
-                const token = localStorage.getItem('gravix_jwt');
+                const token = sessionStorage.getItem('gravix_token');
                 const [usageResp, historyResp, invoiceResp] = await Promise.all([
                     fetch(GATEWAY_URL + '/api/gateway/billing/usage', {
                         headers: { 'Authorization': 'Bearer ' + token }
@@ -2803,7 +2817,7 @@ app.listen(8080, () => {
         async function handleManageBilling() {
             if (!IS_MULTI_TENANT) return;
             try {
-                const token = localStorage.getItem('gravix_jwt');
+                const token = sessionStorage.getItem('gravix_token');
                 const resp = await fetch(GATEWAY_URL + '/api/gateway/billing/portal', {
                     method: 'POST',
                     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -2813,7 +2827,7 @@ app.listen(8080, () => {
                 const data = await resp.json();
                 if (data.url) window.location.href = data.url;
             } catch (err) {
-                alert('Could not open billing portal. ' + err.message);
+                showToast('Could not open billing portal. ' + err.message, 'error');
             }
         }
 
@@ -2923,7 +2937,7 @@ app.listen(8080, () => {
 
             try {
                 const resp = await cachedFetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces/recent?limit=50', {
-                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') }
+                    headers: { 'Authorization': 'Bearer ' + sessionStorage.getItem('gravix_token') }
                 });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
@@ -2981,7 +2995,7 @@ app.listen(8080, () => {
             try {
                 const resp = await cachedFetch(
                     GRAVIX_CONFIG.gatewayUrl + '/api/gateway/traces?trace_id=' + encodeURIComponent(traceId),
-                    { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('gravix_token') } }
+                    { headers: { 'Authorization': 'Bearer ' + sessionStorage.getItem('gravix_token') } }
                 );
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
@@ -3148,5 +3162,840 @@ app.listen(8080, () => {
 
         window.startExport = startExport;
         window.loadDataPage = loadDataPage;
+
+        // --- TOAST NOTIFICATIONS ---
+        function showToast(message, type, duration) {
+            type = type || 'info';
+            duration = duration || 3000;
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            toast.style.animationDuration = '0.3s, 0.3s';
+            toast.style.animationDelay = '0s, ' + (duration - 300) + 'ms';
+            container.appendChild(toast);
+            setTimeout(function() { toast.remove(); }, duration);
+        }
+        window.showToast = showToast;
+
+        // --- API KEYS PAGE ---
+
+        async function loadAPIKeysPage() {
+            const loading = document.getElementById('apikeys-loading');
+            const listEl = document.getElementById('apikeys-list');
+            const emptyEl = document.getElementById('apikeys-empty');
+            const errorEl = document.getElementById('apikeys-error');
+
+            if (!IS_MULTI_TENANT) {
+                if (loading) loading.style.display = 'none';
+                if (emptyEl) {
+                    emptyEl.style.display = 'block';
+                    emptyEl.textContent = 'API key management is available in multi-tenant mode.';
+                }
+                return;
+            }
+
+            loading.style.display = '';
+            listEl.style.display = 'none';
+            emptyEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            try {
+                const token = sessionStorage.getItem('gravix_token');
+                const [keysResp, usageResp] = await Promise.all([
+                    fetch(GATEWAY_URL + '/api/gateway/api-keys', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }),
+                    fetch(GATEWAY_URL + '/api/gateway/billing/usage', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    })
+                ]);
+
+                if (!keysResp.ok) throw new Error('Failed to load API keys');
+                const keysData = await keysResp.json();
+                const keys = keysData.keys || [];
+
+                loading.style.display = 'none';
+
+                if (keys.length === 0) {
+                    emptyEl.style.display = 'block';
+                } else {
+                    listEl.style.display = 'block';
+                    renderAPIKeysList(keys);
+                }
+
+                // Quota banner
+                if (usageResp.ok) {
+                    const usage = await usageResp.json();
+                    renderQuotaBanner(usage);
+                }
+            } catch (err) {
+                loading.style.display = 'none';
+                errorEl.style.display = 'flex';
+                errorEl.innerHTML = '&#x26A0; Failed to load API keys. <button class="section-error-retry" onclick="loadAPIKeysPage()">Retry</button>';
+            }
+        }
+
+        function renderAPIKeysList(keys) {
+            const listEl = document.getElementById('apikeys-list');
+            listEl.innerHTML = '';
+
+            keys.forEach(function(key) {
+                const row = document.createElement('div');
+                row.className = 'api-key-row';
+
+                const masked = key.key_prefix ? key.key_prefix + '...' : '****...';
+                const expiry = key.expires_at ? new Date(key.expires_at).toLocaleDateString() : 'Never';
+                const created = key.created_at ? new Date(key.created_at).toLocaleDateString() : '-';
+
+                row.innerHTML =
+                    '<div>' +
+                        '<div style="font-weight: 600;">' + escapeHtml(key.name || 'Unnamed') + '</div>' +
+                        '<div class="api-key-masked">' + masked + '</div>' +
+                        '<div style="font-size: 0.75rem; color: var(--text-secondary);">Created: ' + created + ' | Expires: ' + expiry + '</div>' +
+                    '</div>' +
+                    '<button class="revoke-key-btn" data-key-id="' + key.id + '" style="padding: 6px 14px; background: var(--danger-color, #ef4444); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">Revoke</button>';
+
+                listEl.appendChild(row);
+            });
+
+            // Attach revoke handlers
+            listEl.querySelectorAll('.revoke-key-btn').forEach(function(btn) {
+                btn.addEventListener('click', async function() {
+                    const keyId = this.getAttribute('data-key-id');
+                    if (!confirm('Revoke this API key? This cannot be undone.')) return;
+                    this.disabled = true;
+                    this.textContent = 'Revoking...';
+                    try {
+                        const token = sessionStorage.getItem('gravix_token');
+                        const resp = await fetch(GATEWAY_URL + '/api/gateway/api-keys/' + keyId, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': 'Bearer ' + token }
+                        });
+                        if (resp.ok) {
+                            showToast('API key revoked.', 'success');
+                            loadAPIKeysPage();
+                        } else {
+                            showToast('Failed to revoke key.', 'error');
+                            this.disabled = false;
+                            this.textContent = 'Revoke';
+                        }
+                    } catch (e) {
+                        showToast('Connection error.', 'error');
+                        this.disabled = false;
+                        this.textContent = 'Revoke';
+                    }
+                });
+            });
+        }
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function renderQuotaBanner(usage) {
+            const banner = document.getElementById('quota-banner');
+            if (!banner) return;
+
+            const limit = usage.event_limit || usage.eventLimit || 0;
+            const used = usage.todayEventCount || usage.total_events || 0;
+            if (limit <= 0) { banner.style.display = 'none'; return; }
+
+            const pct = (used / limit) * 100;
+            if (pct >= 100) {
+                banner.className = 'quota-banner danger';
+                banner.innerHTML = '&#x26A0; You have reached your event limit (' + used.toLocaleString() + '/' + limit.toLocaleString() + '). Events are being dropped. <a href="#" onclick="switchPage(\'usage\'); return false;" style="color: inherit; text-decoration: underline;">Upgrade plan</a>';
+                banner.style.display = 'flex';
+            } else if (pct >= 90) {
+                banner.className = 'quota-banner danger';
+                banner.innerHTML = '&#x26A0; ' + Math.round(pct) + '% of event quota used (' + used.toLocaleString() + '/' + limit.toLocaleString() + '). <a href="#" onclick="switchPage(\'usage\'); return false;" style="color: inherit; text-decoration: underline;">Upgrade plan</a>';
+                banner.style.display = 'flex';
+            } else if (pct >= 80) {
+                banner.className = 'quota-banner warning';
+                banner.innerHTML = '&#x26A0; ' + Math.round(pct) + '% of event quota used. Consider upgrading your plan.';
+                banner.style.display = 'flex';
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+
+        // Create API key form handler
+        const createKeyForm = document.getElementById('create-apikey-form');
+        if (createKeyForm) {
+            createKeyForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const btn = document.getElementById('create-apikey-btn');
+                const nameInput = document.getElementById('apikey-name');
+                const expiryInput = document.getElementById('apikey-expiry');
+                const displayEl = document.getElementById('new-key-display');
+
+                btn.disabled = true;
+                btn.textContent = 'Creating...';
+
+                try {
+                    const token = sessionStorage.getItem('gravix_token');
+                    const body = { name: nameInput.value.trim() };
+                    if (expiryInput.value) {
+                        body.expires_at = expiryInput.value + 'T23:59:59Z';
+                    }
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/api-keys', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(body)
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        document.getElementById('new-key-value').textContent = data.api_key || data.key;
+                        displayEl.style.display = 'block';
+                        showToast('API key created successfully.', 'success');
+                        createKeyForm.reset();
+                        loadAPIKeysPage();
+                    } else {
+                        showToast(data.error || 'Failed to create key.', 'error');
+                    }
+                } catch (err) {
+                    showToast('Connection error.', 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Create Key';
+                }
+            });
+        }
+
+        // Copy new key button
+        const copyKeyBtn = document.getElementById('copy-new-key-btn');
+        if (copyKeyBtn) {
+            copyKeyBtn.addEventListener('click', function() {
+                const keyVal = document.getElementById('new-key-value').textContent;
+                navigator.clipboard.writeText(keyVal).then(function() {
+                    showToast('API key copied to clipboard.', 'success');
+                });
+            });
+        }
+
+        // --- SETTINGS PAGE ---
+
+        async function loadSettingsPage() {
+            const loading = document.getElementById('settings-loading');
+            const profile = document.getElementById('settings-profile');
+
+            if (!IS_MULTI_TENANT) {
+                if (loading) loading.style.display = 'none';
+                if (profile) {
+                    profile.style.display = 'block';
+                    document.getElementById('settings-email').textContent = 'Self-hosted';
+                    document.getElementById('settings-role').textContent = 'admin';
+                    document.getElementById('settings-org').textContent = 'Local';
+                    document.getElementById('settings-plan').textContent = 'Self-hosted';
+                    document.getElementById('settings-verified').textContent = 'N/A';
+                    document.getElementById('settings-last-login').textContent = 'N/A';
+                }
+                return;
+            }
+
+            if (loading) loading.style.display = '';
+            if (profile) profile.style.display = 'none';
+
+            try {
+                const token = sessionStorage.getItem('gravix_token');
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) throw new Error('Failed to load profile');
+                const data = await resp.json();
+
+                if (loading) loading.style.display = 'none';
+                if (profile) profile.style.display = 'block';
+
+                document.getElementById('settings-email').textContent = data.email || '-';
+                document.getElementById('settings-role').textContent = (data.role || '-').charAt(0).toUpperCase() + (data.role || '').slice(1);
+                document.getElementById('settings-org').textContent = data.tenant_name || '-';
+                document.getElementById('settings-plan').textContent = (data.plan || '-').charAt(0).toUpperCase() + (data.plan || '').slice(1);
+                document.getElementById('settings-verified').textContent = data.email_verified ? 'Yes' : 'No';
+                document.getElementById('settings-last-login').textContent = data.last_login_at ? new Date(data.last_login_at).toLocaleString() : 'N/A';
+            } catch (err) {
+                if (loading) loading.style.display = 'none';
+                if (profile) {
+                    profile.style.display = 'block';
+                    profile.innerHTML = '<p style="color: var(--danger-color);">Failed to load profile.</p>';
+                }
+            }
+        }
+
+        // Change password form handler
+        const changePwForm = document.getElementById('change-password-form');
+        if (changePwForm) {
+            changePwForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const msgEl = document.getElementById('change-pw-msg');
+                const btn = document.getElementById('change-pw-btn');
+                const currentPw = document.getElementById('settings-current-pw').value;
+                const newPw = document.getElementById('settings-new-pw').value;
+                const confirmPw = document.getElementById('settings-confirm-pw').value;
+
+                if (newPw !== confirmPw) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = '#ef4444';
+                    msgEl.textContent = 'New passwords do not match.';
+                    return;
+                }
+
+                btn.disabled = true;
+                btn.textContent = 'Changing...';
+                msgEl.style.display = 'none';
+
+                try {
+                    const token = sessionStorage.getItem('gravix_token');
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/password', {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            current_password: currentPw,
+                            new_password: newPw
+                        })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        msgEl.style.display = 'block';
+                        msgEl.style.color = 'var(--success-color, #22c55e)';
+                        msgEl.textContent = 'Password changed successfully.';
+                        changePwForm.reset();
+                    } else {
+                        msgEl.style.display = 'block';
+                        msgEl.style.color = '#ef4444';
+                        msgEl.textContent = data.error || 'Failed to change password.';
+                    }
+                } catch (err) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = '#ef4444';
+                    msgEl.textContent = 'Connection error.';
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Change Password';
+                }
+            });
+        }
+
+        // Logout handler (both sidebar button and settings page button)
+        async function doLogout() {
+            try {
+                const token = sessionStorage.getItem('gravix_token');
+                if (token) {
+                    await fetch(GATEWAY_URL + '/api/gateway/logout', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                }
+            } catch (e) {
+                // Ignore errors — we're logging out regardless
+            }
+            sessionStorage.removeItem('gravix_token');
+            localStorage.removeItem('gravix_api_key');
+            window.location.reload();
+        }
+
+        const settingsLogoutBtn = document.getElementById('settings-logout-btn');
+        if (settingsLogoutBtn) {
+            settingsLogoutBtn.addEventListener('click', doLogout);
+        }
+        const sidebarLogoutBtn = document.getElementById('sidebarLogoutBtn');
+        if (sidebarLogoutBtn) {
+            sidebarLogoutBtn.addEventListener('click', doLogout);
+            // Show logout button in sidebar when user is authenticated
+            if (sessionStorage.getItem('gravix_token')) {
+                sidebarLogoutBtn.style.display = 'flex';
+            }
+        }
+
+        // --- TWO-FACTOR AUTHENTICATION ---
+        async function load2FAStatus() {
+            if (!IS_MULTI_TENANT) return;
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const badge = document.getElementById('2fa-badge');
+                const setupSection = document.getElementById('2fa-setup-section');
+                const disableSection = document.getElementById('2fa-disable-section');
+                if (data.two_factor_enabled) {
+                    if (badge) { badge.textContent = 'Enabled'; badge.style.background = 'rgba(34,197,94,0.15)'; badge.style.color = '#22c55e'; }
+                    if (setupSection) setupSection.style.display = 'none';
+                    if (disableSection) disableSection.style.display = 'block';
+                } else {
+                    if (badge) { badge.textContent = 'Disabled'; badge.style.background = 'rgba(239,68,68,0.15)'; badge.style.color = '#ef4444'; }
+                    if (setupSection) setupSection.style.display = 'block';
+                    if (disableSection) disableSection.style.display = 'none';
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        const setupBtn2FA = document.getElementById('2fa-setup-btn');
+        if (setupBtn2FA) {
+            setupBtn2FA.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const msg = document.getElementById('2fa-msg');
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/2fa/setup', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        document.getElementById('2fa-secret').textContent = data.secret;
+                        document.getElementById('2fa-qr-section').style.display = 'block';
+                        document.getElementById('2fa-setup-section').style.display = 'none';
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Setup failed'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        const confirmBtn2FA = document.getElementById('2fa-confirm-btn');
+        if (confirmBtn2FA) {
+            confirmBtn2FA.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const code = document.getElementById('2fa-confirm-code').value;
+                const msg = document.getElementById('2fa-msg');
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/2fa/confirm', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ code: code })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        document.getElementById('2fa-qr-section').style.display = 'none';
+                        if (data.recovery_codes) {
+                            const rcSection = document.getElementById('2fa-recovery-codes');
+                            const rcList = document.getElementById('2fa-recovery-list');
+                            if (rcSection) rcSection.style.display = 'block';
+                            if (rcList) rcList.textContent = data.recovery_codes.join('\n');
+                            document.getElementById('2fa-qr-section').style.display = 'block';
+                        }
+                        load2FAStatus();
+                        if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--success-color, #22c55e)'; msg.textContent = '2FA enabled successfully'; }
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Invalid code'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        const disableBtn2FA = document.getElementById('2fa-disable-btn');
+        if (disableBtn2FA) {
+            disableBtn2FA.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const code = document.getElementById('2fa-disable-code').value;
+                const msg = document.getElementById('2fa-msg');
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/2fa/disable', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ code: code })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        load2FAStatus();
+                        if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--success-color, #22c55e)'; msg.textContent = '2FA disabled'; }
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Invalid code'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        // --- ACTIVE SESSIONS ---
+        async function loadSessions() {
+            if (!IS_MULTI_TENANT) return;
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            const listEl = document.getElementById('sessions-list');
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/sessions', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) { if (listEl) listEl.textContent = 'Failed to load sessions.'; return; }
+                const data = await resp.json();
+                const sessions = data.sessions || [];
+                if (!listEl) return;
+                if (sessions.length === 0) { listEl.textContent = 'No active sessions.'; return; }
+                listEl.innerHTML = sessions.map(function(s) {
+                    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">' +
+                        '<div><div style="font-weight:500;color:var(--text-primary);">' + escapeHtml(s.ip_address || 'Unknown') + '</div>' +
+                        '<div style="font-size:0.75rem;">' + escapeHtml((s.user_agent || '').substring(0, 60)) + '</div>' +
+                        '<div style="font-size:0.75rem;">Created: ' + new Date(s.created_at).toLocaleString() + '</div></div>' +
+                        '<button onclick="revokeSession(\'' + s.id + '\')" style="padding:4px 12px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem;">Revoke</button></div>';
+                }).join('');
+            } catch (e) {
+                if (listEl) listEl.textContent = 'Failed to load sessions.';
+            }
+        }
+
+        window.revokeSession = async function(sessionId) {
+            const token = sessionStorage.getItem('gravix_token');
+            try {
+                await fetch(GATEWAY_URL + '/api/gateway/sessions?id=' + sessionId, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                loadSessions();
+                showToast('Session revoked', 'success');
+            } catch (e) { showToast('Failed to revoke session', 'error'); }
+        };
+
+        const revokeAllBtn = document.getElementById('sessions-revoke-all-btn');
+        if (revokeAllBtn) {
+            revokeAllBtn.addEventListener('click', async function() {
+                if (!confirm('Revoke all sessions? You will be logged out.')) return;
+                const token = sessionStorage.getItem('gravix_token');
+                try {
+                    await fetch(GATEWAY_URL + '/api/gateway/sessions?id=all', {
+                        method: 'DELETE',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    showToast('All sessions revoked', 'success');
+                    setTimeout(doLogout, 1000);
+                } catch (e) { showToast('Failed to revoke sessions', 'error'); }
+            });
+        }
+
+        // --- SSO CONFIGURATION ---
+        const ssoProvider = document.getElementById('sso-provider');
+        if (ssoProvider) {
+            ssoProvider.addEventListener('change', function() {
+                document.getElementById('sso-saml-fields').style.display = this.value === 'saml' ? 'block' : 'none';
+                document.getElementById('sso-oidc-fields').style.display = this.value === 'oidc' ? 'block' : 'none';
+            });
+        }
+
+        async function loadSSOConfig() {
+            if (!IS_MULTI_TENANT) return;
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) return;
+                const me = await resp.json();
+                // Show SSO card only for admins on business+ plans
+                if (me.role === 'admin' && (me.plan === 'business' || me.plan === 'scale' || me.plan === 'enterprise')) {
+                    const ssoCard = document.getElementById('sso-card');
+                    if (ssoCard) ssoCard.style.display = 'block';
+
+                    const ssoResp = await fetch(GATEWAY_URL + '/api/gateway/sso', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    if (ssoResp.ok) {
+                        const ssoData = await ssoResp.json();
+                        const badge = document.getElementById('sso-badge');
+                        const deleteBtn = document.getElementById('sso-delete-btn');
+                        if (ssoData.configured) {
+                            if (badge) { badge.textContent = ssoData.provider.toUpperCase() + (ssoData.enabled ? ' (Active)' : ' (Inactive)'); badge.style.background = ssoData.enabled ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'; badge.style.color = ssoData.enabled ? '#22c55e' : '#f59e0b'; }
+                            if (deleteBtn) deleteBtn.style.display = 'inline-block';
+                        } else {
+                            if (badge) { badge.textContent = 'Not configured'; badge.style.background = 'rgba(107,114,128,0.15)'; badge.style.color = '#6b7280'; }
+                        }
+                    }
+                }
+                // Show multi-org card for admin on scale/enterprise
+                if (me.role === 'admin' && (me.plan === 'scale' || me.plan === 'enterprise')) {
+                    const orgCard = document.getElementById('multi-org-card');
+                    if (orgCard) orgCard.style.display = 'block';
+                    loadOrganizations();
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        const ssoSaveBtn = document.getElementById('sso-save-btn');
+        if (ssoSaveBtn) {
+            ssoSaveBtn.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const msg = document.getElementById('sso-msg');
+                const provider = document.getElementById('sso-provider').value;
+                const body = { provider: provider, enabled: true };
+                if (provider === 'saml') {
+                    body.entity_id = document.getElementById('sso-entity-id').value;
+                    body.sso_url = document.getElementById('sso-url').value;
+                    body.certificate = document.getElementById('sso-certificate').value;
+                } else {
+                    body.issuer = document.getElementById('sso-issuer').value;
+                    body.client_id = document.getElementById('sso-client-id').value;
+                    body.client_secret = document.getElementById('sso-client-secret').value;
+                }
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/sso', {
+                        method: 'PUT',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--success-color, #22c55e)'; msg.textContent = 'SSO configuration saved'; }
+                        loadSSOConfig();
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Failed to save'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        const ssoDeleteBtn = document.getElementById('sso-delete-btn');
+        if (ssoDeleteBtn) {
+            ssoDeleteBtn.addEventListener('click', async function() {
+                if (!confirm('Remove SSO configuration?')) return;
+                const token = sessionStorage.getItem('gravix_token');
+                try {
+                    await fetch(GATEWAY_URL + '/api/gateway/sso', {
+                        method: 'DELETE',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    showToast('SSO configuration removed', 'success');
+                    loadSSOConfig();
+                } catch (e) { showToast('Failed to remove SSO', 'error'); }
+            });
+        }
+
+        // --- MULTI-ORG MANAGEMENT ---
+        async function loadOrganizations() {
+            const token = sessionStorage.getItem('gravix_token');
+            if (!token) return;
+            const listEl = document.getElementById('org-list');
+            try {
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/orgs', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (!resp.ok) { if (listEl) listEl.textContent = 'Failed to load organizations.'; return; }
+                const data = await resp.json();
+                const orgs = data.organizations || [];
+                if (!listEl) return;
+                if (orgs.length === 0) { listEl.textContent = 'No child organizations yet.'; return; }
+                listEl.innerHTML = orgs.map(function(o) {
+                    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">' +
+                        '<div><div style="font-weight:500;color:var(--text-primary);">' + escapeHtml(o.name) + '</div>' +
+                        '<div style="font-size:0.75rem;">Plan: ' + escapeHtml(o.plan) + ' | Status: ' + escapeHtml(o.status) + '</div></div>' +
+                        '<span style="font-size:0.75rem;color:var(--text-secondary);">' + new Date(o.created_at).toLocaleDateString() + '</span></div>';
+                }).join('');
+            } catch (e) {
+                if (listEl) listEl.textContent = 'Failed to load organizations.';
+            }
+        }
+
+        const orgCreateBtn = document.getElementById('org-create-btn');
+        if (orgCreateBtn) {
+            orgCreateBtn.addEventListener('click', function() {
+                const form = document.getElementById('org-create-form');
+                if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+            });
+        }
+
+        const orgSubmitBtn = document.getElementById('org-submit-btn');
+        if (orgSubmitBtn) {
+            orgSubmitBtn.addEventListener('click', async function() {
+                const token = sessionStorage.getItem('gravix_token');
+                const name = document.getElementById('org-name').value;
+                const emailVal = document.getElementById('org-email').value;
+                const msg = document.getElementById('org-msg');
+                if (!name || !emailVal) { if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Name and email are required'; } return; }
+                try {
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/orgs', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: name, email: emailVal })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        showToast('Organization created', 'success');
+                        document.getElementById('org-create-form').style.display = 'none';
+                        document.getElementById('org-name').value = '';
+                        document.getElementById('org-email').value = '';
+                        loadOrganizations();
+                    } else {
+                        if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = data.error || 'Failed to create'; }
+                    }
+                } catch (e) {
+                    if (msg) { msg.style.display = 'block'; msg.style.color = '#ef4444'; msg.textContent = 'Connection error'; }
+                }
+            });
+        }
+
+        // Load enterprise features on settings page
+        if (IS_MULTI_TENANT && sessionStorage.getItem('gravix_token')) {
+            load2FAStatus();
+            loadSessions();
+            loadSSOConfig();
+        }
+
+        // --- ACCOUNT DELETION ---
+        const deleteAccountBtn = document.getElementById('delete-account-btn');
+        const deleteConfirmModal = document.getElementById('delete-confirm-modal');
+        const deleteConfirmInput = document.getElementById('delete-confirm-input');
+        const deleteConfirmBtn = document.getElementById('delete-confirm-btn');
+        const deleteCancelModalBtn = document.getElementById('delete-cancel-modal-btn');
+        const cancelDeletionBtn = document.getElementById('cancel-deletion-btn');
+
+        if (deleteAccountBtn) {
+            deleteAccountBtn.addEventListener('click', function() {
+                if (deleteConfirmModal) {
+                    deleteConfirmModal.style.display = 'flex';
+                    if (deleteConfirmInput) deleteConfirmInput.value = '';
+                }
+            });
+        }
+        if (deleteCancelModalBtn) {
+            deleteCancelModalBtn.addEventListener('click', function() {
+                if (deleteConfirmModal) deleteConfirmModal.style.display = 'none';
+            });
+        }
+        if (deleteConfirmBtn) {
+            deleteConfirmBtn.addEventListener('click', async function() {
+                if (!deleteConfirmInput || deleteConfirmInput.value !== 'DELETE') {
+                    showToast('Please type DELETE to confirm', 'error');
+                    return;
+                }
+                try {
+                    const tok = sessionStorage.getItem('gravix_token');
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/account', {
+                        method: 'DELETE',
+                        headers: { 'Authorization': 'Bearer ' + tok }
+                    });
+                    const data = await resp.json();
+                    if (resp.ok || resp.status === 202) {
+                        showToast('Account scheduled for deletion in 30 days', 'warning', 5000);
+                        if (deleteConfirmModal) deleteConfirmModal.style.display = 'none';
+                        checkDeletionStatus();
+                    } else {
+                        showToast(data.error || 'Failed to delete account', 'error');
+                    }
+                } catch (e) {
+                    showToast('Failed to reach server', 'error');
+                }
+            });
+        }
+        if (cancelDeletionBtn) {
+            cancelDeletionBtn.addEventListener('click', async function() {
+                try {
+                    const tok = sessionStorage.getItem('gravix_token');
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/account/cancel-deletion', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + tok }
+                    });
+                    if (resp.ok) {
+                        showToast('Deletion request cancelled', 'success');
+                        const statusEl = document.getElementById('deletion-status');
+                        if (statusEl) statusEl.style.display = 'none';
+                        const delBtn = document.getElementById('delete-account-btn');
+                        if (delBtn) delBtn.style.display = 'inline-block';
+                    } else {
+                        const data = await resp.json();
+                        showToast(data.error || 'Failed to cancel deletion', 'error');
+                    }
+                } catch (e) {
+                    showToast('Failed to reach server', 'error');
+                }
+            });
+        }
+
+        async function checkDeletionStatus() {
+            try {
+                const tok = sessionStorage.getItem('gravix_token');
+                if (!tok) return;
+                const resp = await fetch(GATEWAY_URL + '/api/gateway/account', {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + tok }
+                });
+                // A 200 with "deletion already requested" means pending
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.status === 'pending') {
+                        const statusEl = document.getElementById('deletion-status');
+                        const infoEl = document.getElementById('deletion-info');
+                        if (statusEl) statusEl.style.display = 'block';
+                        if (infoEl) {
+                            const expires = new Date(data.expires_at);
+                            const days = Math.ceil((expires - new Date()) / (1000 * 60 * 60 * 24));
+                            infoEl.textContent = 'Your account will be permanently deleted in ' + days + ' days (by ' + expires.toLocaleDateString() + ').';
+                        }
+                        const delBtn = document.getElementById('delete-account-btn');
+                        if (delBtn) delBtn.style.display = 'none';
+                    }
+                }
+            } catch (e) {
+                // ignore — non-critical
+            }
+        }
+
+        // --- TOKEN AUTO-REFRESH ---
+        // Refresh the JWT every 20 minutes to keep the session alive
+        if (IS_MULTI_TENANT && sessionStorage.getItem('gravix_token')) {
+            setInterval(async function() {
+                try {
+                    const token = sessionStorage.getItem('gravix_token');
+                    if (!token) return;
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/refresh', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data.token) {
+                            sessionStorage.setItem('gravix_token', data.token);
+                            dashboardApiToken = data.token;
+                        }
+                    }
+                } catch (e) {
+                    // Silent failure — next refresh will retry
+                }
+            }, 20 * 60 * 1000); // 20 minutes
+        }
+
+        // Cookie consent banner
+        function initCookieConsent() {
+            if (localStorage.getItem('gravix_cookie_consent')) return;
+            const banner = document.getElementById('cookie-consent');
+            if (!banner) return;
+            banner.style.display = 'block';
+
+            document.getElementById('cookie-accept')?.addEventListener('click', function() {
+                localStorage.setItem('gravix_cookie_consent', 'accepted');
+                banner.style.display = 'none';
+                // Record cookie consent if logged in
+                const tok = sessionStorage.getItem('gravix_token');
+                if (tok) {
+                    fetch(GATEWAY_URL + '/api/gateway/consent', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ type: 'cookies', version: '1.0', accepted: true })
+                    }).catch(function() {});
+                }
+            });
+            document.getElementById('cookie-decline')?.addEventListener('click', function() {
+                localStorage.setItem('gravix_cookie_consent', 'declined');
+                banner.style.display = 'none';
+            });
+        }
+        initCookieConsent();
 
     })();

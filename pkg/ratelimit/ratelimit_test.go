@@ -50,11 +50,15 @@ func TestPlanRateLimit(t *testing.T) {
 		wantRate  int64
 		wantBurst int64
 	}{
-		{"pro", 100, 200},
-		{"starter", 50, 100},
+		{"enterprise", 1000, 2000},
+		{"scale", 500, 1000},
+		{"business", 200, 400},
+		{"pro", 200, 400},       // legacy → business tier
+		{"team", 50, 100},
+		{"starter", 50, 100},    // legacy → team tier
 		{"free", 10, 20},
-		{"", 10, 20},       // default → free
-		{"unknown", 10, 20}, // unknown → free
+		{"", 10, 20},            // default → free
+		{"unknown", 10, 20},     // unknown → free
 	}
 
 	for _, tt := range tests {
@@ -106,15 +110,15 @@ func TestTenantLimiter_PlanBasedRates(t *testing.T) {
 	trl := NewTenantLimiter(10, 20)
 	defer trl.Close()
 
-	// Pro plan: burst 200
-	for i := 0; i < 200; i++ {
-		if !trl.Allow("pro-tenant", "pro") {
-			t.Errorf("pro tenant denied on request %d (burst should be 200)", i+1)
+	// Business plan: burst 400
+	for i := 0; i < 400; i++ {
+		if !trl.Allow("biz-tenant", "business") {
+			t.Errorf("business tenant denied on request %d (burst should be 400)", i+1)
 			break
 		}
 	}
-	if trl.Allow("pro-tenant", "pro") {
-		t.Error("pro tenant should be exhausted after 200 requests")
+	if trl.Allow("biz-tenant", "business") {
+		t.Error("business tenant should be exhausted after 400 requests")
 	}
 }
 

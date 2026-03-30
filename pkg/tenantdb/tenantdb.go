@@ -6,6 +6,7 @@ package tenantdb
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -14,11 +15,14 @@ type Tenant struct {
 	ID                   string
 	Name                 string
 	Email                string
-	Plan                 string // free, starter, pro, business, enterprise
+	Plan                 string // free, team, business, scale, enterprise
 	StripeCustomerID     string
 	StripeSubscriptionID string
 	Status               string // active, suspended, churned
 	OverageAllowed       bool   // false=reject over limit (free), true=allow+flag (paid)
+	ParentTenantID       string     // non-empty for child orgs in multi-org setup
+	TrialStartedAt       *time.Time // nil if never on trial
+	TrialEndsAt          *time.Time // nil if no trial or trial expired
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -29,6 +33,7 @@ type APIKey struct {
 	TenantID   string
 	KeyPrefix  string // first 8 chars for display (e.g., "grvx_abc1...")
 	Name       string
+	Scopes     string // comma-separated: ingest:write,traces:write,admin:read,admin:write (empty = all)
 	Status     string // active, revoked
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
@@ -42,16 +47,91 @@ type APIKeyInfo struct {
 	Plan           string
 	Status         string // tenant status (active, suspended)
 	OverageAllowed bool   // whether overage is permitted (paid plans)
+	Scopes         string // comma-separated scopes (empty = unrestricted)
+}
+
+// HasScope returns true if the API key has the given scope (or has no scope restrictions).
+func (info *APIKeyInfo) HasScope(scope string) bool {
+	if info.Scopes == "" {
+		return true // empty = unrestricted
+	}
+	for _, s := range strings.Split(info.Scopes, ",") {
+		if strings.TrimSpace(s) == scope {
+			return true
+		}
+	}
+	return false
 }
 
 // User represents a dashboard user belonging to a tenant.
 type User struct {
-	ID           string
-	TenantID     string
-	Email        string
-	PasswordHash string
-	Role         string // admin, viewer
-	CreatedAt    time.Time
+	ID               string
+	TenantID         string
+	Email            string
+	PasswordHash     string
+	Role             string // admin, viewer
+	EmailVerified    bool
+	TwoFactorEnabled bool
+	TwoFactorSecret  string // encrypted TOTP secret (empty if 2FA not set up)
+	Status           string // active, deactivated
+	LastLoginAt      *time.Time
+	CreatedAt        time.Time
+}
+
+// PasswordResetToken represents a one-time password reset token.
+type PasswordResetToken struct {
+	ID        string
+	UserID    string
+	TokenHash string // SHA-256 hash of the token
+	ExpiresAt time.Time
+	UsedAt    *time.Time
+	CreatedAt time.Time
+}
+
+// EmailVerificationToken represents a one-time email verification token.
+type EmailVerificationToken struct {
+	ID         string
+	UserID     string
+	TokenHash  string // SHA-256 hash of the token
+	ExpiresAt  time.Time
+	VerifiedAt *time.Time
+	CreatedAt  time.Time
+}
+
+// Invitation represents a team invite sent by an admin.
+type Invitation struct {
+	ID        string
+	TenantID  string
+	Email     string
+	Role      string // editor, viewer
+	TokenHash string // SHA-256 hash of invite token
+	Status    string // pending, accepted, expired
+	InvitedBy string // user ID of inviter
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// ConsentRecord tracks user acceptance of legal documents (TOS, privacy policy).
+type ConsentRecord struct {
+	ID        string
+	TenantID  string
+	UserID    string
+	Type      string // tos, privacy, cookies
+	Version   string // e.g., "1.0"
+	Accepted  bool
+	IPAddress string
+	CreatedAt time.Time
+}
+
+// DeletionRequest tracks account deletion requests with grace period.
+type DeletionRequest struct {
+	ID          string
+	TenantID    string
+	RequestedBy string
+	Status      string // pending, cancelled, completed
+	RequestedAt time.Time
+	ExpiresAt   time.Time // 30 days after request
+	CompletedAt *time.Time
 }
 
 // TenantRepo manages tenant records.
@@ -62,6 +142,9 @@ type TenantRepo interface {
 	UpdatePlan(ctx context.Context, id, plan string) error
 	UpdateStatus(ctx context.Context, id, status string) error
 	UpdateStripe(ctx context.Context, id, customerID, subscriptionID string) error
+	UpdateTrial(ctx context.Context, id string, trialStart, trialEnd *time.Time) error
+	UpdateParentTenant(ctx context.Context, id, parentTenantID string) error
+	ListChildren(ctx context.Context, parentTenantID string) ([]*Tenant, error)
 	List(ctx context.Context) ([]*Tenant, error)
 }
 
@@ -96,6 +179,62 @@ type UserRepo interface {
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByID(ctx context.Context, id string) (*User, error)
 	ListByTenant(ctx context.Context, tenantID string) ([]*User, error)
+	UpdatePassword(ctx context.Context, userID, passwordHash string) error
+	UpdateEmailVerified(ctx context.Context, userID string, verified bool) error
+	UpdateLastLogin(ctx context.Context, userID string, t time.Time) error
+	UpdateRole(ctx context.Context, userID, role string) error
+	UpdateStatus(ctx context.Context, userID, status string) error
+	UpdateTwoFactor(ctx context.Context, userID string, enabled bool, secret string) error
+	CountByTenant(ctx context.Context, tenantID string) (int, error)
+}
+
+// InvitationRepo manages team invitations.
+type InvitationRepo interface {
+	Create(ctx context.Context, inv *Invitation) error
+	FindByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error)
+	ListByTenant(ctx context.Context, tenantID string) ([]*Invitation, error)
+	MarkAccepted(ctx context.Context, id string) error
+	DeleteExpired(ctx context.Context) error
+}
+
+// ConsentRecordRepo manages legal consent records.
+type ConsentRecordRepo interface {
+	Create(ctx context.Context, r *ConsentRecord) error
+	ListByUser(ctx context.Context, userID string) ([]*ConsentRecord, error)
+	HasAccepted(ctx context.Context, userID, consentType, version string) (bool, error)
+}
+
+// DeletionRequestRepo manages account deletion requests.
+type DeletionRequestRepo interface {
+	Create(ctx context.Context, r *DeletionRequest) error
+	GetByTenantID(ctx context.Context, tenantID string) (*DeletionRequest, error)
+	Cancel(ctx context.Context, id string) error
+	Complete(ctx context.Context, id string) error
+	ListPending(ctx context.Context) ([]*DeletionRequest, error)
+}
+
+// PasswordResetRepo manages password reset tokens.
+type PasswordResetRepo interface {
+	// Create stores a new password reset token (hashed). Returns the token ID.
+	Create(ctx context.Context, token *PasswordResetToken) error
+	// FindByTokenHash looks up a token by its SHA-256 hash.
+	FindByTokenHash(ctx context.Context, tokenHash string) (*PasswordResetToken, error)
+	// MarkUsed marks a token as used.
+	MarkUsed(ctx context.Context, id string) error
+	// DeleteExpired removes tokens that have expired.
+	DeleteExpired(ctx context.Context) error
+}
+
+// EmailVerificationRepo manages email verification tokens.
+type EmailVerificationRepo interface {
+	// Create stores a new email verification token (hashed).
+	Create(ctx context.Context, token *EmailVerificationToken) error
+	// FindByTokenHash looks up a token by its SHA-256 hash.
+	FindByTokenHash(ctx context.Context, tokenHash string) (*EmailVerificationToken, error)
+	// MarkVerified marks a token as verified.
+	MarkVerified(ctx context.Context, id string) error
+	// DeleteExpired removes tokens that have expired.
+	DeleteExpired(ctx context.Context) error
 }
 
 // EventCounterRepo tracks per-tenant daily event counts for billing metering.
@@ -230,6 +369,51 @@ type MonthlyUsageRepo interface {
 	GetByTenant(ctx context.Context, tenantID string, limit int) ([]*MonthlyUsage, error)
 }
 
+// SSOConfig represents per-tenant SSO configuration.
+type SSOConfig struct {
+	ID           string
+	TenantID     string
+	Provider     string // saml, oidc
+	Enabled      bool
+	EntityID     string // SAML IdP Entity ID
+	SSOURL       string // SAML IdP SSO URL
+	Certificate  string // SAML IdP X.509 certificate (PEM)
+	ClientID     string // OIDC Client ID
+	ClientSecret string // OIDC Client Secret (encrypted)
+	Issuer       string // OIDC Issuer URL
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// SSOConfigRepo manages per-tenant SSO configurations.
+type SSOConfigRepo interface {
+	Upsert(ctx context.Context, cfg *SSOConfig) error
+	GetByTenantID(ctx context.Context, tenantID string) (*SSOConfig, error)
+	Delete(ctx context.Context, tenantID string) error
+}
+
+// Session represents an active user session for session management.
+type Session struct {
+	ID        string
+	UserID    string
+	TenantID  string
+	IPAddress string
+	UserAgent string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RevokedAt *time.Time
+}
+
+// SessionRepo manages user sessions.
+type SessionRepo interface {
+	Create(ctx context.Context, s *Session) error
+	GetByID(ctx context.Context, id string) (*Session, error)
+	ListByUser(ctx context.Context, userID string) ([]*Session, error)
+	Revoke(ctx context.Context, id string) error
+	RevokeAllForUser(ctx context.Context, userID string) error
+	DeleteExpired(ctx context.Context) error
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
@@ -242,5 +426,12 @@ type DB interface {
 	AlertHistory() AlertHistoryRepo
 	AuditLog() AuditRepo
 	RetentionPolicies() RetentionPolicyRepo
+	PasswordResets() PasswordResetRepo
+	EmailVerifications() EmailVerificationRepo
+	Invitations() InvitationRepo
+	ConsentRecords() ConsentRecordRepo
+	DeletionRequests() DeletionRequestRepo
+	SSOConfigs() SSOConfigRepo
+	Sessions() SessionRepo
 	Close() error
 }

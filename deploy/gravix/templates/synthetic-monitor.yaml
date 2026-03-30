@@ -1,0 +1,45 @@
+{{- if .Values.syntheticMonitor.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gravix.fullname" . }}-synthetic-monitor
+  labels:
+    {{- include "gravix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: synthetic-monitor
+spec:
+  schedule: {{ .Values.syntheticMonitor.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: synthetic
+              image: curlimages/curl:8.5.0
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  echo "=== Synthetic Monitor ==="
+
+                  # 1. Health check
+                  echo "Checking gateway health..."
+                  curl -sf http://{{ include "gravix.fullname" . }}-gateway:{{ .Values.gateway.service.port }}/live || { echo "FAIL: gateway /live"; exit 1; }
+                  echo "OK: gateway healthy"
+
+                  # 2. Readiness check
+                  echo "Checking gateway readiness..."
+                  curl -sf http://{{ include "gravix.fullname" . }}-gateway:{{ .Values.gateway.service.port }}/ready || { echo "FAIL: gateway /ready"; exit 1; }
+                  echo "OK: gateway ready"
+
+                  # 3. Ingestion health
+                  echo "Checking ingestion health..."
+                  curl -sf http://{{ include "gravix.fullname" . }}-ingestion:{{ .Values.ingestion.service.port }}/live || { echo "FAIL: ingestion /live"; exit 1; }
+                  echo "OK: ingestion healthy"
+
+                  echo "=== All checks passed ==="
+{{- end }}
