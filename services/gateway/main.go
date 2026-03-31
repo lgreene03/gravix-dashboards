@@ -265,6 +265,15 @@ func main() {
 	iprl := ratelimit.NewIPLimiter(10, 5)
 	defer iprl.Close()
 
+	// TOTP encryption key: separate from JWT secret for security isolation
+	var totpKey []byte
+	if tk := os.Getenv("TOTP_ENCRYPTION_KEY"); tk != "" {
+		totpKey = []byte(tk)
+		slog.Info("using dedicated TOTP encryption key")
+	} else {
+		slog.Warn("TOTP_ENCRYPTION_KEY not set, falling back to JWT_SECRET (deprecated — set TOTP_ENCRYPTION_KEY for production)")
+	}
+
 	gw := &gateway{
 		db:              db,
 		tokens:          tokens,
@@ -276,6 +285,7 @@ func main() {
 		captchaVerifier: captcha.NewVerifierFromEnv(),
 		cubeAPIURL:      cubeURL,
 		jwtSecret:       *jwtSecret,
+		totpKey:         totpKey,
 		baseURL:         email.BaseURLFromEnv(),
 		activeExports:   make(map[string]bool),
 	}
@@ -335,6 +345,7 @@ func main() {
 	// Authenticated + rate-limited API endpoints
 	mux.HandleFunc("/api/gateway/me", gw.requireAuth(gw.rateLimitMiddleware(gw.handleMe)))
 	mux.HandleFunc("/api/gateway/api-keys", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeys)))
+	mux.HandleFunc("/api/gateway/api-keys/", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeyByID)))
 	mux.HandleFunc("/api/gateway/api-keys/expiring", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAPIKeysExpiring)))
 	mux.HandleFunc("/api/gateway/billing/portal", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingPortal)))
 	mux.HandleFunc("/api/gateway/billing/checkout", gw.requireAuth(gw.rateLimitMiddleware(gw.handleBillingCheckout)))
@@ -456,6 +467,7 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	}
 	if allowedOrigins == "" {
 		allowedOrigins = "*"
+		slog.Warn("CORS_ALLOWED_ORIGINS not set, defaulting to '*' — restrict this in production")
 	}
 	originSet := make(map[string]bool)
 	allowAll := false
@@ -530,7 +542,7 @@ type gateway struct {
 	cubeAPIURL      string
 	jwtSecret       string
 	baseURL         string // for email links (e.g., https://app.gravix.io)
-	tokenBlacklist  sync.Map // JTI → expiry time for revoked tokens
+	totpKey         []byte   // separate encryption key for TOTP secrets
 	activeExports   map[string]bool // tracks in-progress exports per tenant
 	activeExportsMu sync.Mutex
 }
@@ -573,8 +585,8 @@ func (gw *gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the JTI with its expiry so we can clean up later
-	gw.tokenBlacklist.Store(claims.ID, claims.ExpiresAt.Time)
+	// Store the JTI in DB so it persists across restarts and replicas
+	_ = gw.db.RevokedTokens().Revoke(r.Context(), claims.ID, claims.ExpiresAt.Time)
 
 	gw.auditDirect(claims.TenantID, claims.UserID, "user.logout", "user", claims.UserID, "", r.RemoteAddr)
 
@@ -583,21 +595,12 @@ func (gw *gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// isTokenBlacklisted checks if a JTI has been revoked.
+// isTokenBlacklisted checks if a JTI has been revoked (DB-backed, works across replicas).
 func (gw *gateway) isTokenBlacklisted(jti string) bool {
 	if jti == "" {
 		return false
 	}
-	val, ok := gw.tokenBlacklist.Load(jti)
-	if !ok {
-		return false
-	}
-	// Clean up expired blacklist entries
-	if expiry, ok := val.(time.Time); ok && time.Now().After(expiry) {
-		gw.tokenBlacklist.Delete(jti)
-		return false
-	}
-	return true
+	return gw.db.RevokedTokens().IsRevoked(context.Background(), jti)
 }
 
 // handleChangePassword lets an authenticated user change their password.
@@ -675,9 +678,9 @@ func (gw *gateway) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Blacklist the old token so it can't be reused
+	// Revoke the old token so it can't be reused
 	if claims.ID != "" {
-		gw.tokenBlacklist.Store(claims.ID, claims.ExpiresAt.Time)
+		_ = gw.db.RevokedTokens().Revoke(context.Background(), claims.ID, claims.ExpiresAt.Time)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -1469,8 +1472,10 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		TOTPCode     string `json:"totp_code"`
+		RecoveryCode string `json:"recovery_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1506,35 +1511,36 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if 2FA is enabled — require TOTP code
+	// Check if 2FA is enabled — require TOTP code or recovery code
 	if user.TwoFactorEnabled {
-		var totpCode string
-		// Check if TOTP code was provided in the login request
-		var loginReq struct {
-			TOTPCode string `json:"totp_code"`
-		}
-		// Re-parse won't work since body is consumed; check the original req fields
-		// The totp_code should be provided as a query param or we return requires_2fa
-		totpCode = r.URL.Query().Get("totp_code")
-		_ = loginReq // suppress unused
-		if totpCode == "" {
+		if req.TOTPCode == "" && req.RecoveryCode == "" {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requires_2fa": true,
 				"user_id":      user.ID,
-				"message":      "provide totp_code to complete login",
+				"message":      "provide totp_code or recovery_code to complete login",
 			})
 			return
 		}
 
-		encKey := gw.totpEncryptionKey()
-		secret, decErr := totp.DecryptSecret(user.TwoFactorSecret, encKey)
-		if decErr != nil {
-			writeError(w, http.StatusInternalServerError, "failed to validate 2FA")
-			return
-		}
-		if !totp.Validate(totpCode, secret) {
-			writeError(w, http.StatusUnauthorized, "invalid TOTP code")
-			return
+		if req.RecoveryCode != "" {
+			// Validate recovery code (SHA-256 hash, one-time use)
+			codeHash := fmt.Sprintf("%x", sha256.Sum256([]byte(req.RecoveryCode)))
+			valid, rcErr := gw.db.RecoveryCodes().Validate(r.Context(), user.ID, codeHash)
+			if rcErr != nil || !valid {
+				writeError(w, http.StatusUnauthorized, "invalid recovery code")
+				return
+			}
+		} else {
+			encKey := gw.totpEncryptionKey()
+			secret, decErr := totp.DecryptSecret(user.TwoFactorSecret, encKey)
+			if decErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate 2FA")
+				return
+			}
+			if !totp.Validate(req.TOTPCode, secret) {
+				writeError(w, http.StatusUnauthorized, "invalid TOTP code")
+				return
+			}
 		}
 	}
 
@@ -2146,6 +2152,41 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleAPIKeyByID handles requests with an ID suffix: DELETE /api/gateway/api-keys/{id}
+func (gw *gateway) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+
+	// Extract key ID from path: /api/gateway/api-keys/<id>
+	parts := strings.Split(r.URL.Path, "/")
+	keyID := ""
+	if len(parts) >= 5 {
+		keyID = parts[4]
+	}
+
+	// Avoid matching /api/gateway/api-keys/expiring (handled by dedicated route)
+	if keyID == "expiring" || keyID == "" {
+		writeError(w, http.StatusBadRequest, "key ID required in path")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		if claims.Role != "admin" {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+		if err := gw.db.APIKeys().Revoke(r.Context(), keyID); err != nil {
+			writeError(w, http.StatusNotFound, "key not found or already revoked")
+			return
+		}
+		gw.audit(r, "api_key.revoke", "api_key", keyID, `{}`)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
 // handleAPIKeysExpiring returns API keys expiring within 7 days.
 func (gw *gateway) handleAPIKeysExpiring(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -2526,6 +2567,10 @@ func (gw *gateway) usageMeteringLoop(ctx context.Context) {
 
 	for {
 		gw.reportUsageToStripe(ctx)
+
+		// Clean up expired revoked tokens and SSO states
+		_ = gw.db.RevokedTokens().Cleanup(ctx)
+		_ = gw.db.SSOStates().Cleanup(ctx)
 
 		select {
 		case <-ctx.Done():
@@ -3440,7 +3485,7 @@ func (gw *gateway) queryCubeMetric(ctx context.Context, token string, rule *tena
 	}
 }
 
-// reportUsageToStripe reads event counters and reports to Stripe for all active tenants.
+// reportUsageToStripe reads event counters, calculates overage, and reports to Stripe.
 func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 	if gw.billing == nil {
 		return
@@ -3452,32 +3497,57 @@ func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 		return
 	}
 
-	today := time.Now().UTC().Format("2006-01-02")
+	now := time.Now().UTC()
+	year, month, _ := now.Date()
 
 	for _, tenant := range tenants {
 		if tenant.Status != "active" || tenant.StripeSubscriptionID == "" {
 			continue
 		}
 
-		count, err := gw.db.EventCounters().GetCount(ctx, tenant.ID, today)
-		if err != nil {
-			slog.Error("usage metering failed to get count", "tenant_id", tenant.ID, "error", err)
+		// Calculate month-to-date total for overage
+		var monthTotal int64
+		for day := 1; day <= now.Day(); day++ {
+			d := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+			if d.Month() != month {
+				break
+			}
+			dayStr := d.Format("2006-01-02")
+			count, err := gw.db.EventCounters().GetCount(ctx, tenant.ID, dayStr)
+			if err != nil {
+				continue
+			}
+			monthTotal += count
+		}
+
+		if monthTotal == 0 {
 			continue
 		}
 
-		if count == 0 {
-			continue
-		}
-
-		if err := gw.billing.ReportUsage(ctx, tenant.StripeSubscriptionID, count, time.Now().UTC()); err != nil {
+		// Report raw usage to Stripe (for metered billing)
+		if err := gw.billing.ReportUsage(ctx, tenant.StripeSubscriptionID, monthTotal, now); err != nil {
 			slog.Error("usage metering failed to report usage", "tenant_id", tenant.ID, "error", err)
 		} else {
-			slog.Info("usage metering reported events", "tenant_id", tenant.ID, "count", count)
+			slog.Info("usage metering reported events", "tenant_id", tenant.ID, "count", monthTotal)
+		}
+
+		// Log overage for paid plans with overage allowed
+		if tenant.OverageAllowed {
+			result := billing.CalculateOverage(tenant.Plan, monthTotal)
+			if result.Overage > 0 {
+				slog.Info("tenant overage detected",
+					"tenant_id", tenant.ID,
+					"plan", tenant.Plan,
+					"limit", result.EventLimit,
+					"usage", monthTotal,
+					"overage", result.Overage,
+					"overage_cost_cents", billing.OverageCostCents(result.Overage),
+				)
+			}
 		}
 	}
 
 	// Monthly snapshot: on the 1st of each month, snapshot previous month's total
-	now := time.Now().UTC()
 	if now.Day() == 1 {
 		prevMonth := now.AddDate(0, -1, 0)
 		prevYear, prevMon, _ := prevMonth.Date()

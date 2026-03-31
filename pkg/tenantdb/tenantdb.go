@@ -414,6 +414,36 @@ type SessionRepo interface {
 	DeleteExpired(ctx context.Context) error
 }
 
+// RecoveryCodeRepo manages hashed 2FA recovery codes.
+type RecoveryCodeRepo interface {
+	// Store saves a set of hashed recovery codes for a user, replacing any existing ones.
+	Store(ctx context.Context, userID string, codeHashes []string) error
+	// Validate checks if a code hash is valid (exists + unused), marks it used atomically, returns true if valid.
+	Validate(ctx context.Context, userID, codeHash string) (bool, error)
+	// DeleteByUser removes all recovery codes for a user.
+	DeleteByUser(ctx context.Context, userID string) error
+}
+
+// RevokedTokenRepo manages persistent token revocation (replaces in-memory blacklist).
+type RevokedTokenRepo interface {
+	// Revoke adds a JTI to the revocation list.
+	Revoke(ctx context.Context, jti string, expiresAt time.Time) error
+	// IsRevoked checks if a JTI has been revoked.
+	IsRevoked(ctx context.Context, jti string) bool
+	// Cleanup removes expired entries.
+	Cleanup(ctx context.Context) error
+}
+
+// SSOStateRepo manages CSRF state tokens for SSO login flows.
+type SSOStateRepo interface {
+	// Store saves a state token with expiry.
+	Store(ctx context.Context, state, tenantID string, expiresAt time.Time) error
+	// ValidateAndDelete checks a state token, returns the tenant ID, and deletes it atomically.
+	ValidateAndDelete(ctx context.Context, state string) (tenantID string, err error)
+	// Cleanup removes expired entries.
+	Cleanup(ctx context.Context) error
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
@@ -433,5 +463,8 @@ type DB interface {
 	DeletionRequests() DeletionRequestRepo
 	SSOConfigs() SSOConfigRepo
 	Sessions() SessionRepo
+	RecoveryCodes() RecoveryCodeRepo
+	RevokedTokens() RevokedTokenRepo
+	SSOStates() SSOStateRepo
 	Close() error
 }

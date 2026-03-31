@@ -287,6 +287,15 @@ func (s *SQLiteDB) SSOConfigs() SSOConfigRepo {
 func (s *SQLiteDB) Sessions() SessionRepo {
 	return &sqliteSessionRepo{db: s.db}
 }
+func (s *SQLiteDB) RecoveryCodes() RecoveryCodeRepo {
+	return &sqliteRecoveryCodeRepo{db: s.db}
+}
+func (s *SQLiteDB) RevokedTokens() RevokedTokenRepo {
+	return &sqliteRevokedTokenRepo{db: s.db}
+}
+func (s *SQLiteDB) SSOStates() SSOStateRepo {
+	return &sqliteSSOStateRepo{db: s.db}
+}
 
 // --- Tenant Repo ---
 
@@ -1719,5 +1728,126 @@ func (r *sqliteSessionRepo) RevokeAllForUser(ctx context.Context, userID string)
 func (r *sqliteSessionRepo) DeleteExpired(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM sessions WHERE datetime(expires_at) < datetime('now')`)
+	return err
+}
+
+// --- Recovery Code Repo ---
+
+type sqliteRecoveryCodeRepo struct{ db *sql.DB }
+
+func (r *sqliteRecoveryCodeRepo) Store(ctx context.Context, userID string, codeHashes []string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Delete existing codes for this user
+	if _, err := tx.ExecContext(ctx, `DELETE FROM recovery_codes WHERE user_id = ?`, userID); err != nil {
+		return err
+	}
+
+	for _, hash := range codeHashes {
+		id := uuid.New().String()
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO recovery_codes (id, user_id, code_hash) VALUES (?, ?, ?)`,
+			id, userID, hash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (r *sqliteRecoveryCodeRepo) Validate(ctx context.Context, userID, codeHash string) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE recovery_codes SET used = 1 WHERE user_id = ? AND code_hash = ? AND used = 0`,
+		userID, codeHash)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *sqliteRecoveryCodeRepo) DeleteByUser(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM recovery_codes WHERE user_id = ?`, userID)
+	return err
+}
+
+// --- Revoked Token Repo ---
+
+type sqliteRevokedTokenRepo struct{ db *sql.DB }
+
+func (r *sqliteRevokedTokenRepo) Revoke(ctx context.Context, jti string, expiresAt time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO revoked_tokens (jti, expires_at) VALUES (?, ?)`,
+		jti, expiresAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (r *sqliteRevokedTokenRepo) IsRevoked(ctx context.Context, jti string) bool {
+	var exp string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT expires_at FROM revoked_tokens WHERE jti = ?`, jti).Scan(&exp)
+	if err != nil {
+		return false
+	}
+	// Check if the token has already expired — if so, it's no longer revoked (it's just dead)
+	t, _ := time.Parse(time.RFC3339, exp)
+	if !t.IsZero() && time.Now().UTC().After(t) {
+		// Opportunistic cleanup
+		_, _ = r.db.ExecContext(ctx, `DELETE FROM revoked_tokens WHERE jti = ?`, jti)
+		return false
+	}
+	return true
+}
+
+func (r *sqliteRevokedTokenRepo) Cleanup(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM revoked_tokens WHERE datetime(expires_at) < datetime('now')`)
+	return err
+}
+
+// --- SSO State Repo ---
+
+type sqliteSSOStateRepo struct{ db *sql.DB }
+
+func (r *sqliteSSOStateRepo) Store(ctx context.Context, state, tenantID string, expiresAt time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sso_states (state, tenant_id, expires_at) VALUES (?, ?, ?)`,
+		state, tenantID, expiresAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (r *sqliteSSOStateRepo) ValidateAndDelete(ctx context.Context, state string) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	var tenantID, expiresAt string
+	err = tx.QueryRowContext(ctx,
+		`SELECT tenant_id, expires_at FROM sso_states WHERE state = ?`, state).Scan(&tenantID, &expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("invalid or expired SSO state")
+	}
+
+	// Delete the state (one-time use)
+	tx.ExecContext(ctx, `DELETE FROM sso_states WHERE state = ?`, state)
+
+	// Check expiry
+	t, _ := time.Parse(time.RFC3339, expiresAt)
+	if !t.IsZero() && time.Now().UTC().After(t) {
+		tx.Commit()
+		return "", fmt.Errorf("SSO state expired")
+	}
+
+	return tenantID, tx.Commit()
+}
+
+func (r *sqliteSSOStateRepo) Cleanup(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM sso_states WHERE datetime(expires_at) < datetime('now')`)
 	return err
 }

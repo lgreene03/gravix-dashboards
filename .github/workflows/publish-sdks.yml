@@ -36,6 +36,26 @@ jobs:
             echo "version=${TAG#sdk-java-v}" >> "$GITHUB_OUTPUT"
           fi
 
+  publish-go:
+    needs: detect-sdk
+    if: needs.detect-sdk.outputs.sdk == 'go'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Verify module
+        working-directory: sdk/go
+        run: |
+          go mod verify
+          go vet ./...
+          go test ./...
+      - name: Trigger module proxy
+        run: |
+          GOPROXY=https://proxy.golang.org GO111MODULE=on \
+            go list -m github.com/${{ github.repository }}/sdk/go@v${{ needs.detect-sdk.outputs.version }} || true
+
   publish-python:
     needs: detect-sdk
     if: needs.detect-sdk.outputs.sdk == 'python'

@@ -131,6 +131,8 @@ gateway:
   # Database driver: "sqlite" (default) or "postgres"
   # When "postgres", set database.url in secrets
   dbDriver: "sqlite"
+  # CORS allowed origins (empty defaults to "*" for local dev; set in production)
+  corsAllowedOrigins: ""
   stripe:
     enabled: false
   resources:

@@ -138,6 +138,7 @@ jobs:
           helm upgrade --install ${{ env.RELEASE_NAME }} ${{ env.HELM_CHART }} \
             --namespace gravix-staging \
             --set ingestion.image.tag="${IMAGE_TAG}" \
+            --set gateway.image.tag="${IMAGE_TAG}" \
             --set rollupJob.image.tag="${IMAGE_TAG}" \
             --set retentionJob.image.tag="${IMAGE_TAG}" \
             --set global.imageRegistry="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}" \
@@ -246,6 +247,7 @@ jobs:
             -f deploy/gravix/values-prod.yaml \
             --namespace gravix-prod \
             --set ingestion.image.tag="${IMAGE_TAG}" \
+            --set gateway.image.tag="${IMAGE_TAG}" \
             --set rollupJob.image.tag="${IMAGE_TAG}" \
             --set retentionJob.image.tag="${IMAGE_TAG}" \
             --set certManager.email="${{ secrets.CERT_MANAGER_EMAIL }}" \
