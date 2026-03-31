@@ -39,6 +39,9 @@ type PostgresDB struct {
 	deletionRequests      *pgDeletionRequestRepo
 	ssoConfigs            *pgSSOConfigRepo
 	sessions              *pgSessionRepo
+	recoveryCodes         *pgRecoveryCodeRepo
+	revokedTokens         *pgRevokedTokenRepo
+	ssoStates             *pgSSOStateRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -82,6 +85,9 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.deletionRequests = &pgDeletionRequestRepo{db: db}
 	pdb.ssoConfigs = &pgSSOConfigRepo{db: db}
 	pdb.sessions = &pgSessionRepo{db: db}
+	pdb.recoveryCodes = &pgRecoveryCodeRepo{db: db}
+	pdb.revokedTokens = &pgRevokedTokenRepo{db: db}
+	pdb.ssoStates = &pgSSOStateRepo{db: db}
 	return pdb, nil
 }
 
@@ -102,6 +108,9 @@ func (p *PostgresDB) ConsentRecords() ConsentRecordRepo         { return p.conse
 func (p *PostgresDB) DeletionRequests() DeletionRequestRepo     { return p.deletionRequests }
 func (p *PostgresDB) SSOConfigs() SSOConfigRepo                 { return p.ssoConfigs }
 func (p *PostgresDB) Sessions() SessionRepo                     { return p.sessions }
+func (p *PostgresDB) RecoveryCodes() RecoveryCodeRepo            { return p.recoveryCodes }
+func (p *PostgresDB) RevokedTokens() RevokedTokenRepo            { return p.revokedTokens }
+func (p *PostgresDB) SSOStates() SSOStateRepo                    { return p.ssoStates }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -1119,5 +1128,120 @@ func (r *pgSessionRepo) RevokeAllForUser(ctx context.Context, userID string) err
 func (r *pgSessionRepo) DeleteExpired(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM sessions WHERE expires_at < NOW()`)
+	return err
+}
+
+// --- Recovery Code Repo ---
+
+type pgRecoveryCodeRepo struct{ db *sql.DB }
+
+func (r *pgRecoveryCodeRepo) Store(ctx context.Context, userID string, codeHashes []string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM recovery_codes WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+
+	for _, hash := range codeHashes {
+		id := uuid.New().String()
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO recovery_codes (id, user_id, code_hash) VALUES ($1, $2, $3)`,
+			id, userID, hash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (r *pgRecoveryCodeRepo) Validate(ctx context.Context, userID, codeHash string) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE recovery_codes SET used = TRUE WHERE user_id = $1 AND code_hash = $2 AND used = FALSE`,
+		userID, codeHash)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *pgRecoveryCodeRepo) DeleteByUser(ctx context.Context, userID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM recovery_codes WHERE user_id = $1`, userID)
+	return err
+}
+
+// --- Revoked Token Repo ---
+
+type pgRevokedTokenRepo struct{ db *sql.DB }
+
+func (r *pgRevokedTokenRepo) Revoke(ctx context.Context, jti string, expiresAt time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING`,
+		jti, expiresAt.UTC())
+	return err
+}
+
+func (r *pgRevokedTokenRepo) IsRevoked(ctx context.Context, jti string) bool {
+	var expiresAt time.Time
+	err := r.db.QueryRowContext(ctx,
+		`SELECT expires_at FROM revoked_tokens WHERE jti = $1`, jti).Scan(&expiresAt)
+	if err != nil {
+		return false
+	}
+	if time.Now().UTC().After(expiresAt) {
+		_, _ = r.db.ExecContext(ctx, `DELETE FROM revoked_tokens WHERE jti = $1`, jti)
+		return false
+	}
+	return true
+}
+
+func (r *pgRevokedTokenRepo) Cleanup(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM revoked_tokens WHERE expires_at < NOW()`)
+	return err
+}
+
+// --- SSO State Repo ---
+
+type pgSSOStateRepo struct{ db *sql.DB }
+
+func (r *pgSSOStateRepo) Store(ctx context.Context, state, tenantID string, expiresAt time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO sso_states (state, tenant_id, expires_at) VALUES ($1, $2, $3)`,
+		state, tenantID, expiresAt.UTC())
+	return err
+}
+
+func (r *pgSSOStateRepo) ValidateAndDelete(ctx context.Context, state string) (string, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	var tenantID string
+	var expiresAt time.Time
+	err = tx.QueryRowContext(ctx,
+		`SELECT tenant_id, expires_at FROM sso_states WHERE state = $1`, state).Scan(&tenantID, &expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("invalid or expired SSO state")
+	}
+
+	tx.ExecContext(ctx, `DELETE FROM sso_states WHERE state = $1`, state)
+
+	if time.Now().UTC().After(expiresAt) {
+		tx.Commit()
+		return "", fmt.Errorf("SSO state expired")
+	}
+
+	return tenantID, tx.Commit()
+}
+
+func (r *pgSSOStateRepo) Cleanup(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM sso_states WHERE expires_at < NOW()`)
 	return err
 }

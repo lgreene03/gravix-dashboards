@@ -72,6 +72,17 @@ spec:
                   name: {{ .Release.Name }}-secrets
                   key: stripe-webhook-secret
             {{- end }}
+            {{- if .Values.gateway.corsAllowedOrigins }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ .Values.gateway.corsAllowedOrigins | quote }}
+            {{- end }}
+            {{- if .Values.global.totpEncryptionKey }}
+            - name: TOTP_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: totp-encryption-key
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /live

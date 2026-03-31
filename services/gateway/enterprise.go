@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -230,11 +232,20 @@ func (gw *gateway) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Generate recovery codes
+	// Generate recovery codes and store hashed versions
 	codes, err := totp.RecoveryCodes(8)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate recovery codes")
 		return
+	}
+
+	// Hash and store recovery codes
+	codeHashes := make([]string, len(codes))
+	for i, code := range codes {
+		codeHashes[i] = fmt.Sprintf("%x", sha256.Sum256([]byte(code)))
+	}
+	if err := gw.db.RecoveryCodes().Store(r.Context(), user.ID, codeHashes); err != nil {
+		slog.Error("failed to store recovery codes", "error", err)
 	}
 
 	gw.audit(r, "2fa.enable", "user", user.ID, "")
@@ -292,6 +303,8 @@ func (gw *gateway) handleTwoFactorDisable(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to disable 2FA")
 		return
 	}
+	// Clean up recovery codes
+	_ = gw.db.RecoveryCodes().DeleteByUser(r.Context(), user.ID)
 
 	gw.audit(r, "2fa.disable", "user", user.ID, "")
 
@@ -460,14 +473,17 @@ func (gw *gateway) handleMultiOrg(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// totpEncryptionKey derives a 32-byte encryption key from the JWT secret.
+// totpEncryptionKey returns the 32-byte encryption key for TOTP secrets.
+// Uses a dedicated key if configured, otherwise falls back to JWT secret (deprecated).
 func (gw *gateway) totpEncryptionKey() []byte {
-	// Use first 32 bytes of JWT secret as TOTP encryption key
+	if len(gw.totpKey) >= 32 {
+		return gw.totpKey[:32]
+	}
+	// Fallback to JWT secret (deprecated — set TOTP_ENCRYPTION_KEY in production)
 	key := []byte(gw.jwtSecret)
 	if len(key) >= 32 {
 		return key[:32]
 	}
-	// Pad if shorter (shouldn't happen since we require 32+ chars)
 	padded := make([]byte, 32)
 	copy(padded, key)
 	return padded
@@ -520,10 +536,15 @@ func (gw *gateway) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		auth = &sso.OIDCAuthenticator{}
 	}
 
-	redirectURL, _, authErr := auth.InitiateLogin(ssoCfg, callbackURL)
+	redirectURL, state, authErr := auth.InitiateLogin(ssoCfg, callbackURL)
 	if authErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to initiate SSO: "+authErr.Error())
 		return
+	}
+
+	// Store state for CSRF validation on callback
+	if state != "" {
+		_ = gw.db.SSOStates().Store(r.Context(), state, tenantID, time.Now().Add(10*time.Minute))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -532,12 +553,33 @@ func (gw *gateway) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSSOCallback processes SSO callback and provisions/authenticates the user.
-// POST /api/gateway/sso/callback?tenant_id=xxx
+// POST /api/gateway/sso/callback?tenant_id=xxx&state=xxx
 func (gw *gateway) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.URL.Query().Get("tenant_id")
 	if tenantID == "" {
 		writeError(w, http.StatusBadRequest, "tenant_id required")
 		return
+	}
+
+	// Validate CSRF state parameter
+	state := r.URL.Query().Get("state")
+	if state == "" {
+		// Also check POST form
+		if r.Method == http.MethodPost {
+			_ = r.ParseForm()
+			state = r.PostFormValue("state")
+		}
+	}
+	if state != "" {
+		validTenantID, stateErr := gw.db.SSOStates().ValidateAndDelete(r.Context(), state)
+		if stateErr != nil {
+			writeError(w, http.StatusForbidden, "invalid or expired SSO state")
+			return
+		}
+		if validTenantID != tenantID {
+			writeError(w, http.StatusForbidden, "SSO state tenant mismatch")
+			return
+		}
 	}
 
 	cfg, err := gw.db.SSOConfigs().GetByTenantID(r.Context(), tenantID)

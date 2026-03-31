@@ -108,6 +108,8 @@ retentionJob:
 # ─── Gateway ───
 gateway:
   replicaCount: 2
+  dbDriver: "postgres"  # REQUIRED: SQLite cannot handle concurrent writes from multiple replicas
+  corsAllowedOrigins: ""  # REQUIRED: set to your production domain (e.g., "https://app.gravix.io")
   image:
     repository: gravix-gateway
     tag: "0.1.0"       # Pin to same SHA as other services
