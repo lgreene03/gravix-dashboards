@@ -184,6 +184,9 @@
             </div>
         </div>
 
+        <!-- Quota warning banner (shown at 80/90/100% usage) -->
+        <div id="quota-warning" class="quota-warning" style="display: none;"></div>
+
         <!-- ==================== OVERVIEW PAGE ==================== -->
         <div id="page-overview" class="page-content">
 
@@ -201,9 +204,11 @@
                 <button id="resetFiltersBtn" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border-color);border-radius:8px;background:var(--card-bg);color:var(--text-primary);cursor:pointer;font-size:0.9rem;">Reset Filters</button>
             </div>
             <div id="emptyOnboard" style="display:none;">
-                <h3>No data available</h3>
-                <p>Gravix hasn't received any events yet. Send your first event:</p>
-                <pre>curl -X POST http://localhost:8090/api/v1/facts \
+                <div id="waiting-for-data" class="waiting-for-data">
+                    <div class="waiting-spinner"></div>
+                    <h3>Waiting for your first events...</h3>
+                    <p>No data received yet. Send your first event using the command below:</p>
+                    <pre>curl -X POST http://localhost:8090/api/v1/facts \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{
@@ -215,7 +220,8 @@
     "status_code": 200,
     "latency_ms": 42
   }'</pre>
-                <p style="margin-top: 12px;">Then wait for the rollup job to aggregate metrics (runs every 5 minutes).</p>
+                    <p style="margin-top: 12px;">Then wait for the rollup job to aggregate metrics (runs every 5 minutes).</p>
+                </div>
             </div>
         </div>
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/referral"
 	"golang.org/x/crypto/bcrypt"
 
 	_ "modernc.org/sqlite"
@@ -296,6 +297,9 @@ func (s *SQLiteDB) RevokedTokens() RevokedTokenRepo {
 func (s *SQLiteDB) SSOStates() SSOStateRepo {
 	return &sqliteSSOStateRepo{db: s.db}
 }
+func (s *SQLiteDB) Referrals() referral.ReferralRepo {
+	return &sqliteReferralRepo{db: s.db}
+}
 
 // --- Tenant Repo ---
 
@@ -333,13 +337,13 @@ func (r *sqliteTenantRepo) Create(ctx context.Context, t *Tenant) error {
 func (r *sqliteTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) {
 	return r.scanTenant(r.db.QueryRowContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE id = ?`, id))
+		        status, overage_allowed, parent_tenant_id, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE id = ?`, id))
 }
 
 func (r *sqliteTenantRepo) GetByEmail(ctx context.Context, email string) (*Tenant, error) {
 	return r.scanTenant(r.db.QueryRowContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE email = ?`, email))
+		        status, overage_allowed, parent_tenant_id, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE email = ?`, email))
 }
 
 func (r *sqliteTenantRepo) UpdatePlan(ctx context.Context, id, plan string) error {
@@ -430,7 +434,7 @@ func (r *sqliteTenantRepo) ListChildren(ctx context.Context, parentTenantID stri
 func (r *sqliteTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
-		        status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants ORDER BY created_at`)
+		        status, overage_allowed, parent_tenant_id, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -450,15 +454,18 @@ func (r *sqliteTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 func (r *sqliteTenantRepo) scanTenant(row *sql.Row) (*Tenant, error) {
 	t := &Tenant{}
 	var createdAt, updatedAt string
-	var trialStarted, trialEnds sql.NullString
+	var trialStarted, trialEnds, parentID sql.NullString
 	var overageInt int
 	err := row.Scan(&t.ID, &t.Name, &t.Email, &t.Plan,
 		&t.StripeCustomerID, &t.StripeSubscriptionID,
-		&t.Status, &overageInt, &trialStarted, &trialEnds, &createdAt, &updatedAt)
+		&t.Status, &overageInt, &parentID, &trialStarted, &trialEnds, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	t.OverageAllowed = overageInt != 0
+	if parentID.Valid {
+		t.ParentTenantID = parentID.String
+	}
 	if trialStarted.Valid {
 		ts, _ := time.Parse(time.RFC3339, trialStarted.String)
 		t.TrialStartedAt = &ts
@@ -479,15 +486,18 @@ type tenantScanner interface {
 func (r *sqliteTenantRepo) scanTenantRow(row tenantScanner) (*Tenant, error) {
 	t := &Tenant{}
 	var createdAt, updatedAt string
-	var trialStarted, trialEnds sql.NullString
+	var trialStarted, trialEnds, parentID sql.NullString
 	var overageInt int
 	err := row.Scan(&t.ID, &t.Name, &t.Email, &t.Plan,
 		&t.StripeCustomerID, &t.StripeSubscriptionID,
-		&t.Status, &overageInt, &trialStarted, &trialEnds, &createdAt, &updatedAt)
+		&t.Status, &overageInt, &parentID, &trialStarted, &trialEnds, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	t.OverageAllowed = overageInt != 0
+	if parentID.Valid {
+		t.ParentTenantID = parentID.String
+	}
 	if trialStarted.Valid {
 		ts, _ := time.Parse(time.RFC3339, trialStarted.String)
 		t.TrialStartedAt = &ts
@@ -1850,4 +1860,81 @@ func (r *sqliteSSOStateRepo) Cleanup(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM sso_states WHERE datetime(expires_at) < datetime('now')`)
 	return err
+}
+
+// --- Referral Repo ---
+
+type sqliteReferralRepo struct{ db *sql.DB }
+
+func (r *sqliteReferralRepo) Create(ctx context.Context, ref *referral.Referral) error {
+	if ref.ID == "" {
+		ref.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO referrals (id, code, referrer_tenant, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		ref.ID, ref.Code, ref.ReferrerTenant, ref.Status,
+		ref.CreatedAt.UTC().Format(time.RFC3339), ref.ExpiresAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (r *sqliteReferralRepo) GetByCode(ctx context.Context, code string) (*referral.Referral, error) {
+	ref := &referral.Referral{}
+	var createdAt, expiresAt string
+	var usedAt sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, code, referrer_tenant, referee_tenant, status, coupon_id, created_at, used_at, expires_at FROM referrals WHERE code = ?`,
+		code).Scan(&ref.ID, &ref.Code, &ref.ReferrerTenant, &ref.RefereeTenant, &ref.Status, &ref.CouponID, &createdAt, &usedAt, &expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	ref.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	ref.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	if usedAt.Valid {
+		t, _ := time.Parse(time.RFC3339, usedAt.String)
+		ref.UsedAt = &t
+	}
+	return ref, nil
+}
+
+func (r *sqliteReferralRepo) MarkUsed(ctx context.Context, code, refereeTenant, couponID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE referrals SET referee_tenant = ?, status = 'used', coupon_id = ?, used_at = ? WHERE code = ? AND status = 'active'`,
+		refereeTenant, couponID, now, code)
+	return err
+}
+
+func (r *sqliteReferralRepo) ListByTenant(ctx context.Context, tenantID string) ([]*referral.Referral, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, code, referrer_tenant, referee_tenant, status, coupon_id, created_at, used_at, expires_at FROM referrals WHERE referrer_tenant = ? ORDER BY created_at DESC`,
+		tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var refs []*referral.Referral
+	for rows.Next() {
+		ref := &referral.Referral{}
+		var createdAt, expiresAt string
+		var usedAt sql.NullString
+		if err := rows.Scan(&ref.ID, &ref.Code, &ref.ReferrerTenant, &ref.RefereeTenant, &ref.Status, &ref.CouponID, &createdAt, &usedAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		ref.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		ref.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+		if usedAt.Valid {
+			t, _ := time.Parse(time.RFC3339, usedAt.String)
+			ref.UsedAt = &t
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
+func (r *sqliteReferralRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM referrals WHERE referrer_tenant = ? AND status = 'active'`, tenantID).Scan(&count)
+	return count, err
 }

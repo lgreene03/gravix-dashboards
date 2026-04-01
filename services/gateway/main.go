@@ -2829,50 +2829,70 @@ func (gw *gateway) handleAlertRuleByID(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var req struct {
-			Name            string  `json:"name"`
-			Metric          string  `json:"metric"`
-			Operator        string  `json:"operator"`
-			Threshold       float64 `json:"threshold"`
-			WindowMinutes   int     `json:"window_minutes"`
-			Service         string  `json:"service"`
-			PathTemplate    string  `json:"path_template"`
-			ChannelID       string  `json:"channel_id"`
-			CooldownMinutes int     `json:"cooldown_minutes"`
-			Status          string  `json:"status"`
+			Name            *string  `json:"name"`
+			Metric          *string  `json:"metric"`
+			Operator        *string  `json:"operator"`
+			Threshold       *float64 `json:"threshold"`
+			WindowMinutes   *int     `json:"window_minutes"`
+			Service         *string  `json:"service"`
+			PathTemplate    *string  `json:"path_template"`
+			ChannelID       *string  `json:"channel_id"`
+			CooldownMinutes *int     `json:"cooldown_minutes"`
+			Status          *string  `json:"status"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
 
-		if errMsg := validateAlertRule(req.Name, req.Metric, req.Operator, req.Threshold,
-			req.WindowMinutes, req.CooldownMinutes, req.ChannelID); errMsg != "" {
-			writeError(w, http.StatusBadRequest, errMsg)
-			return
+		// Apply only the provided fields to the existing rule
+		if req.Name != nil {
+			existing.Name = *req.Name
 		}
-		if req.Status != "" && req.Status != "active" && req.Status != "paused" {
-			writeError(w, http.StatusBadRequest, "status must be active or paused")
+		if req.Metric != nil {
+			existing.Metric = *req.Metric
+		}
+		if req.Operator != nil {
+			existing.Operator = *req.Operator
+		}
+		if req.Threshold != nil {
+			existing.Threshold = *req.Threshold
+		}
+		if req.WindowMinutes != nil {
+			existing.WindowMinutes = *req.WindowMinutes
+		}
+		if req.Service != nil {
+			existing.Service = *req.Service
+		}
+		if req.PathTemplate != nil {
+			existing.PathTemplate = *req.PathTemplate
+		}
+		if req.ChannelID != nil {
+			existing.ChannelID = *req.ChannelID
+		}
+		if req.CooldownMinutes != nil {
+			existing.CooldownMinutes = *req.CooldownMinutes
+		}
+		if req.Status != nil {
+			if *req.Status != "active" && *req.Status != "paused" {
+				writeError(w, http.StatusBadRequest, "status must be active or paused")
+				return
+			}
+			existing.Status = *req.Status
+		}
+
+		// Validate the merged rule
+		if errMsg := validateAlertRule(existing.Name, existing.Metric, existing.Operator, existing.Threshold,
+			existing.WindowMinutes, existing.CooldownMinutes, existing.ChannelID); errMsg != "" {
+			writeError(w, http.StatusBadRequest, errMsg)
 			return
 		}
 
 		// Verify channel belongs to tenant
-		ch, err := gw.db.NotificationChannels().GetByID(r.Context(), req.ChannelID)
+		ch, err := gw.db.NotificationChannels().GetByID(r.Context(), existing.ChannelID)
 		if err != nil || ch.TenantID != claims.TenantID {
 			writeError(w, http.StatusBadRequest, "channel not found")
 			return
-		}
-
-		existing.Name = req.Name
-		existing.Metric = req.Metric
-		existing.Operator = req.Operator
-		existing.Threshold = req.Threshold
-		existing.WindowMinutes = req.WindowMinutes
-		existing.Service = req.Service
-		existing.PathTemplate = req.PathTemplate
-		existing.ChannelID = req.ChannelID
-		existing.CooldownMinutes = req.CooldownMinutes
-		if req.Status != "" {
-			existing.Status = req.Status
 		}
 
 		if err := gw.db.AlertRules().Update(r.Context(), existing); err != nil {

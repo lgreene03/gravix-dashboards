@@ -8,6 +8,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/lgreene/gravix-dashboards/pkg/referral"
 )
 
 // Tenant represents a Gravix customer account.
@@ -466,5 +468,6 @@ type DB interface {
 	RecoveryCodes() RecoveryCodeRepo
 	RevokedTokens() RevokedTokenRepo
 	SSOStates() SSOStateRepo
+	Referrals() referral.ReferralRepo
 	Close() error
 }

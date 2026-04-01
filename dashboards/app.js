@@ -1132,6 +1132,22 @@
                 retryAttempts = 0; // Reset on success
                 updateFreshnessDisplay();
 
+                // Fetch quota usage for overview warning banner (multi-tenant only)
+                if (IS_MULTI_TENANT) {
+                    try {
+                        const token = sessionStorage.getItem('gravix_token');
+                        const usageResp = await fetch(GATEWAY_URL + '/api/gateway/billing/usage', {
+                            headers: { 'Authorization': 'Bearer ' + token }
+                        });
+                        if (usageResp.ok) {
+                            const usageData = await usageResp.json();
+                            renderQuotaWarning(usageData);
+                        }
+                    } catch (e) {
+                        // Non-critical — don't block dashboard on quota fetch failure
+                    }
+                }
+
             } catch (err) {
                 console.error("Dashboard update failed:", err);
                 showError(true);
@@ -2001,6 +2017,7 @@
 
         // Alerts state
         let alertRulesData = [];
+        let editingRuleId = null;
         let channelsData = [];
         let alertHistoryData = [];
 
@@ -2113,6 +2130,7 @@
                     <td><span class="status-badge ${statusClass}">${rule.Status}</span></td>
                     <td>${lastTriggered}</td>
                     <td>
+                        <button class="ep-back-btn" onclick="editAlertRule('${rule.ID}')" style="padding:4px 10px;font-size:0.8rem;margin-right:4px;">Edit</button>
                         <button class="ep-back-btn" onclick="toggleRuleStatus('${rule.ID}', '${rule.Status}')" style="padding:4px 10px;font-size:0.8rem;margin-right:4px;">${toggleLabel}</button>
                         <button class="ep-back-btn" onclick="deleteAlertRule('${rule.ID}')" style="padding:4px 10px;font-size:0.8rem;color:#ef4444;">Delete</button>
                     </td>
@@ -2233,25 +2251,36 @@
             }
         }
 
-        async function toggleRuleStatus(id, currentStatus) {
+        async function editAlertRule(id) {
             const rule = alertRulesData.find(r => r.ID === id);
             if (!rule) return;
+            editingRuleId = id;
+            document.getElementById('rule-modal-title').textContent = 'Edit Alert Rule';
+            document.getElementById('ruleNameInput').value = rule.Name;
+            document.getElementById('ruleMetricSelect').value = rule.Metric;
+            document.getElementById('ruleOperatorSelect').value = rule.Operator;
+            if (rule.Operator === 'anomaly') {
+                document.getElementById('anomalyStddevInput').value = rule.Threshold;
+                document.getElementById('anomalyLookbackSelect').value = String(rule.WindowMinutes);
+            } else {
+                document.getElementById('ruleThresholdInput').value = rule.Threshold;
+                document.getElementById('ruleWindowSelect').value = String(rule.WindowMinutes);
+            }
+            document.getElementById('ruleCooldownSelect').value = String(rule.CooldownMinutes);
+            document.getElementById('ruleServiceInput').value = rule.Service || '';
+            document.getElementById('rulePathInput').value = rule.PathTemplate || '';
+            toggleAnomalyFields();
+            populateChannelSelect();
+            document.getElementById('ruleChannelSelect').value = rule.ChannelID;
+            document.getElementById('rule-modal').style.display = 'flex';
+        }
+
+        async function toggleRuleStatus(id, currentStatus) {
             const newStatus = currentStatus === 'active' ? 'paused' : 'active';
             try {
                 await gatewayFetch('/api/gateway/alert-rules/' + id, {
                     method: 'PUT',
-                    body: JSON.stringify({
-                        name: rule.Name,
-                        metric: rule.Metric,
-                        operator: rule.Operator,
-                        threshold: rule.Threshold,
-                        window_minutes: rule.WindowMinutes,
-                        service: rule.Service,
-                        path_template: rule.PathTemplate,
-                        channel_id: rule.ChannelID,
-                        cooldown_minutes: rule.CooldownMinutes,
-                        status: newStatus
-                    })
+                    body: JSON.stringify({ status: newStatus })
                 });
                 await loadAlertRules();
             } catch (err) {
@@ -2287,6 +2316,7 @@
 
         // Rule modal
         document.getElementById('createRuleBtn').addEventListener('click', () => {
+            editingRuleId = null;
             document.getElementById('rule-modal-title').textContent = 'New Alert Rule';
             document.getElementById('ruleNameInput').value = '';
             document.getElementById('ruleMetricSelect').value = 'error_rate';
@@ -2330,17 +2360,29 @@
             if (!name) { showToast('Name is required', 'warning'); return; }
             if (!channelId) { showToast('Please select a notification channel', 'warning'); return; }
 
+            const payload = {
+                name, metric, operator, threshold,
+                window_minutes: windowMinutes,
+                cooldown_minutes: cooldownMinutes,
+                service, path_template: pathTemplate,
+                channel_id: channelId
+            };
+
             try {
-                await createAlertRule({
-                    name, metric, operator, threshold,
-                    window_minutes: windowMinutes,
-                    cooldown_minutes: cooldownMinutes,
-                    service, path_template: pathTemplate,
-                    channel_id: channelId
-                });
+                if (editingRuleId) {
+                    await gatewayFetch('/api/gateway/alert-rules/' + editingRuleId, {
+                        method: 'PUT',
+                        body: JSON.stringify(payload)
+                    });
+                    await loadAlertRules();
+                    showToast('Alert rule updated', 'success');
+                } else {
+                    await createAlertRule(payload);
+                }
                 document.getElementById('rule-modal').style.display = 'none';
+                editingRuleId = null;
             } catch (err) {
-                showToast('Failed to create rule: ' + err.message, 'error');
+                showToast('Failed to ' + (editingRuleId ? 'update' : 'create') + ' rule: ' + err.message, 'error');
             }
         });
 
@@ -3296,6 +3338,34 @@ app.listen(8080, () => {
             return div.innerHTML;
         }
 
+        // Quota warning for the main overview page (id="quota-warning")
+        function renderQuotaWarning(usage) {
+            const el = document.getElementById('quota-warning');
+            if (!el) return;
+
+            const limit = usage.event_limit || usage.eventLimit || 0;
+            const used = usage.todayEventCount || usage.total_events || 0;
+            if (limit <= 0) { el.style.display = 'none'; return; }
+
+            const pct = (used / limit) * 100;
+            if (pct >= 100) {
+                el.className = 'quota-warning quota-warning-100';
+                el.innerHTML = '&#x26A0; You\'ve reached your monthly quota limit. Events may be rejected.';
+                el.style.display = 'flex';
+            } else if (pct >= 90) {
+                el.className = 'quota-warning quota-warning-90';
+                el.innerHTML = '&#x26A0; You\'ve used ' + Math.round(pct) + '% of your monthly quota. Consider upgrading.';
+                el.style.display = 'flex';
+            } else if (pct >= 80) {
+                el.className = 'quota-warning quota-warning-80';
+                el.innerHTML = '&#x26A0; You\'ve used ' + Math.round(pct) + '% of your monthly quota.';
+                el.style.display = 'flex';
+            } else {
+                el.style.display = 'none';
+            }
+        }
+
+        // Quota banner for API keys page (id="quota-banner")
         function renderQuotaBanner(usage) {
             const banner = document.getElementById('quota-banner');
             if (!banner) return;
