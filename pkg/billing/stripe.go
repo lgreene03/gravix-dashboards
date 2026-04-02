@@ -31,6 +31,10 @@ func NewStripeService(secretKey, webhookSecret string, plans []PlanConfig) *Stri
 	var freeID string
 	for _, p := range plans {
 		planMap[p.PriceID] = p
+		// Also index annual price IDs so PlanForPriceID resolves both periods
+		if p.AnnualPriceID != "" {
+			planMap[p.AnnualPriceID] = p
+		}
 		if p.PlanName == "free" {
 			freeID = p.PriceID
 		}
@@ -192,6 +196,23 @@ func (s *StripeService) PlanForPriceID(priceID string) string {
 
 func (s *StripeService) FreePriceID() string {
 	return s.freePriceID
+}
+
+// AnnualPriceIDFor returns the annual price ID for a given monthly price ID.
+// Returns empty string if no annual price is configured for that plan.
+func (s *StripeService) AnnualPriceIDFor(monthlyPriceID string) string {
+	if p, ok := s.plans[monthlyPriceID]; ok {
+		return p.AnnualPriceID
+	}
+	return ""
+}
+
+// IsAnnualPriceID returns true if the given price ID is an annual price ID.
+func (s *StripeService) IsAnnualPriceID(priceID string) bool {
+	if p, ok := s.plans[priceID]; ok {
+		return p.AnnualPriceID == priceID
+	}
+	return false
 }
 
 func (s *StripeService) ListInvoices(ctx context.Context, customerID string) ([]Invoice, error) {

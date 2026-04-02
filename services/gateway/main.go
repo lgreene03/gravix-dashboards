@@ -24,6 +24,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -297,15 +298,24 @@ func main() {
 	// Start alert evaluator background loop
 	go gw.alertEvaluatorLoop(bgCtx)
 
+	// Start onboarding email drip loop
+	go gw.onboardingEmailLoop(bgCtx)
+
 	// Initialize Stripe billing if configured
 	stripeKey := os.Getenv("STRIPE_SECRET_KEY")
 	if stripeKey != "" {
-		plans := billing.DefaultPlans(
+		plans := billing.DefaultPlansWithAnnual(
 			os.Getenv("STRIPE_PRICE_FREE"),
 			os.Getenv("STRIPE_PRICE_TEAM"),
 			os.Getenv("STRIPE_PRICE_BUSINESS"),
 			os.Getenv("STRIPE_PRICE_SCALE"),
 			os.Getenv("STRIPE_PRICE_ENTERPRISE"),
+			billing.AnnualPriceIDs{
+				Team:       os.Getenv("STRIPE_PRICE_TEAM_ANNUAL"),
+				Business:   os.Getenv("STRIPE_PRICE_BUSINESS_ANNUAL"),
+				Scale:      os.Getenv("STRIPE_PRICE_SCALE_ANNUAL"),
+				Enterprise: os.Getenv("STRIPE_PRICE_ENTERPRISE_ANNUAL"),
+			},
 		)
 		gw.billing = billing.NewStripeService(
 			stripeKey,
@@ -2376,9 +2386,10 @@ func (gw *gateway) handleBillingCheckout(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
-		PriceID    string `json:"price_id"`
-		SuccessURL string `json:"success_url"`
-		CancelURL  string `json:"cancel_url"`
+		PriceID       string `json:"price_id"`
+		BillingPeriod string `json:"billing_period"` // "monthly" (default) or "annual"
+		SuccessURL    string `json:"success_url"`
+		CancelURL     string `json:"cancel_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -2388,6 +2399,13 @@ func (gw *gateway) handleBillingCheckout(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "price_id required")
 		return
 	}
+	if req.BillingPeriod == "" {
+		req.BillingPeriod = "monthly"
+	}
+	if req.BillingPeriod != "monthly" && req.BillingPeriod != "annual" {
+		writeError(w, http.StatusBadRequest, "billing_period must be 'monthly' or 'annual'")
+		return
+	}
 	if req.SuccessURL == "" {
 		req.SuccessURL = "/"
 	}
@@ -2395,19 +2413,30 @@ func (gw *gateway) handleBillingCheckout(w http.ResponseWriter, r *http.Request)
 		req.CancelURL = "/"
 	}
 
-	// Determine trial days for the target plan
-	planName := gw.billing.PlanForPriceID(req.PriceID)
-	trialDays := billing.DefaultTrialDays(planName)
-
 	svc, ok := gw.billing.(*billing.StripeService)
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "checkout not available")
 		return
 	}
 
+	// Resolve the correct price ID based on billing period
+	checkoutPriceID := req.PriceID
+	if req.BillingPeriod == "annual" {
+		if annualID := svc.AnnualPriceIDFor(req.PriceID); annualID != "" {
+			checkoutPriceID = annualID
+		} else {
+			writeError(w, http.StatusBadRequest, "annual billing not available for this plan")
+			return
+		}
+	}
+
+	// Determine trial days for the target plan
+	planName := gw.billing.PlanForPriceID(checkoutPriceID)
+	trialDays := billing.DefaultTrialDays(planName)
+
 	url, err := svc.CreateCheckoutSession(r.Context(), billing.CheckoutParams{
 		CustomerID: tenant.StripeCustomerID,
-		PriceID:    req.PriceID,
+		PriceID:    checkoutPriceID,
 		SuccessURL: req.SuccessURL,
 		CancelURL:  req.CancelURL,
 		TrialDays:  trialDays,
@@ -3136,6 +3165,17 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				continue
 			}
 
+			// Build dashboard deep-link URL
+			dashURL := gw.baseURL + "/index.html?"
+			if rule.Service != "" {
+				dashURL += "service=" + url.QueryEscape(rule.Service) + "&"
+			}
+			if rule.PathTemplate != "" {
+				dashURL += "path=" + url.QueryEscape(rule.PathTemplate) + "&"
+			}
+			from := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute).Format(time.RFC3339)
+			dashURL += "from=" + url.QueryEscape(from) + "&to=" + url.QueryEscape(now.Format(time.RFC3339))
+
 			payload := notify.AlertPayload{
 				RuleName:      rule.Name,
 				Metric:        rule.Metric,
@@ -3146,6 +3186,7 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				Service:       rule.Service,
 				PathTemplate:  rule.PathTemplate,
 				FiredAt:       now,
+				DashboardURL:  dashURL,
 			}
 
 			// Set anomaly-specific fields if applicable
@@ -4215,4 +4256,96 @@ func (gw *gateway) handleCancelDeletion(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "deletion request cancelled",
 	})
+}
+
+// onboardingEmailLoop sends drip emails to tenants based on account age.
+// Runs every hour, checks tenant creation time, and sends:
+//   - 3 days: "try alerting" nudge (if no alert rules created)
+//   - 7 days: "upgrade plan" nudge (if still on free plan)
+func (gw *gateway) onboardingEmailLoop(ctx context.Context) {
+	// Track sent emails in-memory to avoid duplicates within process lifetime.
+	// On restart, audit log entries prevent business-critical duplicate actions,
+	// but a duplicate nudge email is harmless.
+	sent := make(map[string]bool) // key: "tenantID:emailType"
+
+	// Wait 10 minutes after startup before first run
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(10 * time.Minute):
+	}
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		gw.sendOnboardingEmails(ctx, sent)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (gw *gateway) sendOnboardingEmails(ctx context.Context, sent map[string]bool) {
+	tenants, err := gw.db.Tenants().List(ctx)
+	if err != nil {
+		slog.Error("onboarding email loop: failed to list tenants", "error", err)
+		return
+	}
+
+	now := time.Now().UTC()
+	onboarding := email.NewOnboardingService(gw.emailSender, gw.baseURL)
+
+	for _, t := range tenants {
+		if t.Status != "active" {
+			continue
+		}
+		age := now.Sub(t.CreatedAt)
+
+		// 3-day nudge: try alerting
+		if age >= 3*24*time.Hour && age < 30*24*time.Hour {
+			key := t.ID + ":try_alerting"
+			if !sent[key] {
+				// Check if tenant has any alert rules
+				rules, err := gw.db.AlertRules().ListByTenant(ctx, t.ID)
+				if err != nil {
+					slog.Error("onboarding: failed to list alert rules", "tenant_id", t.ID, "error", err)
+					continue
+				}
+				if len(rules) == 0 {
+					// Find admin user for this tenant
+					users, err := gw.db.Users().ListByTenant(ctx, t.ID)
+					if err != nil || len(users) == 0 {
+						continue
+					}
+					onboarding.SendTryAlerting(ctx, users[0].Email, users[0].Email, t.Name)
+					gw.auditDirect(t.ID, "", "onboarding.try_alerting_sent", "tenant", t.ID, "", "system")
+					sent[key] = true
+				} else {
+					sent[key] = true // has rules, skip permanently
+				}
+			}
+		}
+
+		// 7-day nudge: upgrade from free
+		if age >= 7*24*time.Hour && age < 30*24*time.Hour {
+			key := t.ID + ":upgrade_nudge"
+			if !sent[key] {
+				if t.Plan == "free" {
+					users, err := gw.db.Users().ListByTenant(ctx, t.ID)
+					if err != nil || len(users) == 0 {
+						continue
+					}
+					onboarding.SendUpgradeNudge(ctx, users[0].Email, users[0].Email, t.Name)
+					gw.auditDirect(t.ID, "", "onboarding.upgrade_nudge_sent", "tenant", t.ID, "", "system")
+					sent[key] = true
+				} else {
+					sent[key] = true // not on free, skip permanently
+				}
+			}
+		}
+	}
 }

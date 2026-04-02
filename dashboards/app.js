@@ -1265,12 +1265,19 @@
         }
 
         function loadFiltersFromHash() {
+            // Support both query string params (from alert deep-links) and hash params
+            const queryParams = new URLSearchParams(location.search);
             const hash = location.hash.slice(1);
-            if (!hash) return;
-            const params = new URLSearchParams(hash);
+            const hashParams = hash ? new URLSearchParams(hash) : new URLSearchParams();
+            // Query string takes precedence (alert deep-links), fall back to hash
+            const params = new URLSearchParams();
+            for (const [k, v] of hashParams) params.set(k, v);
+            for (const [k, v] of queryParams) params.set(k, v);
+            if (params.toString() === '') return;
             if (params.has('service')) document.getElementById('serviceFilter').value = params.get('service');
-            if (params.has('from')) document.getElementById('dateFrom').value = params.get('from');
-            if (params.has('to')) document.getElementById('dateTo').value = params.get('to');
+            // Extract YYYY-MM-DD from RFC3339 or plain date strings
+            if (params.has('from')) document.getElementById('dateFrom').value = params.get('from').substring(0, 10);
+            if (params.has('to')) document.getElementById('dateTo').value = params.get('to').substring(0, 10);
             // Legacy: support old 'date' param
             if (params.has('date') && !params.has('from')) document.getElementById('dateFrom').value = params.get('date');
             if (params.has('compare')) document.getElementById('compareFilter').value = params.get('compare');

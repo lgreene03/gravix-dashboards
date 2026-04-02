@@ -25,6 +25,7 @@ type AlertPayload struct {
 	Service        string
 	PathTemplate   string
 	FiredAt        time.Time
+	DashboardURL   string // deep-link to dashboard filtered to this alert's scope
 	// Anomaly-specific fields (only set when Operator == "anomaly")
 	Mean           float64
 	Stddev         float64
@@ -154,6 +155,25 @@ func (d *Dispatcher) sendSlack(ctx context.Context, config ChannelConfig, alert 
 		},
 	}
 
+	// Append a dashboard deep-link button if a URL was provided
+	if alert.DashboardURL != "" {
+		blocks := payload["blocks"].([]map[string]interface{})
+		blocks = append(blocks, map[string]interface{}{
+			"type": "actions",
+			"elements": []map[string]interface{}{
+				{
+					"type": "button",
+					"text": map[string]string{
+						"type": "plain_text",
+						"text": "View in Dashboard",
+					},
+					"url": alert.DashboardURL,
+				},
+			},
+		})
+		payload["blocks"] = blocks
+	}
+
 	return d.postJSON(ctx, config.WebhookURL, "", payload)
 }
 
@@ -175,6 +195,9 @@ func (d *Dispatcher) sendWebhook(ctx context.Context, config ChannelConfig, aler
 		"service":        alert.Service,
 		"path_template":  alert.PathTemplate,
 		"fired_at":       alert.FiredAt.Format(time.RFC3339),
+	}
+	if alert.DashboardURL != "" {
+		payload["dashboard_url"] = alert.DashboardURL
 	}
 	return d.postJSON(ctx, config.WebhookURL, config.AuthHeader, payload)
 }
