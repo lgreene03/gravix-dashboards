@@ -3237,3 +3237,563 @@ func TestRegisterRequiresTOS(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
+
+// ============================================================
+// handleTeam tests
+// ============================================================
+
+func TestTeamListSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/team", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	members, ok := resp["members"].([]interface{})
+	if !ok {
+		t.Fatal("expected members array")
+	}
+	if len(members) != 1 {
+		t.Errorf("members count = %d, want 1", len(members))
+	}
+}
+
+func TestTeamUpdateRoleAdmin(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, token := createTestTenantWithUser(t, gw)
+	ctx := context.Background()
+
+	// Create a second user to modify
+	viewer := &tenantdb.User{
+		TenantID:     tenant.ID,
+		Email:        "viewer@corp.com",
+		PasswordHash: "password123",
+		Role:         "viewer",
+	}
+	gw.db.Users().Create(ctx, viewer)
+
+	body := jsonBody(t, map[string]interface{}{
+		"user_id": viewer.ID,
+		"role":    "editor",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/team", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify role was updated
+	updated, _ := gw.db.Users().GetByID(ctx, viewer.ID)
+	if updated.Role != "editor" {
+		t.Errorf("role = %s, want editor", updated.Role)
+	}
+}
+
+func TestTeamUpdateSelfBlocked(t *testing.T) {
+	gw := newTestGateway(t)
+	_, user, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"user_id": user.ID,
+		"role":    "viewer",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/team", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestTeamUpdateInvalidRole(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, token := createTestTenantWithUser(t, gw)
+	ctx := context.Background()
+
+	viewer := &tenantdb.User{
+		TenantID: tenant.ID, Email: "v2@corp.com", PasswordHash: "password123", Role: "viewer",
+	}
+	gw.db.Users().Create(ctx, viewer)
+
+	body := jsonBody(t, map[string]interface{}{
+		"user_id": viewer.ID,
+		"role":    "superadmin",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/team", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestTeamMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/team", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleRetention tests
+// ============================================================
+
+func TestRetentionGetDefault(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/retention", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["plan"] != "free" {
+		t.Errorf("plan = %v, want free", resp["plan"])
+	}
+}
+
+func TestRetentionUpdateSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"facts_days": 5, "metrics_days": 5, "traces_days": 5,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/retention", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRetentionUpdateOutOfBounds(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"facts_days": 999, "metrics_days": 0, "traces_days": 0,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/retention", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRetentionMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/retention", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleLogout tests
+// ============================================================
+
+func TestLogoutSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/logout", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleLogout)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestLogoutWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/logout", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleLogout)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleForgotPassword tests
+// ============================================================
+
+func TestForgotPasswordSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, _ = createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{"email": "admin@corp.com"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/forgot-password", body)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	// Should always return 200 (even for non-existent emails, to prevent enumeration)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForgotPasswordNonExistentEmail(t *testing.T) {
+	gw := newTestGateway(t)
+
+	body := jsonBody(t, map[string]string{"email": "nobody@test.com"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/forgot-password", body)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	// Should return 200 to prevent email enumeration
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
+
+func TestForgotPasswordWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/forgot-password", nil)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+func TestForgotPasswordMissingEmail(t *testing.T) {
+	gw := newTestGateway(t)
+
+	body := jsonBody(t, map[string]string{})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/forgot-password", body)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	// Handler always returns 200 to prevent email enumeration
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
+
+// ============================================================
+// handleInvitations tests
+// ============================================================
+
+func TestInvitationsListEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/invitations", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	invitations := resp["invitations"].([]interface{})
+	if len(invitations) != 0 {
+		t.Errorf("expected empty invitations list, got %d", len(invitations))
+	}
+}
+
+func TestInvitationsCreateSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, token := createTestTenantWithUser(t, gw)
+
+	// Upgrade to team plan to allow more seats
+	gw.db.Tenants().UpdatePlan(context.Background(), tenant.ID, "team")
+
+	body := jsonBody(t, map[string]string{
+		"email": "newmember@corp.com",
+		"role":  "viewer",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/invitations", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestInvitationsCreateMissingEmail(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{"role": "viewer"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/invitations", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestInvitationsMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/invitations", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleResendVerification tests
+// ============================================================
+
+func TestResendVerificationSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/resend-verification", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleResendVerification)(rr, req)
+
+	// Already verified user — should still return 200
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestResendVerificationWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/resend-verification", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleResendVerification)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleBillingCheckout tests
+// ============================================================
+
+func TestBillingCheckoutNoBilling(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{"plan": "team"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/billing/checkout", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingCheckout)(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestBillingCheckoutWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/billing/checkout", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingCheckout)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleBillingInvoices tests
+// ============================================================
+
+func TestBillingInvoicesNoBillingReturnsEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/billing/invoices", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingInvoices)(rr, req)
+
+	// Returns 200 with empty invoices when billing not configured
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestBillingInvoicesWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/billing/invoices", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingInvoices)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleBillingUsageHistory tests
+// ============================================================
+
+func TestBillingUsageHistoryEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/billing/usage-history", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingUsageHistory)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ============================================================
+// handleTracesRecent tests
+// ============================================================
+
+func TestTracesRecentEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	dir := t.TempDir()
+	store, _ := storage.NewLocalStore(dir)
+	gw.store = store
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/traces/recent", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTracesRecent)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTracesRecentWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/traces/recent", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTracesRecent)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
