@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/referral"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -42,6 +43,7 @@ type PostgresDB struct {
 	recoveryCodes         *pgRecoveryCodeRepo
 	revokedTokens         *pgRevokedTokenRepo
 	ssoStates             *pgSSOStateRepo
+	referrals             *pgReferralRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -88,6 +90,7 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.recoveryCodes = &pgRecoveryCodeRepo{db: db}
 	pdb.revokedTokens = &pgRevokedTokenRepo{db: db}
 	pdb.ssoStates = &pgSSOStateRepo{db: db}
+	pdb.referrals = &pgReferralRepo{db: db}
 	return pdb, nil
 }
 
@@ -111,6 +114,7 @@ func (p *PostgresDB) Sessions() SessionRepo                     { return p.sessi
 func (p *PostgresDB) RecoveryCodes() RecoveryCodeRepo            { return p.recoveryCodes }
 func (p *PostgresDB) RevokedTokens() RevokedTokenRepo            { return p.revokedTokens }
 func (p *PostgresDB) SSOStates() SSOStateRepo                    { return p.ssoStates }
+func (p *PostgresDB) Referrals() referral.ReferralRepo            { return p.referrals }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -137,8 +141,8 @@ func (r *pgTenantRepo) Create(ctx context.Context, t *Tenant) error {
 func (r *pgTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) {
 	t := &Tenant{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE id = $1`, id).
-		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, COALESCE(parent_tenant_id,''), trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE id = $1`, id).
+		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.ParentTenantID, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("tenant not found: %s", id)
 	}
@@ -148,8 +152,8 @@ func (r *pgTenantRepo) GetByID(ctx context.Context, id string) (*Tenant, error) 
 func (r *pgTenantRepo) GetByEmail(ctx context.Context, email string) (*Tenant, error) {
 	t := &Tenant{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE email = $1`, email).
-		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, COALESCE(parent_tenant_id,''), trial_started_at, trial_ends_at, created_at, updated_at FROM tenants WHERE email = $1`, email).
+		Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.ParentTenantID, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("tenant not found: %s", email)
 	}
@@ -207,7 +211,7 @@ func (r *pgTenantRepo) ListChildren(ctx context.Context, parentTenantID string) 
 
 func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, trial_started_at, trial_ends_at, created_at, updated_at FROM tenants ORDER BY created_at`)
+		`SELECT id, name, email, plan, COALESCE(stripe_customer_id,''), COALESCE(stripe_subscription_id,''), status, overage_allowed, COALESCE(parent_tenant_id,''), trial_started_at, trial_ends_at, created_at, updated_at FROM tenants ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +219,7 @@ func (r *pgTenantRepo) List(ctx context.Context) ([]*Tenant, error) {
 	var list []*Tenant
 	for rows.Next() {
 		t := &Tenant{}
-		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Email, &t.Plan, &t.StripeCustomerID, &t.StripeSubscriptionID, &t.Status, &t.OverageAllowed, &t.ParentTenantID, &t.TrialStartedAt, &t.TrialEndsAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, t)
@@ -1244,4 +1248,60 @@ func (r *pgSSOStateRepo) Cleanup(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
 		`DELETE FROM sso_states WHERE expires_at < NOW()`)
 	return err
+}
+
+// --- Referral Repo ---
+
+type pgReferralRepo struct{ db *sql.DB }
+
+func (r *pgReferralRepo) Create(ctx context.Context, ref *referral.Referral) error {
+	if ref.ID == "" {
+		ref.ID = uuid.New().String()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO referrals (id, code, referrer_tenant, status, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+		ref.ID, ref.Code, ref.ReferrerTenant, ref.Status, ref.CreatedAt.UTC(), ref.ExpiresAt.UTC())
+	return err
+}
+
+func (r *pgReferralRepo) GetByCode(ctx context.Context, code string) (*referral.Referral, error) {
+	ref := &referral.Referral{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, code, referrer_tenant, referee_tenant, status, coupon_id, created_at, used_at, expires_at FROM referrals WHERE code = $1`,
+		code).Scan(&ref.ID, &ref.Code, &ref.ReferrerTenant, &ref.RefereeTenant, &ref.Status, &ref.CouponID, &ref.CreatedAt, &ref.UsedAt, &ref.ExpiresAt)
+	return ref, err
+}
+
+func (r *pgReferralRepo) MarkUsed(ctx context.Context, code, refereeTenant, couponID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE referrals SET referee_tenant = $1, status = 'used', coupon_id = $2, used_at = NOW() WHERE code = $3 AND status = 'active'`,
+		refereeTenant, couponID, code)
+	return err
+}
+
+func (r *pgReferralRepo) ListByTenant(ctx context.Context, tenantID string) ([]*referral.Referral, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, code, referrer_tenant, referee_tenant, status, coupon_id, created_at, used_at, expires_at FROM referrals WHERE referrer_tenant = $1 ORDER BY created_at DESC`,
+		tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var refs []*referral.Referral
+	for rows.Next() {
+		ref := &referral.Referral{}
+		if err := rows.Scan(&ref.ID, &ref.Code, &ref.ReferrerTenant, &ref.RefereeTenant, &ref.Status, &ref.CouponID, &ref.CreatedAt, &ref.UsedAt, &ref.ExpiresAt); err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
+func (r *pgReferralRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM referrals WHERE referrer_tenant = $1 AND status = 'active'`, tenantID).Scan(&count)
+	return count, err
 }

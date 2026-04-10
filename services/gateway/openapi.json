@@ -102,7 +102,7 @@
     "/api/gateway/login": {
       "post": {
         "summary": "Authenticate user",
-        "description": "Validate credentials and return a JWT token.",
+        "description": "Validate credentials and return a JWT token. If 2FA is enabled, requires totp_code or recovery_code.",
         "operationId": "login",
         "tags": ["Auth"],
         "requestBody": {
@@ -122,7 +122,207 @@
               }
             }
           },
-          "401": { "description": "Invalid credentials" }
+          "401": { "description": "Invalid credentials" },
+          "403": { "description": "Account deactivated or tenant inactive" }
+        }
+      }
+    },
+    "/api/gateway/logout": {
+      "post": {
+        "summary": "Logout and revoke token",
+        "description": "Revoke the current JWT by adding its JTI to the blacklist.",
+        "operationId": "logout",
+        "tags": ["Auth"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "401": { "description": "Not authenticated" }
+        }
+      }
+    },
+    "/api/gateway/forgot-password": {
+      "post": {
+        "summary": "Request password reset",
+        "description": "Send a password reset email. Always returns 200 to prevent email enumeration.",
+        "operationId": "forgotPassword",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email"],
+                "properties": {
+                  "email": { "type": "string", "format": "email" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reset email sent if address is registered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/reset-password": {
+      "post": {
+        "summary": "Complete password reset",
+        "description": "Reset password using a valid token from the reset email.",
+        "operationId": "resetPassword",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["token", "new_password"],
+                "properties": {
+                  "token": { "type": "string" },
+                  "new_password": { "type": "string", "minLength": 8 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset successful",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "400": { "description": "Invalid or expired token" }
+        }
+      }
+    },
+    "/api/gateway/verify-email": {
+      "get": {
+        "summary": "Verify email address",
+        "description": "Verify a user's email using the token from the verification email. Also accepts POST with JSON body.",
+        "operationId": "verifyEmail",
+        "tags": ["Auth"],
+        "parameters": [
+          { "name": "token", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Email verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": { "type": "boolean" },
+                    "message": { "type": "string" },
+                    "api_key": { "type": "string", "description": "Initial API key (only on first verification)" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid or expired token" }
+        }
+      }
+    },
+    "/api/gateway/resend-verification": {
+      "post": {
+        "summary": "Resend verification email",
+        "description": "Resend the email verification link for the authenticated user.",
+        "operationId": "resendVerification",
+        "tags": ["Auth"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Verification email resent",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "401": { "description": "Not authenticated" }
+        }
+      }
+    },
+    "/api/gateway/password": {
+      "put": {
+        "summary": "Change password",
+        "description": "Change the authenticated user's password by providing current and new passwords.",
+        "operationId": "changePassword",
+        "tags": ["Auth"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["current_password", "new_password"],
+                "properties": {
+                  "current_password": { "type": "string" },
+                  "new_password": { "type": "string", "minLength": 8 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "401": { "description": "Current password incorrect" }
+        }
+      }
+    },
+    "/api/gateway/refresh": {
+      "post": {
+        "summary": "Refresh JWT token",
+        "description": "Exchange a valid JWT for a fresh one with a new expiry. Revokes the old token.",
+        "operationId": "refreshToken",
+        "tags": ["Auth"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "New token issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": { "type": "string" },
+                    "tenant_id": { "type": "string" },
+                    "user_id": { "type": "string" },
+                    "email": { "type": "string" },
+                    "role": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Not authenticated" }
         }
       }
     },
@@ -157,8 +357,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": { "$ref": "#/components/schemas/APIKey" }
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/APIKey" }
+                    }
+                  }
                 }
               }
             }
@@ -187,7 +392,74 @@
               }
             }
           },
-          "403": { "description": "Admin role required" }
+          "403": { "description": "Admin role required or email not verified" }
+        }
+      }
+    },
+    "/api/gateway/api-keys/{id}": {
+      "delete": {
+        "summary": "Revoke API key",
+        "description": "Revoke an API key by its ID.",
+        "operationId": "revokeAPIKey",
+        "tags": ["API Keys"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Key revoked" },
+          "403": { "description": "Admin role required" },
+          "404": { "description": "Key not found or already revoked" }
+        }
+      }
+    },
+    "/api/gateway/api-keys/expiring": {
+      "get": {
+        "summary": "List expiring API keys",
+        "description": "Returns API keys expiring within the next 7 days.",
+        "operationId": "listExpiringAPIKeys",
+        "tags": ["API Keys"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of soon-to-expire keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/APIKey" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/webhooks/stripe": {
+      "post": {
+        "summary": "Stripe webhook",
+        "description": "Processes Stripe webhook events. Authenticated via Stripe-Signature header, not JWT.",
+        "operationId": "stripeWebhook",
+        "tags": ["Billing"],
+        "parameters": [
+          { "name": "Stripe-Signature", "in": "header", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Webhook processed" },
+          "400": { "description": "Invalid webhook signature" }
         }
       }
     },
@@ -239,6 +511,7 @@
                 "required": ["price_id"],
                 "properties": {
                   "price_id": { "type": "string" },
+                  "billing_period": { "type": "string", "enum": ["monthly", "annual"], "default": "monthly" },
                   "success_url": { "type": "string", "format": "uri" },
                   "cancel_url": { "type": "string", "format": "uri" }
                 }
@@ -270,10 +543,304 @@
         "security": [{ "JWTAuth": [] }],
         "responses": {
           "200": {
-            "description": "Usage stats",
+            "description": "Usage stats with daily breakdown",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/UsageStats" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/billing/invoices": {
+      "get": {
+        "summary": "List invoices",
+        "description": "Returns Stripe invoice history for the tenant.",
+        "operationId": "billingInvoices",
+        "tags": ["Billing"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Invoice list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "invoices": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/billing/usage/history": {
+      "get": {
+        "summary": "Get usage history",
+        "description": "Returns monthly usage summaries for up to 12 months.",
+        "operationId": "billingUsageHistory",
+        "tags": ["Billing"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Monthly usage history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "history": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "month": { "type": "string" },
+                          "count": { "type": "integer" },
+                          "plan": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/channels": {
+      "get": {
+        "summary": "List notification channels",
+        "operationId": "listChannels",
+        "tags": ["Channels"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Channel list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "channels": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/NotificationChannel" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create notification channel",
+        "operationId": "createChannel",
+        "tags": ["Channels"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "type"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "type": { "type": "string", "enum": ["slack", "webhook"] },
+                  "config": { "type": "object" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Channel created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NotificationChannel" }
+              }
+            }
+          },
+          "403": { "description": "Admin or editor role required" }
+        }
+      }
+    },
+    "/api/gateway/channels/{id}": {
+      "delete": {
+        "summary": "Delete notification channel",
+        "operationId": "deleteChannel",
+        "tags": ["Channels"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Channel deleted" },
+          "403": { "description": "Admin or editor role required" },
+          "404": { "description": "Channel not found" }
+        }
+      }
+    },
+    "/api/gateway/channels/{id}/test": {
+      "post": {
+        "summary": "Send test notification",
+        "description": "Send a test message through the specified notification channel.",
+        "operationId": "testChannel",
+        "tags": ["Channels"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Test notification sent" },
+          "403": { "description": "Admin or editor role required" },
+          "502": { "description": "Test delivery failed" }
+        }
+      }
+    },
+    "/api/gateway/alert-rules": {
+      "get": {
+        "summary": "List alert rules",
+        "operationId": "listAlertRules",
+        "tags": ["Alerting"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of alert rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rules": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/AlertRule" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create alert rule",
+        "operationId": "createAlertRule",
+        "tags": ["Alerting"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AlertRuleRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Alert rule created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AlertRule" }
+              }
+            }
+          },
+          "403": { "description": "Admin or editor role required" }
+        }
+      }
+    },
+    "/api/gateway/alert-rules/{id}": {
+      "put": {
+        "summary": "Update alert rule",
+        "description": "Partial update of an alert rule. Only provided fields are changed.",
+        "operationId": "updateAlertRule",
+        "tags": ["Alerting"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "metric": { "type": "string", "enum": ["error_rate", "p50_latency", "p95_latency", "p99_latency", "throughput"] },
+                  "operator": { "type": "string", "enum": ["gt", "lt", "anomaly"] },
+                  "threshold": { "type": "number" },
+                  "window_minutes": { "type": "integer" },
+                  "service": { "type": "string" },
+                  "path_template": { "type": "string" },
+                  "channel_id": { "type": "string" },
+                  "cooldown_minutes": { "type": "integer" },
+                  "status": { "type": "string", "enum": ["active", "paused"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Alert rule updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AlertRule" }
+              }
+            }
+          },
+          "403": { "description": "Admin or editor role required" },
+          "404": { "description": "Rule not found" }
+        }
+      },
+      "delete": {
+        "summary": "Delete alert rule",
+        "operationId": "deleteAlertRule",
+        "tags": ["Alerting"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Rule deleted" },
+          "403": { "description": "Admin or editor role required" },
+          "404": { "description": "Rule not found" }
+        }
+      }
+    },
+    "/api/gateway/alert-history": {
+      "get": {
+        "summary": "List alert history",
+        "description": "Returns paginated alert firing history. Optionally filter by rule_id.",
+        "operationId": "listAlertHistory",
+        "tags": ["Alerting"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "rule_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "per_page", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alert history entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/AlertHistoryEntry" }
+                    },
+                    "pagination": { "$ref": "#/components/schemas/Pagination" }
+                  }
+                }
               }
             }
           }
@@ -298,33 +865,984 @@
         }
       }
     },
-    "/api/gateway/alert-rules": {
+    "/api/gateway/traces/recent": {
       "get": {
-        "summary": "List alert rules",
-        "operationId": "listAlertRules",
-        "tags": ["Alerting"],
+        "summary": "List recent traces",
+        "description": "Returns recent trace summaries grouped by trace ID.",
+        "operationId": "listRecentTraces",
+        "tags": ["Traces"],
         "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "maximum": 100 } }
+        ],
         "responses": {
           "200": {
-            "description": "List of alert rules"
+            "description": "Recent traces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "traces": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/TraceSummary" }
+                    },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
           }
         }
-      },
+      }
+    },
+    "/api/gateway/traces": {
+      "get": {
+        "summary": "Get trace by ID",
+        "description": "Returns all spans for a specific trace.",
+        "operationId": "getTraceByID",
+        "tags": ["Traces"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "trace_id", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trace spans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "trace_id": { "type": "string" },
+                    "spans": { "type": "array", "items": { "$ref": "#/components/schemas/TraceSpan" } },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "trace_id query parameter required" }
+        }
+      }
+    },
+    "/api/gateway/dlq": {
+      "get": {
+        "summary": "List dead letter queue entries",
+        "description": "Returns recent DLQ entries for the tenant.",
+        "operationId": "listDLQ",
+        "tags": ["DLQ"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 500 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "DLQ entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/DLQEntry" }
+                    },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/dlq/replay": {
       "post": {
-        "summary": "Create alert rule",
-        "operationId": "createAlertRule",
-        "tags": ["Alerting"],
+        "summary": "Replay DLQ entries",
+        "description": "Re-submit DLQ entries to the ingestion endpoint. Validates tenant ownership.",
+        "operationId": "replayDLQ",
+        "tags": ["DLQ"],
         "security": [{ "JWTAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/AlertRuleRequest" }
+              "schema": {
+                "type": "object",
+                "required": ["entries"],
+                "properties": {
+                  "entries": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "raw_json": { "type": "object" }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         },
         "responses": {
-          "201": { "description": "Alert rule created" }
+          "200": { "description": "Replay completed" },
+          "400": { "description": "No valid entries to replay" },
+          "502": { "description": "Ingestion service unavailable" }
+        }
+      }
+    },
+    "/api/gateway/audit-log": {
+      "get": {
+        "summary": "List audit log",
+        "description": "Returns paginated audit entries for the tenant. Admin only.",
+        "operationId": "listAuditLog",
+        "tags": ["Admin"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "per_page", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit log entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEntry" } },
+                    "pagination": { "$ref": "#/components/schemas/Pagination" }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
+    "/api/gateway/retention": {
+      "get": {
+        "summary": "Get retention policy",
+        "description": "Returns the tenant's data retention settings and plan limits.",
+        "operationId": "getRetention",
+        "tags": ["Admin"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Retention policy",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RetentionPolicy" }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" }
+        }
+      },
+      "put": {
+        "summary": "Update retention policy",
+        "description": "Set custom retention periods (within plan limits). Use 0 for plan default.",
+        "operationId": "updateRetention",
+        "tags": ["Admin"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "facts_days": { "type": "integer" },
+                  "metrics_days": { "type": "integer" },
+                  "traces_days": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retention policy updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RetentionPolicy" }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
+    "/api/gateway/export": {
+      "post": {
+        "summary": "Export raw data",
+        "description": "Stream a tar.gz archive of raw JSONL files for a date range. Max 30 days, 1 concurrent export per tenant.",
+        "operationId": "exportData",
+        "tags": ["Admin"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["start_date", "end_date"],
+                "properties": {
+                  "start_date": { "type": "string", "format": "date" },
+                  "end_date": { "type": "string", "format": "date" },
+                  "data_type": { "type": "string", "enum": ["request_facts", "service_events"], "default": "request_facts" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "tar.gz archive stream",
+            "content": { "application/gzip": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "400": { "description": "Invalid date range" },
+          "429": { "description": "Export already in progress" }
+        }
+      }
+    },
+    "/api/gateway/invitations": {
+      "get": {
+        "summary": "List invitations",
+        "description": "List pending team invitations for the tenant.",
+        "operationId": "listInvitations",
+        "tags": ["Team"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Invitation list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "invitations": { "type": "array", "items": { "$ref": "#/components/schemas/Invitation" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Send team invitation",
+        "description": "Invite a user to join the tenant. Admin only. Enforces seat limits.",
+        "operationId": "createInvitation",
+        "tags": ["Team"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email"],
+                "properties": {
+                  "email": { "type": "string", "format": "email" },
+                  "role": { "type": "string", "enum": ["viewer", "editor", "admin"], "default": "viewer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invitation sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Admin role required or seat limit reached" },
+          "409": { "description": "User already exists" }
+        }
+      }
+    },
+    "/api/gateway/invitations/accept": {
+      "post": {
+        "summary": "Accept team invitation",
+        "description": "Accept an invitation and create a user account. No JWT required.",
+        "operationId": "acceptInvitation",
+        "tags": ["Team"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["token", "password"],
+                "properties": {
+                  "token": { "type": "string" },
+                  "password": { "type": "string", "minLength": 8 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Invitation accepted, JWT returned",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "400": { "description": "Token expired or already used" },
+          "404": { "description": "Invitation not found" }
+        }
+      }
+    },
+    "/api/gateway/team": {
+      "get": {
+        "summary": "List team members",
+        "description": "Returns all users in the tenant (password hashes excluded).",
+        "operationId": "listTeamMembers",
+        "tags": ["Team"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Team member list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "members": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/TeamMember" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update team member",
+        "description": "Change a user's role or status. Admin only. Cannot modify yourself.",
+        "operationId": "updateTeamMember",
+        "tags": ["Team"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["user_id"],
+                "properties": {
+                  "user_id": { "type": "string" },
+                  "role": { "type": "string", "enum": ["viewer", "editor", "admin"] },
+                  "status": { "type": "string", "enum": ["active", "deactivated"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Member updated" },
+          "400": { "description": "Cannot modify own role" },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
+    "/api/gateway/gdpr/access": {
+      "get": {
+        "summary": "GDPR data access",
+        "description": "Returns all personal data held for the authenticated user (GDPR Article 15).",
+        "operationId": "gdprAccess",
+        "tags": ["GDPR"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Personal data export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": { "$ref": "#/components/schemas/UserInfo" },
+                    "tenant": { "type": "object" },
+                    "consent_records": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/gdpr/portability": {
+      "get": {
+        "summary": "GDPR data portability",
+        "description": "Download personal data as a JSON file (GDPR Article 20).",
+        "operationId": "gdprPortability",
+        "tags": ["GDPR"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "JSON file download",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            },
+            "headers": {
+              "Content-Disposition": {
+                "schema": { "type": "string" },
+                "description": "attachment; filename=\"gravix-data-export.json\""
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/consent": {
+      "get": {
+        "summary": "List consent records",
+        "description": "Returns all consent records for the authenticated user.",
+        "operationId": "listConsent",
+        "tags": ["GDPR"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Consent records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "consent_records": { "type": "array", "items": { "$ref": "#/components/schemas/ConsentRecord" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Record consent",
+        "description": "Record a new consent decision (tos, privacy, or cookies).",
+        "operationId": "recordConsent",
+        "tags": ["GDPR"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["type", "version"],
+                "properties": {
+                  "type": { "type": "string", "enum": ["tos", "privacy", "cookies"] },
+                  "version": { "type": "string" },
+                  "accepted": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Consent recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "type": { "type": "string" },
+                    "version": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/account": {
+      "delete": {
+        "summary": "Request account deletion",
+        "description": "Schedule the tenant for deletion with a 30-day grace period. Admin only.",
+        "operationId": "requestAccountDeletion",
+        "tags": ["Account"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "202": {
+            "description": "Deletion scheduled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": { "type": "string" },
+                    "requested_at": { "type": "string", "format": "date-time" },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
+    "/api/gateway/account/cancel-deletion": {
+      "post": {
+        "summary": "Cancel account deletion",
+        "description": "Cancel a pending account deletion request. Admin only.",
+        "operationId": "cancelAccountDeletion",
+        "tags": ["Account"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Deletion cancelled",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" },
+          "404": { "description": "No pending deletion request" }
+        }
+      }
+    },
+    "/api/gateway/2fa/setup": {
+      "post": {
+        "summary": "Set up two-factor auth",
+        "description": "Generate a TOTP secret and provisioning URL for authenticator apps.",
+        "operationId": "twoFactorSetup",
+        "tags": ["2FA"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "TOTP secret and URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "secret": { "type": "string" },
+                    "url": { "type": "string", "format": "uri" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "409": { "description": "2FA already enabled" }
+        }
+      }
+    },
+    "/api/gateway/2fa/confirm": {
+      "post": {
+        "summary": "Confirm two-factor auth",
+        "description": "Verify the TOTP code to enable 2FA. Returns recovery codes.",
+        "operationId": "twoFactorConfirm",
+        "tags": ["2FA"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["code"],
+                "properties": {
+                  "code": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "2FA enabled with recovery codes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "recovery_codes": { "type": "array", "items": { "type": "string" } },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid TOTP code or setup not started" },
+          "409": { "description": "2FA already enabled" }
+        }
+      }
+    },
+    "/api/gateway/2fa/disable": {
+      "post": {
+        "summary": "Disable two-factor auth",
+        "description": "Disable 2FA by providing a valid TOTP code.",
+        "operationId": "twoFactorDisable",
+        "tags": ["2FA"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["code"],
+                "properties": {
+                  "code": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "2FA disabled" },
+          "400": { "description": "Invalid TOTP code or 2FA not enabled" }
+        }
+      }
+    },
+    "/api/gateway/sso": {
+      "get": {
+        "summary": "Get SSO configuration",
+        "description": "Returns current SSO configuration for the tenant (secrets redacted).",
+        "operationId": "getSSOConfig",
+        "tags": ["SSO"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "SSO config",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SSOConfigResponse" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Configure SSO",
+        "description": "Create or update SSO settings. Admin only. Requires business plan or higher.",
+        "operationId": "updateSSOConfig",
+        "tags": ["SSO"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["provider"],
+                "properties": {
+                  "provider": { "type": "string", "enum": ["saml", "oidc"] },
+                  "enabled": { "type": "boolean" },
+                  "entity_id": { "type": "string" },
+                  "sso_url": { "type": "string", "format": "uri" },
+                  "certificate": { "type": "string" },
+                  "client_id": { "type": "string" },
+                  "client_secret": { "type": "string" },
+                  "issuer": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "SSO configured" },
+          "403": { "description": "Admin role required or plan too low" }
+        }
+      },
+      "delete": {
+        "summary": "Delete SSO configuration",
+        "description": "Remove SSO settings for the tenant. Admin only.",
+        "operationId": "deleteSSOConfig",
+        "tags": ["SSO"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": { "description": "SSO config deleted" },
+          "403": { "description": "Admin role required" }
+        }
+      }
+    },
+    "/api/gateway/sso/login": {
+      "get": {
+        "summary": "Initiate SSO login",
+        "description": "Start the SSO authentication flow for a tenant. Returns a redirect URL.",
+        "operationId": "ssoLogin",
+        "tags": ["SSO"],
+        "parameters": [
+          { "name": "tenant_id", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSO redirect URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "redirect_url": { "type": "string", "format": "uri" }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "SSO not configured for tenant" }
+        }
+      }
+    },
+    "/api/gateway/sso/callback": {
+      "post": {
+        "summary": "SSO callback",
+        "description": "Process SSO provider callback, provision user via JIT, and return a JWT.",
+        "operationId": "ssoCallback",
+        "tags": ["SSO"],
+        "parameters": [
+          { "name": "tenant_id", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "state", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSO login successful",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "401": { "description": "SSO validation failed" },
+          "403": { "description": "Invalid or expired SSO state" }
+        }
+      }
+    },
+    "/api/gateway/sessions": {
+      "get": {
+        "summary": "List active sessions",
+        "description": "Returns all active sessions for the authenticated user.",
+        "operationId": "listSessions",
+        "tags": ["Sessions"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Session list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Session" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Revoke sessions",
+        "description": "Revoke a specific session by ID or all sessions (?id=all).",
+        "operationId": "revokeSessions",
+        "tags": ["Sessions"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Session ID or 'all'" }
+        ],
+        "responses": {
+          "200": { "description": "Session(s) revoked" },
+          "400": { "description": "Session ID required" }
+        }
+      }
+    },
+    "/api/gateway/orgs": {
+      "get": {
+        "summary": "List child organizations",
+        "description": "Returns child organizations for multi-org tenants. Admin only.",
+        "operationId": "listOrgs",
+        "tags": ["Organizations"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Organization list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "organizations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "plan": { "type": "string" },
+                          "status": { "type": "string" },
+                          "created_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Admin role required" }
+        }
+      },
+      "post": {
+        "summary": "Create child organization",
+        "description": "Create a child org under the current tenant. Requires scale or enterprise plan.",
+        "operationId": "createOrg",
+        "tags": ["Organizations"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "email"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "email": { "type": "string", "format": "email" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Child org created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "status": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Admin role required or plan too low" },
+          "409": { "description": "Organization already exists" }
+        }
+      }
+    },
+    "/api/gateway/referrals": {
+      "get": {
+        "summary": "List referral codes",
+        "description": "Returns referral codes created by the tenant.",
+        "operationId": "listReferrals",
+        "tags": ["Referrals"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Referral list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "referrals": { "type": "array", "items": { "$ref": "#/components/schemas/Referral" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create referral code",
+        "description": "Generate a new referral code for the tenant.",
+        "operationId": "createReferral",
+        "tags": ["Referrals"],
+        "security": [{ "JWTAuth": [] }],
+        "responses": {
+          "201": {
+            "description": "Referral code created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "string" },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "share_url": { "type": "string", "format": "uri" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/referrals/redeem": {
+      "post": {
+        "summary": "Redeem referral code",
+        "description": "Apply a referral code. Both parties receive 1 month free.",
+        "operationId": "redeemReferral",
+        "tags": ["Referrals"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["code"],
+                "properties": {
+                  "code": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Referral redeemed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "code": { "type": "string" },
+                    "coupon_id": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid or expired code" }
         }
       }
     },
@@ -340,11 +1858,37 @@
     },
     "/live": {
       "get": {
-        "summary": "Health check",
-        "operationId": "healthCheck",
+        "summary": "Liveness check",
+        "description": "Returns 200 if the service process is running.",
+        "operationId": "liveCheck",
         "tags": ["Meta"],
         "responses": {
-          "200": { "description": "Service is healthy" }
+          "200": { "description": "Service is alive" }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Readiness check",
+        "description": "Returns 200 with component status if the service is ready to handle traffic.",
+        "operationId": "readyCheck",
+        "tags": ["Meta"],
+        "responses": {
+          "200": {
+            "description": "Service is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ready", "degraded"] },
+                    "db": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "503": { "description": "Service not ready" }
         }
       }
     }
@@ -397,16 +1941,20 @@
           "name": { "type": "string" },
           "email": { "type": "string", "format": "email" },
           "password": { "type": "string", "minLength": 8 },
+          "captcha_token": { "type": "string" },
           "accept_tos": { "type": "boolean" }
         }
       },
       "RegisterResponse": {
         "type": "object",
         "properties": {
+          "token": { "type": "string" },
           "tenant_id": { "type": "string" },
           "user_id": { "type": "string" },
-          "api_key": { "type": "string" },
-          "token": { "type": "string" }
+          "email": { "type": "string" },
+          "role": { "type": "string" },
+          "plan": { "type": "string" },
+          "email_verification_required": { "type": "boolean" }
         }
       },
       "LoginRequest": {
@@ -414,25 +1962,42 @@
         "required": ["email", "password"],
         "properties": {
           "email": { "type": "string", "format": "email" },
-          "password": { "type": "string" }
+          "password": { "type": "string" },
+          "totp_code": { "type": "string", "description": "Required if 2FA is enabled" },
+          "recovery_code": { "type": "string", "description": "Alternative to totp_code for 2FA" }
         }
       },
       "LoginResponse": {
         "type": "object",
         "properties": {
           "token": { "type": "string" },
-          "user": { "$ref": "#/components/schemas/UserInfo" }
+          "tenant_id": { "type": "string" },
+          "user_id": { "type": "string" },
+          "email": { "type": "string" },
+          "role": { "type": "string" },
+          "plan": { "type": "string" },
+          "email_verified": { "type": "boolean" },
+          "requires_2fa": { "type": "boolean", "description": "True when 2FA code is needed to complete login" }
         }
       },
       "UserInfo": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
+          "user_id": { "type": "string" },
           "email": { "type": "string" },
           "role": { "type": "string" },
           "tenant_id": { "type": "string" },
           "tenant_name": { "type": "string" },
-          "plan": { "type": "string" }
+          "plan": { "type": "string" },
+          "email_verified": { "type": "boolean" },
+          "status": { "type": "string" },
+          "last_login_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "MessageResponse": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" }
         }
       },
       "APIKey": {
@@ -458,30 +2023,233 @@
         "type": "object",
         "properties": {
           "key": { "type": "string", "description": "Plaintext key (shown only once)" },
-          "id": { "type": "string" },
+          "key_id": { "type": "string" },
           "name": { "type": "string" },
-          "key_prefix": { "type": "string" }
+          "key_prefix": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" }
         }
       },
       "UsageStats": {
         "type": "object",
         "properties": {
+          "tenant_id": { "type": "string" },
+          "today": { "type": "integer" },
+          "month_total": { "type": "integer" },
+          "period": { "type": "string" },
           "plan": { "type": "string" },
-          "event_count": { "type": "integer" },
           "event_limit": { "type": "integer" },
-          "usage_percent": { "type": "number" }
+          "rate_limit_rps": { "type": "integer" },
+          "daily_counts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": { "type": "string", "format": "date" },
+                "count": { "type": "integer" }
+              }
+            }
+          }
         }
       },
       "AlertRuleRequest": {
         "type": "object",
-        "required": ["name", "service", "metric", "operator", "threshold"],
+        "required": ["name", "metric", "operator", "threshold", "channel_id", "window_minutes", "cooldown_minutes"],
         "properties": {
           "name": { "type": "string" },
           "service": { "type": "string" },
-          "metric": { "type": "string", "enum": ["error_rate", "p95_latency", "p99_latency", "throughput"] },
-          "operator": { "type": "string", "enum": [">", "<", ">=", "<="] },
+          "metric": { "type": "string", "enum": ["error_rate", "p50_latency", "p95_latency", "p99_latency", "throughput"] },
+          "operator": { "type": "string", "enum": ["gt", "lt", "anomaly"] },
           "threshold": { "type": "number" },
+          "window_minutes": { "type": "integer", "minimum": 1, "maximum": 60 },
+          "cooldown_minutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "path_template": { "type": "string" },
           "channel_id": { "type": "string" }
+        }
+      },
+      "AlertRule": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "tenant_id": { "type": "string" },
+          "name": { "type": "string" },
+          "metric": { "type": "string" },
+          "operator": { "type": "string" },
+          "threshold": { "type": "number" },
+          "window_minutes": { "type": "integer" },
+          "cooldown_minutes": { "type": "integer" },
+          "service": { "type": "string" },
+          "path_template": { "type": "string" },
+          "channel_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["active", "paused"] },
+          "last_triggered_at": { "type": "string", "format": "date-time" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AlertHistoryEntry": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "rule_id": { "type": "string" },
+          "tenant_id": { "type": "string" },
+          "metric": { "type": "string" },
+          "threshold": { "type": "number" },
+          "actual_value": { "type": "number" },
+          "service": { "type": "string" },
+          "path_template": { "type": "string" },
+          "status": { "type": "string" },
+          "message": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "NotificationChannel": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "tenant_id": { "type": "string" },
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["slack", "webhook"] },
+          "config": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "TraceSummary": {
+        "type": "object",
+        "properties": {
+          "trace_id": { "type": "string" },
+          "root_service": { "type": "string" },
+          "root_path": { "type": "string" },
+          "total_latency_ms": { "type": "integer" },
+          "span_count": { "type": "integer" },
+          "event_time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "TraceSpan": {
+        "type": "object",
+        "properties": {
+          "trace_id": { "type": "string" },
+          "span_id": { "type": "string" },
+          "parent_span_id": { "type": "string" },
+          "event_time": { "type": "string", "format": "date-time" },
+          "service": { "type": "string" },
+          "method": { "type": "string" },
+          "path_template": { "type": "string" },
+          "status_code": { "type": "integer" },
+          "latency_ms": { "type": "integer" }
+        }
+      },
+      "DLQEntry": {
+        "type": "object",
+        "properties": {
+          "timestamp": { "type": "string", "format": "date-time" },
+          "tenant_id": { "type": "string" },
+          "fact_type": { "type": "string" },
+          "error": { "type": "string" },
+          "raw_json": { "type": "object" }
+        }
+      },
+      "AuditEntry": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "tenant_id": { "type": "string" },
+          "user_id": { "type": "string" },
+          "action": { "type": "string" },
+          "resource": { "type": "string" },
+          "resource_id": { "type": "string" },
+          "detail": { "type": "string" },
+          "ip_address": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "RetentionPolicy": {
+        "type": "object",
+        "properties": {
+          "plan": { "type": "string" },
+          "min_days": { "type": "integer" },
+          "max_days": { "type": "integer" },
+          "plan_default_facts_days": { "type": "integer" },
+          "facts_days": { "type": "integer" },
+          "metrics_days": { "type": "integer" },
+          "traces_days": { "type": "integer" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Invitation": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string" },
+          "role": { "type": "string" },
+          "status": { "type": "string", "enum": ["pending", "accepted", "expired"] },
+          "invited_by": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "expires_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "TeamMember": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string" },
+          "role": { "type": "string" },
+          "status": { "type": "string" },
+          "email_verified": { "type": "boolean" },
+          "last_login_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ConsentRecord": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "version": { "type": "string" },
+          "accepted": { "type": "boolean" },
+          "ip_address": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "ip_address": { "type": "string" },
+          "user_agent": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "expires_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "SSOConfigResponse": {
+        "type": "object",
+        "properties": {
+          "configured": { "type": "boolean" },
+          "provider": { "type": "string", "enum": ["saml", "oidc"] },
+          "enabled": { "type": "boolean" },
+          "entity_id": { "type": "string" },
+          "sso_url": { "type": "string" },
+          "has_certificate": { "type": "boolean" },
+          "client_id": { "type": "string" },
+          "issuer": { "type": "string" },
+          "has_secret": { "type": "boolean" }
+        }
+      },
+      "Referral": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "tenant_id": { "type": "string" },
+          "redeemed_by": { "type": "string" },
+          "coupon_id": { "type": "string" },
+          "status": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "properties": {
+          "page": { "type": "integer" },
+          "per_page": { "type": "integer" },
+          "total": { "type": "integer" }
         }
       },
       "PartialResponse": {

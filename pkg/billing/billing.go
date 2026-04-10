@@ -79,15 +79,28 @@ type Invoice struct {
 	HostedUrl string `json:"hosted_url"`
 }
 
+// AnnualPriceIDs holds annual billing Stripe price IDs keyed by plan name.
+type AnnualPriceIDs struct {
+	Team       string
+	Business   string
+	Scale      string
+	Enterprise string
+}
+
 // DefaultPlans returns the standard 5-tier plan configuration.
 // Price IDs must be set from environment variables.
 func DefaultPlans(freePriceID, teamPriceID, businessPriceID, scalePriceID, enterprisePriceID string) []PlanConfig {
+	return DefaultPlansWithAnnual(freePriceID, teamPriceID, businessPriceID, scalePriceID, enterprisePriceID, AnnualPriceIDs{})
+}
+
+// DefaultPlansWithAnnual returns the standard 5-tier plan configuration with optional annual price IDs.
+func DefaultPlansWithAnnual(freePriceID, teamPriceID, businessPriceID, scalePriceID, enterprisePriceID string, annual AnnualPriceIDs) []PlanConfig {
 	return []PlanConfig{
 		{PriceID: freePriceID, PlanName: "free", EventLimit: 500_000, SeatLimit: 1, ServiceLimit: 2, RetentionDays: 7},
-		{PriceID: teamPriceID, PlanName: "team", EventLimit: 10_000_000, SeatLimit: 5, ServiceLimit: 5, RetentionDays: 30},
-		{PriceID: businessPriceID, PlanName: "business", EventLimit: 50_000_000, SeatLimit: 20, ServiceLimit: 20, RetentionDays: 90},
-		{PriceID: scalePriceID, PlanName: "scale", EventLimit: 200_000_000, SeatLimit: 0, ServiceLimit: 50, RetentionDays: 365},
-		{PriceID: enterprisePriceID, PlanName: "enterprise", EventLimit: 0, SeatLimit: 0, ServiceLimit: 0, RetentionDays: 365},
+		{PriceID: teamPriceID, AnnualPriceID: annual.Team, PlanName: "team", EventLimit: 10_000_000, SeatLimit: 5, ServiceLimit: 5, RetentionDays: 30},
+		{PriceID: businessPriceID, AnnualPriceID: annual.Business, PlanName: "business", EventLimit: 50_000_000, SeatLimit: 20, ServiceLimit: 20, RetentionDays: 90},
+		{PriceID: scalePriceID, AnnualPriceID: annual.Scale, PlanName: "scale", EventLimit: 200_000_000, SeatLimit: 0, ServiceLimit: 50, RetentionDays: 365},
+		{PriceID: enterprisePriceID, AnnualPriceID: annual.Enterprise, PlanName: "enterprise", EventLimit: 0, SeatLimit: 0, ServiceLimit: 0, RetentionDays: 365},
 	}
 }
 

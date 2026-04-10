@@ -684,28 +684,35 @@ func (gw *gateway) handleReferrals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create an in-memory referral service (no persistent repo yet — uses the handler for validation)
+	svc := referral.NewService(gw.db.Referrals())
+
 	switch r.Method {
 	case http.MethodGet:
-		// List referral codes for this tenant
+		refs, err := gw.db.Referrals().ListByTenant(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list referrals")
+			return
+		}
+		if refs == nil {
+			refs = []*referral.Referral{}
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"referrals": []interface{}{},
-			"message":   "referral program active — create codes with POST",
+			"referrals": refs,
 		})
 
 	case http.MethodPost:
-		code, err := referral.GenerateCode()
+		ref, err := svc.CreateCode(r.Context(), claims.TenantID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to generate referral code")
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		gw.audit(r, "referral.create", "referral", code, "")
+		gw.audit(r, "referral.create", "referral", ref.Code, "")
 
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
-			"code":       code,
-			"expires_in": "90 days",
-			"share_url":  gw.baseURL + "/signup?ref=" + code,
+			"code":       ref.Code,
+			"expires_at": ref.ExpiresAt.Format(time.RFC3339),
+			"share_url":  gw.baseURL + "/signup?ref=" + ref.Code,
 		})
 
 	default:
@@ -738,11 +745,19 @@ func (gw *gateway) handleRedeemReferral(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	svc := referral.NewService(gw.db.Referrals())
+	ref, err := svc.RedeemCode(r.Context(), req.Code, claims.TenantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	gw.audit(r, "referral.redeem", "referral", req.Code, "")
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "redeemed",
-		"code":    req.Code,
-		"message": "referral applied — both parties will receive 1 month free",
+		"status":    "redeemed",
+		"code":      ref.Code,
+		"coupon_id": ref.CouponID,
+		"message":   "referral applied — both parties will receive 1 month free",
 	})
 }
