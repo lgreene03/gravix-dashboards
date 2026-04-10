@@ -1117,7 +1117,48 @@
 
     </main>
 
+    <!-- Feedback Widget -->
+    <button id="feedback-fab" class="feedback-fab" title="Send feedback" aria-label="Send feedback">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+    </button>
+    <div id="feedback-panel" class="feedback-panel" style="display:none">
+        <div class="feedback-header">
+            <span>Send Feedback</span>
+            <button id="feedback-close" class="feedback-close" aria-label="Close">&times;</button>
+        </div>
+        <form id="feedback-form">
+            <label class="feedback-label">Type</label>
+            <select id="feedback-type" class="feedback-select">
+                <option value="bug">Bug Report</option>
+                <option value="feature">Feature Request</option>
+                <option value="general" selected>General Feedback</option>
+            </select>
+            <label class="feedback-label">How would you rate your experience?</label>
+            <div class="feedback-rating" id="feedback-rating">
+                <button type="button" data-rating="1" aria-label="1 star">&#9733;</button>
+                <button type="button" data-rating="2" aria-label="2 stars">&#9733;</button>
+                <button type="button" data-rating="3" aria-label="3 stars">&#9733;</button>
+                <button type="button" data-rating="4" aria-label="4 stars">&#9733;</button>
+                <button type="button" data-rating="5" aria-label="5 stars">&#9733;</button>
+            </div>
+            <label class="feedback-label" for="feedback-message">Message</label>
+            <textarea id="feedback-message" class="feedback-textarea" rows="4" placeholder="Tell us what you think..." required maxlength="2000"></textarea>
+            <div class="feedback-actions">
+                <span id="feedback-chars" class="feedback-chars">0 / 2000</span>
+                <button type="submit" class="feedback-submit">Send</button>
+            </div>
+        </form>
+        <div id="feedback-success" class="feedback-success" style="display:none">
+            <span class="feedback-check">&#10003;</span>
+            <p>Thanks for your feedback!</p>
+        </div>
+    </div>
 
+    <script src="lib/utils.js"></script>
+    <script src="lib/cube-client.js"></script>
+    <script src="lib/chart-helpers.js"></script>
     <script src="app.js"></script>
 
 

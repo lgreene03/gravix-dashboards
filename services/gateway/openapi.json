@@ -1846,6 +1846,43 @@
         }
       }
     },
+    "/api/gateway/feedback": {
+      "post": {
+        "summary": "Submit feedback",
+        "description": "Submit in-app user feedback. Logged to audit trail for product team review.",
+        "operationId": "submitFeedback",
+        "tags": ["Feedback"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["message"],
+                "properties": {
+                  "type": { "type": "string", "enum": ["bug", "feature", "general"], "default": "general" },
+                  "message": { "type": "string", "maxLength": 2000 },
+                  "page": { "type": "string" },
+                  "rating": { "type": "integer", "minimum": 0, "maximum": 5 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Feedback received",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "400": { "description": "Invalid input" }
+        }
+      }
+    },
     "/api/gateway/openapi.json": {
       "get": {
         "summary": "OpenAPI specification",
