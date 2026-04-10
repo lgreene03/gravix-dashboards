@@ -1,0 +1,17 @@
+{
+  "baseline_50qps": {
+    "max_p95_latency_ms": 200,
+    "max_error_rate": 0.01,
+    "min_qps_ratio": 0.9
+  },
+  "moderate_200qps": {
+    "max_p95_latency_ms": 350,
+    "max_error_rate": 0.01,
+    "min_qps_ratio": 0.9
+  },
+  "stress_500qps": {
+    "max_p95_latency_ms": 500,
+    "max_error_rate": 0.02,
+    "min_qps_ratio": 0.85
+  }
+}
