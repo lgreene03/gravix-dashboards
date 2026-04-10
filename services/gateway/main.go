@@ -390,6 +390,7 @@ func main() {
 	// Growth features (Phase 32)
 	mux.HandleFunc("/api/gateway/referrals", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleReferrals))))
 	mux.HandleFunc("/api/gateway/referrals/redeem", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleRedeemReferral))))
+	mux.HandleFunc("/api/gateway/feedback", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleFeedback))))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -2203,4 +2204,48 @@ func (gw *gateway) sendOnboardingEmails(ctx context.Context, sent map[string]boo
 			}
 		}
 	}
+}
+
+func (gw *gateway) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+
+	var req struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Page    string `json:"page"`
+		Rating  int    `json:"rating"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Message == "" {
+		http.Error(w, `{"error":"message is required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Message) > 2000 {
+		http.Error(w, `{"error":"message too long (max 2000 chars)"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Type == "" {
+		req.Type = "general"
+	}
+
+	detail := fmt.Sprintf("type=%s page=%s rating=%d message=%s", req.Type, req.Page, req.Rating, req.Message)
+	gw.audit(r, "feedback.submitted", "feedback", "", detail)
+
+	slog.Info("feedback received",
+		"tenant_id", claims.TenantID,
+		"user_id", claims.UserID,
+		"type", req.Type,
+		"page", req.Page,
+		"rating", req.Rating,
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Thank you for your feedback!"})
 }

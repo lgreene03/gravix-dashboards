@@ -695,13 +695,7 @@
             }
         }
 
-        // --- SECURITY: HTML escape helper to prevent XSS ---
-        function escapeHtml(str) {
-            if (str == null) return '';
-            const div = document.createElement('div');
-            div.textContent = String(str);
-            return div.innerHTML;
-        }
+        // escapeHtml provided by lib/utils.js
 
         // --- DATA FETCHING ---
         function cubeHeaders() {
@@ -1380,11 +1374,7 @@
             }
         }
 
-        function escapeHtml(s) {
-            const div = document.createElement('div');
-            div.appendChild(document.createTextNode(s || ''));
-            return div.innerHTML;
-        }
+        // escapeHtml provided by lib/utils.js
 
         function escapeAttr(s) {
             return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -2857,11 +2847,7 @@ app.listen(8080, () => {
             });
         }
 
-        function formatNumber(n) {
-            if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-            if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-            return n.toString();
-        }
+        // formatNumber provided by lib/utils.js
 
         async function handleManageBilling() {
             if (!IS_MULTI_TENANT) return;
@@ -3212,21 +3198,7 @@ app.listen(8080, () => {
         window.startExport = startExport;
         window.loadDataPage = loadDataPage;
 
-        // --- TOAST NOTIFICATIONS ---
-        function showToast(message, type, duration) {
-            type = type || 'info';
-            duration = duration || 3000;
-            const container = document.getElementById('toast-container');
-            if (!container) return;
-            const toast = document.createElement('div');
-            toast.className = 'toast ' + type;
-            toast.textContent = message;
-            toast.style.animationDuration = '0.3s, 0.3s';
-            toast.style.animationDelay = '0s, ' + (duration - 300) + 'ms';
-            container.appendChild(toast);
-            setTimeout(function() { toast.remove(); }, duration);
-        }
-        window.showToast = showToast;
+        // showToast provided by lib/utils.js
 
         // --- API KEYS PAGE ---
 
@@ -3339,11 +3311,7 @@ app.listen(8080, () => {
             });
         }
 
-        function escapeHtml(str) {
-            var div = document.createElement('div');
-            div.textContent = str;
-            return div.innerHTML;
-        }
+        // escapeHtml provided by lib/utils.js
 
         // Quota warning for the main overview page (id="quota-warning")
         function renderQuotaWarning(usage) {
@@ -4074,5 +4042,99 @@ app.listen(8080, () => {
             });
         }
         initCookieConsent();
+
+        // --- FEEDBACK WIDGET ---
+        (function() {
+            const fab = document.getElementById('feedback-fab');
+            const panel = document.getElementById('feedback-panel');
+            const closeBtn = document.getElementById('feedback-close');
+            const form = document.getElementById('feedback-form');
+            const messageEl = document.getElementById('feedback-message');
+            const charsEl = document.getElementById('feedback-chars');
+            const ratingContainer = document.getElementById('feedback-rating');
+            const successEl = document.getElementById('feedback-success');
+
+            if (!fab || !panel) return;
+
+            // Only show in multi-tenant mode
+            if (!IS_MULTI_TENANT) {
+                fab.style.display = 'none';
+                return;
+            }
+
+            let selectedRating = 0;
+
+            fab.addEventListener('click', function() {
+                panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+                if (panel.style.display === 'block') {
+                    successEl.style.display = 'none';
+                    form.style.display = 'block';
+                }
+            });
+
+            closeBtn.addEventListener('click', function() {
+                panel.style.display = 'none';
+            });
+
+            // Star rating
+            ratingContainer.querySelectorAll('button').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    selectedRating = parseInt(btn.dataset.rating);
+                    ratingContainer.querySelectorAll('button').forEach(function(b, i) {
+                        b.classList.toggle('active', i < selectedRating);
+                    });
+                });
+            });
+
+            // Character counter
+            messageEl.addEventListener('input', function() {
+                charsEl.textContent = messageEl.value.length + ' / 2000';
+            });
+
+            form.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const submitBtn = form.querySelector('.feedback-submit');
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Sending...';
+
+                try {
+                    const token = sessionStorage.getItem('gravix_token');
+                    const resp = await fetch(GATEWAY_URL + '/api/gateway/feedback', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            type: document.getElementById('feedback-type').value,
+                            message: messageEl.value,
+                            page: currentPage || 'overview',
+                            rating: selectedRating
+                        })
+                    });
+
+                    if (!resp.ok) {
+                        const data = await resp.json().catch(function() { return {}; });
+                        throw new Error(data.error || 'Failed to send feedback');
+                    }
+
+                    form.style.display = 'none';
+                    successEl.style.display = 'block';
+
+                    // Reset form
+                    form.reset();
+                    selectedRating = 0;
+                    ratingContainer.querySelectorAll('button').forEach(function(b) { b.classList.remove('active'); });
+                    charsEl.textContent = '0 / 2000';
+
+                    setTimeout(function() { panel.style.display = 'none'; }, 2000);
+                } catch (err) {
+                    showToast('Feedback failed: ' + err.message, 'error');
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Send';
+                }
+            });
+        })();
 
     })();
