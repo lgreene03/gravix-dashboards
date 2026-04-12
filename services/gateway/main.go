@@ -103,6 +103,26 @@ var (
 			Help: "Total alert evaluation errors.",
 		},
 	)
+	gatewayBillingCheckoutTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_billing_checkout_total",
+			Help: "Total number of billing checkout sessions created.",
+		},
+		[]string{"plan", "interval"},
+	)
+	gatewayBillingWebhookTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_billing_webhook_total",
+			Help: "Total number of Stripe webhook events processed.",
+		},
+		[]string{"event_type", "status"},
+	)
+	gatewayBillingPortalRequestsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "gateway_billing_portal_requests_total",
+			Help: "Total number of billing portal session requests.",
+		},
+	)
 )
 
 func init() {
@@ -112,6 +132,9 @@ func init() {
 	prometheus.MustRegister(gatewayAuditErrorsTotal)
 	prometheus.MustRegister(gatewayAlertNotificationErrorsTotal)
 	prometheus.MustRegister(gatewayAlertEvalErrorsTotal)
+	prometheus.MustRegister(gatewayBillingCheckoutTotal)
+	prometheus.MustRegister(gatewayBillingWebhookTotal)
+	prometheus.MustRegister(gatewayBillingPortalRequestsTotal)
 	prometheus.MustRegister(collectors.NewBuildInfoCollector())
 }
 
@@ -232,7 +255,7 @@ func main() {
 	}
 	defer db.Close()
 
-	tokens := auth.NewTokenService(*jwtSecret, 24*time.Hour)
+	tokens := auth.NewTokenService(*jwtSecret, 1*time.Hour)
 
 	cubeURL := os.Getenv("CUBE_API_URL")
 	if cubeURL == "" {
@@ -472,6 +495,14 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	if allowedOrigins == "" {
 		allowedOrigins = "*"
 		slog.Warn("CORS_ALLOWED_ORIGINS not set, defaulting to '*' — restrict this in production")
+	}
+	// Warn loudly if CORS is wildcard in non-development environments
+	gravixEnv := os.Getenv("GRAVIX_ENV")
+	if (allowedOrigins == "*" || allowedOrigins == "") && gravixEnv != "development" && gravixEnv != "dev" {
+		slog.Warn("CORS_ALLOWED_ORIGINS is set to wildcard — restrict for production use",
+			"current_value", allowedOrigins,
+			"GRAVIX_ENV", gravixEnv,
+		)
 	}
 	originSet := make(map[string]bool)
 	allowAll := false

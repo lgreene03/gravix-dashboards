@@ -119,6 +119,51 @@ groups:
           summary: "Ingestion goroutine count above 1000"
           description: "High goroutine count ({{ $value }}) may indicate a goroutine leak."
 
+  - name: gravix_gateway
+    rules:
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway service is down"
+          description: "The gateway service has been unreachable for 2 minutes."
+
+      - alert: GatewayHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway P95 latency above 2 seconds"
+          description: "The gateway service P95 request latency is {{ $value }}s, exceeding the 2s threshold."
+
+      - alert: GatewayHighErrorRate
+        expr: |
+          sum(rate(gateway_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(gateway_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway 5xx error rate above 5%"
+          description: "The gateway service is returning >5% server errors over the last 5 minutes."
+
+      - alert: GatewayBillingWebhookErrors
+        expr: rate(gateway_billing_webhook_total{status="error"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Billing webhook errors detected"
+          description: "Stripe webhook processing errors have been occurring for over 5 minutes."
+
   - name: gravix_self_monitoring
     rules:
       - alert: GravixServiceDown

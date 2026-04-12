@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
@@ -21,6 +22,69 @@ import (
 	"github.com/lgreene/gravix-dashboards/pkg/totp"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// loginAttemptTracker tracks failed login attempts per email for account lockout.
+var loginAttemptTracker sync.Map // email -> *loginAttempts
+
+const (
+	maxLoginAttempts    = 5
+	loginLockoutWindow = 15 * time.Minute
+)
+
+type loginAttempts struct {
+	mu       sync.Mutex
+	failures []time.Time
+}
+
+// recordFailure records a failed login attempt and returns true if the account is now locked out.
+func recordLoginFailure(emailAddr string) bool {
+	val, _ := loginAttemptTracker.LoadOrStore(emailAddr, &loginAttempts{})
+	attempts := val.(*loginAttempts)
+	attempts.mu.Lock()
+	defer attempts.mu.Unlock()
+
+	now := time.Now()
+	// Prune old entries outside the lockout window
+	cutoff := now.Add(-loginLockoutWindow)
+	fresh := attempts.failures[:0]
+	for _, t := range attempts.failures {
+		if t.After(cutoff) {
+			fresh = append(fresh, t)
+		}
+	}
+	fresh = append(fresh, now)
+	attempts.failures = fresh
+
+	return len(fresh) >= maxLoginAttempts
+}
+
+// isLoginLocked checks if the email is currently locked out due to too many failures.
+func isLoginLocked(emailAddr string) bool {
+	val, ok := loginAttemptTracker.Load(emailAddr)
+	if !ok {
+		return false
+	}
+	attempts := val.(*loginAttempts)
+	attempts.mu.Lock()
+	defer attempts.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-loginLockoutWindow)
+	fresh := attempts.failures[:0]
+	for _, t := range attempts.failures {
+		if t.After(cutoff) {
+			fresh = append(fresh, t)
+		}
+	}
+	attempts.failures = fresh
+
+	return len(fresh) >= maxLoginAttempts
+}
+
+// clearLoginFailures removes tracked failures for the email (on successful login).
+func clearLoginFailures(emailAddr string) {
+	loginAttemptTracker.Delete(emailAddr)
+}
 
 // handleLogout revokes the current JWT by adding its JTI to the blacklist.
 func (gw *gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -165,13 +229,22 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Account lockout: reject if too many recent failures
+	if isLoginLocked(req.Email) {
+		slog.Warn("login locked out due to too many failed attempts", "email", req.Email)
+		writeError(w, http.StatusTooManyRequests, "too many failed login attempts, please try again later")
+		return
+	}
+
 	user, err := gw.db.Users().GetByEmail(r.Context(), req.Email)
 	if err != nil {
+		recordLoginFailure(req.Email)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		recordLoginFailure(req.Email)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -227,6 +300,9 @@ func (gw *gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
+
+	// Clear login failure tracker on successful login
+	clearLoginFailures(req.Email)
 
 	// Update last login time
 	_ = gw.db.Users().UpdateLastLogin(r.Context(), user.ID, time.Now())

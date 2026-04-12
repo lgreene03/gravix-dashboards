@@ -39,6 +39,7 @@ func (gw *gateway) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	event, err := gw.billing.ParseWebhook(payload, sigHeader)
 	if err != nil {
 		slog.Error("webhook signature verification failed", "error", err)
+		gatewayBillingWebhookTotal.WithLabelValues("unknown", "error").Inc()
 		writeError(w, http.StatusBadRequest, "invalid webhook signature")
 		return
 	}
@@ -113,6 +114,7 @@ func (gw *gateway) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Always return 200 to acknowledge receipt
+	gatewayBillingWebhookTotal.WithLabelValues(event.Type, "success").Inc()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -155,6 +157,7 @@ func (gw *gateway) handleBillingPortal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	gatewayBillingPortalRequestsTotal.Inc()
 	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
@@ -248,6 +251,7 @@ func (gw *gateway) handleBillingCheckout(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	gatewayBillingCheckoutTotal.WithLabelValues(planName, req.BillingPeriod).Inc()
 	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
