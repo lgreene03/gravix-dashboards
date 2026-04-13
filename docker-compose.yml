@@ -194,7 +194,7 @@ services:
       - "4000:4000"
     environment:
       - CUBEJS_DB_TYPE=trino
-      - CUBEJS_DB_HOST=gravix-trino
+      - CUBEJS_DB_HOST=trino
       - CUBEJS_DB_PORT=8080
       - CUBEJS_DB_PRESTO_CATALOG=gravix
       - CUBEJS_DB_NAME=raw

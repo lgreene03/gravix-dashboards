@@ -81,7 +81,7 @@ echo "[3/8] Registering test tenant..."
 
 REGISTER_RESP=$(curl -sf -X POST http://localhost:8091/api/gateway/register \
     -H "Content-Type: application/json" \
-    -d '{"email":"smoke@gravix.test","password":"SmokeTest123!","org_name":"Smoke Test Org"}' 2>&1) || true
+    -d '{"name":"Smoke Test Org","email":"smoke@gravix.test","password":"SmokeTest123!","accept_tos":true}' 2>&1) || true
 
 if echo "$REGISTER_RESP" | grep -q '"token"'; then
     TOKEN=$(echo "$REGISTER_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
@@ -106,7 +106,7 @@ fi
 echo "[4/8] Creating API key..."
 
 if [ -n "$TOKEN" ]; then
-    KEY_RESP=$(curl -sf -X POST http://localhost:8091/api/gateway/api-keys \
+    KEY_RESP=$(curl -s -X POST http://localhost:8091/api/gateway/api-keys \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{"name":"smoke-test-key"}' 2>&1) || true
@@ -143,14 +143,15 @@ if [ -n "$API_KEY" ]; then
     for i in $(seq 1 50); do
         STATUS_CODE=$((200 + (i % 5 == 0 ? 300 : 0)))
         LATENCY=$((10 + RANDOM % 200))
-        FACT="{\"event_id\":\"$(python3 -c "import uuid; print(uuid.uuid4())")\",\"event_time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"service\":\"smoke-svc\",\"method\":\"GET\",\"path_template\":\"/api/smoke/{id}\",\"status_code\":$STATUS_CODE,\"latency_ms\":$LATENCY}"
+        EVENT_ID=$(python3 -c "import uuid,time,os; t=int(time.time()*1000); b=bytearray(t.to_bytes(6,'big')+os.urandom(10)); b[6]=(b[6]&0x0f)|0x70; b[8]=(b[8]&0x3f)|0x80; print(uuid.UUID(bytes=bytes(b)))")
+        FACT="{\"event_id\":\"$EVENT_ID\",\"event_time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"service\":\"smoke-svc\",\"method\":\"GET\",\"path_template\":\"/api/smoke/{id}\",\"status_code\":$STATUS_CODE,\"latency_ms\":$LATENCY}"
 
-        RESP=$(curl -sf -o /dev/null -w "%{http_code}" -X POST http://localhost:8090/api/v1/facts \
+        RESP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8090/api/v1/facts \
             -H "Content-Type: application/json" \
             -H "X-API-Key: $API_KEY" \
             -d "$FACT" 2>&1) || RESP="000"
 
-        if [ "$RESP" = "200" ] || [ "$RESP" = "202" ] || [ "$RESP" = "204" ]; then
+        if [ "${RESP:0:1}" = "2" ]; then
             FACTS_SENT=$((FACTS_SENT + 1))
         fi
     done
