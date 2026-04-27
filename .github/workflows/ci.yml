@@ -118,6 +118,16 @@ jobs:
 
   helm-validate:
     runs-on: ubuntu-latest
+    env:
+      # Common test secrets for all helm commands. Real deployments inject
+      # these via --set or external secrets — these values exist solely to
+      # satisfy chart `required` checks during lint/template validation.
+      HELM_TEST_SETS: >-
+        --set global.apiKey=test-key-at-least-16ch
+        --set global.jwtSecret=test-jwt-secret-must-be-at-least-32-chars
+        --set global.cubeApiSecret=test-cube-api-secret-32-characters-long
+        --set global.storage.accessKey=test-access-key
+        --set global.storage.secretKey=test-secret-at-least-16ch
     steps:
       - uses: actions/checkout@v4
 
@@ -126,35 +136,24 @@ jobs:
 
       - name: Lint Helm chart (dev values)
         run: |
-          helm lint deploy/gravix \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch
+          helm lint deploy/gravix $HELM_TEST_SETS
 
       - name: Lint Helm chart (prod values)
         run: |
           helm lint deploy/gravix \
             -f deploy/gravix/values-prod.yaml \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
+            $HELM_TEST_SETS \
             --set certManager.email=test@example.com
 
       - name: Template render (dev)
         run: |
-          helm template gravix deploy/gravix \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
-            > /dev/null
+          helm template gravix deploy/gravix $HELM_TEST_SETS > /dev/null
 
       - name: Template render (prod)
         run: |
           helm template gravix deploy/gravix \
             -f deploy/gravix/values-prod.yaml \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
+            $HELM_TEST_SETS \
             --set certManager.email=test@example.com \
             > /dev/null
 
@@ -162,9 +161,7 @@ jobs:
         run: |
           COUNT=$(helm template gravix deploy/gravix \
             -f deploy/gravix/values-prod.yaml \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
+            $HELM_TEST_SETS \
             --set certManager.email=test@example.com \
             2>/dev/null | grep -c '^kind:')
           echo "Production resource count: ${COUNT}"
