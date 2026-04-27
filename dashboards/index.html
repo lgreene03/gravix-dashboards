@@ -340,6 +340,13 @@
                 <div class="real-content" id="events-container">
                     <div id="events-empty" class="empty-state" style="padding: 24px;">
                         <p>No service events recorded for this date.</p>
+                        <p style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 8px;">
+                            Service events (deploys, restarts, scaling) appear here once your services
+                            POST to <code>/api/v1/events</code>. The bundled load-generator emits sample
+                            events every 30s — wait a few minutes after sending traffic, or
+                            <a href="https://docs.gravix.io/getting-started/service-events" target="_blank">read the docs</a>
+                            to integrate your CI/CD or runtime.
+                        </p>
                     </div>
                     <!-- Timeline stacked bar chart -->
                     <div id="events-timeline-wrapper" class="chart-wrapper" style="display: none;">

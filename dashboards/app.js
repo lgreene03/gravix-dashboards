@@ -505,6 +505,16 @@
                 }
             });
 
+            if (filtered.length === 0) {
+                const tr = document.createElement('tr');
+                const msg = data.length === 0
+                    ? 'No endpoints found yet. Send some traffic and wait a few minutes for the rollup + Cube pre-aggregation to populate.'
+                    : 'No endpoints match your search.';
+                tr.innerHTML = '<td colspan="8" style="text-align:center; padding: 32px; color: var(--color-text-muted);">' + escapeHtml(msg) + '</td>';
+                body.appendChild(tr);
+                return;
+            }
+
             filtered.forEach(row => {
                 const tr = document.createElement('tr');
                 const errorRate = parseFloat(row["RequestMetricsMinute.errorRate"]) || 0;
@@ -661,7 +671,9 @@
 
                 const errRes = processSeries(errorData, "RequestMetricsMinute.errorRate");
                 updateChart('epErrorRate', 'epErrorRateChart', 'Error Rate', errRes.labels, errRes.values, {
-                    borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', yMax: 1.0, yTitle: 'Rate'
+                    borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)',
+                    yMax: 1.0, yTitle: 'Error Rate (%)',
+                    yTickFormat: function(v) { return (v * 100).toFixed(1) + '%'; }
                 });
 
                 renderLatencyMultiChart(p50Data, p95Data, p99Data);
@@ -1107,7 +1119,8 @@
                     borderColor: '#ef4444',
                     backgroundColor: 'rgba(239, 68, 68, 0.1)',
                     yMax: 1.0,
-                    yTitle: 'Rate'
+                    yTitle: 'Error Rate (%)',
+                    yTickFormat: function(v) { return (v * 100).toFixed(1) + '%'; }
                 });
 
                 updateChart('latency', 'latencyChart', 'Latency (ms)', latencyRes.labels, latencyRes.values, {
@@ -1224,11 +1237,19 @@
                                 beginAtZero: true,
                                 max: options.yMax,
                                 border: { display: false },
-                                title: { display: !!options.yTitle, text: options.yTitle }
+                                title: { display: !!options.yTitle, text: options.yTitle },
+                                ticks: options.yTickFormat
+                                    ? { callback: options.yTickFormat }
+                                    : undefined
                             }
                         },
                         plugins: {
-                            legend: { display: data.previous ? true : false, position: 'top', align: 'end' }
+                            legend: { display: data.previous ? true : false, position: 'top', align: 'end' },
+                            tooltip: options.yTickFormat
+                                ? { callbacks: { label: function(ctx) {
+                                    return ctx.dataset.label + ': ' + options.yTickFormat(ctx.parsed.y);
+                                  } } }
+                                : undefined
                         }
                     }
                 });
@@ -4056,12 +4077,6 @@ app.listen(8080, () => {
 
             if (!fab || !panel) return;
 
-            // Only show in multi-tenant mode
-            if (!IS_MULTI_TENANT) {
-                fab.style.display = 'none';
-                return;
-            }
-
             let selectedRating = 0;
 
             fab.addEventListener('click', function() {
@@ -4098,24 +4113,37 @@ app.listen(8080, () => {
                 submitBtn.textContent = 'Sending...';
 
                 try {
-                    const token = sessionStorage.getItem('gravix_token');
-                    const resp = await fetch(GATEWAY_URL + '/api/gateway/feedback', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': 'Bearer ' + token,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            type: document.getElementById('feedback-type').value,
-                            message: messageEl.value,
-                            page: currentPage || 'overview',
-                            rating: selectedRating
-                        })
-                    });
+                    const payload = {
+                        type: document.getElementById('feedback-type').value,
+                        message: messageEl.value,
+                        page: currentPage || 'overview',
+                        rating: selectedRating
+                    };
 
-                    if (!resp.ok) {
-                        const data = await resp.json().catch(function() { return {}; });
-                        throw new Error(data.error || 'Failed to send feedback');
+                    if (IS_MULTI_TENANT) {
+                        // Authenticated submission to the gateway — recorded as audit log.
+                        const token = sessionStorage.getItem('gravix_token');
+                        const resp = await fetch(GATEWAY_URL + '/api/gateway/feedback', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': 'Bearer ' + token,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!resp.ok) {
+                            const data = await resp.json().catch(function() { return {}; });
+                            throw new Error(data.error || 'Failed to send feedback');
+                        }
+                    } else {
+                        // Single-tenant Docker dev mode: no auth, no backend storage.
+                        // Stash to localStorage so the operator can pull it later, and log.
+                        console.info('[feedback]', payload);
+                        try {
+                            const stored = JSON.parse(localStorage.getItem('gravix_feedback') || '[]');
+                            stored.push(Object.assign({ ts: new Date().toISOString() }, payload));
+                            localStorage.setItem('gravix_feedback', JSON.stringify(stored.slice(-50)));
+                        } catch (_) { /* localStorage may be disabled */ }
                     }
 
                     form.style.display = 'none';
