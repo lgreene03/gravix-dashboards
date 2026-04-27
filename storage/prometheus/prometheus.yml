@@ -19,7 +19,7 @@ scrape_configs:
 
   - job_name: "request-metrics-rollup"
     static_configs:
-      - targets: ["request-metrics-rollup:9090"]
+      - targets: ["request-metrics-rollup:9091"]
 
   - job_name: "purge"
     static_configs:
