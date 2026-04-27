@@ -192,7 +192,7 @@ func RenderSetupGuide(data OnboardingData) (html, text string, err error) {
 	if err := setupGuideTmpl.Execute(&buf, data); err != nil {
 		return "", "", fmt.Errorf("render setup guide template: %w", err)
 	}
-	textBody := fmt.Sprintf("Quick Setup Guide for Gravix. Read the full guide: https://docs.gravix.io/getting-started")
+	textBody := "Quick Setup Guide for Gravix. Read the full guide: https://docs.gravix.io/getting-started"
 	return buf.String(), textBody, nil
 }
 

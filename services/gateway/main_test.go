@@ -353,7 +353,7 @@ func TestRequireAuthSuccess(t *testing.T) {
 		handlerCalled = true
 		claims := auth.ClaimsFromContext(r.Context())
 		if claims == nil {
-			t.Error("claims should be in context")
+			t.Fatal("claims should be in context")
 		}
 		if claims.Role != "admin" {
 			t.Errorf("role = %q, want admin", claims.Role)
