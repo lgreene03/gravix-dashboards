@@ -359,21 +359,6 @@ func TestEndToEnd_ServiceEventsDetailRollup(t *testing.T) {
 	t.Logf("E2E events detail passed: 5 events → %d warehouse files", len(warehouseKeys))
 }
 
-// extractDateFromKey finds the first YYYY-MM-DD pattern anywhere in a key.
-// It checks both path segments and substrings within segments (e.g., metrics_2025-01-15.parquet).
-func extractDateFromKey(key string) string {
-	// Search the entire key for a YYYY-MM-DD pattern
-	for i := 0; i <= len(key)-10; i++ {
-		candidate := key[i : i+10]
-		if candidate[4] == '-' && candidate[7] == '-' {
-			if _, err := time.Parse("2006-01-02", candidate); err == nil {
-				return candidate
-			}
-		}
-	}
-	return ""
-}
-
 func findProjectRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()

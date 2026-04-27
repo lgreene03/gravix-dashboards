@@ -277,7 +277,7 @@ func renderStatusHTML(statuses []ServiceStatus) string {
 	var serviceHTML string
 	for _, s := range statuses {
 		statusClass := s.Status
-		statusLabel := strings.Title(s.Status)
+		statusLabel := titleCase(s.Status)
 		serviceHTML += fmt.Sprintf(`
 		<div class="service">
 			<div class="service-header">
@@ -432,4 +432,17 @@ func main() {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// titleCase uppercases the first ASCII letter of s. Suitable for short
+// status labels like "operational", "degraded", "down".
+func titleCase(s string) string {
+	if s == "" {
+		return s
+	}
+	b := []byte(s)
+	if b[0] >= 'a' && b[0] <= 'z' {
+		b[0] -= 'a' - 'A'
+	}
+	return string(b)
 }

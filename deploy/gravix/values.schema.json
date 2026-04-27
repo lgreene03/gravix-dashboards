@@ -374,6 +374,11 @@
           "default": "sqlite",
           "description": "Database driver: sqlite or postgres"
         },
+        "corsAllowedOrigins": {
+          "type": "string",
+          "default": "",
+          "description": "Comma-separated list of allowed CORS origins (empty defaults to '*' for local dev)"
+        },
         "stripe": {
           "type": "object",
           "additionalProperties": false,

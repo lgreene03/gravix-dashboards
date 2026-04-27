@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 flask = ["flask>=2.0"]
 fastapi = ["fastapi>=0.100", "starlette>=0.27"]
+test = ["pytest>=7.0", "responses>=0.23"]
 dev = ["pytest>=7.0", "responses>=0.23"]
 
 [tool.pytest.ini_options]
