@@ -316,6 +316,8 @@ services:
   prometheus:
     image: prom/prometheus:v2.51.0
     container_name: gravix-prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./storage/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./storage/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
