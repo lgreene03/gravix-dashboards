@@ -754,7 +754,7 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 
 		tenantID := getTenantID(r)
 
-		fact, err := schemas.ParseRequestFact(body)
+		fact, err := schemas.ParseRequestFact(body, tenantID)
 		if err != nil {
 			// Write rejected fact to DLQ (async, non-blocking)
 			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
@@ -828,7 +828,7 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 				continue
 			}
 
-			fact, err := schemas.ParseRequestFact(line)
+			fact, err := schemas.ParseRequestFact(line, tenantID)
 			if err != nil {
 				errMsg := fmt.Sprintf("line %d: %v", i+1, err)
 				errors = append(errors, errMsg)
@@ -937,7 +937,8 @@ func handleEvents(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
-		event, err := schemas.ParseServiceEvent(body)
+		tenantID := getTenantID(r)
+		event, err := schemas.ParseServiceEvent(body, tenantID)
 		if err != nil {
 			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid ServiceEvent: %v", err))
 			return
@@ -950,7 +951,6 @@ func handleEvents(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			return
 		}
 
-		tenantID := getTenantID(r)
 		topic := topicForTenant(tenantID, "service_events")
 		if err := sink.Write(topic, cleanData); err != nil {
 			log.Printf("Sink write error: %v", err)

@@ -170,6 +170,25 @@ type AlertHistoryRepo interface {
 	ListByRule(ctx context.Context, ruleID string, limit int) ([]*AlertHistoryEntry, error)
 }
 
+// AuditEntry represents an immutable audit log record.
+type AuditEntry struct {
+	ID         string
+	TenantID   string
+	UserID     string // actor who performed the action
+	Action     string // e.g. "api_key.create", "tenant.register", "data.purge"
+	Resource   string // type of resource acted upon
+	ResourceID string // ID of the specific resource
+	Detail     string // JSON-encoded details (before/after, metadata)
+	IPAddress  string // request source IP
+	CreatedAt  time.Time
+}
+
+// AuditRepo manages immutable audit log entries.
+type AuditRepo interface {
+	Log(ctx context.Context, entry *AuditEntry) error
+	ListByTenant(ctx context.Context, tenantID string, limit, offset int) ([]*AuditEntry, int, error)
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
@@ -179,5 +198,6 @@ type DB interface {
 	NotificationChannels() NotificationChannelRepo
 	AlertRules() AlertRuleRepo
 	AlertHistory() AlertHistoryRepo
+	AuditLog() AuditRepo
 	Close() error
 }

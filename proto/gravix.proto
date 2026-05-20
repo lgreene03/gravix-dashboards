@@ -16,6 +16,7 @@ message RequestFact {
   int32 status_code = 6;
   int32 latency_ms = 7;
   string user_agent_family = 8;
+  string tenant_id = 9;
 }
 
 // ServiceEvent represents a generic lifecycle or operational event.
@@ -27,4 +28,5 @@ message ServiceEvent {
   string entity_id = 5; // Added
   string message = 6;
   map<string, string> properties = 7;
+  string tenant_id = 8;
 }

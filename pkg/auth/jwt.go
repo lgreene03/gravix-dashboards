@@ -24,6 +24,13 @@ func ClaimsFromContext(ctx context.Context) *Claims {
 	return c
 }
 
+// Role constants for RBAC.
+const (
+	RoleAdmin  = "admin"
+	RoleEditor = "editor"
+	RoleViewer = "viewer"
+)
+
 // Claims represents the JWT claims for a Gravix dashboard session.
 type Claims struct {
 	TenantID string `json:"tenant_id"`
@@ -31,6 +38,16 @@ type Claims struct {
 	Email    string `json:"email"`
 	Role     string `json:"role"`
 	jwt.RegisteredClaims
+}
+
+// HasRole returns true if the claims' role matches any of the given roles.
+func (c *Claims) HasRole(roles ...string) bool {
+	for _, r := range roles {
+		if c.Role == r {
+			return true
+		}
+	}
+	return false
 }
 
 // TokenService handles JWT generation and validation.

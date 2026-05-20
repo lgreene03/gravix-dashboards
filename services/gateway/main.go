@@ -153,6 +153,7 @@ func main() {
 	mux.HandleFunc("/api/gateway/alert-history", gw.requireAuth(gw.handleAlertHistory))
 	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.handleDLQ))
 	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.handleDLQReplay))
+	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.handleAuditLog))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -228,6 +229,53 @@ type gateway struct {
 	store      storage.ObjectStore // for DLQ reads
 	cubeAPIURL string
 	jwtSecret  string
+}
+
+// requireRole returns middleware that checks if the authenticated user has one of the given roles.
+// Must be used inside requireAuth (assumes claims are in context).
+func (gw *gateway) requireRole(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			claims := auth.ClaimsFromContext(r.Context())
+			if claims == nil || !claims.HasRole(roles...) {
+				writeError(w, http.StatusForbidden, fmt.Sprintf("requires one of roles: %v", roles))
+				return
+			}
+			next(w, r)
+		}
+	}
+}
+
+// planRank maps plan names to a numeric rank for comparison.
+var planRank = map[string]int{
+	"free":    0,
+	"starter": 1,
+	"pro":     2,
+}
+
+// requirePlan returns middleware that checks if the tenant's plan meets the minimum.
+// Must be used inside requireAuth.
+func (gw *gateway) requirePlan(minPlan string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			claims := auth.ClaimsFromContext(r.Context())
+			if claims == nil {
+				writeError(w, http.StatusUnauthorized, "authentication required")
+				return
+			}
+			tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "tenant not found")
+				return
+			}
+			if planRank[tenant.Plan] < planRank[minPlan] {
+				writeError(w, http.StatusForbidden,
+					fmt.Sprintf("upgrade required: %s plan needed (current: %s)", minPlan, tenant.Plan))
+				return
+			}
+			next(w, r)
+		}
+	}
 }
 
 // handleLogin authenticates a user with email/password and returns a JWT.
@@ -354,7 +402,7 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		TenantID:     tenant.ID,
 		Email:        req.Email,
 		PasswordHash: req.Password, // Will be hashed by the repo
-		Role:         "admin",
+		Role:         auth.RoleAdmin,
 	}
 	if err := gw.db.Users().Create(ctx, user); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create user")
@@ -374,6 +422,9 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
+
+	gw.auditDirect(tenant.ID, user.ID, "tenant.register", "tenant", tenant.ID,
+		fmt.Sprintf(`{"name":%q,"email":%q}`, req.Name, req.Email), r.RemoteAddr)
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"token":      token,
@@ -447,7 +498,7 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"keys": keys})
 
 	case http.MethodPost:
-		if claims.Role != "admin" {
+		if !claims.HasRole(auth.RoleAdmin) {
 			writeError(w, http.StatusForbidden, "admin role required")
 			return
 		}
@@ -466,6 +517,9 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		gw.audit(r, "api_key.create", "api_key", key.ID,
+			fmt.Sprintf(`{"name":%q,"prefix":%q}`, key.Name, key.KeyPrefix))
+
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"key":        plain,
 			"key_id":     key.ID,
@@ -474,7 +528,7 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodDelete:
-		if claims.Role != "admin" {
+		if !claims.HasRole(auth.RoleAdmin) {
 			writeError(w, http.StatusForbidden, "admin role required")
 			return
 		}
@@ -491,6 +545,9 @@ func (gw *gateway) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "key not found or already revoked")
 			return
 		}
+
+		gw.audit(r, "api_key.revoke", "api_key", keyID, `{}`)
+
 		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 
 	default:
@@ -561,6 +618,8 @@ func (gw *gateway) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Webhook error: failed to update plan for tenant %s: %v", tenant.ID, err)
 			} else {
 				log.Printf("Webhook: updated tenant %s plan to %s", tenant.ID, event.PlanName)
+				gw.auditDirect(tenant.ID, "system", "tenant.plan_change", "tenant", tenant.ID,
+					fmt.Sprintf(`{"new_plan":%q,"stripe_event":%q}`, event.PlanName, event.Type), r.RemoteAddr)
 			}
 		}
 		// Update subscription ID
@@ -672,6 +731,92 @@ func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- Audit Logging ---
+
+// audit records an immutable audit entry for a mutation. Runs async (fire-and-forget)
+// so it never blocks the HTTP request path. Errors are logged but not propagated.
+// For pre-auth endpoints (e.g., register), pass tenantID and userID explicitly.
+func (gw *gateway) audit(r *http.Request, action, resource, resourceID, detail string) {
+	claims := auth.ClaimsFromContext(r.Context())
+	entry := &tenantdb.AuditEntry{
+		Action:     action,
+		Resource:   resource,
+		ResourceID: resourceID,
+		Detail:     detail,
+		IPAddress:  r.RemoteAddr,
+	}
+	if claims != nil {
+		entry.TenantID = claims.TenantID
+		entry.UserID = claims.UserID
+	}
+	go func() {
+		if err := gw.db.AuditLog().Log(context.Background(), entry); err != nil {
+			log.Printf("Audit log error: %v", err)
+		}
+	}()
+}
+
+// auditDirect records an audit entry with explicit tenant/user IDs.
+// Used by pre-auth endpoints (register) and system actions (webhooks).
+func (gw *gateway) auditDirect(tenantID, userID, action, resource, resourceID, detail, ip string) {
+	entry := &tenantdb.AuditEntry{
+		TenantID:   tenantID,
+		UserID:     userID,
+		Action:     action,
+		Resource:   resource,
+		ResourceID: resourceID,
+		Detail:     detail,
+		IPAddress:  ip,
+	}
+	go func() {
+		if err := gw.db.AuditLog().Log(context.Background(), entry); err != nil {
+			log.Printf("Audit log error: %v", err)
+		}
+	}()
+}
+
+// handleAuditLog lists audit entries for the authenticated tenant (admin only).
+func (gw *gateway) handleAuditLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	claims := auth.ClaimsFromContext(r.Context())
+	if !claims.HasRole(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	entries, total, err := gw.db.AuditLog().ListByTenant(r.Context(), claims.TenantID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list audit log")
+		return
+	}
+	if entries == nil {
+		entries = []*tenantdb.AuditEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"entries": entries,
+		"total":   total,
+		"limit":   limit,
+		"offset":  offset,
+	})
+}
+
 // usageMeteringLoop reports tenant event usage to Stripe every hour.
 func (gw *gateway) usageMeteringLoop(ctx context.Context) {
 	// Wait 5 minutes after startup before first run
@@ -713,8 +858,8 @@ func (gw *gateway) handleChannels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"channels": channels})
 
 	case http.MethodPost:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 
@@ -778,8 +923,8 @@ func (gw *gateway) handleChannelByID(w http.ResponseWriter, r *http.Request) {
 	isTest := len(parts) >= 6 && parts[5] == "test"
 
 	if isTest && r.Method == http.MethodPost {
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 		ch, err := gw.db.NotificationChannels().GetByID(r.Context(), channelID)
@@ -806,8 +951,8 @@ func (gw *gateway) handleChannelByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodDelete:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 		ch, err := gw.db.NotificationChannels().GetByID(r.Context(), channelID)
@@ -856,8 +1001,8 @@ func (gw *gateway) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"rules": rules})
 
 	case http.MethodPost:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 
@@ -925,8 +1070,8 @@ func (gw *gateway) handleAlertRuleByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPut:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 
@@ -994,8 +1139,8 @@ func (gw *gateway) handleAlertRuleByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, existing)
 
 	case http.MethodDelete:
-		if claims.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin role required")
+		if !claims.HasRole(auth.RoleAdmin, auth.RoleEditor) {
+			writeError(w, http.StatusForbidden, "admin or editor role required")
 			return
 		}
 

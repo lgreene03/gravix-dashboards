@@ -28,6 +28,33 @@ networks:
     driver: bridge
 
 services:
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    container_name: gravix-gateway
+    restart: always
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./data:/app/data
+    command: [ "./gateway", "--tenant-db", "/app/data/gravix.db" ]
+    environment:
+      - JWT_SECRET=supersecretjwtkey12345!
+      - TENANT_DB_PATH=/app/data/gravix.db
+      - CUBE_API_URL=http://cube:4000/cubejs-api/v1/load
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8091/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - frontend
+      - backend
+
   ingestion:
     build:
       context: .
@@ -40,7 +67,7 @@ services:
       - ./data:/app/data
     command: [ "./ingestion-service", "--base-dir", "/app/data" ]
     environment:
-      - API_KEY=${API_KEY:?API_KEY is required - set it in .env}
+      - TENANT_DB_PATH=/app/data/gravix.db
       # No S3_ENDPOINT → ingestion auto-falls back to LocalStore (local disk)
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/live"]
@@ -63,6 +90,8 @@ services:
       - CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:
       - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
+      - TENANT_DB_PATH=/cube/data/gravix.db
+      - JWT_SECRET=supersecretjwtkey12345!
     volumes:
       - ./cube/cube.js:/cube/conf/cube.js
       - ./cube/model:/cube/conf/model

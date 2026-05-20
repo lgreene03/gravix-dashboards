@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS alert_history (
 CREATE INDEX IF NOT EXISTS idx_alert_history_tenant ON alert_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_alert_history_rule ON alert_history(rule_id);
 CREATE INDEX IF NOT EXISTS idx_alert_history_created ON alert_history(created_at);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+	id          TEXT PRIMARY KEY,
+	tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+	user_id     TEXT NOT NULL DEFAULT '',
+	action      TEXT NOT NULL,
+	resource    TEXT NOT NULL DEFAULT '',
+	resource_id TEXT NOT NULL DEFAULT '',
+	detail      TEXT NOT NULL DEFAULT '{}',
+	ip_address  TEXT NOT NULL DEFAULT '',
+	created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_tenant_time ON audit_logs(tenant_id, created_at);
 `
 
 // SQLiteDB implements DB using a SQLite database.
@@ -150,8 +163,9 @@ func (s *SQLiteDB) EventCounters() EventCounterRepo {
 func (s *SQLiteDB) NotificationChannels() NotificationChannelRepo {
 	return &sqliteNotificationChannelRepo{db: s.db}
 }
-func (s *SQLiteDB) AlertRules() AlertRuleRepo   { return &sqliteAlertRuleRepo{db: s.db} }
+func (s *SQLiteDB) AlertRules() AlertRuleRepo     { return &sqliteAlertRuleRepo{db: s.db} }
 func (s *SQLiteDB) AlertHistory() AlertHistoryRepo { return &sqliteAlertHistoryRepo{db: s.db} }
+func (s *SQLiteDB) AuditLog() AuditRepo            { return &sqliteAuditRepo{db: s.db} }
 
 // --- Tenant Repo ---
 
@@ -802,4 +816,64 @@ func (r *sqliteAlertHistoryRepo) scanAlertHistory(rows *sql.Rows) ([]*AlertHisto
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// --- Audit Log Repo ---
+
+type sqliteAuditRepo struct{ db *sql.DB }
+
+func (r *sqliteAuditRepo) Log(ctx context.Context, entry *AuditEntry) error {
+	if entry.ID == "" {
+		entry.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO audit_logs (id, tenant_id, user_id, action, resource, resource_id, detail, ip_address, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.ID, entry.TenantID, entry.UserID, entry.Action,
+		entry.Resource, entry.ResourceID, entry.Detail, entry.IPAddress, now,
+	)
+	if err == nil {
+		entry.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	}
+	return err
+}
+
+func (r *sqliteAuditRepo) ListByTenant(ctx context.Context, tenantID string, limit, offset int) ([]*AuditEntry, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	// Get total count
+	var total int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE tenant_id = ?`, tenantID).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, tenant_id, user_id, action, resource, resource_id, detail, ip_address, created_at
+		 FROM audit_logs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		tenantID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var entries []*AuditEntry
+	for rows.Next() {
+		e := &AuditEntry{}
+		var createdAt string
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.UserID, &e.Action,
+			&e.Resource, &e.ResourceID, &e.Detail, &e.IPAddress, &createdAt); err != nil {
+			return nil, 0, err
+		}
+		e.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		entries = append(entries, e)
+	}
+	return entries, total, rows.Err()
 }

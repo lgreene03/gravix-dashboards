@@ -39,9 +39,15 @@ spec:
                   drop: ["ALL"]
               command: ["./purge"]
               args:
+                - "--mode"
+                - {{ .Values.retentionJob.mode | default "manual" | quote }}
+                {{- if eq (default "manual" .Values.retentionJob.mode) "manual" }}
                 - "--retention-days"
                 - "{{ .Values.retentionJob.retentionDays }}"
+                {{- end }}
               env:
+                - name: TENANT_DB_PATH
+                  value: {{ .Values.retentionJob.tenantDBPath | default "/data/gravix.db" | quote }}
                 - name: S3_ENDPOINT
                   value: {{ .Values.global.storage.endpoint | quote }}
                 - name: S3_REGION

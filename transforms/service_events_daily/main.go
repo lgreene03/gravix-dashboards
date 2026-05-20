@@ -254,7 +254,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 				continue
 			}
 
-			event, err := schemas.ParseServiceEvent(line)
+			event, err := schemas.ParseServiceEvent(line, tenantID)
 			if err != nil {
 				log.Printf("Skipping invalid line in %s: %v", key, err)
 				continue

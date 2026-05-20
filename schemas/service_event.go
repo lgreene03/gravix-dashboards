@@ -12,13 +12,16 @@ import (
 // ServiceEvent aliases the generated Protobuf type.
 type ServiceEvent = gravixv1.ServiceEvent
 
-// ParseServiceEvent decodes and validates a raw JSON byte slice into a Protobuf message.
-func ParseServiceEvent(data []byte) (*ServiceEvent, error) {
+// ParseServiceEvent decodes, injects tenant context, and validates a raw JSON byte slice into a Protobuf message.
+func ParseServiceEvent(data []byte, tenantID string) (*ServiceEvent, error) {
 	var event ServiceEvent
 	err := protojson.Unmarshal(data, &event)
 	if err != nil {
 		return nil, fmt.Errorf("protojson unmarshal error: %w", err)
 	}
+
+	// Always override/inject the tenant ID from the trusted auth context
+	event.TenantId = tenantID
 
 	if err := ValidateServiceEvent(&event); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
@@ -29,6 +32,11 @@ func ParseServiceEvent(data []byte) (*ServiceEvent, error) {
 
 // ValidateServiceEvent enforces schema constraints on the Protobuf message.
 func ValidateServiceEvent(e *ServiceEvent) error {
+	// Constraint: TenantID must be present
+	if e.TenantId == "" {
+		return fmt.Errorf("tenant_id is required")
+	}
+
 	// Constraint: EventID must be present and valid UUIDv7
 	if e.EventId == "" {
 		return fmt.Errorf("event_id is required")

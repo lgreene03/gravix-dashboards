@@ -1312,6 +1312,120 @@ func TestAlertHistoryListByTenantDefaultLimit(t *testing.T) {
 	}
 }
 
+// --- Audit Log Repo ---
+
+func TestAuditLogCreate(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
+
+	entry := &AuditEntry{
+		TenantID:   tenant.ID,
+		UserID:     "user-1",
+		Action:     "api_key.create",
+		Resource:   "api_key",
+		ResourceID: "key-1",
+		Detail:     `{"name":"prod-key"}`,
+		IPAddress:  "127.0.0.1",
+	}
+	if err := db.AuditLog().Log(ctx, entry); err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if entry.ID == "" {
+		t.Error("ID should be auto-generated")
+	}
+	if entry.CreatedAt.IsZero() {
+		t.Error("CreatedAt should be set")
+	}
+}
+
+func TestAuditLogListByTenant(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	t1 := createTestTenant(t, db, "Acme", "acme@test.com")
+	t2 := createTestTenant(t, db, "Beta", "beta@test.com")
+
+	db.AuditLog().Log(ctx, &AuditEntry{TenantID: t1.ID, UserID: "u1", Action: "api_key.create"})
+	db.AuditLog().Log(ctx, &AuditEntry{TenantID: t1.ID, UserID: "u1", Action: "api_key.revoke"})
+	db.AuditLog().Log(ctx, &AuditEntry{TenantID: t2.ID, UserID: "u2", Action: "tenant.register"})
+
+	entries, total, err := db.AuditLog().ListByTenant(ctx, t1.ID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListByTenant: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want 2", total)
+	}
+	if len(entries) != 2 {
+		t.Errorf("len = %d, want 2", len(entries))
+	}
+}
+
+func TestAuditLogPagination(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
+
+	for i := 0; i < 5; i++ {
+		db.AuditLog().Log(ctx, &AuditEntry{
+			TenantID: tenant.ID,
+			UserID:   "u1",
+			Action:   "test.action",
+		})
+	}
+
+	// Page 1: first 2 entries
+	entries, total, err := db.AuditLog().ListByTenant(ctx, tenant.ID, 2, 0)
+	if err != nil {
+		t.Fatalf("ListByTenant page 1: %v", err)
+	}
+	if total != 5 {
+		t.Errorf("total = %d, want 5", total)
+	}
+	if len(entries) != 2 {
+		t.Errorf("page 1 len = %d, want 2", len(entries))
+	}
+
+	// Page 2: next 2 entries
+	entries2, _, err := db.AuditLog().ListByTenant(ctx, tenant.ID, 2, 2)
+	if err != nil {
+		t.Fatalf("ListByTenant page 2: %v", err)
+	}
+	if len(entries2) != 2 {
+		t.Errorf("page 2 len = %d, want 2", len(entries2))
+	}
+
+	// Page 3: last entry
+	entries3, _, err := db.AuditLog().ListByTenant(ctx, tenant.ID, 2, 4)
+	if err != nil {
+		t.Fatalf("ListByTenant page 3: %v", err)
+	}
+	if len(entries3) != 1 {
+		t.Errorf("page 3 len = %d, want 1", len(entries3))
+	}
+}
+
+func TestAuditLogEmpty(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	tenant := createTestTenant(t, db, "Acme", "acme@test.com")
+
+	entries, total, err := db.AuditLog().ListByTenant(ctx, tenant.ID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListByTenant: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("total = %d, want 0", total)
+	}
+	if len(entries) != 0 {
+		t.Errorf("len = %d, want 0", len(entries))
+	}
+}
+
 // --- Repo accessor verification ---
 
 func TestNewReposNotNil(t *testing.T) {
@@ -1325,5 +1439,8 @@ func TestNewReposNotNil(t *testing.T) {
 	}
 	if db.AlertHistory() == nil {
 		t.Error("AlertHistory() returned nil")
+	}
+	if db.AuditLog() == nil {
+		t.Error("AuditLog() returned nil")
 	}
 }

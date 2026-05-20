@@ -91,6 +91,7 @@ rollupJob:
     pullPolicy: IfNotPresent
 
 retentionJob:
+  mode: "auto"  # Per-plan retention: free=7d, starter=30d, pro=90d
   image:
     repository: gravix-rollup
     tag: "0.1.0"

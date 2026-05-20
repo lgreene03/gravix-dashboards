@@ -354,7 +354,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 			}
 
 			// Parse JSON Fact
-			fact, err := schemas.ParseRequestFact(line)
+			fact, err := schemas.ParseRequestFact(line, tenantID)
 			if err != nil {
 				log.Printf("Skipping invalid JSON line in %s: %v", key, err)
 				continue

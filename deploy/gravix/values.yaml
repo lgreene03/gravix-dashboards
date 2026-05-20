@@ -92,7 +92,9 @@ retentionJob:
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   schedule: "0 3 * * *" # Daily at 03:00 UTC
-  retentionDays: 30
+  mode: "manual"        # "auto" = per-plan retention (free=7d, starter=30d, pro=90d), "manual" = use retentionDays
+  retentionDays: 30     # Only used when mode=manual
+  tenantDBPath: "/data/gravix.db"  # Path to tenant SQLite database inside the container
 
 dashboard:
   image:

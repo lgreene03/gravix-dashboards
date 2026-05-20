@@ -33,6 +33,7 @@ type RequestFact struct {
 	StatusCode      int32                  `protobuf:"varint,6,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
 	LatencyMs       int32                  `protobuf:"varint,7,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
 	UserAgentFamily string                 `protobuf:"bytes,8,opt,name=user_agent_family,json=userAgentFamily,proto3" json:"user_agent_family,omitempty"`
+	TenantId        string                 `protobuf:"bytes,9,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -123,6 +124,13 @@ func (x *RequestFact) GetUserAgentFamily() string {
 	return ""
 }
 
+func (x *RequestFact) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
 // ServiceEvent represents a generic lifecycle or operational event.
 type ServiceEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -133,6 +141,7 @@ type ServiceEvent struct {
 	EntityId      string                 `protobuf:"bytes,5,opt,name=entity_id,json=entityId,proto3" json:"entity_id,omitempty"` // Added
 	Message       string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`
 	Properties    map[string]string      `protobuf:"bytes,7,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	TenantId      string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -216,11 +225,18 @@ func (x *ServiceEvent) GetProperties() map[string]string {
 	return nil
 }
 
+func (x *ServiceEvent) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
 var File_proto_gravix_proto protoreflect.FileDescriptor
 
 const file_proto_gravix_proto_rawDesc = "" +
 	"\n" +
-	"\x12proto/gravix.proto\x12\tgravix.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa6\x02\n" +
+	"\x12proto/gravix.proto\x12\tgravix.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x02\n" +
 	"\vRequestFact\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x129\n" +
 	"\n" +
@@ -232,7 +248,8 @@ const file_proto_gravix_proto_rawDesc = "" +
 	"statusCode\x12\x1d\n" +
 	"\n" +
 	"latency_ms\x18\a \x01(\x05R\tlatencyMs\x12*\n" +
-	"\x11user_agent_family\x18\b \x01(\tR\x0fuserAgentFamily\"\xdc\x02\n" +
+	"\x11user_agent_family\x18\b \x01(\tR\x0fuserAgentFamily\x12\x1b\n" +
+	"\ttenant_id\x18\t \x01(\tR\btenantId\"\xf9\x02\n" +
 	"\fServiceEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x129\n" +
 	"\n" +
@@ -244,7 +261,8 @@ const file_proto_gravix_proto_rawDesc = "" +
 	"\amessage\x18\x06 \x01(\tR\amessage\x12G\n" +
 	"\n" +
 	"properties\x18\a \x03(\v2'.gravix.v1.ServiceEvent.PropertiesEntryR\n" +
-	"properties\x1a=\n" +
+	"properties\x12\x1b\n" +
+	"\ttenant_id\x18\b \x01(\tR\btenantId\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B=Z;github.com/lgreene/gravix-dashboards/gen/gravix/v1;gravixv1b\x06proto3"

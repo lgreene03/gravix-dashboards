@@ -67,3 +67,54 @@ func TestValidateGarbage(t *testing.T) {
 		t.Error("expected error for garbage token")
 	}
 }
+
+func TestHasRole(t *testing.T) {
+	claims := &Claims{Role: RoleAdmin}
+
+	if !claims.HasRole(RoleAdmin) {
+		t.Error("admin should match admin")
+	}
+	if claims.HasRole(RoleEditor) {
+		t.Error("admin should not match editor")
+	}
+	if claims.HasRole(RoleViewer) {
+		t.Error("admin should not match viewer")
+	}
+}
+
+func TestHasRoleMultiple(t *testing.T) {
+	claims := &Claims{Role: RoleEditor}
+
+	if !claims.HasRole(RoleAdmin, RoleEditor) {
+		t.Error("editor should match when admin+editor are accepted")
+	}
+	if claims.HasRole(RoleAdmin, RoleViewer) {
+		t.Error("editor should not match admin+viewer")
+	}
+}
+
+func TestHasRoleViewer(t *testing.T) {
+	claims := &Claims{Role: RoleViewer}
+
+	if claims.HasRole(RoleAdmin) {
+		t.Error("viewer should not match admin")
+	}
+	if claims.HasRole(RoleAdmin, RoleEditor) {
+		t.Error("viewer should not match admin+editor")
+	}
+	if !claims.HasRole(RoleViewer) {
+		t.Error("viewer should match viewer")
+	}
+}
+
+func TestRoleConstants(t *testing.T) {
+	if RoleAdmin != "admin" {
+		t.Errorf("RoleAdmin = %q", RoleAdmin)
+	}
+	if RoleEditor != "editor" {
+		t.Errorf("RoleEditor = %q", RoleEditor)
+	}
+	if RoleViewer != "viewer" {
+		t.Errorf("RoleViewer = %q", RoleViewer)
+	}
+}

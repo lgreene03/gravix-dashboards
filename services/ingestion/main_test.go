@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
@@ -94,6 +95,14 @@ func validEventJSON(t *testing.T) string {
 	return string(data)
 }
 
+func withMockTenant(r *http.Request) *http.Request {
+	info := &tenantdb.APIKeyInfo{
+		TenantID: "tenant-abc",
+		Plan:     "free",
+	}
+	return r.WithContext(context.WithValue(r.Context(), tenantInfoKey, info))
+}
+
 // setupSink creates a DurableSink backed by a temp directory with local storage.
 func setupSink(t *testing.T) *DurableSink {
 	t.Helper()
@@ -117,6 +126,7 @@ func TestHandleFacts_ValidPost(t *testing.T) {
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -131,6 +141,7 @@ func TestHandleFacts_InvalidJSON(t *testing.T) {
 	handler := handleFacts(sink, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(`{"bad json`))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -153,6 +164,7 @@ func TestHandleFacts_MissingContentType(t *testing.T) {
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
+	req = withMockTenant(req)
 	// No Content-Type header set
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -168,6 +180,7 @@ func TestHandleFacts_WrongContentType(t *testing.T) {
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "text/plain")
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -182,6 +195,7 @@ func TestHandleFacts_MethodNotAllowed(t *testing.T) {
 	handler := handleFacts(sink, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/facts", nil)
+	req = withMockTenant(req)
 	rr := httptest.NewRecorder()
 	handler(rr, req)
 
@@ -196,6 +210,7 @@ func TestHandleEvents_ValidPost(t *testing.T) {
 
 	body := validEventJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(body))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -210,6 +225,7 @@ func TestHandleEvents_InvalidJSON(t *testing.T) {
 	handler := handleEvents(sink, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(`not json`))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -225,6 +241,7 @@ func TestHandleEvents_MissingContentType(t *testing.T) {
 
 	body := validEventJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(body))
+	req = withMockTenant(req)
 	rr := httptest.NewRecorder()
 	handler(rr, req)
 
@@ -367,6 +384,7 @@ func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 	body := line1 + "\n" + line2 + "\n"
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/batch", strings.NewReader(body))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -395,6 +413,7 @@ func TestHandleBatchFacts_MixedValid(t *testing.T) {
 	body := validLine + "\n{bad json}\n"
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/batch", strings.NewReader(body))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler(rr, req)
@@ -418,6 +437,7 @@ func TestHandleBatchFacts_EmptyBody(t *testing.T) {
 	handler := handleBatchFacts(sink, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/batch", strings.NewReader(""))
+	req = withMockTenant(req)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler(rr, req)

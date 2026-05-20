@@ -12,25 +12,44 @@ import (
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 )
 
+// planRetentionDays returns the data retention period in days for a given billing plan.
+// Used in "auto" mode to enforce per-tenant retention based on their subscription tier.
+func planRetentionDays(plan string) int {
+	switch plan {
+	case "free":
+		return 7
+	case "starter":
+		return 30
+	case "pro":
+		return 90
+	default:
+		return 30 // unknown plans default to starter-level retention
+	}
+}
+
 func main() {
 	var retentionDays int
 	var dryRun bool
 	var dataDir string
 	var tenantDBPath string
+	var mode string
 
-	flag.IntVar(&retentionDays, "retention-days", 30, "Delete data older than this many days")
+	flag.IntVar(&retentionDays, "retention-days", 30, "Delete data older than this many days (manual mode only)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print files that would be deleted without actually deleting")
 	flag.StringVar(&dataDir, "data-dir", "./data", "Base data directory (used for local storage)")
 	flag.StringVar(&tenantDBPath, "tenant-db", "", "Path to tenant SQLite database (multi-tenant mode)")
+	flag.StringVar(&mode, "mode", "manual", "Retention mode: 'auto' uses per-plan retention, 'manual' uses --retention-days")
 	flag.Parse()
 
 	if tenantDBPath == "" {
 		tenantDBPath = os.Getenv("TENANT_DB_PATH")
 	}
 
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
-	cutoffStr := cutoff.Format("2006-01-02")
-	log.Printf("Purging data older than %d days (cutoff: %s, dry-run: %v)", retentionDays, cutoffStr, dryRun)
+	if mode != "auto" && mode != "manual" {
+		log.Fatalf("Invalid mode %q: must be 'auto' or 'manual'", mode)
+	}
+
+	log.Printf("Starting purge (mode=%s, dry-run=%v)", mode, dryRun)
 
 	ctx := context.Background()
 
@@ -58,8 +77,11 @@ func main() {
 		}
 	}
 
-	// Build list of prefixes to purge
+	// Build list of per-tenant purge targets
 	type purgeTarget struct {
+		tenantID         string
+		tenantPlan       string
+		retentionDays    int
 		raw              string
 		rawEvents        string
 		warehouseMetrics string
@@ -67,9 +89,11 @@ func main() {
 	}
 
 	var targets []purgeTarget
+	var tdb tenantdb.DB
 
 	if tenantDBPath != "" {
-		tdb, err := tenantdb.Open(tenantDBPath)
+		var err error
+		tdb, err = tenantdb.Open(tenantDBPath)
 		if err != nil {
 			log.Fatalf("Failed to open tenant database: %v", err)
 		}
@@ -81,16 +105,27 @@ func main() {
 		}
 
 		for _, t := range tenants {
+			days := retentionDays
+			if mode == "auto" {
+				days = planRetentionDays(t.Plan)
+			}
 			targets = append(targets, purgeTarget{
+				tenantID:         t.ID,
+				tenantPlan:       t.Plan,
+				retentionDays:    days,
 				raw:              fmt.Sprintf("raw/%s/request_facts", t.ID),
 				rawEvents:        fmt.Sprintf("raw/%s/service_events", t.ID),
 				warehouseMetrics: fmt.Sprintf("warehouse/%s/request_metrics_minute", t.ID),
 				warehouseEvents:  fmt.Sprintf("warehouse/%s/service_events_daily", t.ID),
 			})
 		}
-		log.Printf("Multi-tenant mode: purging %d tenants", len(targets))
+		log.Printf("Multi-tenant mode (%s): purging %d tenants", mode, len(targets))
 	} else {
+		if mode == "auto" {
+			log.Println("Warning: --mode=auto requires a tenant database; falling back to manual retention")
+		}
 		targets = append(targets, purgeTarget{
+			retentionDays:    retentionDays,
 			raw:              "raw/request_facts",
 			rawEvents:        "raw/service_events",
 			warehouseMetrics: "warehouse/request_metrics_minute",
@@ -98,22 +133,53 @@ func main() {
 		})
 	}
 
-	var total int
+	var grandTotal int
 	for _, t := range targets {
+		cutoff := time.Now().UTC().AddDate(0, 0, -t.retentionDays)
+		cutoffStr := cutoff.Format("2006-01-02")
+
+		if t.tenantID != "" {
+			log.Printf("Tenant %s (plan=%s): retaining %d days (cutoff: %s)", t.tenantID, t.tenantPlan, t.retentionDays, cutoffStr)
+		} else {
+			log.Printf("Single-tenant: retaining %d days (cutoff: %s)", t.retentionDays, cutoffStr)
+		}
+
+		var tenantTotal int
 		for _, prefix := range []string{t.raw, t.rawEvents, t.warehouseMetrics, t.warehouseEvents} {
 			deleted, err := purgeOldData(ctx, store, prefix, cutoffStr, dryRun)
 			if err != nil {
 				log.Printf("Error purging %s: %v", prefix, err)
 			}
-			total += deleted
+			tenantTotal += deleted
 		}
+
+		// Write audit entry for each tenant purge (skip dry-run and zero-delete runs)
+		if tdb != nil && t.tenantID != "" && !dryRun && tenantTotal > 0 {
+			detail := fmt.Sprintf(
+				`{"retention_days":%d,"files_deleted":%d,"cutoff":"%s","plan":"%s","mode":"%s"}`,
+				t.retentionDays, tenantTotal, cutoffStr, t.tenantPlan, mode,
+			)
+			entry := &tenantdb.AuditEntry{
+				TenantID:   t.tenantID,
+				UserID:     "system",
+				Action:     "data.purge",
+				Resource:   "retention",
+				ResourceID: t.tenantID,
+				Detail:     detail,
+			}
+			if err := tdb.AuditLog().Log(ctx, entry); err != nil {
+				log.Printf("Audit log error for tenant %s: %v", t.tenantID, err)
+			}
+		}
+
+		grandTotal += tenantTotal
 	}
 
 	action := "deleted"
 	if dryRun {
 		action = "would delete"
 	}
-	log.Printf("Purge complete: %s %d files total", action, total)
+	log.Printf("Purge complete: %s %d files total", action, grandTotal)
 }
 
 // purgeOldData lists all keys under a prefix and deletes those containing dates older than the cutoff.

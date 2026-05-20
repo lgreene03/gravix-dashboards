@@ -21,6 +21,7 @@ func TestRequestFact_Validate(t *testing.T) {
 			name: "Valid Fact",
 			input: &RequestFact{
 				EventId:      validUUIDv7,
+				TenantId:     "tenant-123",
 				EventTime:    timestamppb.Now(),
 				Service:      "auth-service",
 				Method:       "POST",
@@ -29,6 +30,19 @@ func TestRequestFact_Validate(t *testing.T) {
 				LatencyMs:    45,
 			},
 			expectErr: false,
+		},
+		{
+			name: "Missing TenantID",
+			input: &RequestFact{
+				EventId:      validUUIDv7,
+				EventTime:    timestamppb.Now(),
+				Service:      "auth-service",
+				Method:       "POST",
+				PathTemplate: "/login",
+				StatusCode:   200,
+			},
+			expectErr: true,
+			errMsg:    "tenant_id is required",
 		},
 		{
 			name: "Missing EventID",
@@ -290,6 +304,9 @@ func TestRequestFact_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.name != "Missing TenantID" && tt.input != nil && tt.input.TenantId == "" {
+				tt.input.TenantId = "tenant-123"
+			}
 			err := ValidateRequestFact(tt.input)
 			if tt.expectErr {
 				if err == nil {
@@ -308,6 +325,7 @@ func TestRequestFact_Validate(t *testing.T) {
 
 func TestValidateRequestFact_InvalidEventID(t *testing.T) {
 	fact := &RequestFact{
+		TenantId:     "tenant-123",
 		EventId:      "not-a-uuid-at-all",
 		EventTime:    timestamppb.Now(),
 		Service:      "svc",
@@ -327,6 +345,7 @@ func TestValidateRequestFact_InvalidEventID(t *testing.T) {
 func TestValidateRequestFact_ZeroEventTime(t *testing.T) {
 	// Go's zero time is 0001-01-01T00:00:00Z which is epoch -62135596800
 	fact := &RequestFact{
+		TenantId:     "tenant-123",
 		EventId:      validUUIDv7,
 		EventTime:    &timestamppb.Timestamp{Seconds: -62135596800, Nanos: 0},
 		Service:      "svc",
@@ -353,7 +372,7 @@ func TestParseRequestFact_Valid(t *testing.T) {
 		"statusCode": 200,
 		"latencyMs": 45
 	}`
-	fact, err := ParseRequestFact([]byte(json))
+	fact, err := ParseRequestFact([]byte(json), "tenant-123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -366,7 +385,7 @@ func TestParseRequestFact_Valid(t *testing.T) {
 }
 
 func TestParseRequestFact_InvalidJSON(t *testing.T) {
-	_, err := ParseRequestFact([]byte(`{not valid json`))
+	_, err := ParseRequestFact([]byte(`{not valid json`), "tenant-123")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -384,7 +403,7 @@ func TestParseRequestFact_ValidationError(t *testing.T) {
 		"pathTemplate": "/p",
 		"statusCode": 200
 	}`
-	_, err := ParseRequestFact([]byte(json))
+	_, err := ParseRequestFact([]byte(json), "tenant-123")
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
