@@ -30,7 +30,7 @@ func runTailDLQ(args []string) {
 	endpoint := fs.String("endpoint", "", "Gateway endpoint (env: GRAVIX_GATEWAY_URL)")
 	fs.Parse(args)
 
-	gwURL := resolveStr(*endpoint, "GRAVIX_GATEWAY_URL")
+	gwURL := resolveStr(*endpoint, os.Getenv("GRAVIX_GATEWAY_URL"))
 	if gwURL == "" {
 		gwURL = "http://localhost:8091"
 	}

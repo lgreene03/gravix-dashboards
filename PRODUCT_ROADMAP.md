@@ -190,19 +190,19 @@ Phase 1 (multi-tenancy, tenant auth).
 
 ### Features
 
-#### 3.1 Go SDK Client Library
+#### 3.1 Go SDK Client Library ✅
 Thin wrapper around the HTTP ingestion API. Handles automatic batching (flush every 5s or 100 events), retries with exponential backoff, path template sanitization (auto-replace UUIDs with `{id}`). Published as `github.com/gravix-io/gravix-go`.
 - Effort: 2 person-weeks
 
-#### 3.2 Python SDK
+#### 3.2 Python SDK ✅
 Same capabilities as Go SDK. `pip install gravix`. Middleware integration for Flask/FastAPI/Django.
 - Effort: 1.5 person-weeks
 
-#### 3.3 Node.js SDK
+#### 3.3 Node.js SDK ✅
 Same capabilities. `npm install @gravix/sdk`. Express/Koa/Fastify middleware.
 - Effort: 1.5 person-weeks
 
-#### 3.4 GitHub Actions Marketplace Action
+#### 3.4 GitHub Actions Marketplace Action ✅
 `gravix/deploy-event` action that sends a `ServiceEvent` on every deploy. Auto-populates commit SHA, branch, author, repo. One-line YAML integration in any CI pipeline.
 - Effort: 1 person-week
 
@@ -214,7 +214,7 @@ Interactive onboarding in the dashboard: select your language, copy-paste the SD
 Auto-generated from protobuf definitions + OpenAPI spec. Hosted at docs.gravix.io. Interactive API explorer with "Try it" buttons.
 - Effort: 1 person-week
 
-#### 3.7 CLI Tool
+#### 3.7 CLI Tool ✅
 `gravix` CLI for power users: send test events, check tenant status, view recent metrics, tail the DLQ. Distributed via Homebrew and Go install.
 - Effort: 1 person-week
 
