@@ -6,7 +6,7 @@
 
 ---
 
-## Horizon 1: Production-Ready MVP — Complete
+## Horizon 1: Production-Ready MVP — Complete ✅
 
 Delivered the durable batch architecture with production deployment capabilities.
 
@@ -19,7 +19,7 @@ Delivered the durable batch architecture with production deployment capabilities
 
 ---
 
-## Phase 0: Bootstrap ($0-20/mo) — Week 0
+## Phase 0: Bootstrap ($0-20/mo) — Week 0 ✅
 
 **Theme:** "Run Before You Spend"
 **Goal:** Deploy the full Gravix pipeline on a single cheap VPS with zero cloud dependencies. DuckDB replaces Trino upfront; local disk replaces MinIO.
@@ -61,7 +61,7 @@ The Cube.js models, rollup jobs, and ingestion service work identically in both 
 
 ---
 
-## Phase 1: SaaS Foundation (Month 1-2)
+## Phase 1: SaaS Foundation (Month 1-2) ✅
 
 **Theme:** "Accept the First Dollar"
 **Goal:** Multi-tenancy, billing, and onboarding — the minimum to charge a customer.
@@ -122,7 +122,7 @@ None — builds directly on Horizon 1.
 
 ---
 
-## Phase 2: Analytics & Alerting (Month 3-5)
+## Phase 2: Analytics & Alerting (Month 3-5) 🟢
 
 **Theme:** "Less Staring, More Knowing"
 **Goal:** Path-level drill-downs and alerting — the features that convert Starter users to Pro.
@@ -182,7 +182,7 @@ Phase 1 (multi-tenancy, tenant auth).
 
 ---
 
-## Phase 3: Developer Experience (Month 5-7)
+## Phase 3: Developer Experience (Month 5-7) 🟡
 
 **Theme:** "Five-Minute Setup"
 **Goal:** SDK libraries, CI integration, and documentation — reduce time-to-value and drive organic adoption.
