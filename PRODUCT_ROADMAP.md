@@ -182,7 +182,7 @@ Phase 1 (multi-tenancy, tenant auth).
 
 ---
 
-## Phase 3: Developer Experience (Month 5-7) 🟢
+## Phase 3: Developer Experience (Month 5-7) ✅
 
 **Theme:** "Five-Minute Setup"
 **Goal:** SDK libraries, CI integration, and documentation — reduce time-to-value and drive organic adoption.
@@ -206,11 +206,11 @@ Same capabilities. `npm install @gravix/sdk`. Express/Koa/Fastify middleware.
 `gravix/deploy-event` action that sends a `ServiceEvent` on every deploy. Auto-populates commit SHA, branch, author, repo. One-line YAML integration in any CI pipeline.
 - Effort: 1 person-week
 
-#### 3.5 Quick-Start Wizard
+#### 3.5 Quick-Start Wizard ✅
 Interactive onboarding in the dashboard: select your language, copy-paste the SDK snippet, verify first event received in real-time. Celebrate with confetti.
 - Effort: 1.5 person-weeks
 
-#### 3.6 API Documentation Site
+#### 3.6 API Documentation Site ✅
 Auto-generated from protobuf definitions + OpenAPI spec. Hosted at docs.gravix.io. Interactive API explorer with "Try it" buttons.
 - Effort: 1 person-week
 
