@@ -34,6 +34,10 @@ go test ./schemas/... -run TestValidateRequestFact
 go build -o ingestion-service ./services/ingestion/
 go build -o rollup-job ./transforms/request_metrics_minute/
 go build -o load-generator ./cmd/load_generator/
+go build -o compaction-job ./transforms/compaction/
+
+# Run storage compaction job (Phase 5.3)
+go run ./transforms/compaction/ -db ./data/gravix.db -days 2
 
 # Regenerate protobuf code (requires protoc + protoc-gen-go)
 protoc --go_out=./gen --go_opt=paths=source_relative proto/gravix.proto

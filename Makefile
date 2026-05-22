@@ -1,4 +1,4 @@
-.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs
+.PHONY: build build-cli build-compaction test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -7,6 +7,10 @@ build:
 	go build -o bin/load-generator ./cmd/load_generator/
 	go build -o bin/purge ./cmd/purge/
 	go build -o bin/gravix ./cmd/cli/
+	go build -o bin/compaction-job ./transforms/compaction/
+
+build-compaction:
+	go build -o bin/compaction-job ./transforms/compaction/
 
 build-cli:
 	go build -o bin/gravix ./cmd/cli/
