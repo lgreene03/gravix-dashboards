@@ -1,0 +1,57 @@
+name: 'Gravix Deploy Event'
+description: >
+  Send a ServiceEvent to the Gravix observability platform on every deploy.
+  Auto-populates commit SHA, branch, author, repo, workflow, and run metadata
+  from the GitHub Actions context.
+
+branding:
+  icon: 'activity'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'Gravix API key (sent as X-API-Key header). Store in a GitHub secret.'
+    required: true
+
+  gravix-url:
+    description: 'Base URL of your Gravix ingestion service.'
+    required: false
+    default: 'https://ingest.gravix.io'
+
+  service:
+    description: >
+      Service name to tag this event with.
+      Defaults to the repository name (e.g. "my-org/my-repo").
+    required: false
+    default: ${{ github.repository }}
+
+  event-type:
+    description: >
+      Event type string. Use a consistent naming convention across your services,
+      e.g. "deploy_completed", "deploy_started", "rollback_triggered".
+    required: false
+    default: 'deploy_completed'
+
+  message:
+    description: 'Optional human-readable description of this event.'
+    required: false
+    default: ''
+
+  version:
+    description: 'Version, tag, or release name being deployed (e.g. "v1.4.2").'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Send deploy event
+      shell: bash
+      env:
+        _GRAVIX_API_KEY: ${{ inputs.api-key }}
+        _GRAVIX_URL: ${{ inputs.gravix-url }}
+        _GRAVIX_SERVICE: ${{ inputs.service }}
+        _GRAVIX_EVENT_TYPE: ${{ inputs.event-type }}
+        _GRAVIX_MESSAGE: ${{ inputs.message }}
+        _GRAVIX_VERSION: ${{ inputs.version }}
+      run: ${{ github.action_path }}/send.sh
