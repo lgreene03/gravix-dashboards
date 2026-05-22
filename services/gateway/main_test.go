@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1984,5 +1988,577 @@ func TestEditorCannotViewAuditLog(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("editor should be blocked from audit log, got status %d", rr.Code)
+	}
+}
+
+// ============================================================
+// evaluateAlerts Integration Tests
+// ============================================================
+
+func TestEvaluateAlerts_StaticRules(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	type receivedNotification struct {
+		Path    string
+		Body    []byte
+		Headers http.Header
+	}
+	var received []receivedNotification
+	var mu sync.Mutex
+
+	mockNotify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		received = append(received, receivedNotification{
+			Path:    r.URL.Path,
+			Body:    body,
+			Headers: r.Header,
+		})
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockNotify.Close()
+
+	// 1. Create channels
+	slackChan := &tenantdb.NotificationChannel{
+		TenantID: tenant.ID,
+		Name:     "Test Slack Channel",
+		Type:     "slack",
+		Config:   fmt.Sprintf(`{"webhook_url":%q}`, mockNotify.URL+"/slack"),
+	}
+	if err := gw.db.NotificationChannels().Create(context.Background(), slackChan); err != nil {
+		t.Fatalf("Create slack channel: %v", err)
+	}
+
+	webhookChan := &tenantdb.NotificationChannel{
+		TenantID: tenant.ID,
+		Name:     "Test Webhook Channel",
+		Type:     "webhook",
+		Config:   fmt.Sprintf(`{"webhook_url":%q,"auth_header":"Bearer supersecret"}`, mockNotify.URL+"/webhook"),
+	}
+	if err := gw.db.NotificationChannels().Create(context.Background(), webhookChan); err != nil {
+		t.Fatalf("Create webhook channel: %v", err)
+	}
+
+	// 2. Create rules
+	ruleA := &tenantdb.AlertRule{
+		TenantID:        tenant.ID,
+		Name:            "High Error Rate",
+		Metric:          "error_rate",
+		Operator:        "gt",
+		Threshold:       0.05,
+		WindowMinutes:   5,
+		ChannelID:       slackChan.ID,
+		CooldownMinutes: 15,
+		Status:          "active",
+	}
+	if err := gw.db.AlertRules().Create(context.Background(), ruleA); err != nil {
+		t.Fatalf("Create rule A: %v", err)
+	}
+
+	ruleB := &tenantdb.AlertRule{
+		TenantID:        tenant.ID,
+		Name:            "Low Latency Alert",
+		Metric:          "p99_latency",
+		Operator:        "lt",
+		Threshold:       200.0,
+		WindowMinutes:   5,
+		ChannelID:       webhookChan.ID,
+		CooldownMinutes: 15,
+		Status:          "active",
+	}
+	if err := gw.db.AlertRules().Create(context.Background(), ruleB); err != nil {
+		t.Fatalf("Create rule B: %v", err)
+	}
+
+	ruleC := &tenantdb.AlertRule{
+		TenantID:        tenant.ID,
+		Name:            "High Throughput",
+		Metric:          "throughput",
+		Operator:        "gt",
+		Threshold:       1000.0,
+		WindowMinutes:   5,
+		ChannelID:       slackChan.ID,
+		CooldownMinutes: 15,
+		Status:          "active",
+	}
+	if err := gw.db.AlertRules().Create(context.Background(), ruleC); err != nil {
+		t.Fatalf("Create rule C: %v", err)
+	}
+
+	// 3. Mock Cube.js server
+	mockCube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqBody map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		query, ok := reqBody["query"].(map[string]interface{})
+		if !ok {
+			http.Error(w, "missing query", 400)
+			return
+		}
+		measures, ok := query["measures"].([]interface{})
+		if !ok || len(measures) == 0 {
+			http.Error(w, "missing measures", 400)
+			return
+		}
+		measure := measures[0].(string)
+
+		var val float64
+		switch measure {
+		case "RequestMetricsMinute.errorRate":
+			val = 0.08 // triggers Rule A (gt 0.05)
+		case "RequestMetricsMinute.p99Latency":
+			val = 150.0 // triggers Rule B (lt 200.0)
+		case "RequestMetricsMinute.requestCount":
+			val = 500.0 // does not trigger Rule C (gt 1000.0)
+		default:
+			val = 0.0
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]interface{}{
+			"data": []map[string]interface{}{
+				{
+					measure: val,
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer mockCube.Close()
+
+	gw.cubeAPIURL = mockCube.URL
+
+	// 4. Run evaluator
+	gw.evaluateAlerts(context.Background())
+
+	// 5. Assert notifications
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(received) != 2 {
+		t.Fatalf("expected 2 notifications, got %d", len(received))
+	}
+
+	// Verify Slack notification
+	var slackFound bool
+	for _, n := range received {
+		if n.Path == "/slack" {
+			slackFound = true
+			var payload map[string]interface{}
+			if err := json.Unmarshal(n.Body, &payload); err != nil {
+				t.Fatalf("unmarshal Slack payload: %v", err)
+			}
+			text, _ := payload["text"].(string)
+			if !strings.Contains(text, "High Error Rate") {
+				t.Errorf("expected Slack text to contain rule name, got: %s", text)
+			}
+		}
+	}
+	if !slackFound {
+		t.Error("Slack notification not received")
+	}
+
+	// Verify Webhook notification
+	var webhookFound bool
+	for _, n := range received {
+		if n.Path == "/webhook" {
+			webhookFound = true
+			authHeader := n.Headers.Get("Authorization")
+			if authHeader != "Bearer supersecret" {
+				t.Errorf("expected webhook Authorization header Bearer supersecret, got: %s", authHeader)
+			}
+
+			var payload map[string]interface{}
+			if err := json.Unmarshal(n.Body, &payload); err != nil {
+				t.Fatalf("unmarshal Webhook payload: %v", err)
+			}
+
+			if payload["alert_name"] != "Low Latency Alert" {
+				t.Errorf("expected low latency alert name, got: %v", payload["alert_name"])
+			}
+			if payload["metric"] != "p99_latency" {
+				t.Errorf("expected low latency metric, got: %v", payload["metric"])
+			}
+			if payload["operator"] != "lt" {
+				t.Errorf("expected operator lt, got: %v", payload["operator"])
+			}
+			if payload["threshold"] != 200.0 {
+				t.Errorf("expected threshold 200, got: %v", payload["threshold"])
+			}
+			if payload["actual_value"] != 150.0 {
+				t.Errorf("expected actual_value 150, got: %v", payload["actual_value"])
+			}
+		}
+	}
+	if !webhookFound {
+		t.Error("Webhook notification not received")
+	}
+
+	// 6. Assert database logs
+	history, err := gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByTenant history: %v", err)
+	}
+
+	if len(history) != 2 {
+		t.Fatalf("expected 2 history entries, got %d", len(history))
+	}
+
+	// Verify history contents
+	var foundA, foundB bool
+	for _, entry := range history {
+		if entry.RuleID == ruleA.ID {
+			foundA = true
+			if entry.Status != "fired" {
+				t.Errorf("Rule A history status: got %s, want fired", entry.Status)
+			}
+			if entry.ActualValue != 0.08 {
+				t.Errorf("Rule A history actual value: got %.4f, want 0.0800", entry.ActualValue)
+			}
+			if !strings.Contains(entry.Message, "error_rate is 0.0800") {
+				t.Errorf("Rule A message incorrect: %s", entry.Message)
+			}
+		} else if entry.RuleID == ruleB.ID {
+			foundB = true
+			if entry.Status != "fired" {
+				t.Errorf("Rule B history status: got %s, want fired", entry.Status)
+			}
+			if entry.ActualValue != 150.0 {
+				t.Errorf("Rule B history actual value: got %.4f, want 150.0000", entry.ActualValue)
+			}
+			if !strings.Contains(entry.Message, "p99_latency is 150.0000") {
+				t.Errorf("Rule B message incorrect: %s", entry.Message)
+			}
+		} else if entry.RuleID == ruleC.ID {
+			t.Errorf("Rule C should not have triggered history")
+		}
+	}
+	if !foundA {
+		t.Error("Rule A history entry not found")
+	}
+	if !foundB {
+		t.Error("Rule B history entry not found")
+	}
+}
+
+func TestEvaluateAlerts_Cooldown(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	var mu sync.Mutex
+	var callCount int
+
+	mockNotify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockNotify.Close()
+
+	ch := &tenantdb.NotificationChannel{
+		TenantID: tenant.ID,
+		Name:     "Slack",
+		Type:     "slack",
+		Config:   fmt.Sprintf(`{"webhook_url":%q}`, mockNotify.URL),
+	}
+	if err := gw.db.NotificationChannels().Create(context.Background(), ch); err != nil {
+		t.Fatalf("Create channel: %v", err)
+	}
+
+	rule := &tenantdb.AlertRule{
+		TenantID:        tenant.ID,
+		Name:            "High Error Rate",
+		Metric:          "error_rate",
+		Operator:        "gt",
+		Threshold:       0.05,
+		WindowMinutes:   5,
+		ChannelID:       ch.ID,
+		CooldownMinutes: 15,
+		Status:          "active",
+	}
+	if err := gw.db.AlertRules().Create(context.Background(), rule); err != nil {
+		t.Fatalf("Create rule: %v", err)
+	}
+
+	mockCube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"RequestMetricsMinute.errorRate": 0.12},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer mockCube.Close()
+
+	gw.cubeAPIURL = mockCube.URL
+
+	// 1. Initial fire: rule should fire
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if callCount != 1 {
+		mu.Unlock()
+		t.Fatalf("expected 1 notification on initial fire, got %d", callCount)
+	}
+	mu.Unlock()
+
+	// Verify rule database was updated with last_triggered_at
+	dbRule, err := gw.db.AlertRules().GetByID(context.Background(), rule.ID)
+	if err != nil {
+		t.Fatalf("GetByID rule: %v", err)
+	}
+	if dbRule.LastTriggeredAt == nil {
+		t.Fatal("expected LastTriggeredAt to be set")
+	}
+
+	// 2. Immediate second evaluation: rule is in cooldown, should NOT fire
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if callCount != 1 {
+		mu.Unlock()
+		t.Fatalf("expected still 1 notification (blocked by cooldown), got %d", callCount)
+	}
+	mu.Unlock()
+
+	// 3. Override LastTriggeredAt to a past time (20 minutes ago) to bypass cooldown
+	pastTime := time.Now().UTC().Add(-20 * time.Minute)
+	if err := gw.db.AlertRules().UpdateLastTriggered(context.Background(), rule.ID, pastTime); err != nil {
+		t.Fatalf("UpdateLastTriggered: %v", err)
+	}
+
+	// 4. Run evaluation again: cooldown has expired, should fire again!
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if callCount != 2 {
+		mu.Unlock()
+		t.Fatalf("expected 2 notifications after cooldown bypass, got %d", callCount)
+	}
+	mu.Unlock()
+}
+
+func TestEvaluateAlerts_Anomaly(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	var mu sync.Mutex
+	var notifications []map[string]interface{}
+
+	mockNotify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		notifications = append(notifications, body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockNotify.Close()
+
+	ch := &tenantdb.NotificationChannel{
+		TenantID: tenant.ID,
+		Name:     "Webhook",
+		Type:     "webhook",
+		Config:   fmt.Sprintf(`{"webhook_url":%q}`, mockNotify.URL),
+	}
+	if err := gw.db.NotificationChannels().Create(context.Background(), ch); err != nil {
+		t.Fatalf("Create channel: %v", err)
+	}
+
+	// WindowMinutes = 30 days lookback to ensure matching historical count >= 3
+	rule := &tenantdb.AlertRule{
+		TenantID:        tenant.ID,
+		Name:            "Anomaly Error Rate",
+		Metric:          "error_rate",
+		Operator:        "anomaly",
+		Threshold:       2.5, // > 2.5 sigma is anomaly
+		WindowMinutes:   30,
+		ChannelID:       ch.ID,
+		CooldownMinutes: 15,
+		Status:          "active",
+	}
+	if err := gw.db.AlertRules().Create(context.Background(), rule); err != nil {
+		t.Fatalf("Create anomaly rule: %v", err)
+	}
+
+	now := time.Now().UTC()
+
+	var returnedData []map[string]interface{}
+
+	mockCube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]interface{}{
+			"data": returnedData,
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer mockCube.Close()
+
+	gw.cubeAPIURL = mockCube.URL
+
+	// Helper to generate correct historical data rows matching current hour + DOW
+	genData := func(todayVal float64, histVals []float64) []map[string]interface{} {
+		var list []map[string]interface{}
+		// Today's matching data point
+		list = append(list, map[string]interface{}{
+			"RequestMetricsMinute.bucketStart": now.Format("2006-01-02T15:04:05"),
+			"RequestMetricsMinute.errorRate":   todayVal,
+		})
+		// Historical matching data points (7, 14, 21, 28... days ago)
+		for i, v := range histVals {
+			daysAgo := (i + 1) * 7
+			ts := now.AddDate(0, 0, -daysAgo)
+			list = append(list, map[string]interface{}{
+				"RequestMetricsMinute.bucketStart": ts.Format("2006-01-02T15:04:05"),
+				"RequestMetricsMinute.errorRate":   v,
+			})
+		}
+		return list
+	}
+
+	// Case 1: Standard Anomaly Firing (Value = 105, Mean = 100, StdDev = 1.6329, Sigma = 3.06 > 2.5)
+	mu.Lock()
+	notifications = nil
+	mu.Unlock()
+	returnedData = genData(105.0, []float64{100.0, 102.0, 98.0, 100.0})
+
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if len(notifications) != 1 {
+		mu.Unlock()
+		t.Fatalf("Case 1: expected 1 notification, got %d", len(notifications))
+	}
+	n := notifications[0]
+	mu.Unlock()
+
+	if n["alert_name"] != "Anomaly Error Rate" {
+		t.Errorf("Case 1: expected alert name Anomaly Error Rate, got %v", n["alert_name"])
+	}
+	if n["actual_value"] != 105.0 {
+		t.Errorf("Case 1: expected actual value 105, got %v", n["actual_value"])
+	}
+
+	// Verify history contains anomaly details
+	history, err := gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByTenant error: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("Case 1: expected 1 history record, got %d", len(history))
+	}
+	if !strings.Contains(history[0].Message, "anomaly detected") {
+		t.Errorf("Case 1: expected history message to mention anomaly, got %q", history[0].Message)
+	}
+
+	// Reset cooldown and clear history for subsequent cases
+	if err := gw.db.AlertRules().UpdateLastTriggered(context.Background(), rule.ID, time.Time{}); err != nil {
+		t.Fatalf("Reset cooldown: %v", err)
+	}
+
+	// Case 2: Standard Anomaly Bypassed (Value = 101, Mean = 100, Sigma = 0.61 <= 2.5)
+	mu.Lock()
+	notifications = nil
+	mu.Unlock()
+	returnedData = genData(101.0, []float64{100.0, 102.0, 98.0, 100.0})
+
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if len(notifications) != 0 {
+		mu.Unlock()
+		t.Fatalf("Case 2: expected 0 notifications, got %d", len(notifications))
+	}
+	mu.Unlock()
+
+	// Verify history count remains 1
+	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByTenant error: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("Case 2: expected still 1 history record, got %d", len(history))
+	}
+
+	// Case 3: Low Data Points Skip (< 3 points)
+	mu.Lock()
+	notifications = nil
+	mu.Unlock()
+	returnedData = genData(105.0, []float64{100.0, 100.0}) // only 2 historical data points
+
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if len(notifications) != 0 {
+		mu.Unlock()
+		t.Fatalf("Case 3: expected 0 notifications, got %d", len(notifications))
+	}
+	mu.Unlock()
+
+	// Verify history count remains 1
+	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByTenant error: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("Case 3: expected still 1 history record, got %d", len(history))
+	}
+
+	// Case 4: StdDev = 0, Value Matches Mean (100.0) -> No fire
+	mu.Lock()
+	notifications = nil
+	mu.Unlock()
+	returnedData = genData(100.0, []float64{100.0, 100.0, 100.0, 100.0})
+
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if len(notifications) != 0 {
+		mu.Unlock()
+		t.Fatalf("Case 4: expected 0 notifications, got %d", len(notifications))
+	}
+	mu.Unlock()
+
+	// Verify history count remains 1
+	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByTenant error: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("Case 4: expected still 1 history record, got %d", len(history))
+	}
+
+	// Case 5: StdDev = 0, Value Deviates (105.0) -> Infinite Sigma, fires!
+	mu.Lock()
+	notifications = nil
+	mu.Unlock()
+	returnedData = genData(105.0, []float64{100.0, 100.0, 100.0, 100.0})
+
+	gw.evaluateAlerts(context.Background())
+
+	mu.Lock()
+	if len(notifications) != 1 {
+		mu.Unlock()
+		t.Fatalf("Case 5: expected 1 notification (Inf sigma), got %d", len(notifications))
+	}
+	mu.Unlock()
+
+	// Verify history count is now 2
+	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByTenant error: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("Case 5: expected 2 history records, got %d", len(history))
 	}
 }
