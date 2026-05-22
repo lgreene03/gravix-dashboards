@@ -122,7 +122,7 @@ None — builds directly on Horizon 1.
 
 ---
 
-## Phase 2: Analytics & Alerting (Month 3-5) 🟢
+## Phase 2: Analytics & Alerting (Month 3-5) ✅
 
 **Theme:** "Less Staring, More Knowing"
 **Goal:** Path-level drill-downs and alerting — the features that convert Starter users to Pro.
@@ -182,7 +182,7 @@ Phase 1 (multi-tenancy, tenant auth).
 
 ---
 
-## Phase 3: Developer Experience (Month 5-7) 🟡
+## Phase 3: Developer Experience (Month 5-7) 🟢
 
 **Theme:** "Five-Minute Setup"
 **Goal:** SDK libraries, CI integration, and documentation — reduce time-to-value and drive organic adoption.
