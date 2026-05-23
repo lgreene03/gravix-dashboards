@@ -1,8 +1,24 @@
 const jwt = require('jsonwebtoken');
 
 module.exports = {
-    // Refresh pre-aggregations every 5 minutes in the background
     scheduledRefreshTimer: 300,
+
+    // Isolate each tenant into its own Cube app context so pre-aggregation
+    // namespaces and connection pool partitions don't bleed across tenants.
+    contextToAppId: ({ securityContext }) => {
+        if (securityContext && securityContext.tenant_id) {
+            return `GRAVIX_${securityContext.tenant_id}`;
+        }
+        return 'GRAVIX_GLOBAL';
+    },
+
+    // Pre-aggregation storage is also partitioned per tenant.
+    contextToOrchestratorId: ({ securityContext }) => {
+        if (securityContext && securityContext.tenant_id) {
+            return `GRAVIX_${securityContext.tenant_id}`;
+        }
+        return 'GRAVIX_GLOBAL';
+    },
 
     checkAuth: (req, auth) => {
         const jwtSecret = process.env.JWT_SECRET;

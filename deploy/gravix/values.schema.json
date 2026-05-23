@@ -477,6 +477,17 @@
                 "maxReplicas": { "type": "integer", "minimum": 1 },
                 "targetCPU": { "type": "integer", "minimum": 1, "maximum": 100 }
               }
+            },
+            "duckdb": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "DuckDB performance tuning (5.1). Only effective when CUBEJS_DB_TYPE=duckdb.",
+              "properties": {
+                "memoryLimitGb": { "type": "integer", "minimum": 1, "default": 1, "description": "Per-connection memory cap in GB" },
+                "threads": { "type": "integer", "minimum": 1, "default": 2, "description": "Parallel query threads per connection" },
+                "queryTimeoutSec": { "type": "integer", "minimum": 5, "default": 30, "description": "Hard ceiling on single-query wall time (seconds)" },
+                "maxPoolSize": { "type": "integer", "minimum": 1, "default": 8, "description": "Max concurrent DuckDB connections" }
+              }
             }
           }
         }
@@ -746,6 +757,36 @@
         "retentionDays": { "type": "integer", "minimum": 1 }
       }
     },
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Redis cache for Cube.js pre-aggregation storage and query queuing (5.5)",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" },
+            "storageClass": { "type": "string" }
+          }
+        },
+        "resources": { "$ref": "#/definitions/resourceRequirements" },
+        "externalUrl": {
+          "type": "string",
+          "description": "URL of an external Redis / ElastiCache instance. When set, the in-cluster pod is not created."
+        }
+      }
+    },
     "backup": {
       "type": "object",
       "additionalProperties": false,
@@ -766,14 +807,27 @@
           "type": "string",
           "description": "S3 prefix for backup snapshots"
         },
-        "destinationBucket": {
-          "type": "string",
-          "description": "Separate bucket for cross-region DR"
-        },
         "activeDeadlineSeconds": {
           "type": "integer",
           "minimum": 60,
           "description": "Max runtime for backup job"
+        },
+        "crossRegion": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "S3 cross-region replication for disaster recovery (5.4)",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "destinationBucket": { "type": "string", "description": "Destination bucket name (must exist with versioning enabled)" },
+            "destinationRegion": { "type": "string", "description": "AWS region of the destination bucket" },
+            "replicationRoleArn": { "type": "string", "description": "IAM role ARN with S3 replication permissions" },
+            "storageClass": {
+              "type": "string",
+              "enum": ["STANDARD", "STANDARD_IA", "ONEZONE_IA", "GLACIER", "DEEP_ARCHIVE"],
+              "default": "STANDARD_IA",
+              "description": "Storage class for replicated objects"
+            }
+          }
         }
       }
     }

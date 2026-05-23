@@ -1,0 +1,78 @@
+# Multi-region satellite overlay — eu-west-1 (Ireland).
+#
+# Deploys ingestion only. Query serving, rollup, and dashboard run in the
+# primary region (us-east-1). All ingested events are written to the primary
+# S3 bucket; enable backup.crossRegion on the primary for DR.
+#
+# Usage:
+#   helm install gravix-eu deploy/gravix \
+#     -f deploy/gravix/values-prod.yaml \
+#     -f deploy/gravix/values-eu-west-1.yaml \
+#     --set global.apiKey=<secret> \
+#     --set global.storage.accessKey=<secret> \
+#     --set global.storage.secretKey=<secret>
+#
+# Route 53 geolocation routing:
+#   Create a CNAME record for ingest.gravix.io pointing to this cluster's
+#   ingestion Service (LoadBalancer) with a geolocation policy for Europe.
+#   The primary us-east-1 record serves as the default.
+
+global:
+  storage:
+    endpoint: "https://s3.eu-west-1.amazonaws.com"
+    region: "eu-west-1"
+    # Same bucket as primary — events land in the same S3 namespace.
+    # Cross-region replication on the primary copies data back for DR.
+    bucket: "gravix-prod"
+
+# ─── Only ingestion is active in satellite regions ───
+ingestion:
+  enabled: true
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  persistence:
+    storageClass: "gp3"
+
+loadGenerator:
+  enabled: false
+
+rollupJob:
+  enabled: false
+
+eventsRollupJob:
+  enabled: false
+
+eventsDetailJob:
+  enabled: false
+
+retentionJob:
+  enabled: false
+
+gateway:
+  enabled: false
+
+storage:
+  minio:
+    enabled: false
+  trino:
+    enabled: false
+  cube:
+    enabled: false
+
+redis:
+  enabled: false
+
+backup:
+  enabled: false
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70

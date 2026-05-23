@@ -1,0 +1,38 @@
+{{- if .Values.backup.crossRegion.enabled }}
+# ConfigMap carrying the S3 replication configuration for cross-region DR (5.4).
+# Apply manually via:
+#   kubectl get configmap {{ .Release.Name }}-s3-replication -o jsonpath='{.data.replication\.json}' | \
+#     aws s3api put-bucket-replication \
+#       --bucket {{ .Values.global.storage.bucket }} \
+#       --replication-configuration file:///dev/stdin
+#
+# Prerequisites (do once in IaC / Terraform):
+#   1. Enable versioning on source bucket: aws s3api put-bucket-versioning ...
+#   2. Create destination bucket in {{ .Values.backup.crossRegion.destinationRegion }} with versioning enabled
+#   3. Create IAM role {{ .Values.backup.crossRegion.replicationRoleArn }} with
+#      s3:ReplicateObject, s3:ReplicateDelete, s3:GetReplicationConfiguration permissions
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-s3-replication
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  replication.json: |
+    {
+      "Role": {{ .Values.backup.crossRegion.replicationRoleArn | quote }},
+      "Rules": [
+        {
+          "ID": "gravix-full-replication",
+          "Status": "Enabled",
+          "Filter": { "Prefix": "" },
+          "Destination": {
+            "Bucket": "arn:aws:s3:::{{ .Values.backup.crossRegion.destinationBucket }}",
+            "StorageClass": {{ .Values.backup.crossRegion.storageClass | default "STANDARD_IA" | quote }}
+          },
+          "DeleteMarkerReplication": { "Status": "Enabled" }
+        }
+      ]
+    }
+{{- end }}

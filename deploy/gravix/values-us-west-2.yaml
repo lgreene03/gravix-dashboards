@@ -1,0 +1,64 @@
+# Multi-region satellite overlay — us-west-2 (Oregon).
+#
+# Deploys ingestion only. Same pattern as values-eu-west-1.yaml.
+# See that file for Route 53 and cross-region setup notes.
+#
+# Usage:
+#   helm install gravix-usw2 deploy/gravix \
+#     -f deploy/gravix/values-prod.yaml \
+#     -f deploy/gravix/values-us-west-2.yaml \
+#     --set global.apiKey=<secret> \
+#     --set global.storage.accessKey=<secret> \
+#     --set global.storage.secretKey=<secret>
+
+global:
+  storage:
+    endpoint: "https://s3.us-west-2.amazonaws.com"
+    region: "us-west-2"
+    bucket: "gravix-prod"
+
+ingestion:
+  enabled: true
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  persistence:
+    storageClass: "gp3"
+
+loadGenerator:
+  enabled: false
+rollupJob:
+  enabled: false
+eventsRollupJob:
+  enabled: false
+eventsDetailJob:
+  enabled: false
+retentionJob:
+  enabled: false
+gateway:
+  enabled: false
+
+storage:
+  minio:
+    enabled: false
+  trino:
+    enabled: false
+  cube:
+    enabled: false
+
+redis:
+  enabled: false
+
+backup:
+  enabled: false
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70

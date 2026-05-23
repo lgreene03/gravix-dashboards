@@ -148,6 +148,11 @@ storage:
     image:
       repository: cubejs/cube
       tag: "v0.35"
+    duckdb:
+      memoryLimitGb: 2   # Increase for production workloads
+      threads: 4          # Match node vCPU count
+      queryTimeoutSec: 30
+      maxPoolSize: 16
 
 # ─── cert-manager (Automatic TLS) ───
 # Creates ClusterIssuer resources for Let's Encrypt.
@@ -231,6 +236,32 @@ resourceQuota:
   pvcs: "5"
   pods: "30"
 
+# ─── Tiered Storage (5.2) ───
+# Applies S3 lifecycle rules: STANDARD_IA after 7 days, GLACIER after 30,
+# delete after 90. Set enabled=true once the bucket exists.
+s3Lifecycle:
+  enabled: true
+  warmAfterDays: 7
+  coldAfterDays: 30
+  deleteAfterDays: 90
+
+# ─── Redis Cache (5.5) ───
+# Replace with externalUrl pointing to ElastiCache when provisioned.
+# Until then, in-cluster Redis handles Cube.js pre-aggregation.
+redis:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 4Gi
+    storageClass: "gp3"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
 # ─── Backups ───
 # Daily snapshots of raw/ and warehouse/ data.
 # Schedule runs at 02:00 UTC, before retention purge at 03:00 UTC.
@@ -238,4 +269,9 @@ backup:
   enabled: true
   schedule: "0 2 * * *"
   retentionDays: 14              # Keep 2 weeks of backup snapshots
-  # destinationBucket: ""        # Set to a cross-region bucket for DR
+  # Cross-region DR (5.4) — uncomment and set after provisioning IAM role + destination bucket.
+  # crossRegion:
+  #   enabled: true
+  #   destinationBucket: "gravix-prod-dr-us-west-2"
+  #   destinationRegion: "us-west-2"
+  #   replicationRoleArn: "arn:aws:iam::ACCOUNT_ID:role/gravix-s3-replication"

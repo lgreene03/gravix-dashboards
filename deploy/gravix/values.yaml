@@ -188,6 +188,33 @@ storage:
       minReplicas: 2
       maxReplicas: 5
       targetCPU: 70
+    # DuckDB performance tuning (5.1). Only applied when CUBEJS_DB_TYPE=duckdb.
+    duckdb:
+      memoryLimitGb: 1    # Per-connection memory cap; prevents OOM on concurrent queries
+      threads: 2           # Parallel threads per query (set to vCPU count)
+      queryTimeoutSec: 30  # Hard ceiling on single-query wall time
+      maxPoolSize: 8       # Max concurrent DuckDB connections across all tenants
+
+# Redis cache (5.5) — used by Cube.js for pre-aggregation storage and query queuing.
+# For managed ElastiCache, set externalUrl and leave enabled: false.
+redis:
+  enabled: false
+  image:
+    repository: redis
+    tag: "7.2-alpine"
+  persistence:
+    enabled: false
+    size: 1Gi
+    # storageClass: ""
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  # Point to an external Redis / ElastiCache instead of the in-cluster pod.
+  externalUrl: ""  # e.g., redis://my-cluster.abc.0001.use1.cache.amazonaws.com:6379
 
 # Synthetic monitoring CronJob — sends health checks to verify the pipeline.
 syntheticMonitor:
@@ -299,5 +326,12 @@ backup:
   schedule: "0 2 * * *"          # Daily at 02:00 UTC (before retention at 03:00)
   retentionDays: 7               # Keep backup snapshots for 7 days
   # prefix: "backups"            # S3 prefix for backup snapshots
-  # destinationBucket: ""        # Separate bucket for cross-region DR
   # activeDeadlineSeconds: 3600  # Max runtime for backup job
+  # Cross-region replication (5.4). Requires IAM role with S3 replication permissions
+  # and versioning enabled on both source and destination buckets.
+  crossRegion:
+    enabled: false
+    destinationBucket: ""        # e.g., gravix-prod-dr-us-west-2
+    destinationRegion: "us-west-2"
+    replicationRoleArn: ""       # arn:aws:iam::ACCOUNT:role/gravix-s3-replication
+    storageClass: "STANDARD_IA"  # Storage class in destination (saves ~45%)

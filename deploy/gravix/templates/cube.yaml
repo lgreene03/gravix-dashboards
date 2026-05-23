@@ -55,6 +55,31 @@ spec:
                   name: {{ .Release.Name }}-secrets
                   key: cube-api-secret
             {{- end }}
+            {{- if .Values.global.jwtSecret }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: jwt-secret
+            {{- end }}
+            # Redis cache (5.5): enables pre-aggregation storage + cross-replica query queuing.
+            {{- if or .Values.redis.enabled .Values.redis.externalUrl }}
+            - name: CUBEJS_CACHE_AND_QUEUE_DRIVER
+              value: "redis"
+            - name: CUBEJS_REDIS_URL
+              {{- if .Values.redis.externalUrl }}
+              value: {{ .Values.redis.externalUrl | quote }}
+              {{- else }}
+              value: "redis://{{ .Release.Name }}-redis:6379"
+              {{- end }}
+            {{- end }}
+            # DuckDB performance tuning (5.1): only effective when CUBEJS_DB_TYPE=duckdb.
+            - name: CUBEJS_DB_MAX_POOL
+              value: {{ .Values.storage.cube.duckdb.maxPoolSize | default 8 | quote }}
+            - name: CUBEJS_DB_QUERY_TIMEOUT
+              value: {{ .Values.storage.cube.duckdb.queryTimeoutSec | default 30 | quote }}
+            - name: CUBEJS_CONCURRENCY
+              value: {{ .Values.storage.cube.duckdb.threads | default 2 | quote }}
           livenessProbe:
             httpGet:
               path: /readyz

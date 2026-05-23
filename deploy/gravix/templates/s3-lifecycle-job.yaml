@@ -1,0 +1,73 @@
+{{- if .Values.s3Lifecycle.enabled }}
+# Helm post-install/post-upgrade hook: applies the S3 lifecycle policy from
+# the s3-lifecycle ConfigMap to the configured bucket. Works with both AWS S3
+# and MinIO (detected via global.storage.endpoint).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-s3-lifecycle-apply
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: apply-lifecycle
+          image: amazon/aws-cli:2.15.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.global.storage.region | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: s3-access-key
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: s3-secret-key
+            - name: S3_BUCKET
+              value: {{ .Values.global.storage.bucket | quote }}
+            - name: S3_ENDPOINT
+              value: {{ .Values.global.storage.endpoint | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # MinIO and non-AWS S3 require --endpoint-url; AWS S3 does not.
+              if echo "$S3_ENDPOINT" | grep -qv 'amazonaws.com'; then
+                ENDPOINT_FLAG="--endpoint-url $S3_ENDPOINT"
+              else
+                ENDPOINT_FLAG=""
+              fi
+              aws s3api put-bucket-lifecycle-configuration \
+                $ENDPOINT_FLAG \
+                --bucket "$S3_BUCKET" \
+                --lifecycle-configuration file:///lifecycle/lifecycle.json
+              echo "Lifecycle policy applied to $S3_BUCKET"
+          volumeMounts:
+            - name: lifecycle-config
+              mountPath: /lifecycle
+              readOnly: true
+      volumes:
+        - name: lifecycle-config
+          configMap:
+            name: {{ .Release.Name }}-s3-lifecycle
+{{- end }}
