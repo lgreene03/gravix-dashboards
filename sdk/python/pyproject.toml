@@ -5,19 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gravix"
 version = "0.1.0"
-description = "Python client for the Gravix observability platform"
-readme = "README.md"
+description = "Python SDK for Gravix observability platform"
+requires-python = ">=3.9"
 license = {text = "MIT"}
-requires-python = ">=3.8"
 dependencies = [
-    "requests>=2.20",
+    "urllib3>=2.0",
 ]
 
 [project.optional-dependencies]
 flask = ["flask>=2.0"]
-fastapi = ["fastapi>=0.68", "starlette>=0.14"]
-django = ["django>=3.2"]
-dev = ["pytest>=7.0", "responses>=0.20"]
+fastapi = ["fastapi>=0.100", "starlette>=0.27"]
+test = ["pytest>=7.0", "responses>=0.23"]
+dev = ["pytest>=7.0", "responses>=0.23"]
 
-[tool.setuptools.packages.find]
-include = ["gravix*"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -4,18 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
+	"github.com/lgreene/gravix-dashboards/pkg/captcha"
+	"github.com/lgreene/gravix-dashboards/pkg/email"
+	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
+	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
+	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 )
 
@@ -31,12 +33,23 @@ func newTestGateway(t *testing.T) *gateway {
 
 	tokens := auth.NewTokenService("test-secret-key-32chars!!", 1*time.Hour)
 
+	trl := ratelimit.NewTenantLimiter(100, 200)
+	t.Cleanup(func() { trl.Close() })
+
+	iprl := ratelimit.NewIPLimiter(600, 100) // generous limits for tests
+	t.Cleanup(func() { iprl.Close() })
+
 	return &gateway{
-		db:         db,
-		tokens:     tokens,
-		notifier:   notify.NewDispatcher(),
-		cubeAPIURL: "http://localhost:4000/cubejs-api/v1/load",
-		jwtSecret:  "test-secret-key-32chars!!",
+		db:              db,
+		tokens:          tokens,
+		notifier:        notify.NewDispatcher(),
+		emailSender:     &email.NoopSender{},
+		captchaVerifier: &captcha.NoopVerifier{},
+		rateLimiter:     trl,
+		ipLimiter:       iprl,
+		cubeAPIURL:      "http://localhost:4000/cubejs-api/v1/load",
+		jwtSecret:       "test-secret-key-32chars!!",
+		baseURL:         "http://localhost:8000",
 	}
 }
 
@@ -57,16 +70,17 @@ func createTestTenantWithUser(t *testing.T, gw *gateway) (*tenantdb.Tenant, *ten
 	}
 
 	user := &tenantdb.User{
-		TenantID:     tenant.ID,
-		Email:        "admin@corp.com",
-		PasswordHash: "password123", // will be bcrypt-hashed by the repo
-		Role:         "admin",
+		TenantID:      tenant.ID,
+		Email:         "admin@corp.com",
+		PasswordHash:  "password123", // will be bcrypt-hashed by the repo
+		Role:          "admin",
+		EmailVerified: true,
 	}
 	if err := gw.db.Users().Create(ctx, user); err != nil {
 		t.Fatalf("Create user: %v", err)
 	}
 
-	plainKey, _, err := gw.db.APIKeys().Create(ctx, tenant.ID, "default")
+	plainKey, _, err := gw.db.APIKeys().Create(ctx, tenant.ID, "default", nil)
 	if err != nil {
 		t.Fatalf("Create API key: %v", err)
 	}
@@ -224,10 +238,11 @@ func TestLoginSuspendedTenant(t *testing.T) {
 func TestRegisterSuccess(t *testing.T) {
 	gw := newTestGateway(t)
 
-	body := jsonBody(t, map[string]string{
-		"name":     "New Corp",
-		"email":    "new@corp.com",
-		"password": "securepass123",
+	body := jsonBody(t, map[string]interface{}{
+		"name":       "New Corp",
+		"email":      "new@corp.com",
+		"password":   "S3cur3P@ss!",
+		"accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -246,8 +261,9 @@ func TestRegisterSuccess(t *testing.T) {
 	if resp["tenant_id"] == nil {
 		t.Error("expected tenant_id")
 	}
-	if resp["api_key"] == nil {
-		t.Error("expected api_key")
+	// API key is no longer returned at registration — deferred until email verification
+	if resp["email_verification_required"] != true {
+		t.Error("expected email_verification_required=true")
 	}
 	if resp["plan"] != "free" {
 		t.Errorf("plan = %v, want free", resp["plan"])
@@ -258,8 +274,8 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	gw := newTestGateway(t)
 
 	// Register first user
-	body := jsonBody(t, map[string]string{
-		"name": "Corp A", "email": "dup@corp.com", "password": "securepass123",
+	body := jsonBody(t, map[string]interface{}{
+		"name": "Corp A", "email": "dup@corp.com", "password": "S3cur3P@ss!", "accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -269,8 +285,8 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	}
 
 	// Try duplicate
-	body = jsonBody(t, map[string]string{
-		"name": "Corp B", "email": "dup@corp.com", "password": "securepass456",
+	body = jsonBody(t, map[string]interface{}{
+		"name": "Corp B", "email": "dup@corp.com", "password": "S3cur3P@ss2", "accept_tos": true,
 	})
 	req = httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr = httptest.NewRecorder()
@@ -284,8 +300,8 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 func TestRegisterShortPassword(t *testing.T) {
 	gw := newTestGateway(t)
 
-	body := jsonBody(t, map[string]string{
-		"name": "Corp", "email": "new@corp.com", "password": "short",
+	body := jsonBody(t, map[string]interface{}{
+		"name": "Corp", "email": "new@corp.com", "password": "short", "accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -337,7 +353,7 @@ func TestRequireAuthSuccess(t *testing.T) {
 		handlerCalled = true
 		claims := auth.ClaimsFromContext(r.Context())
 		if claims == nil {
-			t.Error("claims should be in context")
+			t.Fatal("claims should be in context")
 		}
 		if claims.Role != "admin" {
 			t.Errorf("role = %q, want admin", claims.Role)
@@ -588,7 +604,7 @@ func TestAPIKeysDeleteAdmin(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a key to delete
-	_, key, err := gw.db.APIKeys().Create(ctx, tenant.ID, "to-delete")
+	_, key, err := gw.db.APIKeys().Create(ctx, tenant.ID, "to-delete", nil)
 	if err != nil {
 		t.Fatalf("Create key: %v", err)
 	}
@@ -756,7 +772,7 @@ func TestStripeWebhookWrongMethod(t *testing.T) {
 }
 
 // ============================================================
-// corsMiddleware tests
+// securityHeadersMiddleware tests
 // ============================================================
 
 func TestCORSMiddlewareOptions(t *testing.T) {
@@ -764,7 +780,7 @@ func TestCORSMiddlewareOptions(t *testing.T) {
 		t.Error("inner handler should not be called for OPTIONS")
 	})
 
-	handler := corsMiddleware(inner)
+	handler := securityHeadersMiddleware(inner)
 	req := httptest.NewRequest(http.MethodOptions, "/api/gateway/login", nil)
 	rr := httptest.NewRecorder()
 
@@ -791,7 +807,7 @@ func TestCORSMiddlewarePassThrough(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := corsMiddleware(inner)
+	handler := securityHeadersMiddleware(inner)
 	req := httptest.NewRequest(http.MethodGet, "/api/gateway/me", nil)
 	rr := httptest.NewRecorder()
 
@@ -1357,9 +1373,9 @@ func TestAlertHistoryListSuccess(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	history, ok := resp["history"].([]interface{})
+	history, ok := resp["data"].([]interface{})
 	if !ok {
-		t.Fatal("expected history array")
+		t.Fatal("expected data array")
 	}
 	if len(history) != 0 {
 		t.Errorf("history count = %d, want 0", len(history))
@@ -1396,9 +1412,9 @@ func TestAlertHistoryListByRule(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	history, ok := resp["history"].([]interface{})
+	history, ok := resp["data"].([]interface{})
 	if !ok {
-		t.Fatal("expected history array")
+		t.Fatal("expected data array")
 	}
 	if len(history) != 1 {
 		t.Errorf("history count = %d, want 1", len(history))
@@ -1607,15 +1623,19 @@ func TestAuditLogEndpointEmpty(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	entries, ok := resp["entries"].([]interface{})
+	entries, ok := resp["data"].([]interface{})
 	if !ok {
-		t.Fatal("expected entries array")
+		t.Fatal("expected data array")
 	}
 	if len(entries) != 0 {
-		t.Errorf("entries count = %d, want 0", len(entries))
+		t.Errorf("data count = %d, want 0", len(entries))
 	}
-	if resp["total"].(float64) != 0 {
-		t.Errorf("total = %v, want 0", resp["total"])
+	pg, ok := resp["pagination"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected pagination object")
+	}
+	if pg["total"].(float64) != 0 {
+		t.Errorf("total = %v, want 0", pg["total"])
 	}
 }
 
@@ -1679,8 +1699,9 @@ func TestAuditLogWithEntries(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	if resp["total"].(float64) != 2 {
-		t.Errorf("total = %v, want 2", resp["total"])
+	pg := resp["pagination"].(map[string]interface{})
+	if pg["total"].(float64) != 2 {
+		t.Errorf("total = %v, want 2", pg["total"])
 	}
 }
 
@@ -1695,7 +1716,7 @@ func TestAuditLogPagination(t *testing.T) {
 		})
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/gateway/audit-log?limit=2&offset=0", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/audit-log?page=1&limit=2", nil)
 	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
 	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
@@ -1708,20 +1729,21 @@ func TestAuditLogPagination(t *testing.T) {
 
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	entries := resp["entries"].([]interface{})
+	entries := resp["data"].([]interface{})
 	if len(entries) != 2 {
-		t.Errorf("entries count = %d, want 2", len(entries))
+		t.Errorf("data count = %d, want 2", len(entries))
 	}
-	if resp["total"].(float64) != 5 {
-		t.Errorf("total = %v, want 5", resp["total"])
+	pg := resp["pagination"].(map[string]interface{})
+	if pg["total"].(float64) != 5 {
+		t.Errorf("total = %v, want 5", pg["total"])
 	}
 }
 
 func TestRegisterCreatesAuditEntry(t *testing.T) {
 	gw := newTestGateway(t)
 
-	body := jsonBody(t, map[string]string{
-		"name": "Audit Corp", "email": "audit@corp.com", "password": "securepass123",
+	body := jsonBody(t, map[string]interface{}{
+		"name": "Audit Corp", "email": "audit@corp.com", "password": "S3cur3P@ss!", "accept_tos": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
@@ -1991,860 +2013,1787 @@ func TestEditorCannotViewAuditLog(t *testing.T) {
 	}
 }
 
-// ============================================================
-// evaluateAlerts Integration Tests
-// ============================================================
+// ─── Rate Limiting Tests ───
 
-func TestEvaluateAlerts_StaticRules(t *testing.T) {
+func TestRateLimitMiddleware_AllowedRequest(t *testing.T) {
 	gw := newTestGateway(t)
-	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
-	type receivedNotification struct {
-		Path    string
-		Body    []byte
-		Headers http.Header
-	}
-	var received []receivedNotification
-	var mu sync.Mutex
-
-	mockNotify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		received = append(received, receivedNotification{
-			Path:    r.URL.Path,
-			Body:    body,
-			Headers: r.Header,
-		})
+	called := false
+	handler := gw.rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		called = true
 		w.WriteHeader(http.StatusOK)
-	}))
-	defer mockNotify.Close()
-
-	// 1. Create channels
-	slackChan := &tenantdb.NotificationChannel{
-		TenantID: tenant.ID,
-		Name:     "Test Slack Channel",
-		Type:     "slack",
-		Config:   fmt.Sprintf(`{"webhook_url":%q}`, mockNotify.URL+"/slack"),
-	}
-	if err := gw.db.NotificationChannels().Create(context.Background(), slackChan); err != nil {
-		t.Fatalf("Create slack channel: %v", err)
-	}
-
-	webhookChan := &tenantdb.NotificationChannel{
-		TenantID: tenant.ID,
-		Name:     "Test Webhook Channel",
-		Type:     "webhook",
-		Config:   fmt.Sprintf(`{"webhook_url":%q,"auth_header":"Bearer supersecret"}`, mockNotify.URL+"/webhook"),
-	}
-	if err := gw.db.NotificationChannels().Create(context.Background(), webhookChan); err != nil {
-		t.Fatalf("Create webhook channel: %v", err)
-	}
-
-	// 2. Create rules
-	ruleA := &tenantdb.AlertRule{
-		TenantID:        tenant.ID,
-		Name:            "High Error Rate",
-		Metric:          "error_rate",
-		Operator:        "gt",
-		Threshold:       0.05,
-		WindowMinutes:   5,
-		ChannelID:       slackChan.ID,
-		CooldownMinutes: 15,
-		Status:          "active",
-	}
-	if err := gw.db.AlertRules().Create(context.Background(), ruleA); err != nil {
-		t.Fatalf("Create rule A: %v", err)
-	}
-
-	ruleB := &tenantdb.AlertRule{
-		TenantID:        tenant.ID,
-		Name:            "Low Latency Alert",
-		Metric:          "p99_latency",
-		Operator:        "lt",
-		Threshold:       200.0,
-		WindowMinutes:   5,
-		ChannelID:       webhookChan.ID,
-		CooldownMinutes: 15,
-		Status:          "active",
-	}
-	if err := gw.db.AlertRules().Create(context.Background(), ruleB); err != nil {
-		t.Fatalf("Create rule B: %v", err)
-	}
-
-	ruleC := &tenantdb.AlertRule{
-		TenantID:        tenant.ID,
-		Name:            "High Throughput",
-		Metric:          "throughput",
-		Operator:        "gt",
-		Threshold:       1000.0,
-		WindowMinutes:   5,
-		ChannelID:       slackChan.ID,
-		CooldownMinutes: 15,
-		Status:          "active",
-	}
-	if err := gw.db.AlertRules().Create(context.Background(), ruleC); err != nil {
-		t.Fatalf("Create rule C: %v", err)
-	}
-
-	// 3. Mock Cube.js server
-	mockCube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var reqBody map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		query, ok := reqBody["query"].(map[string]interface{})
-		if !ok {
-			http.Error(w, "missing query", 400)
-			return
-		}
-		measures, ok := query["measures"].([]interface{})
-		if !ok || len(measures) == 0 {
-			http.Error(w, "missing measures", 400)
-			return
-		}
-		measure := measures[0].(string)
-
-		var val float64
-		switch measure {
-		case "RequestMetricsMinute.errorRate":
-			val = 0.08 // triggers Rule A (gt 0.05)
-		case "RequestMetricsMinute.p99Latency":
-			val = 150.0 // triggers Rule B (lt 200.0)
-		case "RequestMetricsMinute.requestCount":
-			val = 500.0 // does not trigger Rule C (gt 1000.0)
-		default:
-			val = 0.0
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]interface{}{
-			"data": []map[string]interface{}{
-				{
-					measure: val,
-				},
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer mockCube.Close()
-
-	gw.cubeAPIURL = mockCube.URL
-
-	// 4. Run evaluator
-	gw.evaluateAlerts(context.Background())
-
-	// 5. Assert notifications
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(received) != 2 {
-		t.Fatalf("expected 2 notifications, got %d", len(received))
-	}
-
-	// Verify Slack notification
-	var slackFound bool
-	for _, n := range received {
-		if n.Path == "/slack" {
-			slackFound = true
-			var payload map[string]interface{}
-			if err := json.Unmarshal(n.Body, &payload); err != nil {
-				t.Fatalf("unmarshal Slack payload: %v", err)
-			}
-			text, _ := payload["text"].(string)
-			if !strings.Contains(text, "High Error Rate") {
-				t.Errorf("expected Slack text to contain rule name, got: %s", text)
-			}
-		}
-	}
-	if !slackFound {
-		t.Error("Slack notification not received")
-	}
-
-	// Verify Webhook notification
-	var webhookFound bool
-	for _, n := range received {
-		if n.Path == "/webhook" {
-			webhookFound = true
-			authHeader := n.Headers.Get("Authorization")
-			if authHeader != "Bearer supersecret" {
-				t.Errorf("expected webhook Authorization header Bearer supersecret, got: %s", authHeader)
-			}
-
-			var payload map[string]interface{}
-			if err := json.Unmarshal(n.Body, &payload); err != nil {
-				t.Fatalf("unmarshal Webhook payload: %v", err)
-			}
-
-			if payload["alert_name"] != "Low Latency Alert" {
-				t.Errorf("expected low latency alert name, got: %v", payload["alert_name"])
-			}
-			if payload["metric"] != "p99_latency" {
-				t.Errorf("expected low latency metric, got: %v", payload["metric"])
-			}
-			if payload["operator"] != "lt" {
-				t.Errorf("expected operator lt, got: %v", payload["operator"])
-			}
-			if payload["threshold"] != 200.0 {
-				t.Errorf("expected threshold 200, got: %v", payload["threshold"])
-			}
-			if payload["actual_value"] != 150.0 {
-				t.Errorf("expected actual_value 150, got: %v", payload["actual_value"])
-			}
-		}
-	}
-	if !webhookFound {
-		t.Error("Webhook notification not received")
-	}
-
-	// 6. Assert database logs
-	history, err := gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
-	if err != nil {
-		t.Fatalf("ListByTenant history: %v", err)
-	}
-
-	if len(history) != 2 {
-		t.Fatalf("expected 2 history entries, got %d", len(history))
-	}
-
-	// Verify history contents
-	var foundA, foundB bool
-	for _, entry := range history {
-		if entry.RuleID == ruleA.ID {
-			foundA = true
-			if entry.Status != "fired" {
-				t.Errorf("Rule A history status: got %s, want fired", entry.Status)
-			}
-			if entry.ActualValue != 0.08 {
-				t.Errorf("Rule A history actual value: got %.4f, want 0.0800", entry.ActualValue)
-			}
-			if !strings.Contains(entry.Message, "error_rate is 0.0800") {
-				t.Errorf("Rule A message incorrect: %s", entry.Message)
-			}
-		} else if entry.RuleID == ruleB.ID {
-			foundB = true
-			if entry.Status != "fired" {
-				t.Errorf("Rule B history status: got %s, want fired", entry.Status)
-			}
-			if entry.ActualValue != 150.0 {
-				t.Errorf("Rule B history actual value: got %.4f, want 150.0000", entry.ActualValue)
-			}
-			if !strings.Contains(entry.Message, "p99_latency is 150.0000") {
-				t.Errorf("Rule B message incorrect: %s", entry.Message)
-			}
-		} else if entry.RuleID == ruleC.ID {
-			t.Errorf("Rule C should not have triggered history")
-		}
-	}
-	if !foundA {
-		t.Error("Rule A history entry not found")
-	}
-	if !foundB {
-		t.Error("Rule B history entry not found")
-	}
-}
-
-func TestEvaluateAlerts_Cooldown(t *testing.T) {
-	gw := newTestGateway(t)
-	tenant, _, _, _ := createTestTenantWithUser(t, gw)
-
-	var mu sync.Mutex
-	var callCount int
-
-	mockNotify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		callCount++
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer mockNotify.Close()
-
-	ch := &tenantdb.NotificationChannel{
-		TenantID: tenant.ID,
-		Name:     "Slack",
-		Type:     "slack",
-		Config:   fmt.Sprintf(`{"webhook_url":%q}`, mockNotify.URL),
-	}
-	if err := gw.db.NotificationChannels().Create(context.Background(), ch); err != nil {
-		t.Fatalf("Create channel: %v", err)
-	}
-
-	rule := &tenantdb.AlertRule{
-		TenantID:        tenant.ID,
-		Name:            "High Error Rate",
-		Metric:          "error_rate",
-		Operator:        "gt",
-		Threshold:       0.05,
-		WindowMinutes:   5,
-		ChannelID:       ch.ID,
-		CooldownMinutes: 15,
-		Status:          "active",
-	}
-	if err := gw.db.AlertRules().Create(context.Background(), rule); err != nil {
-		t.Fatalf("Create rule: %v", err)
-	}
-
-	mockCube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]interface{}{
-			"data": []map[string]interface{}{
-				{"RequestMetricsMinute.errorRate": 0.12},
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer mockCube.Close()
-
-	gw.cubeAPIURL = mockCube.URL
-
-	// 1. Initial fire: rule should fire
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if callCount != 1 {
-		mu.Unlock()
-		t.Fatalf("expected 1 notification on initial fire, got %d", callCount)
-	}
-	mu.Unlock()
-
-	// Verify rule database was updated with last_triggered_at
-	dbRule, err := gw.db.AlertRules().GetByID(context.Background(), rule.ID)
-	if err != nil {
-		t.Fatalf("GetByID rule: %v", err)
-	}
-	if dbRule.LastTriggeredAt == nil {
-		t.Fatal("expected LastTriggeredAt to be set")
-	}
-
-	// 2. Immediate second evaluation: rule is in cooldown, should NOT fire
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if callCount != 1 {
-		mu.Unlock()
-		t.Fatalf("expected still 1 notification (blocked by cooldown), got %d", callCount)
-	}
-	mu.Unlock()
-
-	// 3. Override LastTriggeredAt to a past time (20 minutes ago) to bypass cooldown
-	pastTime := time.Now().UTC().Add(-20 * time.Minute)
-	if err := gw.db.AlertRules().UpdateLastTriggered(context.Background(), rule.ID, pastTime); err != nil {
-		t.Fatalf("UpdateLastTriggered: %v", err)
-	}
-
-	// 4. Run evaluation again: cooldown has expired, should fire again!
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if callCount != 2 {
-		mu.Unlock()
-		t.Fatalf("expected 2 notifications after cooldown bypass, got %d", callCount)
-	}
-	mu.Unlock()
-}
-
-func TestEvaluateAlerts_Anomaly(t *testing.T) {
-	gw := newTestGateway(t)
-	tenant, _, _, _ := createTestTenantWithUser(t, gw)
-
-	var mu sync.Mutex
-	var notifications []map[string]interface{}
-
-	mockNotify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		notifications = append(notifications, body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer mockNotify.Close()
-
-	ch := &tenantdb.NotificationChannel{
-		TenantID: tenant.ID,
-		Name:     "Webhook",
-		Type:     "webhook",
-		Config:   fmt.Sprintf(`{"webhook_url":%q}`, mockNotify.URL),
-	}
-	if err := gw.db.NotificationChannels().Create(context.Background(), ch); err != nil {
-		t.Fatalf("Create channel: %v", err)
-	}
-
-	// WindowMinutes = 30 days lookback to ensure matching historical count >= 3
-	rule := &tenantdb.AlertRule{
-		TenantID:        tenant.ID,
-		Name:            "Anomaly Error Rate",
-		Metric:          "error_rate",
-		Operator:        "anomaly",
-		Threshold:       2.5, // > 2.5 sigma is anomaly
-		WindowMinutes:   30,
-		ChannelID:       ch.ID,
-		CooldownMinutes: 15,
-		Status:          "active",
-	}
-	if err := gw.db.AlertRules().Create(context.Background(), rule); err != nil {
-		t.Fatalf("Create anomaly rule: %v", err)
-	}
-
-	now := time.Now().UTC()
-
-	var returnedData []map[string]interface{}
-
-	mockCube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]interface{}{
-			"data": returnedData,
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer mockCube.Close()
-
-	gw.cubeAPIURL = mockCube.URL
-
-	// Helper to generate correct historical data rows matching current hour + DOW
-	genData := func(todayVal float64, histVals []float64) []map[string]interface{} {
-		var list []map[string]interface{}
-		// Today's matching data point
-		list = append(list, map[string]interface{}{
-			"RequestMetricsMinute.bucketStart": now.Format("2006-01-02T15:04:05"),
-			"RequestMetricsMinute.errorRate":   todayVal,
-		})
-		// Historical matching data points (7, 14, 21, 28... days ago)
-		for i, v := range histVals {
-			daysAgo := (i + 1) * 7
-			ts := now.AddDate(0, 0, -daysAgo)
-			list = append(list, map[string]interface{}{
-				"RequestMetricsMinute.bucketStart": ts.Format("2006-01-02T15:04:05"),
-				"RequestMetricsMinute.errorRate":   v,
-			})
-		}
-		return list
-	}
-
-	// Case 1: Standard Anomaly Firing (Value = 105, Mean = 100, StdDev = 1.6329, Sigma = 3.06 > 2.5)
-	mu.Lock()
-	notifications = nil
-	mu.Unlock()
-	returnedData = genData(105.0, []float64{100.0, 102.0, 98.0, 100.0})
-
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if len(notifications) != 1 {
-		mu.Unlock()
-		t.Fatalf("Case 1: expected 1 notification, got %d", len(notifications))
-	}
-	n := notifications[0]
-	mu.Unlock()
-
-	if n["alert_name"] != "Anomaly Error Rate" {
-		t.Errorf("Case 1: expected alert name Anomaly Error Rate, got %v", n["alert_name"])
-	}
-	if n["actual_value"] != 105.0 {
-		t.Errorf("Case 1: expected actual value 105, got %v", n["actual_value"])
-	}
-
-	// Verify history contains anomaly details
-	history, err := gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
-	if err != nil {
-		t.Fatalf("ListByTenant error: %v", err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("Case 1: expected 1 history record, got %d", len(history))
-	}
-	if !strings.Contains(history[0].Message, "anomaly detected") {
-		t.Errorf("Case 1: expected history message to mention anomaly, got %q", history[0].Message)
-	}
-
-	// Reset cooldown and clear history for subsequent cases
-	if err := gw.db.AlertRules().UpdateLastTriggered(context.Background(), rule.ID, time.Time{}); err != nil {
-		t.Fatalf("Reset cooldown: %v", err)
-	}
-
-	// Case 2: Standard Anomaly Bypassed (Value = 101, Mean = 100, Sigma = 0.61 <= 2.5)
-	mu.Lock()
-	notifications = nil
-	mu.Unlock()
-	returnedData = genData(101.0, []float64{100.0, 102.0, 98.0, 100.0})
-
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if len(notifications) != 0 {
-		mu.Unlock()
-		t.Fatalf("Case 2: expected 0 notifications, got %d", len(notifications))
-	}
-	mu.Unlock()
-
-	// Verify history count remains 1
-	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
-	if err != nil {
-		t.Fatalf("ListByTenant error: %v", err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("Case 2: expected still 1 history record, got %d", len(history))
-	}
-
-	// Case 3: Low Data Points Skip (< 3 points)
-	mu.Lock()
-	notifications = nil
-	mu.Unlock()
-	returnedData = genData(105.0, []float64{100.0, 100.0}) // only 2 historical data points
-
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if len(notifications) != 0 {
-		mu.Unlock()
-		t.Fatalf("Case 3: expected 0 notifications, got %d", len(notifications))
-	}
-	mu.Unlock()
-
-	// Verify history count remains 1
-	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
-	if err != nil {
-		t.Fatalf("ListByTenant error: %v", err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("Case 3: expected still 1 history record, got %d", len(history))
-	}
-
-	// Case 4: StdDev = 0, Value Matches Mean (100.0) -> No fire
-	mu.Lock()
-	notifications = nil
-	mu.Unlock()
-	returnedData = genData(100.0, []float64{100.0, 100.0, 100.0, 100.0})
-
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if len(notifications) != 0 {
-		mu.Unlock()
-		t.Fatalf("Case 4: expected 0 notifications, got %d", len(notifications))
-	}
-	mu.Unlock()
-
-	// Verify history count remains 1
-	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
-	if err != nil {
-		t.Fatalf("ListByTenant error: %v", err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("Case 4: expected still 1 history record, got %d", len(history))
-	}
-
-	// Case 5: StdDev = 0, Value Deviates (105.0) -> Infinite Sigma, fires!
-	mu.Lock()
-	notifications = nil
-	mu.Unlock()
-	returnedData = genData(105.0, []float64{100.0, 100.0, 100.0, 100.0})
-
-	gw.evaluateAlerts(context.Background())
-
-	mu.Lock()
-	if len(notifications) != 1 {
-		mu.Unlock()
-		t.Fatalf("Case 5: expected 1 notification (Inf sigma), got %d", len(notifications))
-	}
-	mu.Unlock()
-
-	// Verify history count is now 2
-	history, err = gw.db.AlertHistory().ListByTenant(context.Background(), tenant.ID, 10)
-	if err != nil {
-		t.Fatalf("ListByTenant error: %v", err)
-	}
-	if len(history) != 2 {
-		t.Fatalf("Case 5: expected 2 history records, got %d", len(history))
-	}
-}
-
-// ============================================================
-// User management tests (Phase 4.1 RBAC)
-// ============================================================
-
-// createUserInTenant creates an additional user for a tenant with a given role.
-func createUserInTenant(t *testing.T, gw *gateway, tenantID, email, role string) (*tenantdb.User, string) {
-	t.Helper()
-	ctx := context.Background()
-	user := &tenantdb.User{
-		TenantID:     tenantID,
-		Email:        email,
-		PasswordHash: "password123",
-		Role:         role,
-	}
-	if err := gw.db.Users().Create(ctx, user); err != nil {
-		t.Fatalf("createUserInTenant: %v", err)
-	}
-	token, err := gw.tokens.Generate(tenantID, user.ID, user.Email, user.Role)
-	if err != nil {
-		t.Fatalf("generate token: %v", err)
-	}
-	return user, token
-}
-
-func TestListUsers_Admin(t *testing.T) {
-	gw := newTestGateway(t)
-	tenant, _, _, adminToken := createTestTenantWithUser(t, gw)
-	createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
-
-	req := authRequest(httptest.NewRequest(http.MethodGet, "/api/gateway/users", nil), adminToken)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/me", nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	handler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if !called {
+		t.Error("handler was not called")
+	}
+
+	// Check rate limit headers are present
+	if rr.Header().Get("X-RateLimit-Limit") == "" {
+		t.Error("missing X-RateLimit-Limit header")
+	}
+	if rr.Header().Get("X-RateLimit-Remaining") == "" {
+		t.Error("missing X-RateLimit-Remaining header")
+	}
+	if rr.Header().Get("X-RateLimit-Reset") == "" {
+		t.Error("missing X-RateLimit-Reset header")
+	}
+}
+
+func TestRateLimitMiddleware_Rejected429(t *testing.T) {
+	// Create gateway with very low rate limit
+	dir := t.TempDir()
+	db, err := tenantdb.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("Open test DB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	tokens := auth.NewTokenService("test-secret-key-32chars!!", 1*time.Hour)
+	trl := ratelimit.NewTenantLimiter(1, 1) // Very low: 1 req/sec, burst 1
+	t.Cleanup(func() { trl.Close() })
+
+	gw := &gateway{
+		db:          db,
+		tokens:      tokens,
+		notifier:    notify.NewDispatcher(),
+		rateLimiter: trl,
+		cubeAPIURL:  "http://localhost:4000/cubejs-api/v1/load",
+		jwtSecret:   "test-secret-key-32chars!!",
+	}
+
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	handler := gw.rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: auth.RoleAdmin}
+
+	// Exhaust the free plan burst (20 tokens) via allowed requests
+	for i := 0; i < 20; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/gateway/me", nil)
+		req = req.WithContext(auth.WithClaims(req.Context(), claims))
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d", i+1, rr.Code)
+		}
+	}
+
+	// Next request should be rate limited (burst exhausted)
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/me", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("request after burst: expected 429, got %d", rr.Code)
+	}
+
+	// Check 429 response has rate limit headers
+	if rr.Header().Get("X-RateLimit-Remaining") != "0" {
+		t.Errorf("X-RateLimit-Remaining = %q, want 0", rr.Header().Get("X-RateLimit-Remaining"))
+	}
+}
+
+// ─── Security Headers Tests ─────────────────────────────────────────────────
+
+func TestSecurityHeadersPresent(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := securityHeadersMiddleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	checks := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":       "DENY",
+		"Cache-Control":         "no-store",
+	}
+	for header, want := range checks {
+		if got := rr.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+
+	// HSTS should NOT be present without X-Forwarded-Proto or TLS
+	if hsts := rr.Header().Get("Strict-Transport-Security"); hsts != "" {
+		t.Errorf("HSTS should not be set without HTTPS, got %q", hsts)
+	}
+}
+
+func TestSecurityHeadersCSP(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := securityHeadersMiddleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	csp := rr.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("Content-Security-Policy header not set")
+	}
+
+	// Verify key directives are present
+	requiredDirectives := []string{
+		"default-src 'self'",
+		"script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+		"style-src 'self' 'unsafe-inline'",
+		"connect-src 'self'",
+		"frame-ancestors 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+	}
+	for _, directive := range requiredDirectives {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("CSP missing directive %q, got: %s", directive, csp)
+		}
+	}
+}
+
+func TestSecurityHeadersHSTSOnHTTPS(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := securityHeadersMiddleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	want := "max-age=31536000; includeSubDomains"
+	if got := rr.Header().Get("Strict-Transport-Security"); got != want {
+		t.Errorf("HSTS = %q, want %q", got, want)
+	}
+}
+
+func TestSecurityHeadersCORSOriginDefault(t *testing.T) {
+	// Default (no env var) should use *
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := securityHeadersMiddleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, "*")
+	}
+}
+
+func TestSecurityHeadersCORSOriginEnv(t *testing.T) {
+	t.Setenv("CORS_ALLOWED_ORIGIN", "https://dashboard.gravix.io")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := securityHeadersMiddleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Origin", "https://dashboard.gravix.io")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	want := "https://dashboard.gravix.io"
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != want {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, want)
+	}
+}
+
+func TestSecurityHeadersOPTIONSPreflight(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := securityHeadersMiddleware(mux)
+
+	req := httptest.NewRequest(http.MethodOptions, "/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("OPTIONS status = %d, want %d", rr.Code, http.StatusNoContent)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Methods"); got == "" {
+		t.Error("Access-Control-Allow-Methods not set on OPTIONS")
+	}
+}
+
+// ============================================================
+// DLQ tests
+// ============================================================
+
+func newTestGatewayWithStore(t *testing.T) (*gateway, storage.ObjectStore) {
+	t.Helper()
+	gw := newTestGateway(t)
+	dir := t.TempDir()
+	store, err := storage.NewLocalStore(dir)
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+	gw.store = store
+	return gw, store
+}
+
+func TestDLQListEmpty(t *testing.T) {
+	gw, _ := newTestGatewayWithStore(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/dlq", nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleDLQ(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("DLQ empty list status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Entries []json.RawMessage `json:"entries"`
+		Total   int               `json:"total"`
+	}
+	decodeResponse(t, rr, &resp)
+	if resp.Total != 0 {
+		t.Errorf("DLQ total = %d, want 0", resp.Total)
+	}
+	if len(resp.Entries) != 0 {
+		t.Errorf("DLQ entries = %d, want 0", len(resp.Entries))
+	}
+}
+
+func TestDLQListWithEntries(t *testing.T) {
+	gw, store := newTestGatewayWithStore(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	// Seed a DLQ file
+	entry := `{"timestamp":"2026-03-18T10:00:00Z","fact_type":"request_fact","error":"invalid path","raw_json":{"service":"test"}}` + "\n"
+	key := tenant.ID + "/dlq/request_facts/2026-03-18/10/batch_001.jsonl"
+	if err := store.Put(context.Background(), key, strings.NewReader(entry)); err != nil {
+		t.Fatalf("seed DLQ: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/dlq?limit=10", nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleDLQ(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("DLQ list status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	entries, ok := resp["entries"].([]interface{})
+	if !ok {
+		t.Fatal("DLQ response missing 'entries' array")
+	}
+	if len(entries) != 1 {
+		t.Errorf("DLQ entries = %d, want 1", len(entries))
+	}
+}
+
+func TestDLQNoStore(t *testing.T) {
+	gw := newTestGateway(t)
+	// gw.store is nil
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/dlq", nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleDLQ(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("DLQ no store status = %d, want 503", rr.Code)
+	}
+}
+
+func TestDLQWrongMethod(t *testing.T) {
+	gw, _ := newTestGatewayWithStore(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/dlq", nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleDLQ(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("DLQ wrong method status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// Webhook channel type test
+// ============================================================
+
+func TestChannelsCreateWebhookType(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"name":   "My Webhook",
+		"type":   "webhook",
+		"config": map[string]string{"webhook_url": "https://example.com/hook", "auth_header": "Bearer secret"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/channels", body)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChannels(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create webhook channel status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var ch tenantdb.NotificationChannel
+	decodeResponse(t, rr, &ch)
+	if ch.Type != "webhook" {
+		t.Errorf("channel type = %q, want webhook", ch.Type)
+	}
+}
+
+func TestChannelsCreateInvalidType(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"name": "Bad Channel",
+		"type": "email",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/channels", body)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChannels(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("create invalid type status = %d, want 400", rr.Code)
+	}
+}
+
+func TestChannelsCreateMissingName(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"type": "slack",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/channels", body)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChannels(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("create missing name status = %d, want 400", rr.Code)
+	}
+}
+
+// ============================================================
+// Alert rule anomaly creation test
+// ============================================================
+
+func TestAlertRulesCreateAnomaly(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	ch := createTestChannelViaDB(t, gw, tenant.ID)
+
+	body := jsonBody(t, map[string]interface{}{
+		"name":             "Anomaly Rule",
+		"metric":           "p95_latency",
+		"operator":         "anomaly",
+		"threshold":        2.5,
+		"window_minutes":   7,
+		"channel_id":       ch.ID,
+		"cooldown_minutes": 30,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/alert-rules", body)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleAlertRules(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create anomaly rule status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var rule tenantdb.AlertRule
+	decodeResponse(t, rr, &rule)
+	if rule.Operator != "anomaly" {
+		t.Errorf("rule operator = %q, want anomaly", rule.Operator)
+	}
+}
+
+// ============================================================
+// Audit trail tests for new audit calls (Sprint 14.2)
+// ============================================================
+
+func TestLoginCreatesAuditEntry(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, _ = createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{
+		"email":    "admin@corp.com",
+		"password": "password123",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/login", body)
+	rr := httptest.NewRecorder()
+
+	gw.handleLogin(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("login status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Wait for async audit
+	time.Sleep(100 * time.Millisecond)
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	tenantID := resp["tenant_id"].(string)
+
+	entries, _, err := gw.db.AuditLog().ListByTenant(context.Background(), tenantID, 10, 0)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	found := false
+	for _, e := range entries {
+		if e.Action == "user.login" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("login did not create user.login audit entry")
+	}
+}
+
+func TestChannelCreateCreatesAuditEntry(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"name":   "Audit Test Channel",
+		"type":   "slack",
+		"config": map[string]string{"webhook_url": "https://hooks.slack.com/services/T/B/x"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/channels", body)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChannels(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create channel status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	entries, _, err := gw.db.AuditLog().ListByTenant(context.Background(), tenant.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	found := false
+	for _, e := range entries {
+		if e.Action == "channel.create" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("channel create did not produce channel.create audit entry")
+	}
+}
+
+func TestAlertRuleDeleteCreatesAuditEntry(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	ch := createTestChannelViaDB(t, gw, tenant.ID)
+
+	// Create a rule to delete
+	rule := &tenantdb.AlertRule{
+		TenantID:        tenant.ID,
+		Name:            "Delete Me",
+		Metric:          "error_rate",
+		Operator:        "gt",
+		Threshold:       0.1,
+		WindowMinutes:   5,
+		ChannelID:       ch.ID,
+		CooldownMinutes: 10,
+	}
+	if err := gw.db.AlertRules().Create(context.Background(), rule); err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/alert-rules/"+rule.ID, nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: "u1", Email: "a@b.com", Role: auth.RoleAdmin}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleAlertRuleByID(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete rule status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	entries, _, err := gw.db.AuditLog().ListByTenant(context.Background(), tenant.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	found := false
+	for _, e := range entries {
+		if e.Action == "alert_rule.delete" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("alert rule delete did not produce alert_rule.delete audit entry")
+	}
+}
+
+func TestAPIKeyCreateWithExpiry(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	body := `{"name":"expiring-key","expires_in_days":30}`
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/api-keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   user.ID,
+		Email:    user.Email,
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleAPIKeys(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d: %s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if resp["expires_at"] == nil {
+		t.Error("expected expires_at in response")
+	}
+}
+
+func TestAPIKeyCreateNoExpiry(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	body := `{"name":"permanent-key"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/api-keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   user.ID,
+		Email:    user.Email,
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleAPIKeys(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d: %s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if resp["expires_at"] != nil {
+		t.Error("expected no expires_at for key without expiry")
+	}
+}
+
+func TestAPIKeysExpiringEndpoint(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	ctx := context.Background()
+
+	// Create a key expiring in 3 days
+	soon := time.Now().UTC().Add(3 * 24 * time.Hour)
+	gw.db.APIKeys().Create(ctx, tenant.ID, "expiring-soon", &soon)
+
+	// Create a key expiring in 30 days (should not appear)
+	later := time.Now().UTC().Add(30 * 24 * time.Hour)
+	gw.db.APIKeys().Create(ctx, tenant.ID, "expiring-later", &later)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/api-keys/expiring", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   "test-user",
+		Email:    "test@test.com",
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleAPIKeysExpiring(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var resp struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if len(resp.Keys) != 1 {
+		t.Errorf("expected 1 expiring key, got %d", len(resp.Keys))
+	}
+}
+
+// ============================================================
+// Sprint 16.3: Gateway Handler Coverage Gaps
+// ============================================================
+
+func TestAPIKeysExpiringEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/api-keys/expiring", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   "test-user",
+		Email:    "test@test.com",
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleAPIKeysExpiring(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var resp struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if len(resp.Keys) != 0 {
+		t.Errorf("expected 0 expiring keys, got %d", len(resp.Keys))
+	}
+}
+
+func TestAPIKeysExpiringMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/api-keys/expiring", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   "test-user",
+		Email:    "test@test.com",
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleAPIKeysExpiring(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestDLQReplayMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/dlq/replay", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   "test-user",
+		Email:    "test@test.com",
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleDLQReplay(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestDLQReplayEmptyEntries(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	body := `{"entries":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/dlq/replay", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   "test-user",
+		Email:    "test@test.com",
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleDLQReplay(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d: %s", rr.Code, http.StatusBadRequest, rr.Body.String())
+	}
+}
+
+func TestDLQReplayInvalidJSON(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/dlq/replay", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenant.ID,
+		UserID:   "test-user",
+		Email:    "test@test.com",
+		Role:     "admin",
+	}))
+
+	rr := httptest.NewRecorder()
+	gw.handleDLQReplay(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSecurityHeadersCSPAllDirectives(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := securityHeadersMiddleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	csp := rr.Header().Get("Content-Security-Policy")
+
+	// Verify ALL 9 CSP directives are present
+	allDirectives := []string{
+		"default-src",
+		"script-src",
+		"style-src",
+		"connect-src",
+		"img-src",
+		"font-src",
+		"frame-ancestors",
+		"base-uri",
+		"form-action",
+	}
+	for _, d := range allDirectives {
+		if !strings.Contains(csp, d) {
+			t.Errorf("CSP missing directive %q, got: %s", d, csp)
+		}
+	}
+}
+
+func TestGatewayRequestIDHeader(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	})
+	handler := logging.RequestIDMiddleware(securityHeadersMiddleware(mux))
+
+	// Without X-Request-ID — should generate one
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	id := rr.Header().Get("X-Request-ID")
+	if id == "" {
+		t.Error("expected X-Request-ID in response when none provided")
+	}
+	if len(id) != 36 {
+		t.Errorf("X-Request-ID = %q, expected UUID format (36 chars)", id)
+	}
+
+	// With X-Request-ID — should preserve it
+	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req2.Header.Set("X-Request-ID", "custom-trace-id")
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, req2)
+
+	if got := rr2.Header().Get("X-Request-ID"); got != "custom-trace-id" {
+		t.Errorf("X-Request-ID = %q, want %q", got, "custom-trace-id")
+	}
+}
+
+// --- Sprint 25.1: Change Password, Token Refresh ---
+
+func TestChangePasswordSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, token := createTestTenantWithUser(t, gw)
+
+	body := `{"current_password":"password123","new_password":"N3wP@ssw0rd!"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	_ = token
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ChangePassword status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify login with new password works
+	loginBody := `{"email":"admin@corp.com","password":"N3wP@ssw0rd!"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/gateway/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRR := httptest.NewRecorder()
+	gw.handleLogin(loginRR, loginReq)
+
+	if loginRR.Code != http.StatusOK {
+		t.Fatalf("Login with new password status = %d; body: %s", loginRR.Code, loginRR.Body.String())
+	}
+}
+
+func TestChangePasswordWrongCurrent(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	body := `{"current_password":"wrongpass","new_password":"N3wP@ssw0rd!"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("ChangePassword wrong current status = %d, want 401", rr.Code)
+	}
+}
+
+func TestChangePasswordWeakNew(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	body := `{"current_password":"password123","new_password":"weak"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("ChangePassword weak new status = %d, want 400", rr.Code)
+	}
+}
+
+func TestChangePasswordMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/password", nil)
+	claims := &auth.Claims{TenantID: "t1", UserID: "u1", Email: "a@b.com", Role: "admin"}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleChangePassword(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("ChangePassword GET status = %d, want 405", rr.Code)
+	}
+}
+
+func TestRefreshTokenSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, token := createTestTenantWithUser(t, gw)
+
+	// Parse original token to get claims with JTI
+	origClaims, err := gw.tokens.Validate(token)
+	if err != nil {
+		t.Fatalf("Validate original token: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/refresh", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), origClaims))
+	_ = tenant
+	_ = user
+	rr := httptest.NewRecorder()
+
+	gw.handleRefreshToken(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("RefreshToken status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+
+	newToken, ok := resp["token"].(string)
+	if !ok || newToken == "" {
+		t.Fatal("expected non-empty token in refresh response")
+	}
+	if newToken == token {
+		t.Error("refreshed token should be different from original")
+	}
+
+	// Old token JTI should be blacklisted
+	if !gw.isTokenBlacklisted(origClaims.ID) {
+		t.Error("old token JTI should be blacklisted after refresh")
+	}
+}
+
+func TestRefreshTokenMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/refresh", nil)
+	claims := &auth.Claims{TenantID: "t1", UserID: "u1", Email: "a@b.com", Role: "admin"}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleRefreshToken(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("RefreshToken GET status = %d, want 405", rr.Code)
+	}
+}
+
+func TestMeIncludesProfileFields(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/me", nil)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: user.Role}
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleMe(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Me status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+
+	if _, ok := resp["email_verified"]; !ok {
+		t.Error("expected email_verified in /me response")
+	}
+	if _, ok := resp["tenant_name"]; !ok {
+		t.Error("expected tenant_name in /me response")
+	}
+	if _, ok := resp["plan"]; !ok {
+		t.Error("expected plan in /me response")
+	}
+}
+
+// ============================================================
+// GDPR / Consent / Account Deletion tests
+// ============================================================
+
+func TestGDPRAccessReturnsUserData(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/gdpr/access", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+
+	gw.handleGDPRAccess(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
 	}
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	users := resp["users"].([]interface{})
-	if len(users) != 2 {
-		t.Errorf("got %d users, want 2", len(users))
+	if resp["user"] == nil {
+		t.Error("expected user in response")
+	}
+	if resp["tenant"] == nil {
+		t.Error("expected tenant in response")
 	}
 }
 
-func TestListUsers_Viewer(t *testing.T) {
+func TestGDPRPortabilityDownload(t *testing.T) {
 	gw := newTestGateway(t)
-	tenant, _, _, _ := createTestTenantWithUser(t, gw)
-	_, viewerToken := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
-	req := authRequest(httptest.NewRequest(http.MethodGet, "/api/gateway/users", nil), viewerToken)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/gdpr/portability", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	gw.handleGDPRPortability(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Fatalf("viewer should be able to list users; status = %d", rr.Code)
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	cd := rr.Header().Get("Content-Disposition")
+	if cd == "" {
+		t.Error("expected Content-Disposition header")
+	}
+	if !strings.Contains(cd, "gravix-data-export.json") {
+		t.Errorf("Content-Disposition = %q, want attachment filename", cd)
 	}
 }
 
-func TestCreateUser_Admin(t *testing.T) {
+func TestConsentListEmpty(t *testing.T) {
 	gw := newTestGateway(t)
-	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
-	body := jsonBody(t, map[string]string{
-		"email":    "editor@corp.com",
-		"password": "securepass",
-		"role":     "editor",
-	})
-	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/consent", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	gw.handleConsent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
+
+func TestConsentCreateAndList(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
+
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+
+	// Create consent
+	body := jsonBody(t, map[string]interface{}{
+		"type": "cookies", "version": "1.0", "accepted": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/consent", body)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr := httptest.NewRecorder()
+	gw.handleConsent(rr, req)
 
 	if rr.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+		t.Fatalf("create status = %d, want 201; body: %s", rr.Code, rr.Body.String())
 	}
-	var resp map[string]interface{}
-	decodeResponse(t, rr, &resp)
-	if resp["role"] != "editor" {
-		t.Errorf("role = %v, want editor", resp["role"])
-	}
-	if resp["password_hash"] != nil {
-		t.Error("response must not include password_hash")
-	}
-}
 
-func TestCreateUser_DefaultsToViewer(t *testing.T) {
-	gw := newTestGateway(t)
-	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+	// List consent
+	req = httptest.NewRequest(http.MethodGet, "/api/gateway/consent", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr = httptest.NewRecorder()
+	gw.handleConsent(rr, req)
 
-	body := jsonBody(t, map[string]string{
-		"email":    "newuser@corp.com",
-		"password": "securepass",
-		// role omitted
-	})
-	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
-	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUsers)(rr, req)
-
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
-	}
-	var resp map[string]interface{}
-	decodeResponse(t, rr, &resp)
-	if resp["role"] != "viewer" {
-		t.Errorf("role = %v, want viewer (default)", resp["role"])
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", rr.Code)
 	}
 }
 
-func TestCreateUser_NonAdminForbidden(t *testing.T) {
+func TestConsentInvalidType(t *testing.T) {
 	gw := newTestGateway(t)
-	tenant, _, _, _ := createTestTenantWithUser(t, gw)
-	_, editorToken := createUserInTenant(t, gw, tenant.ID, "editor@corp.com", "editor")
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
-	body := jsonBody(t, map[string]string{
-		"email":    "another@corp.com",
-		"password": "securepass",
-		"role":     "viewer",
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+	body := jsonBody(t, map[string]interface{}{
+		"type": "invalid", "version": "1.0", "accepted": true,
 	})
-	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), editorToken)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/consent", body)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUsers)(rr, req)
-
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rr.Code)
-	}
-}
-
-func TestCreateUser_DuplicateEmail(t *testing.T) {
-	gw := newTestGateway(t)
-	_, _, _, adminToken := createTestTenantWithUser(t, gw)
-
-	body := jsonBody(t, map[string]string{
-		"email":    "admin@corp.com", // already created by createTestTenantWithUser
-		"password": "securepass",
-		"role":     "viewer",
-	})
-	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
-	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUsers)(rr, req)
-
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", rr.Code)
-	}
-}
-
-func TestCreateUser_InvalidRole(t *testing.T) {
-	gw := newTestGateway(t)
-	_, _, _, adminToken := createTestTenantWithUser(t, gw)
-
-	body := jsonBody(t, map[string]string{
-		"email":    "bad@corp.com",
-		"password": "securepass",
-		"role":     "superuser",
-	})
-	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
-	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUsers)(rr, req)
+	gw.handleConsent(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
 
-func TestUpdateUserRole_Admin(t *testing.T) {
+func TestAccountDeletionAndCancel(t *testing.T) {
 	gw := newTestGateway(t)
-	tenant, _, _, adminToken := createTestTenantWithUser(t, gw)
-	viewer, _ := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
-	body := jsonBody(t, map[string]string{"role": "editor"})
-	req := authRequest(
-		httptest.NewRequest(http.MethodPut, "/api/gateway/users/"+viewer.ID, body),
-		adminToken,
-	)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
+
+	// Request deletion
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUserByID)(rr, req)
+	gw.handleAccountDeletion(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("delete status = %d, want 202; body: %s", rr.Code, rr.Body.String())
 	}
 	var resp map[string]interface{}
 	decodeResponse(t, rr, &resp)
-	if resp["role"] != "editor" {
-		t.Errorf("role = %v, want editor", resp["role"])
+	if resp["status"] != "pending" {
+		t.Errorf("status = %v, want pending", resp["status"])
+	}
+
+	// Cancel deletion
+	req = httptest.NewRequest(http.MethodPost, "/api/gateway/account/cancel-deletion", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr = httptest.NewRecorder()
+	gw.handleCancelDeletion(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200; body: %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestUpdateUserRole_NonAdminForbidden(t *testing.T) {
+func TestAccountDeletionRequiresAdmin(t *testing.T) {
 	gw := newTestGateway(t)
-	tenant, _, _, _ := createTestTenantWithUser(t, gw)
-	viewer, viewerToken := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
-	body := jsonBody(t, map[string]string{"role": "admin"})
-	req := authRequest(
-		httptest.NewRequest(http.MethodPut, "/api/gateway/users/"+viewer.ID, body),
-		viewerToken,
-	)
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "viewer"}
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUserByID)(rr, req)
+	gw.handleAccountDeletion(rr, req)
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rr.Code)
 	}
 }
 
-func TestUpdateUserRole_CrossTenantBlocked(t *testing.T) {
+func TestAccountDeletionDuplicateReturnsPending(t *testing.T) {
 	gw := newTestGateway(t)
-	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
-	// Create a second tenant and user
-	ctx := context.Background()
-	otherTenant := &tenantdb.Tenant{Name: "Other Corp", Email: "other@other.com", Plan: "free", Status: "active"}
-	if err := gw.db.Tenants().Create(ctx, otherTenant); err != nil {
-		t.Fatal(err)
-	}
-	otherUser := &tenantdb.User{TenantID: otherTenant.ID, Email: "user@other.com", PasswordHash: "pass1234", Role: "viewer"}
-	if err := gw.db.Users().Create(ctx, otherUser); err != nil {
-		t.Fatal(err)
-	}
+	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: "admin"}
 
-	body := jsonBody(t, map[string]string{"role": "admin"})
-	req := authRequest(
-		httptest.NewRequest(http.MethodPut, "/api/gateway/users/"+otherUser.ID, body),
-		adminToken,
-	)
+	// First request
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUserByID)(rr, req)
+	gw.handleAccountDeletion(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("first delete status = %d", rr.Code)
+	}
 
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("cross-tenant update should return 404, got %d", rr.Code)
+	// Second request — should return 200 with existing
+	req = httptest.NewRequest(http.MethodDelete, "/api/gateway/account", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+	rr = httptest.NewRecorder()
+	gw.handleAccountDeletion(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second delete status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["message"] != "deletion already requested" {
+		t.Errorf("message = %v", resp["message"])
 	}
 }
 
-func TestDeleteUser_Admin(t *testing.T) {
+func TestRegisterRequiresTOS(t *testing.T) {
 	gw := newTestGateway(t)
-	tenant, _, _, adminToken := createTestTenantWithUser(t, gw)
-	viewer, _ := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
 
-	req := authRequest(
-		httptest.NewRequest(http.MethodDelete, "/api/gateway/users/"+viewer.ID, nil),
-		adminToken,
-	)
+	body := jsonBody(t, map[string]interface{}{
+		"name": "No TOS Corp", "email": "notos@corp.com", "password": "S3cur3P@ss!", "accept_tos": false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/register", body)
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUserByID)(rr, req)
+	gw.handleRegister(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+// ============================================================
+// handleTeam tests
+// ============================================================
+
+func TestTeamListSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/team", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
 	}
 
-	// Confirm user is gone
-	if _, err := gw.db.Users().GetByID(context.Background(), viewer.ID); err == nil {
-		t.Error("user should have been deleted")
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	members, ok := resp["members"].([]interface{})
+	if !ok {
+		t.Fatal("expected members array")
+	}
+	if len(members) != 1 {
+		t.Errorf("members count = %d, want 1", len(members))
 	}
 }
 
-func TestDeleteUser_SelfDeleteBlocked(t *testing.T) {
+func TestTeamUpdateRoleAdmin(t *testing.T) {
 	gw := newTestGateway(t)
-	_, adminUser, _, adminToken := createTestTenantWithUser(t, gw)
+	tenant, _, _, token := createTestTenantWithUser(t, gw)
+	ctx := context.Background()
 
-	req := authRequest(
-		httptest.NewRequest(http.MethodDelete, "/api/gateway/users/"+adminUser.ID, nil),
-		adminToken,
-	)
+	// Create a second user to modify
+	viewer := &tenantdb.User{
+		TenantID:     tenant.ID,
+		Email:        "viewer@corp.com",
+		PasswordHash: "password123",
+		Role:         "viewer",
+	}
+	gw.db.Users().Create(ctx, viewer)
+
+	body := jsonBody(t, map[string]interface{}{
+		"user_id": viewer.ID,
+		"role":    "editor",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/team", body)
+	req = authRequest(req, token)
+
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUserByID)(rr, req)
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify role was updated
+	updated, _ := gw.db.Users().GetByID(ctx, viewer.ID)
+	if updated.Role != "editor" {
+		t.Errorf("role = %s, want editor", updated.Role)
+	}
+}
+
+func TestTeamUpdateSelfBlocked(t *testing.T) {
+	gw := newTestGateway(t)
+	_, user, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"user_id": user.ID,
+		"role":    "viewer",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/team", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("self-delete should return 400, got %d", rr.Code)
+		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
 
-func TestDeleteUser_NonAdminForbidden(t *testing.T) {
+func TestTeamUpdateInvalidRole(t *testing.T) {
 	gw := newTestGateway(t)
-	tenant, adminUser, _, _ := createTestTenantWithUser(t, gw)
-	_, viewerToken := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+	tenant, _, _, token := createTestTenantWithUser(t, gw)
+	ctx := context.Background()
 
-	req := authRequest(
-		httptest.NewRequest(http.MethodDelete, "/api/gateway/users/"+adminUser.ID, nil),
-		viewerToken,
-	)
+	viewer := &tenantdb.User{
+		TenantID: tenant.ID, Email: "v2@corp.com", PasswordHash: "password123", Role: "viewer",
+	}
+	gw.db.Users().Create(ctx, viewer)
+
+	body := jsonBody(t, map[string]interface{}{
+		"user_id": viewer.ID,
+		"role":    "superadmin",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/team", body)
+	req = authRequest(req, token)
+
 	rr := httptest.NewRecorder()
-	gw.requireAuth(gw.handleUserByID)(rr, req)
 
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rr.Code)
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestTeamMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/team", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTeam)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleRetention tests
+// ============================================================
+
+func TestRetentionGetDefault(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/retention", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["plan"] != "free" {
+		t.Errorf("plan = %v, want free", resp["plan"])
+	}
+}
+
+func TestRetentionUpdateSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"facts_days": 5, "metrics_days": 5, "traces_days": 5,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/retention", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRetentionUpdateOutOfBounds(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]interface{}{
+		"facts_days": 999, "metrics_days": 0, "traces_days": 0,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/gateway/retention", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRetentionMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/retention", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleRetention)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleLogout tests
+// ============================================================
+
+func TestLogoutSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/logout", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleLogout)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestLogoutWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/logout", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleLogout)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleForgotPassword tests
+// ============================================================
+
+func TestForgotPasswordSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, _ = createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{"email": "admin@corp.com"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/forgot-password", body)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	// Should always return 200 (even for non-existent emails, to prevent enumeration)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForgotPasswordNonExistentEmail(t *testing.T) {
+	gw := newTestGateway(t)
+
+	body := jsonBody(t, map[string]string{"email": "nobody@test.com"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/forgot-password", body)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	// Should return 200 to prevent email enumeration
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
+
+func TestForgotPasswordWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/forgot-password", nil)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+func TestForgotPasswordMissingEmail(t *testing.T) {
+	gw := newTestGateway(t)
+
+	body := jsonBody(t, map[string]string{})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/forgot-password", body)
+	rr := httptest.NewRecorder()
+
+	gw.handleForgotPassword(rr, req)
+
+	// Handler always returns 200 to prevent email enumeration
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
+
+// ============================================================
+// handleInvitations tests
+// ============================================================
+
+func TestInvitationsListEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/invitations", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	invitations := resp["invitations"].([]interface{})
+	if len(invitations) != 0 {
+		t.Errorf("expected empty invitations list, got %d", len(invitations))
+	}
+}
+
+func TestInvitationsCreateSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, token := createTestTenantWithUser(t, gw)
+
+	// Upgrade to team plan to allow more seats
+	gw.db.Tenants().UpdatePlan(context.Background(), tenant.ID, "team")
+
+	body := jsonBody(t, map[string]string{
+		"email": "newmember@corp.com",
+		"role":  "viewer",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/invitations", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestInvitationsCreateMissingEmail(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{"role": "viewer"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/invitations", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestInvitationsMethodNotAllowed(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/gateway/invitations", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleInvitations)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleResendVerification tests
+// ============================================================
+
+func TestResendVerificationSuccess(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/resend-verification", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleResendVerification)(rr, req)
+
+	// Already verified user — should still return 200
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestResendVerificationWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/resend-verification", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleResendVerification)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleBillingCheckout tests
+// ============================================================
+
+func TestBillingCheckoutNoBilling(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{"plan": "team"})
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/billing/checkout", body)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingCheckout)(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestBillingCheckoutWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/billing/checkout", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingCheckout)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleBillingInvoices tests
+// ============================================================
+
+func TestBillingInvoicesNoBillingReturnsEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/billing/invoices", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingInvoices)(rr, req)
+
+	// Returns 200 with empty invoices when billing not configured
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestBillingInvoicesWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/billing/invoices", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingInvoices)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
+	}
+}
+
+// ============================================================
+// handleBillingUsageHistory tests
+// ============================================================
+
+func TestBillingUsageHistoryEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/billing/usage-history", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleBillingUsageHistory)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ============================================================
+// handleTracesRecent tests
+// ============================================================
+
+func TestTracesRecentEmpty(t *testing.T) {
+	gw := newTestGateway(t)
+	dir := t.TempDir()
+	store, _ := storage.NewLocalStore(dir)
+	gw.store = store
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/traces/recent", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTracesRecent)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTracesRecentWrongMethod(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, token := createTestTenantWithUser(t, gw)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/traces/recent", nil)
+	req = authRequest(req, token)
+
+	rr := httptest.NewRecorder()
+
+	gw.requireAuth(gw.handleTracesRecent)(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rr.Code)
 	}
 }

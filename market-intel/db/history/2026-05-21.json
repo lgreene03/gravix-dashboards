@@ -1,0 +1,959 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-05-21T00:00:00Z",
+  "opportunities": [
+    {
+      "id": "opp-001",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Construction",
+        "geography": "Northern Ireland / United Kingdom",
+        "category": "CIS Compliance & Tax",
+        "tags": ["compliance", "CIS", "HMRC", "MTD", "construction", "subcontractor", "SME"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 4, "pain_severity": 5, "frequency": 4, "willingness_to_pay": 4 },
+        "build": { "mvp_simplicity": 3, "data_availability": 4, "ai_leverage": 3, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 4, "sales_cycle_length": 4, "founder_led_sales_viability": 4, "speed_to_first_revenue": 4 },
+        "composite": { "opportunity_score": 4.25, "buildability_score": 3.2, "revenue_velocity_score": 4.0, "overall_weighted_score": 3.85 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.85, "rank": 3, "confidence": "high" }],
+        "rank": 3, "previous_rank": null, "rank_delta": null, "confidence": "high"
+      },
+      "business_analysis": {
+        "problem_statement": "April 2026 CIS reforms require contractors to continuously monitor subcontractors (not just verify once), with gross payment status revocation extended from 1 to 5 years. A 'knew or should have known' liability clause means contractors face catastrophic penalties for supply-chain fraud. Most small contractors check via HMRC portal manually and track in spreadsheets. MTD for Income Tax also hits CIS subcontractors from April 2026, requiring quarterly digital submissions.",
+        "target_buyer": "Owner or finance manager of construction firms with 5-50 employees running 5-20 subcontractors simultaneously",
+        "trigger_event": "April 2026 CIS rule changes, HMRC penalty notices, accountant recommendation",
+        "current_workaround": "Manual HMRC portal checks, spreadsheet tracking, accountant-managed CIS returns costing £100-300/month",
+        "competitor_summary": "Eque2 (£500+/month, enterprise), Xero CIS add-ons (generic, no risk monitoring), BuildersAI (CIS planned for 2026, not yet live), manual accountant services",
+        "market_maturity": "early",
+        "regulatory_complexity": "high"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app + mobile, HMRC CIS verification API integration, periodic automated re-verification, alert system",
+        "ai_components": ["Subcontractor risk scoring from verification history", "Anomaly detection on payment patterns"],
+        "required_integrations": ["HMRC CIS API", "Xero/QuickBooks for CIS deduction export", "Companies House for subcontractor status checks"],
+        "data_sources": ["User-submitted subcontractor details", "HMRC verification responses", "Companies House public data"],
+        "infrastructure_complexity": "medium",
+        "estimated_monthly_infra_cost": "80-200 GBP",
+        "maintenance_expectations": "Medium — HMRC API changes require prompt updates; CIS rules updated periodically"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Subcontractor register with HMRC verification status",
+          "Automated monthly re-verification with email alerts on status changes",
+          "CIS monthly return preparation (filled from payment records)",
+          "MTD ITSA-compatible digital record export for subcontractors",
+          "Gross payment status risk flag and audit trail"
+        ],
+        "features_to_fake_manually": [
+          "Initial onboarding support (human-assisted setup for first 10 customers)",
+          "Edge case CIS calculations reviewed by accountant partner"
+        ],
+        "four_week_scope": "Subcontractor register, HMRC verification API call, monthly return template, basic alert emails",
+        "eight_week_scope": "Re-verification scheduling, MTD export format, Xero integration for payment import",
+        "suggested_tech_stack": "Next.js, PostgreSQL, HMRC CIS API, Xero OAuth, Railway or Fly.io"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription per contractor firm, tiered by subcontractor count",
+        "estimated_acv_gbp": 1188,
+        "likely_first_customers": "NI construction firms via Federation of Master Builders NI, CECA NI, Contractors NI Facebook groups",
+        "distribution_strategy": "Partner with NI/UK accountants who have construction clients, FMB NI chapter, LinkedIn outreach to construction firm owners",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-002",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Trade & Logistics",
+        "geography": "Northern Ireland",
+        "category": "Post-Brexit Cross-Border Trade Documentation",
+        "tags": ["customs", "Windsor-Framework", "EORI", "NI", "post-Brexit", "AI", "export"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 3, "pain_severity": 5, "frequency": 4, "willingness_to_pay": 5 },
+        "build": { "mvp_simplicity": 2, "data_availability": 4, "ai_leverage": 5, "competition_saturation": 4, "maintenance_complexity": 2 },
+        "sales": { "ease_of_reaching_buyers": 4, "sales_cycle_length": 4, "founder_led_sales_viability": 4, "speed_to_first_revenue": 4 },
+        "composite": { "opportunity_score": 4.25, "buildability_score": 3.4, "revenue_velocity_score": 4.0, "overall_weighted_score": 3.91 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.91, "rank": 1, "confidence": "medium" }],
+        "rank": 1, "previous_rank": null, "rank_delta": null, "confidence": "medium"
+      },
+      "business_analysis": {
+        "problem_statement": "NI businesses need both GB and XI EORI numbers, follow Windsor Framework rules for goods moving NI-GB-EU, and determine 'goods at risk' status per shipment. CHIEF decommissioned December 2024; all declarations now on CDS. Average cost per customs declaration is £48; NI SMEs use expensive intermediaries or make costly manual errors. NI food producers trading fortnightly into Ireland/EU face repeated documentation complexity unique to the Windsor Framework.",
+        "target_buyer": "Export/import manager or owner at an NI-based manufacturing or trading SME with 2-50 employees doing regular GB-NI-EU cross-border movements",
+        "trigger_event": "Failed customs declaration, customs fine, HMRC audit, freight forwarder bill shock",
+        "current_workaround": "Customs agents/brokers (£48+ per declaration), manual CDS submissions with high error rate, freight forwarders absorbing cost",
+        "competitor_summary": "Customs agents (expensive, not software), Descartes/Customs4Trade (enterprise), no NI-specific Windsor Framework tool exists",
+        "market_maturity": "early",
+        "regulatory_complexity": "very high"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app with AI document ingestion, CDS API integration, Windsor Framework decision tree, declaration drafting assistant",
+        "ai_components": ["Invoice and shipment document extraction (Claude API)", "Windsor Framework 'goods at risk' determination rules engine", "Declaration field auto-population from uploaded documents"],
+        "required_integrations": ["HMRC CDS API for submission", "HMRC Trade Tariff API for commodity codes", "Companies House for counterparty verification"],
+        "data_sources": ["User-uploaded commercial invoices, packing lists, CMR documents", "HMRC tariff database (public)", "UKGT/EU tariff rates"],
+        "infrastructure_complexity": "high",
+        "estimated_monthly_infra_cost": "150-400 GBP",
+        "maintenance_expectations": "High — Windsor Framework rules actively evolving, CDS API updates, tariff rate changes"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Upload commercial invoice + packing list — AI extracts shipment fields",
+          "Windsor Framework eligibility checker (goods at risk determination)",
+          "CDS import/export declaration draft with field validation",
+          "Commodity code lookup and AI-powered auto-suggestion",
+          "Declaration submission to HMRC CDS API"
+        ],
+        "features_to_fake_manually": [
+          "Complex Windsor Framework edge cases reviewed by customs consultant before submission",
+          "First 20 declarations manually reviewed to build accuracy baseline"
+        ],
+        "four_week_scope": "Document upload, AI extraction, Windsor Framework decision tree, draft declaration PDF output",
+        "eight_week_scope": "CDS API live submission, commodity code lookup, audit trail, customer declaration history",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Claude API (document extraction), HMRC CDS + Trade Tariff APIs, Fly.io"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Per-declaration fee (£8-15) + monthly subscription £199/month for unlimited volume",
+        "estimated_acv_gbp": 2400,
+        "likely_first_customers": "NI Chamber of Commerce members, Invest NI client companies, NI Food and Drink Association members",
+        "distribution_strategy": "NI Chamber of Commerce partnership, Invest NI SME programme, LinkedIn outreach to NI export managers, NI food sector associations",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-003",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Construction",
+        "geography": "Northern Ireland / United Kingdom",
+        "category": "Job Costing & Invoicing",
+        "tags": ["construction", "job-costing", "CIS", "invoicing", "SME", "trades"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 4, "pain_severity": 4, "frequency": 5, "willingness_to_pay": 4 },
+        "build": { "mvp_simplicity": 3, "data_availability": 4, "ai_leverage": 3, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 4, "sales_cycle_length": 4, "founder_led_sales_viability": 4, "speed_to_first_revenue": 4 },
+        "composite": { "opportunity_score": 4.25, "buildability_score": 3.2, "revenue_velocity_score": 4.0, "overall_weighted_score": 3.85 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.85, "rank": 3, "confidence": "high" }],
+        "rank": 3, "previous_rank": null, "rank_delta": null, "confidence": "high"
+      },
+      "business_analysis": {
+        "problem_statement": "UK construction SMEs (5-50 employees) have no affordable mid-market tool covering job costing, subcontractor management, and CIS-compliant invoicing in one place. Enterprise platforms (Procore, Eque2) cost £500+/month and are built for £20M+ businesses. Generic tools (Xero, QuickBooks) lack job costing depth. BuildersAI is UK-focused but doesn't yet have CIS. Builders use 2-3 disconnected tools or spreadsheets, spending 5-10 hours/week reconciling. April 2026 CIS liability changes intensify this pain.",
+        "target_buyer": "Owner-manager of a building contractor with 5-30 employees doing residential and light commercial work",
+        "trigger_event": "End-of-year tax reconciliation pain, CIS penalty, losing money on jobs without knowing it, accountant recommendation",
+        "current_workaround": "WhatsApp for job updates, spreadsheets for costing, Xero for invoicing (disconnected), accountant manually entering CIS",
+        "competitor_summary": "BuildersAI (no CIS yet, free beta), Procore/Eque2 (too expensive), SimPRO (mid-market but complex), Xero+plugins (fragmented)",
+        "market_maturity": "early",
+        "regulatory_complexity": "medium"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Mobile-first web app: job cards, cost tracking, subcontractor allocation, CIS deduction calculator, invoice generation",
+        "ai_components": ["Auto-categorise costs from receipt photos", "Job margin prediction based on historical similar jobs"],
+        "required_integrations": ["Xero/QuickBooks export for accountants", "HMRC CIS verification", "Open Banking for bank transaction import"],
+        "data_sources": ["User-entered jobs, costs, subcontractor payments", "Bank feeds via Open Banking"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "60-150 GBP",
+        "maintenance_expectations": "Low — mainly accounting software integration maintenance and CIS rule changes"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Job creation with budget and actual cost tracking",
+          "Subcontractor time and material logging",
+          "CIS deduction calculator and payment certificate generation",
+          "Invoice generation with CIS reverse charge VAT handling",
+          "Job profit/loss dashboard"
+        ],
+        "features_to_fake_manually": [
+          "Receipt OCR initially uses manual entry",
+          "Complex VAT scenarios reviewed by accountant partner for first 20 customers"
+        ],
+        "four_week_scope": "Job creation, cost logging, subcontractor payments, basic CIS certificate output",
+        "eight_week_scope": "Invoicing with CIS/VAT, job margin dashboard, Xero export, mobile-responsive",
+        "suggested_tech_stack": "Next.js, PostgreSQL, React Native or PWA for mobile, Xero API, Vercel + Railway"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £49/month (1-5 jobs), £99/month (6-20 jobs), £199/month unlimited",
+        "estimated_acv_gbp": 1188,
+        "likely_first_customers": "NI/UK builders via FMB NI, local builders Facebook groups, accountant referrals from construction-specialist accountants",
+        "distribution_strategy": "FMB NI and FMB UK chapters, construction Facebook groups, construction accountant partnerships, Google Ads for 'construction CIS software UK'",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-004",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Food & Beverage",
+        "geography": "United Kingdom",
+        "category": "Allergen & PPDS Compliance",
+        "tags": ["food-safety", "allergen", "PPDS", "compliance", "SME", "catering", "FSA"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 4, "pain_severity": 4, "frequency": 4, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 4, "data_availability": 4, "ai_leverage": 4, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 4, "founder_led_sales_viability": 4, "speed_to_first_revenue": 4 },
+        "composite": { "opportunity_score": 3.75, "buildability_score": 3.6, "revenue_velocity_score": 3.75, "overall_weighted_score": 3.70 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.70, "rank": 6, "confidence": "medium" }],
+        "rank": 6, "previous_rank": null, "rank_delta": null, "confidence": "medium"
+      },
+      "business_analysis": {
+        "problem_statement": "UK PPDS guidance updated March 2025 requires full ingredient lists with emphasised allergens on all foods prepared and packaged on-site (delis, bakeries, food trucks, school kitchens). 14 allergens must be tracked through all recipes. 400,000+ small food businesses still use handwritten recipe cards, paper ingredient lists, or spreadsheets. A wrong label or missed allergen carries criminal liability under Natasha's Law. FSA enforcement is actively increasing.",
+        "target_buyer": "Owner/manager of a small food business: deli, artisan bakery, small caterer, farm shop food producer, school kitchen manager",
+        "trigger_event": "EHO inspection, customer complaint, FSA guidance change, insurance renewal asking about allergen management",
+        "current_workaround": "Paper recipe books, handwritten ingredient lists, email to supplier for allergen declarations, spreadsheet matrix",
+        "competitor_summary": "Allergen Menu (enterprise), Nutritics (complex and expensive), MyDish (partial), mostly manual — no dominant sub-£50/month player",
+        "market_maturity": "early",
+        "regulatory_complexity": "medium"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: ingredient database with allergen flags, recipe builder, automatic allergen matrix, label generator, QR code for digital allergen disclosure",
+        "ai_components": ["AI ingredient parsing from supplier declaration PDFs", "Recipe ingredient auto-suggestion", "Label text generation compliant with FSA format"],
+        "required_integrations": ["Supplier allergen declaration PDF import", "Label printing API (Dymo/Brother optional)", "QR code generator for digital menus"],
+        "data_sources": ["FSA open allergen database", "User-entered ingredients and recipes", "Supplier uploaded allergen sheets"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "30-80 GBP",
+        "maintenance_expectations": "Low — FSA guidance changes infrequently; main work is keeping ingredient database current"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Ingredient database with 14-allergen flagging",
+          "Recipe builder that auto-generates allergen matrix",
+          "PPDS label generator (PDF/printable)",
+          "Supplier declaration upload with AI allergen extraction",
+          "Menu QR code for digital allergen disclosure"
+        ],
+        "features_to_fake_manually": [
+          "AI extraction of complex supplier PDFs initially reviewed by team",
+          "Custom label design links to Canva template initially"
+        ],
+        "four_week_scope": "Ingredient DB, recipe builder, allergen matrix table, basic label PDF output",
+        "eight_week_scope": "Supplier declaration upload + AI parsing, QR code digital menu, mobile-friendly interface",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Claude API (document extraction), PDFKit for labels, Vercel"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Freemium: free tier (5 recipes), £19/month (unlimited recipes, 1 site), £39/month (multi-site)",
+        "estimated_acv_gbp": 348,
+        "likely_first_customers": "NI/UK delis and artisan bakeries via food business Facebook groups, EHO training events, FSA FHRS scheme pages",
+        "distribution_strategy": "FSA business guidance pages (SEO), EHO officer referrals, food business Facebook groups, local food trade associations",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-005",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Social Care",
+        "geography": "United Kingdom",
+        "category": "CQC Compliance & Audit Readiness",
+        "tags": ["care-home", "CQC", "compliance", "audit", "social-care", "SME"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 3, "pain_severity": 5, "frequency": 5, "willingness_to_pay": 4 },
+        "build": { "mvp_simplicity": 3, "data_availability": 4, "ai_leverage": 4, "competition_saturation": 2, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 4.25, "buildability_score": 3.2, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.50 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.50, "rank": 8, "confidence": "medium" }],
+        "rank": 8, "previous_rank": null, "rank_delta": null, "confidence": "medium"
+      },
+      "business_analysis": {
+        "problem_statement": "CQC's 'Always On' Single Assessment Framework (2023) means care home data must be inspection-ready at any moment. 85% of providers have some digital records but most are disconnected. 30% of social care workers cite excessive paperwork as a reason for leaving. Smaller independent care homes (10-40 beds) cannot afford Access Group or Radar Healthcare yet face the same regulatory burden as large operators.",
+        "target_buyer": "Registered Manager or owner of an independent residential or nursing home with 10-50 beds",
+        "trigger_event": "CQC inspection warning, 'Requires Improvement' rating, new manager onboarding, staff audit failure",
+        "current_workaround": "Spreadsheets for training records, paper-based incident logs, Word documents for policies, care notes in basic digital system not consolidated for audit",
+        "competitor_summary": "Access Care Management (expensive enterprise), Radar Healthcare (mid-market), Nourish (care notes only), no cheap consolidated audit-readiness tool for small operators",
+        "market_maturity": "growing",
+        "regulatory_complexity": "high"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: evidence library with CQC framework mapping, staff training tracker, incident log, audit-readiness score, inspection simulation mode",
+        "ai_components": ["Evidence classification against CQC SAF quality statements", "Audit-readiness gap analysis from uploaded documents", "Incident narrative summarisation for CQC reporting"],
+        "required_integrations": ["CQC Fundamental Standards reference data (public)", "Staff training certificate upload/OCR", "Care notes CSV import (optional)"],
+        "data_sources": ["User-uploaded evidence documents", "CQC inspection report database (public)", "Staff records entered by manager"],
+        "infrastructure_complexity": "medium",
+        "estimated_monthly_infra_cost": "80-180 GBP",
+        "maintenance_expectations": "Medium — CQC assessment framework updates require prompt mapping changes"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "CQC framework evidence library (map documents to each Quality Statement)",
+          "Staff training record tracker with expiry alerts",
+          "Incident log with CQC notification workflow",
+          "Audit-readiness score (percentage of framework evidenced)",
+          "Pre-inspection checklist and simulation mode"
+        ],
+        "features_to_fake_manually": [
+          "Initial framework mapping done manually using CQC guidance",
+          "AI evidence classification reviewed by CQC consultant partner for first cohort"
+        ],
+        "four_week_scope": "Evidence library, framework mapping, staff training tracker, basic audit score",
+        "eight_week_scope": "Incident log, pre-inspection checklist, AI evidence classification",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Claude API (evidence classification), Railway"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £149/month per care home",
+        "estimated_acv_gbp": 1788,
+        "likely_first_customers": "Independent care home owners via Care England, NCA, local care home Facebook groups, CQC public inspection list",
+        "distribution_strategy": "Care England membership, LinkedIn targeting registered managers, Care Show NEC, CQC inspection outcomes as lead signal",
+        "sales_difficulty": "high"
+      }
+    },
+    {
+      "id": "opp-006",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Trade & Logistics",
+        "geography": "United Kingdom",
+        "category": "Customs Document Preparation",
+        "tags": ["customs", "CDS", "export", "import", "AI", "SME", "post-Brexit"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 4, "pain_severity": 5, "frequency": 4, "willingness_to_pay": 5 },
+        "build": { "mvp_simplicity": 2, "data_availability": 4, "ai_leverage": 5, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 4.5, "buildability_score": 3.4, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.65 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.65, "rank": 7, "confidence": "medium" }],
+        "rank": 7, "previous_rank": null, "rank_delta": null, "confidence": "medium"
+      },
+      "business_analysis": {
+        "problem_statement": "UK customs declarations cost an average £48 each. CHIEF decommissioned December 2024; all declarations now require CDS-compatible third-party software. Total customs admin burden for GB-EU trade was £1.8 billion in 2022. SMEs either use expensive intermediaries or make costly manual errors. Post-Brexit rules on commodity codes, rules of origin, and trade agreements are complex and frequently misapplied.",
+        "target_buyer": "Export/import manager at a UK manufacturing or trading SME with 5-100 employees doing 10-200 cross-border shipments per month",
+        "trigger_event": "Customs broker bill shock, failed HMRC audit, incorrect commodity code penalty, CHIEF shutdown requiring new software",
+        "current_workaround": "Customs brokers/freight forwarders (expensive), manual CDS entries (error-prone), spreadsheet tracking",
+        "competitor_summary": "Descartes, Customs4Trade, ChamberCustoms (enterprise/complex), no affordable AI-native SME customs prep tool",
+        "market_maturity": "early",
+        "regulatory_complexity": "very high"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: document upload, AI extraction, CDS declaration draft generation, commodity code lookup, declaration history and audit trail",
+        "ai_components": ["Invoice and packing list parsing via Claude API", "Commodity code suggestion from product description", "Rules of origin determination assistant", "Declaration field validation"],
+        "required_integrations": ["HMRC CDS API (declaration submission)", "HMRC Trade Tariff API (commodity codes, duties)", "HMRC TRE system (reconciliation)"],
+        "data_sources": ["User-uploaded commercial invoices, packing lists, COOs", "HMRC trade tariff (public API)", "User commodity code history"],
+        "infrastructure_complexity": "high",
+        "estimated_monthly_infra_cost": "200-500 GBP",
+        "maintenance_expectations": "High — tariff schedules change, HMRC APIs evolve, trade agreements affect rules of origin"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Upload commercial invoice — AI extracts shipment data",
+          "Commodity code lookup and AI suggestion",
+          "CDS declaration draft generation",
+          "Declaration validation (catch common errors before submission)",
+          "Declaration history and audit trail"
+        ],
+        "features_to_fake_manually": [
+          "Complex rules of origin reviewed by customs consultant",
+          "First 50 declarations reviewed before CDS live submission"
+        ],
+        "four_week_scope": "Document upload, AI extraction, commodity code lookup, draft declaration PDF",
+        "eight_week_scope": "CDS API live submission, declaration validation, audit trail, rules of origin assistant",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Claude API (document extraction), HMRC CDS + Trade Tariff APIs, Fly.io"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Per-declaration fee £5-12 + monthly subscription £149-299/month for high-volume",
+        "estimated_acv_gbp": 3000,
+        "likely_first_customers": "UK Chamber of Commerce members, manufacturers with EU supply chains",
+        "distribution_strategy": "UK/NI Chamber of Commerce partnerships, DBT export support networks, Google Ads for 'customs declaration software UK'",
+        "sales_difficulty": "high"
+      }
+    },
+    {
+      "id": "opp-007",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Cross-Sector HR & Employment",
+        "geography": "United Kingdom",
+        "category": "Right-to-Work Compliance",
+        "tags": ["HR", "right-to-work", "compliance", "immigration", "SME", "employment"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 5, "pain_severity": 4, "frequency": 4, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 4, "data_availability": 4, "ai_leverage": 4, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 4, "sales_cycle_length": 4, "founder_led_sales_viability": 4, "speed_to_first_revenue": 4 },
+        "composite": { "opportunity_score": 4.0, "buildability_score": 3.6, "revenue_velocity_score": 4.0, "overall_weighted_score": 3.88 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.88, "rank": 2, "confidence": "high" }],
+        "rank": 2, "previous_rank": null, "rank_delta": null, "confidence": "high"
+      },
+      "business_analysis": {
+        "problem_statement": "Home Office survey (April 2025): 80% of UK employers answer at least one right-to-work compliance question incorrectly. Civil penalties reach £60,000 per worker. Post-Brexit, the range of acceptable documents expanded (BRP, eVisa, share code) while becoming more complex. High-turnover sectors (hospitality, agriculture, construction, social care) are most exposed. Expiry tracking and repeat verification requirements catch many employers out. Most SMEs track in spreadsheets or not at all.",
+        "target_buyer": "HR manager or owner of a UK SME with 10-200 employees, particularly in hospitality, healthcare, construction, or agriculture",
+        "trigger_event": "Home Office audit, media coverage of RTW fines, insurance renewal, HR software review",
+        "current_workaround": "Spreadsheet with passport copy dates, physical files, mental reminders, or generic HR software that doesn't specifically track RTW expiry",
+        "competitor_summary": "Uright, Xydus, TrustID (mainly biometric), generic HR platforms (Breathe, BambooHR) don't specialise in RTW. Gap for a £20-50/month RTW-specialist tool.",
+        "market_maturity": "early",
+        "regulatory_complexity": "medium"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: employee register, document upload, AI document type recognition, expiry tracking, share code verification, automated renewal alerts",
+        "ai_components": ["Document type recognition (passport, BRP, visa, eVisa QR)", "Expiry date extraction from document images", "Share code status interpretation"],
+        "required_integrations": ["UKVI employer share code check API", "Email/SMS alerts for approaching expiry", "HR system CSV import (Breathe, BambooHR)"],
+        "data_sources": ["User-uploaded employee documents (encrypted at rest)", "UKVI share code API responses", "Employee profiles entered by employer"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "40-100 GBP",
+        "maintenance_expectations": "Medium — Home Office document list updates require prompt changes"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Employee register with RTW document upload",
+          "AI document type recognition and expiry date extraction",
+          "UKVI share code integration for real-time status check",
+          "Expiry alert system (90/60/30 day warnings)",
+          "Audit trail for Home Office inspection readiness",
+          "Document checklist by nationality/status type"
+        ],
+        "features_to_fake_manually": [
+          "Complex immigration status edge cases answered by UKVI-experienced advisor partner",
+          "Document type recognition reviewed manually for first 3 months"
+        ],
+        "four_week_scope": "Employee register, document upload, basic expiry tracking, email alerts",
+        "eight_week_scope": "AI document recognition, share code integration, audit trail export, Home Office guide integration",
+        "suggested_tech_stack": "Next.js, PostgreSQL (encrypted), Claude API (document recognition), UKVI share code API, Railway"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £29/month (up to 25 employees), £59/month (26-100), £99/month (101-250)",
+        "estimated_acv_gbp": 708,
+        "likely_first_customers": "UK SME HR managers via FSB, LinkedIn HR community, UKHospitality",
+        "distribution_strategy": "FSB membership, LinkedIn targeting HR managers in hospitality and construction, Google Ads for 'right to work checking software UK', immigration advisor partnerships",
+        "sales_difficulty": "low"
+      }
+    },
+    {
+      "id": "opp-008",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Agriculture",
+        "geography": "United Kingdom",
+        "category": "Farm Subsidy Evidence Capture",
+        "tags": ["agriculture", "SFI", "DEFRA", "farming", "evidence", "mobile", "subsidy"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 3, "pain_severity": 4, "frequency": 3, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 4, "data_availability": 4, "ai_leverage": 4, "competition_saturation": 4, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 3.25, "buildability_score": 3.8, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.33 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.33, "rank": 9, "confidence": "medium" }],
+        "rank": 9, "previous_rank": null, "rank_delta": null, "confidence": "medium"
+      },
+      "business_analysis": {
+        "problem_statement": "SFI26 (Sustainable Farming Incentive 2026) requires farms to capture and submit rich evidence of farming actions to receive subsidy payments. Most farms under 50ha lack tools to gather, organise, and submit this evidence. DEFRA CLA noted 'most farms currently lack the tools and capacity to gather and organise the evidence SFI26 requires at scale.' Existing farm management software doesn't connect to BCMS/RPA portals. Current SFI IT system has known limitations.",
+        "target_buyer": "Owner-operator of a UK farm under 50ha participating in SFI26 or planning to apply",
+        "trigger_event": "SFI26 application opening, payment query from RPA, farm advisor recommendation",
+        "current_workaround": "Paper records, photos on personal phone (unorganised), spreadsheets, farm advisor helping manually",
+        "competitor_summary": "No SFI26-specific evidence tool identified. Farm management systems (Farmplan, Gatekeeper) are expensive and general. Clear opportunity for a focused SFI evidence capture app.",
+        "market_maturity": "nascent",
+        "regulatory_complexity": "medium"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Mobile-first app: geotagged photo capture, action diary linked to SFI26 action codes, evidence packaging for RPA submission",
+        "ai_components": ["Photo-to-evidence classification (what farming action is depicted)", "Action diary entry assistant from voice notes", "Evidence sufficiency assessment"],
+        "required_integrations": ["DEFRA SFI26 action code reference data (public)", "GPS/mapping for field identification", "RPA API (future)"],
+        "data_sources": ["User-captured geotagged photos", "User action diary entries", "DEFRA SFI26 action specifications (public)"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "30-80 GBP",
+        "maintenance_expectations": "Medium — SFI action codes and evidence requirements update annually"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Geotagged photo capture linked to field/parcel",
+          "Action diary with SFI26 action code selection",
+          "Evidence package builder (group photos/notes by action code)",
+          "PDF export for RPA submission or farm advisor review",
+          "Action calendar showing when evidence is due"
+        ],
+        "features_to_fake_manually": [
+          "RPA submission is initially manual (export PDF, upload to RPA portal)",
+          "Farm parcels set up manually by team for first 10 customers"
+        ],
+        "four_week_scope": "Photo capture, geotagging, action code diary, basic PDF export",
+        "eight_week_scope": "Evidence package builder, RPA-format export, action calendar, mobile PWA",
+        "suggested_tech_stack": "React Native or PWA, PostgreSQL + PostGIS, S3 for photo storage, Claude API, Fly.io"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Annual subscription: £99/year per farm",
+        "estimated_acv_gbp": 99,
+        "likely_first_customers": "UK small farms via NFU, local farming groups, farm advisors, DEFRA Farming Advice Service",
+        "distribution_strategy": "NFU small farm membership, DEFRA FAS newsletter, farm advisor partnerships, county agricultural shows (RUAS in NI)",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-009",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Cross-Sector Health & Safety",
+        "geography": "United Kingdom",
+        "category": "Workplace Safety Compliance",
+        "tags": ["health-safety", "HSE", "compliance", "SME", "risk-assessment", "COSHH"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 4, "pain_severity": 4, "frequency": 4, "willingness_to_pay": 4 },
+        "build": { "mvp_simplicity": 4, "data_availability": 4, "ai_leverage": 3, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 4, "sales_cycle_length": 4, "founder_led_sales_viability": 4, "speed_to_first_revenue": 4 },
+        "composite": { "opportunity_score": 4.0, "buildability_score": 3.4, "revenue_velocity_score": 4.0, "overall_weighted_score": 3.82 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.82, "rank": 5, "confidence": "medium" }],
+        "rank": 5, "previous_rank": null, "rank_delta": null, "confidence": "medium"
+      },
+      "business_analysis": {
+        "problem_statement": "45% of UK SME workplaces have health and safety compliance gaps (ACI Safety, 2026). Small businesses are legally required to maintain written risk assessments, COSHH assessments, fire risk assessments, and PPE records. Most maintain these as Word docs or paper. When HSE inspects, inability to produce current site-specific documents results in improvement notices and fines. The H&S software market is dominated by expensive enterprise tools or generic document libraries that aren't site-specific.",
+        "target_buyer": "Owner or Office Manager of an SME in construction, manufacturing, warehouse, or food production with 5-50 employees",
+        "trigger_event": "HSE inspection, RIDDOR incident, insurance renewal, new contract requiring H&S documentation",
+        "current_workaround": "Generic Word templates from HSE website, paper files, H&S consultant visits (£200-500/day), out-of-date bought document packs",
+        "competitor_summary": "Evotix (enterprise), Alcumus (enterprise), Safesite (US-focused), iAuditor (complex, expensive). Gap for simple £30-80/month UK SME H&S tracker.",
+        "market_maturity": "growing",
+        "regulatory_complexity": "medium"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: risk assessment builder, hazard register, incident log, RIDDOR notification helper, PPE tracker, policy library with renewal reminders",
+        "ai_components": ["Risk assessment generation from job description input", "RIDDOR reportability classifier", "H&S gap analysis from uploaded existing documents"],
+        "required_integrations": ["HSE RIDDOR online notification (helper/link)", "Email alerts for review dates", "Mobile app for site-based incident capture (PWA)"],
+        "data_sources": ["User-entered hazards and controls", "HSE approved code of practice reference data (public)", "Incident records entered by users"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "40-100 GBP",
+        "maintenance_expectations": "Low — UK H&S regulations change slowly; mainly template updates"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Risk assessment builder (activity → hazards → controls → review schedule)",
+          "COSHH assessment builder from SDS upload",
+          "Incident log with RIDDOR check (must report? when? how?)",
+          "PPE record tracker per employee",
+          "H&S policy library with annual review reminders"
+        ],
+        "features_to_fake_manually": [
+          "AI risk assessment drafts reviewed by H&S consultant partner for first cohort",
+          "Industry-specific hazard libraries built manually for top 5 sectors"
+        ],
+        "four_week_scope": "Risk assessment builder, incident log, basic RIDDOR checker, review reminders",
+        "eight_week_scope": "COSHH builder, PPE tracker, policy library, H&S gap score, AI risk assessment generator",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Claude API (risk assessment generation), Vercel + Railway"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £39/month (1-10 employees), £69/month (11-50), £119/month (51-100)",
+        "estimated_acv_gbp": 828,
+        "likely_first_customers": "UK construction and manufacturing SMEs via FSB, HSE training providers, H&S consultant referrals",
+        "distribution_strategy": "FSB, H&S training providers (affiliate), LinkedIn targeting plant/operations managers, Google Ads for 'H&S compliance software UK SME'",
+        "sales_difficulty": "low"
+      }
+    },
+    {
+      "id": "opp-010",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Accounting & Tax",
+        "geography": "United Kingdom",
+        "category": "MTD ITSA Transition",
+        "tags": ["MTD", "ITSA", "HMRC", "accounting", "sole-trader", "landlord", "tax"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 5, "pain_severity": 4, "frequency": 4, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 3, "data_availability": 4, "ai_leverage": 3, "competition_saturation": 2, "maintenance_complexity": 2 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 4.0, "buildability_score": 2.8, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.29 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.29, "rank": 12, "confidence": "low" }],
+        "rank": 12, "previous_rank": null, "rank_delta": null, "confidence": "low"
+      },
+      "business_analysis": {
+        "problem_statement": "From April 2026, sole traders and landlords with >£50k gross income must comply with MTD for Income Tax (quarterly digital submissions). 45% of sole traders feel unprepared. Many HMRC digital interfaces are still in beta. Compliance already costs SMEs £4,500/year. However, Xero, QuickBooks, and FreeAgent are all heavily investing here, making differentiation difficult unless targeting a specific underserved vertical.",
+        "target_buyer": "Self-employed tradesperson, landlord, or sole trader with £50k+ income who doesn't yet use dedicated accounting software",
+        "trigger_event": "April 2026 mandatory deadline, accountant recommendation, HMRC communication",
+        "current_workaround": "Spreadsheets handed to accountant annually, paper receipts box",
+        "competitor_summary": "Xero, FreeAgent, QuickBooks all targeting this market aggressively. High competition — only viable with a specific vertical niche (e.g. tradespeople, landlords).",
+        "market_maturity": "growing",
+        "regulatory_complexity": "high"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Lightweight income/expense tracker with quarterly HMRC MTD submission",
+        "ai_components": ["Receipt categorisation", "Quarterly income/expense summary"],
+        "required_integrations": ["HMRC MTD ITSA API", "Open Banking (TrueLayer)"],
+        "data_sources": ["Bank transactions via Open Banking", "User-uploaded receipts"],
+        "infrastructure_complexity": "medium",
+        "estimated_monthly_infra_cost": "50-150 GBP",
+        "maintenance_expectations": "High — HMRC API still evolving"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Income and expense tracking with category suggestions",
+          "Receipt photo upload and categorisation",
+          "Quarterly MTD ITSA submission to HMRC",
+          "Annual self-assessment preparation report for accountant"
+        ],
+        "features_to_fake_manually": ["HMRC API manual submission assistance for beta customers"],
+        "four_week_scope": "Income/expense tracker, receipt upload, quarterly summary report",
+        "eight_week_scope": "HMRC MTD API live submission, Open Banking integration, accountant sharing portal",
+        "suggested_tech_stack": "Next.js, PostgreSQL, HMRC MTD API, Open Banking (TrueLayer), Vercel"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Annual subscription: £99-149/year",
+        "estimated_acv_gbp": 120,
+        "likely_first_customers": "Sole trader tradespeople via FMB, FSB, LinkedIn targeting landlords",
+        "distribution_strategy": "Accountant partnerships (white-label), FSB, Google Ads",
+        "sales_difficulty": "high"
+      }
+    },
+    {
+      "id": "opp-011",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Recruitment",
+        "geography": "United Kingdom",
+        "category": "IR35 & Contractor Compliance",
+        "tags": ["recruitment", "IR35", "compliance", "contractor", "agency", "onboarding"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 3, "pain_severity": 4, "frequency": 4, "willingness_to_pay": 4 },
+        "build": { "mvp_simplicity": 3, "data_availability": 4, "ai_leverage": 4, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 3.75, "buildability_score": 3.4, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.38 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.38, "rank": 10, "confidence": "medium" }],
+        "rank": 10, "previous_rank": null, "rank_delta": null, "confidence": "medium"
+      },
+      "business_analysis": {
+        "problem_statement": "IR35 threshold changes from April 2025 reclassified more businesses as 'small', reverting contractor IR35 responsibility. Agencies may face negligence liability if they conduct IR35 assessments incorrectly. 80% of employers answer RTW questions incorrectly. Small recruitment agencies still use email for contractor document collection, Word checklists for IR35 status, and spreadsheets for expiry tracking.",
+        "target_buyer": "Director or compliance officer at a UK recruitment agency with 3-50 consultants placing contractors",
+        "trigger_event": "IR35 investigation, RTW audit, professional indemnity insurance renewal, major client compliance requirement",
+        "current_workaround": "Email-based document collection, Word IR35 checklists, spreadsheet expiry tracker",
+        "competitor_summary": "Dedicated compliance software sparse for small agencies; Parasol/Brookson serve large agencies. Gap for simple agency compliance hub.",
+        "market_maturity": "early",
+        "regulatory_complexity": "high"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: contractor onboarding portal, document collection, IR35 questionnaire, compliance dashboard per contractor placement",
+        "ai_components": ["IR35 status assessment from questionnaire responses", "Document completeness checking", "Risk flag generation"],
+        "required_integrations": ["UKVI share code check", "HMRC CEST-equivalent logic", "Email/SMS for contractor document requests"],
+        "data_sources": ["Contractor-uploaded documents", "Questionnaire responses", "Placement records"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "40-100 GBP",
+        "maintenance_expectations": "Medium — IR35 rules change with legislation; RTW document list updates"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Contractor onboarding portal (self-serve document upload)",
+          "IR35 status questionnaire with HMRC CEST-equivalent logic",
+          "RTW document verification and expiry tracker",
+          "Compliance dashboard: green/amber/red per contractor",
+          "Audit trail export per placement"
+        ],
+        "features_to_fake_manually": ["Complex IR35 edge cases reviewed by employment law partner"],
+        "four_week_scope": "Contractor onboarding portal, document upload, basic compliance checklist",
+        "eight_week_scope": "IR35 questionnaire, RTW expiry tracking, compliance dashboard, audit export",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Claude API (risk assessment), UKVI API, Railway"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £99/month (up to 50 contractors), £199/month (51-200)",
+        "estimated_acv_gbp": 1188,
+        "likely_first_customers": "UK recruitment agencies via REC, APSCo, LinkedIn",
+        "distribution_strategy": "REC membership, APSCo, employment lawyer referrals, LinkedIn targeting recruitment agency directors",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-012",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Property",
+        "geography": "United Kingdom",
+        "category": "Lettings Compliance",
+        "tags": ["property", "letting-agent", "compliance", "Gas-Safety", "EICR", "EPC", "landlord"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 3, "pain_severity": 4, "frequency": 3, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 4, "data_availability": 4, "ai_leverage": 2, "competition_saturation": 2, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 4, "founder_led_sales_viability": 4, "speed_to_first_revenue": 4 },
+        "composite": { "opportunity_score": 3.25, "buildability_score": 3.0, "revenue_velocity_score": 3.75, "overall_weighted_score": 3.35 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.35, "rank": 11, "confidence": "low" }],
+        "rank": 11, "previous_rank": null, "rank_delta": null, "confidence": "low"
+      },
+      "business_analysis": {
+        "problem_statement": "Small letting agencies managing 50-500 properties still use spreadsheets to track Gas Safety (annual), EICR (5-year), EPC, deposit protection (30-day deadline), and Right to Rent expiry. Missed certificates result in criminal liability and CMP scheme expulsion. Staff turnover creates handover gaps. LetCompliance.com is emerging but market not yet dominated.",
+        "target_buyer": "Owner or compliance officer at a small letting agency managing 50-500 properties",
+        "trigger_event": "Missed certificate deadline resulting in fine, professional indemnity renewal, ARLA Propertymark compliance audit",
+        "current_workaround": "Spreadsheet tracking, email reminders from memory, paper filing",
+        "competitor_summary": "LetCompliance (emerging), Landlord Studio (broader), Arthur Online (complex). Market not yet fully served at the small agency level.",
+        "market_maturity": "early",
+        "regulatory_complexity": "medium"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: property register, certificate upload, expiry tracking, automated email alerts, landlord portal",
+        "ai_components": ["Certificate date extraction from uploaded PDF/image"],
+        "required_integrations": ["Email alert system", "Rightmove/Zoopla API for property import (optional)"],
+        "data_sources": ["User-uploaded certificates", "Property register"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "20-60 GBP",
+        "maintenance_expectations": "Low — regulations change infrequently"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Property register with tenancy details",
+          "Certificate upload and expiry tracking (Gas Safety, EICR, EPC)",
+          "Deposit protection deadline tracker",
+          "Right to Rent expiry tracker per tenant",
+          "Traffic light compliance dashboard per property"
+        ],
+        "features_to_fake_manually": ["Certificate date extraction initially manual entry"],
+        "four_week_scope": "Property register, certificate upload, expiry dashboard, email alerts",
+        "eight_week_scope": "Full compliance dashboard, deposit + RTR tracking, AI date extraction, landlord portal",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Vercel"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £29/month (up to 50 properties), £59/month (51-200), £99/month (201-500)",
+        "estimated_acv_gbp": 708,
+        "likely_first_customers": "Small letting agents via ARLA Propertymark, PropertyMark events, LinkedIn",
+        "distribution_strategy": "ARLA Propertymark membership, property management Facebook groups, LinkedIn, Google Ads for 'letting agent compliance software'",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-013",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Agri-Food",
+        "geography": "Northern Ireland",
+        "category": "ESG Supplier Data",
+        "tags": ["agri-food", "ESG", "traceability", "NI", "supply-chain", "retailer"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 2, "pain_severity": 3, "frequency": 2, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 3, "data_availability": 3, "ai_leverage": 3, "competition_saturation": 4, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 2 },
+        "composite": { "opportunity_score": 2.5, "buildability_score": 3.2, "revenue_velocity_score": 2.75, "overall_weighted_score": 2.80 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 2.80, "rank": 16, "confidence": "low" }],
+        "rank": 16, "previous_rank": null, "rank_delta": null, "confidence": "low"
+      },
+      "business_analysis": {
+        "problem_statement": "NI food producers supplying major retailers (Tesco, Sainsbury's, Musgrave) face increasing ESG data requests as UK SRS mandates large companies to collect supplier sustainability data from 2026-2027. Small NI food processors lack affordable tools to demonstrate sustainability credentials and risk losing supply contracts.",
+        "target_buyer": "Owner or production manager at an NI food processing SME supplying a major retailer",
+        "trigger_event": "Retailer ESG questionnaire, tender requirement for sustainability data, NI Food & Drink Association guidance",
+        "current_workaround": "Responding to retailer questionnaires manually via email/spreadsheet",
+        "competitor_summary": "Sedex (large enterprise), IntegriChain (global). Market too nascent for clear SME winner.",
+        "market_maturity": "nascent",
+        "regulatory_complexity": "low"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: ESG data collection wizard, sustainability metric tracker, supplier pack PDF generator",
+        "ai_components": ["ESG questionnaire response drafting from company data", "Carbon footprint estimation from energy/transport inputs"],
+        "required_integrations": ["Retailer questionnaire format adapters (manually built initially)", "Carbon database APIs"],
+        "data_sources": ["User-entered energy, transport, waste data", "Retailer questionnaire templates"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "20-50 GBP",
+        "maintenance_expectations": "Medium — retailer requirements change; carbon accounting standards evolving"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "ESG data collection wizard",
+          "Retailer-specific questionnaire format mapping",
+          "Sustainability credentials PDF",
+          "Year-over-year tracking"
+        ],
+        "features_to_fake_manually": ["Retailer questionnaire mapping done manually per retailer"],
+        "four_week_scope": "Data collection wizard, basic metrics dashboard, PDF export",
+        "eight_week_scope": "Retailer format mapping, year-over-year tracking, carbon estimation",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Vercel"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Annual subscription: £299-599/year per food producer",
+        "estimated_acv_gbp": 450,
+        "likely_first_customers": "NI Food & Drink Association members, Invest NI food sector clients",
+        "distribution_strategy": "NI Food & Drink Association, Invest NI food sector programme",
+        "sales_difficulty": "high"
+      }
+    },
+    {
+      "id": "opp-014",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Healthcare",
+        "geography": "United Kingdom",
+        "category": "NHS Dental Practice Management",
+        "tags": ["dental", "NHS", "UDA", "FP17", "compliance", "practice-management"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 3, "pain_severity": 4, "frequency": 5, "willingness_to_pay": 4 },
+        "build": { "mvp_simplicity": 3, "data_availability": 4, "ai_leverage": 2, "competition_saturation": 2, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 4.0, "buildability_score": 2.8, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.29 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.29, "rank": 12, "confidence": "low" }],
+        "rank": 12, "previous_rank": null, "rank_delta": null, "confidence": "low"
+      },
+      "business_analysis": {
+        "problem_statement": "NHS dental contract changes effective April 2026. Practices must track UDA performance against NHS contract targets to avoid clawback. Many independent practices track UDA via spreadsheet or mental arithmetic. Failure to hit targets = NHS reclaims payment; over-delivery = unpaid. Full PMS (SOE, Dentally) costs £300-1000+/month and is complex to migrate to.",
+        "target_buyer": "Practice manager or principal dentist at an independent NHS dental practice with 1-3 chairs",
+        "trigger_event": "NHS contract review, UDA performance warning from ICB, April 2026 contract changes",
+        "current_workaround": "Spreadsheet UDA tracking, mental targets per dentist, end-of-year scramble",
+        "competitor_summary": "SOE, Dentally, R4 (all full PMS at £300-1000+/month). No lightweight standalone UDA tracker.",
+        "market_maturity": "growing",
+        "regulatory_complexity": "high"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: contract parameter setup, daily UDA logging, pacing dashboard, clawback risk alert, monthly NHS return preparation",
+        "ai_components": ["NHS band/UDA classification assistant from treatment description"],
+        "required_integrations": ["NHS BSA reporting (export helper)", "FP17 form data import (optional)"],
+        "data_sources": ["User-entered daily treatments", "NHS contract parameters"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "30-80 GBP",
+        "maintenance_expectations": "Medium — NHS contract terms change annually"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "NHS contract setup (annual UDA target, band values)",
+          "Daily treatment logging with UDA calculation",
+          "Pacing dashboard (on track / at risk)",
+          "Dentist performance breakdown",
+          "Monthly summary report for NHS submission prep"
+        ],
+        "features_to_fake_manually": ["FP17 submission still done via NHSBSA portal"],
+        "four_week_scope": "Contract setup, daily logging, basic pacing dashboard",
+        "eight_week_scope": "Dentist breakdown, monthly reports, clawback risk alert, mobile-friendly",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Vercel"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £49-99/month per practice",
+        "estimated_acv_gbp": 888,
+        "likely_first_customers": "Independent NHS dental practices via BDA, local dental committee contacts",
+        "distribution_strategy": "BDA Young Dentist network, LDC meetings, BDJ advertising, LinkedIn targeting practice managers",
+        "sales_difficulty": "high"
+      }
+    },
+    {
+      "id": "opp-015",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Transport & Logistics",
+        "geography": "United Kingdom",
+        "category": "Light Commercial Vehicle Tachograph Compliance",
+        "tags": ["logistics", "tachograph", "compliance", "van", "DVSA", "haulage", "SME"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 3, "pain_severity": 3, "frequency": 4, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 3, "data_availability": 3, "ai_leverage": 3, "competition_saturation": 2, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 3.25, "buildability_score": 2.8, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.03 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.03, "rank": 15, "confidence": "low" }],
+        "rank": 15, "previous_rank": null, "rank_delta": null, "confidence": "low"
+      },
+      "business_analysis": {
+        "problem_statement": "From 2026, vehicles between 2.5T and 3.5T used for international transport now require smart tachographs. Thousands of UK small operators (couriers, tradespeople, small food distributors doing Ireland-UK runs) are newly in scope. Existing tachograph compliance software is complex and expensive, built for HGV operators.",
+        "target_buyer": "Owner-operator of a small UK courier or delivery company doing international cross-border runs with 2.5-3.5T vans",
+        "trigger_event": "DVSA roadside check, new vehicle purchase with smart tachograph, freight customer requiring compliance documentation",
+        "current_workaround": "Manual driver log books (now insufficient for international), Excel tracking",
+        "competitor_summary": "Convey, Tachomaster (built for HGV, overly complex for 2.5T operators)",
+        "market_maturity": "nascent",
+        "regulatory_complexity": "medium"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Mobile app: tachograph data upload (via USB reader or manual entry), driver hours calculator, DVSA compliance report",
+        "ai_components": ["Driver hours infringement detection from tachograph data"],
+        "required_integrations": ["Smart tachograph data file parsing (DTG format)", "DVSA compliance check reference rules"],
+        "data_sources": ["Smart tachograph data files", "Driver schedule entered by operator"],
+        "infrastructure_complexity": "medium",
+        "estimated_monthly_infra_cost": "30-80 GBP",
+        "maintenance_expectations": "Medium — DVSA rules and tachograph data formats update periodically"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Driver hours tracking (manual entry or file upload)",
+          "DVSA driving hours rules calculator",
+          "Rest period compliance checker",
+          "Infringement report",
+          "Digital download log"
+        ],
+        "features_to_fake_manually": ["Complex tachograph file parsing done by team per customer initially"],
+        "four_week_scope": "Manual hours entry, rules calculator, basic compliance report",
+        "eight_week_scope": "File upload parsing, driver management, infringement alerts, DVSA-format report",
+        "suggested_tech_stack": "React Native, PostgreSQL, Railway"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Monthly subscription: £19/month per driver",
+        "estimated_acv_gbp": 456,
+        "likely_first_customers": "UK van operators doing Ireland-UK runs via Road Haulage Association, NI-based small distribution firms",
+        "distribution_strategy": "Road Haulage Association (RHA), Logistics UK, NI courier Facebook groups",
+        "sales_difficulty": "medium"
+      }
+    },
+    {
+      "id": "opp-016",
+      "metadata": {
+        "date_discovered": "2026-05-21",
+        "last_updated": "2026-05-21",
+        "industry": "Cross-Sector",
+        "geography": "United Kingdom",
+        "category": "SME ESG Supply Chain Reporting",
+        "tags": ["ESG", "carbon", "sustainability", "supply-chain", "SME", "procurement"],
+        "status": "active"
+      },
+      "scoring": {
+        "market": { "market_size": 4, "pain_severity": 3, "frequency": 2, "willingness_to_pay": 3 },
+        "build": { "mvp_simplicity": 4, "data_availability": 4, "ai_leverage": 3, "competition_saturation": 3, "maintenance_complexity": 3 },
+        "sales": { "ease_of_reaching_buyers": 3, "sales_cycle_length": 3, "founder_led_sales_viability": 3, "speed_to_first_revenue": 3 },
+        "composite": { "opportunity_score": 3.0, "buildability_score": 3.4, "revenue_velocity_score": 3.0, "overall_weighted_score": 3.12 },
+        "history": [{ "date": "2026-05-21", "overall_weighted_score": 3.12, "rank": 14, "confidence": "low" }],
+        "rank": 14, "previous_rank": null, "rank_delta": null, "confidence": "low"
+      },
+      "business_analysis": {
+        "problem_statement": "70%+ large UK companies say they will require more detailed ESG data from suppliers by 2026. UK SRS published February 2026. SMEs face indirect supply chain pressure: losing contracts if they cannot provide carbon, energy, and governance data to procurement teams. Most SMEs have no system and respond to each questionnaire ad-hoc.",
+        "target_buyer": "Owner or operations manager of a UK SME supplying large corporate customers who are beginning to issue ESG questionnaires",
+        "trigger_event": "Procurement questionnaire from major customer, ESG requirement in tender specification, ISO 14001 audit prep",
+        "current_workaround": "Manually answering procurement questionnaires, hiring sustainability consultant for one-off exercises",
+        "competitor_summary": "Sedex (large enterprise), EcoVadis (expensive), Zevero (UK carbon, emerging). Gap for simple £50-100/month SME tool.",
+        "market_maturity": "nascent",
+        "regulatory_complexity": "low"
+      },
+      "technical_analysis": {
+        "suggested_architecture": "Web app: ESG data input wizard, metrics tracking, questionnaire response generator, carbon footprint calculator",
+        "ai_components": ["Questionnaire auto-fill from stored company data", "Carbon footprint estimation from activity inputs"],
+        "required_integrations": ["Carbon database (UK BEIS conversion factors)", "Sedex/EcoVadis export format (optional)"],
+        "data_sources": ["User-entered energy, transport, waste data", "BEIS emission factors (public)"],
+        "infrastructure_complexity": "low",
+        "estimated_monthly_infra_cost": "20-60 GBP",
+        "maintenance_expectations": "Low — BEIS emission factors update annually"
+      },
+      "mvp_definition": {
+        "core_features": [
+          "Annual ESG data collection wizard (energy, water, waste, carbon)",
+          "Carbon footprint calculator using BEIS emission factors",
+          "Supplier ESG profile PDF for customer submission",
+          "Questionnaire answer bank (answer once, reuse)"
+        ],
+        "features_to_fake_manually": ["Customer questionnaire mapping done manually per customer format"],
+        "four_week_scope": "Data collection wizard, carbon calculator, basic PDF report",
+        "eight_week_scope": "Answer bank, multi-customer questionnaire mapping, year-over-year tracking",
+        "suggested_tech_stack": "Next.js, PostgreSQL, Vercel"
+      },
+      "commercial_analysis": {
+        "pricing_model": "Annual subscription: £299/year per SME",
+        "estimated_acv_gbp": 299,
+        "likely_first_customers": "UK manufacturing SMEs via Make UK, FSB, local chambers of commerce",
+        "distribution_strategy": "Make UK, FSB, chambers of commerce, LinkedIn targeting operations managers",
+        "sales_difficulty": "medium"
+      }
+    }
+  ]
+}

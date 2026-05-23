@@ -33,7 +33,6 @@ type RequestFact struct {
 	StatusCode      int32                  `protobuf:"varint,6,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
 	LatencyMs       int32                  `protobuf:"varint,7,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
 	UserAgentFamily string                 `protobuf:"bytes,8,opt,name=user_agent_family,json=userAgentFamily,proto3" json:"user_agent_family,omitempty"`
-	TenantId        string                 `protobuf:"bytes,9,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -124,11 +123,123 @@ func (x *RequestFact) GetUserAgentFamily() string {
 	return ""
 }
 
-func (x *RequestFact) GetTenantId() string {
+// TraceSample represents a sampled distributed trace span.
+// Stored separately from RequestFact to avoid adding high-cardinality
+// dimensions to the core fact table. Short retention (7 days).
+type TraceSample struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TraceId       string                 `protobuf:"bytes,1,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`                  // UUIDv7 — shared across all spans in a trace
+	SpanId        string                 `protobuf:"bytes,2,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`                     // 16-char lowercase hex
+	ParentSpanId  string                 `protobuf:"bytes,3,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"` // empty for root span
+	EventTime     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`            // when the span started
+	Service       string                 `protobuf:"bytes,5,opt,name=service,proto3" json:"service,omitempty"`
+	Method        string                 `protobuf:"bytes,6,opt,name=method,proto3" json:"method,omitempty"`                                                                        // HTTP method
+	PathTemplate  string                 `protobuf:"bytes,7,opt,name=path_template,json=pathTemplate,proto3" json:"path_template,omitempty"`                                        // sanitized path template
+	StatusCode    int32                  `protobuf:"varint,8,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`                                             // HTTP status (100-599)
+	LatencyMs     int32                  `protobuf:"varint,9,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`                                                // span duration in ms (>= 0)
+	Tags          map[string]string      `protobuf:"bytes,10,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // max 10 key-value pairs
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TraceSample) Reset() {
+	*x = TraceSample{}
+	mi := &file_proto_gravix_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TraceSample) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TraceSample) ProtoMessage() {}
+
+func (x *TraceSample) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_gravix_proto_msgTypes[1]
 	if x != nil {
-		return x.TenantId
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TraceSample.ProtoReflect.Descriptor instead.
+func (*TraceSample) Descriptor() ([]byte, []int) {
+	return file_proto_gravix_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *TraceSample) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
 	}
 	return ""
+}
+
+func (x *TraceSample) GetSpanId() string {
+	if x != nil {
+		return x.SpanId
+	}
+	return ""
+}
+
+func (x *TraceSample) GetParentSpanId() string {
+	if x != nil {
+		return x.ParentSpanId
+	}
+	return ""
+}
+
+func (x *TraceSample) GetEventTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EventTime
+	}
+	return nil
+}
+
+func (x *TraceSample) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *TraceSample) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *TraceSample) GetPathTemplate() string {
+	if x != nil {
+		return x.PathTemplate
+	}
+	return ""
+}
+
+func (x *TraceSample) GetStatusCode() int32 {
+	if x != nil {
+		return x.StatusCode
+	}
+	return 0
+}
+
+func (x *TraceSample) GetLatencyMs() int32 {
+	if x != nil {
+		return x.LatencyMs
+	}
+	return 0
+}
+
+func (x *TraceSample) GetTags() map[string]string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
 }
 
 // ServiceEvent represents a generic lifecycle or operational event.
@@ -141,14 +252,13 @@ type ServiceEvent struct {
 	EntityId      string                 `protobuf:"bytes,5,opt,name=entity_id,json=entityId,proto3" json:"entity_id,omitempty"` // Added
 	Message       string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`
 	Properties    map[string]string      `protobuf:"bytes,7,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	TenantId      string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ServiceEvent) Reset() {
 	*x = ServiceEvent{}
-	mi := &file_proto_gravix_proto_msgTypes[1]
+	mi := &file_proto_gravix_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -160,7 +270,7 @@ func (x *ServiceEvent) String() string {
 func (*ServiceEvent) ProtoMessage() {}
 
 func (x *ServiceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_gravix_proto_msgTypes[1]
+	mi := &file_proto_gravix_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -173,7 +283,7 @@ func (x *ServiceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceEvent.ProtoReflect.Descriptor instead.
 func (*ServiceEvent) Descriptor() ([]byte, []int) {
-	return file_proto_gravix_proto_rawDescGZIP(), []int{1}
+	return file_proto_gravix_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ServiceEvent) GetEventId() string {
@@ -225,18 +335,11 @@ func (x *ServiceEvent) GetProperties() map[string]string {
 	return nil
 }
 
-func (x *ServiceEvent) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
-	}
-	return ""
-}
-
 var File_proto_gravix_proto protoreflect.FileDescriptor
 
 const file_proto_gravix_proto_rawDesc = "" +
 	"\n" +
-	"\x12proto/gravix.proto\x12\tgravix.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x02\n" +
+	"\x12proto/gravix.proto\x12\tgravix.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa6\x02\n" +
 	"\vRequestFact\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x129\n" +
 	"\n" +
@@ -248,8 +351,25 @@ const file_proto_gravix_proto_rawDesc = "" +
 	"statusCode\x12\x1d\n" +
 	"\n" +
 	"latency_ms\x18\a \x01(\x05R\tlatencyMs\x12*\n" +
-	"\x11user_agent_family\x18\b \x01(\tR\x0fuserAgentFamily\x12\x1b\n" +
-	"\ttenant_id\x18\t \x01(\tR\btenantId\"\xf9\x02\n" +
+	"\x11user_agent_family\x18\b \x01(\tR\x0fuserAgentFamily\"\xa8\x03\n" +
+	"\vTraceSample\x12\x19\n" +
+	"\btrace_id\x18\x01 \x01(\tR\atraceId\x12\x17\n" +
+	"\aspan_id\x18\x02 \x01(\tR\x06spanId\x12$\n" +
+	"\x0eparent_span_id\x18\x03 \x01(\tR\fparentSpanId\x129\n" +
+	"\n" +
+	"event_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\teventTime\x12\x18\n" +
+	"\aservice\x18\x05 \x01(\tR\aservice\x12\x16\n" +
+	"\x06method\x18\x06 \x01(\tR\x06method\x12#\n" +
+	"\rpath_template\x18\a \x01(\tR\fpathTemplate\x12\x1f\n" +
+	"\vstatus_code\x18\b \x01(\x05R\n" +
+	"statusCode\x12\x1d\n" +
+	"\n" +
+	"latency_ms\x18\t \x01(\x05R\tlatencyMs\x124\n" +
+	"\x04tags\x18\n" +
+	" \x03(\v2 .gravix.v1.TraceSample.TagsEntryR\x04tags\x1a7\n" +
+	"\tTagsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdc\x02\n" +
 	"\fServiceEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x129\n" +
 	"\n" +
@@ -261,8 +381,7 @@ const file_proto_gravix_proto_rawDesc = "" +
 	"\amessage\x18\x06 \x01(\tR\amessage\x12G\n" +
 	"\n" +
 	"properties\x18\a \x03(\v2'.gravix.v1.ServiceEvent.PropertiesEntryR\n" +
-	"properties\x12\x1b\n" +
-	"\ttenant_id\x18\b \x01(\tR\btenantId\x1a=\n" +
+	"properties\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B=Z;github.com/lgreene/gravix-dashboards/gen/gravix/v1;gravixv1b\x06proto3"
@@ -279,22 +398,26 @@ func file_proto_gravix_proto_rawDescGZIP() []byte {
 	return file_proto_gravix_proto_rawDescData
 }
 
-var file_proto_gravix_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_proto_gravix_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_proto_gravix_proto_goTypes = []any{
 	(*RequestFact)(nil),           // 0: gravix.v1.RequestFact
-	(*ServiceEvent)(nil),          // 1: gravix.v1.ServiceEvent
-	nil,                           // 2: gravix.v1.ServiceEvent.PropertiesEntry
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*TraceSample)(nil),           // 1: gravix.v1.TraceSample
+	(*ServiceEvent)(nil),          // 2: gravix.v1.ServiceEvent
+	nil,                           // 3: gravix.v1.TraceSample.TagsEntry
+	nil,                           // 4: gravix.v1.ServiceEvent.PropertiesEntry
+	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
 }
 var file_proto_gravix_proto_depIdxs = []int32{
-	3, // 0: gravix.v1.RequestFact.event_time:type_name -> google.protobuf.Timestamp
-	3, // 1: gravix.v1.ServiceEvent.event_time:type_name -> google.protobuf.Timestamp
-	2, // 2: gravix.v1.ServiceEvent.properties:type_name -> gravix.v1.ServiceEvent.PropertiesEntry
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	5, // 0: gravix.v1.RequestFact.event_time:type_name -> google.protobuf.Timestamp
+	5, // 1: gravix.v1.TraceSample.event_time:type_name -> google.protobuf.Timestamp
+	3, // 2: gravix.v1.TraceSample.tags:type_name -> gravix.v1.TraceSample.TagsEntry
+	5, // 3: gravix.v1.ServiceEvent.event_time:type_name -> google.protobuf.Timestamp
+	4, // 4: gravix.v1.ServiceEvent.properties:type_name -> gravix.v1.ServiceEvent.PropertiesEntry
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_proto_gravix_proto_init() }
@@ -308,7 +431,7 @@ func file_proto_gravix_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_gravix_proto_rawDesc), len(file_proto_gravix_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

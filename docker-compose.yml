@@ -66,6 +66,37 @@ services:
     networks:
       - backend
 
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    container_name: gravix-gateway
+    restart: always
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required - set it in .env}
+      - CUBE_API_URL=http://cube:4000/cubejs-api/v1/load
+      - RAW_DATA_DIR=/app/data/raw
+      - INGESTION_URL=http://ingestion:8080
+    depends_on:
+      cube:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8091/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - frontend
+      - backend
+
   init-minio:
     image: minio/mc:RELEASE.2024-03-13T23-51-57Z
     container_name: gravix-init-minio
@@ -87,7 +118,7 @@ services:
       - backend
 
   init-trino:
-    image: trinodb/trino:351
+    image: trinodb/trino:435
     container_name: gravix-init-trino
     entrypoint: /bin/sh
     command:
@@ -126,6 +157,19 @@ services:
             format = 'PARQUET',
             external_location = 's3a://gravix/warehouse/service_events_daily/'
           )"
+        trino --server trino:8080 --execute "
+          CREATE TABLE IF NOT EXISTS gravix.raw.service_events_detail (
+            tenant_id VARCHAR,
+            event_time VARCHAR,
+            service VARCHAR,
+            event_type VARCHAR,
+            entity_id VARCHAR,
+            message VARCHAR,
+            properties VARCHAR
+          ) WITH (
+            format = 'PARQUET',
+            external_location = 's3a://gravix/warehouse/service_events_detail/'
+          )"
         echo "Trino tables initialized."
     depends_on:
       trino:
@@ -136,7 +180,7 @@ services:
       - backend
 
   trino:
-    image: trinodb/trino:351
+    image: trinodb/trino:435
     container_name: gravix-trino
     ports:
       - "127.0.0.1:8081:8080" # Trino UI — localhost only
@@ -177,7 +221,7 @@ services:
       - "4000:4000"
     environment:
       - CUBEJS_DB_TYPE=trino
-      - CUBEJS_DB_HOST=gravix-trino
+      - CUBEJS_DB_HOST=trino
       - CUBEJS_DB_PORT=8080
       - CUBEJS_DB_PRESTO_CATALOG=gravix
       - CUBEJS_DB_NAME=raw
@@ -308,6 +352,39 @@ services:
     networks:
       - backend
 
+  service-events-detail-rollup:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-events-detail-rollup
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Starting service-events-detail rollup cron (every hour)..."
+        while true; do
+          echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Running service-events-detail rollup..."
+          ./service-events-detail-rollup \
+            -input-dir ./data/raw/service_events \
+            -output-dir ./data/warehouse/service_events_detail || echo "Rollup failed, will retry next cycle"
+          sleep 3600
+        done
+    volumes:
+      - ./data:/app/data
+    environment:
+      - S3_ENDPOINT=http://minio:9000
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET:-gravix}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+    depends_on:
+      minio:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
+
   purge:
     build:
       context: .
@@ -381,6 +458,30 @@ services:
       timeout: 3s
       retries: 3
     mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - backend
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: gravix-postgres
+    profiles: ["postgres"]
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-gravix}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gravix}
+      - POSTGRES_DB=${POSTGRES_DB:-gravix}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gravix}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    mem_limit: 512m
     cpus: 0.5
     networks:
       - backend

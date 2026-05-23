@@ -1,0 +1,69 @@
+name: SDK Codegen Check
+
+on:
+  push:
+    paths:
+      - 'services/gateway/openapi.json'
+      - 'scripts/generate-sdk-types.sh'
+      - 'sdk/node/src/generated-types.ts'
+      - 'sdk/python/gravix/generated_types.py'
+  pull_request:
+    paths:
+      - 'services/gateway/openapi.json'
+      - 'scripts/generate-sdk-types.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  check-codegen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Regenerate SDK types
+        run: ./scripts/generate-sdk-types.sh
+      - name: Check for uncommitted changes
+        run: |
+          if ! git diff --exit-code sdk/node/src/generated-types.ts sdk/python/gravix/generated_types.py; then
+            echo "::error::Generated SDK types are out of date. Run ./scripts/generate-sdk-types.sh and commit the results."
+            exit 1
+          fi
+
+  validate-openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate OpenAPI spec
+        run: |
+          python3 -c "
+          import json, sys
+          with open('services/gateway/openapi.json') as f:
+              spec = json.load(f)
+          paths = spec.get('paths', {})
+          schemas = spec.get('components', {}).get('schemas', {})
+          print(f'OpenAPI {spec[\"openapi\"]}: {len(paths)} paths, {len(schemas)} schemas')
+          # Basic validation
+          assert 'info' in spec, 'Missing info section'
+          assert len(paths) > 0, 'No paths defined'
+          assert len(schemas) > 0, 'No schemas defined'
+          print('Validation passed')
+          "
+
+  typecheck-node-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install and type-check
+        working-directory: sdk/node
+        run: |
+          npm ci
+          npx tsc --noEmit

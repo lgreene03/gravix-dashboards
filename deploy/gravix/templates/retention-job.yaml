@@ -19,7 +19,7 @@ spec:
         metadata:
           annotations:
             prometheus.io/scrape: "true"
-            prometheus.io/port: "9090"
+            prometheus.io/port: "9091"
             prometheus.io/path: "/metrics"
         spec:
           serviceAccountName: {{ .Release.Name }}-jobs
@@ -44,6 +44,14 @@ spec:
                 {{- if eq (default "manual" .Values.retentionJob.mode) "manual" }}
                 - "--retention-days"
                 - "{{ .Values.retentionJob.retentionDays }}"
+                {{- end }}
+                {{- if gt (int (default 0 .Values.retentionJob.warmAfterDays)) 0 }}
+                - "--warm-after-days"
+                - "{{ .Values.retentionJob.warmAfterDays }}"
+                {{- end }}
+                {{- if gt (int (default 0 .Values.retentionJob.coldAfterDays)) 0 }}
+                - "--cold-after-days"
+                - "{{ .Values.retentionJob.coldAfterDays }}"
                 {{- end }}
               env:
                 - name: TENANT_DB_PATH

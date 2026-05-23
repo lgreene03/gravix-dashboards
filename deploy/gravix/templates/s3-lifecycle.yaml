@@ -1,0 +1,87 @@
+{{- if .Values.s3Lifecycle.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gravix.fullname" . }}-s3-lifecycle
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  lifecycle.json: |
+    {
+      "Rules": [
+        {
+          "ID": "gravix-warm-transition",
+          "Status": "Enabled",
+          "Filter": {
+            "Prefix": "raw/"
+          },
+          "Transitions": [
+            {
+              "Days": {{ .Values.s3Lifecycle.warmAfterDays }},
+              "StorageClass": "STANDARD_IA"
+            }
+          ]
+        },
+        {
+          "ID": "gravix-cold-transition",
+          "Status": "Enabled",
+          "Filter": {
+            "Prefix": "raw/"
+          },
+          "Transitions": [
+            {
+              "Days": {{ .Values.s3Lifecycle.coldAfterDays }},
+              "StorageClass": "GLACIER"
+            }
+          ]
+        },
+        {
+          "ID": "gravix-expiration",
+          "Status": "Enabled",
+          "Filter": {
+            "Prefix": "raw/"
+          },
+          "Expiration": {
+            "Days": {{ .Values.s3Lifecycle.deleteAfterDays }}
+          }
+        },
+        {
+          "ID": "gravix-warehouse-warm",
+          "Status": "Enabled",
+          "Filter": {
+            "Prefix": "warehouse/"
+          },
+          "Transitions": [
+            {
+              "Days": {{ .Values.s3Lifecycle.warmAfterDays }},
+              "StorageClass": "STANDARD_IA"
+            }
+          ]
+        },
+        {
+          "ID": "gravix-warehouse-cold",
+          "Status": "Enabled",
+          "Filter": {
+            "Prefix": "warehouse/"
+          },
+          "Transitions": [
+            {
+              "Days": {{ .Values.s3Lifecycle.coldAfterDays }},
+              "StorageClass": "GLACIER"
+            }
+          ]
+        },
+        {
+          "ID": "gravix-warehouse-expiration",
+          "Status": "Enabled",
+          "Filter": {
+            "Prefix": "warehouse/"
+          },
+          "Expiration": {
+            "Days": {{ .Values.s3Lifecycle.deleteAfterDays }}
+          }
+        }
+      ]
+    }
+{{- end }}

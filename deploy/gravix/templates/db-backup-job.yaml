@@ -1,0 +1,97 @@
+{{- if .Values.dbBackup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-db-backup
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/component: db-backup
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  schedule: {{ .Values.dbBackup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: gravix
+            app.kubernetes.io/component: db-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: db-backup
+              {{- if eq (.Values.gateway.dbDriver | default "sqlite") "postgres" }}
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+                  BACKUP_FILE="/backups/gravix-pg-${TIMESTAMP}.sql.gz"
+                  echo "Starting PostgreSQL backup..."
+                  pg_dump "$DATABASE_URL" | gzip > "${BACKUP_FILE}"
+                  echo "Backup complete: ${BACKUP_FILE}"
+                  # Clean up old backups
+                  find /backups -name "gravix-pg-*.sql.gz" -mtime +{{ .Values.dbBackup.retentionDays }} -delete
+                  echo "Cleanup complete (retention: {{ .Values.dbBackup.retentionDays }} days)"
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-secrets
+                      key: database-url
+              {{- else }}
+              image: alpine:3.19
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+                  BACKUP_FILE="/backups/gravix-sqlite-${TIMESTAMP}.db"
+                  DB_PATH="{{ .Values.gateway.tenantDBPath | default "/data/gravix.db" }}"
+                  echo "Starting SQLite backup..."
+                  cp "${DB_PATH}" "${BACKUP_FILE}"
+                  # Also backup WAL if present
+                  [ -f "${DB_PATH}-wal" ] && cp "${DB_PATH}-wal" "${BACKUP_FILE}-wal"
+                  echo "Backup complete: ${BACKUP_FILE}"
+                  # Clean up old backups
+                  find /backups -name "gravix-sqlite-*.db*" -mtime +{{ .Values.dbBackup.retentionDays }} -delete
+                  echo "Cleanup complete (retention: {{ .Values.dbBackup.retentionDays }} days)"
+              {{- end }}
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: data
+              {{- if .Values.gateway.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ .Release.Name }}-gateway-pvc
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ .Release.Name }}-db-backup-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-db-backup-pvc
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/component: db-backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+{{- end }}

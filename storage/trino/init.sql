@@ -29,9 +29,9 @@ CREATE TABLE IF NOT EXISTS gravix.raw.service_events (
     external_location = '/data/raw/service_events'
 );
 -- Derived Metrics (Parquet)
--- The rollup job writes to /data/warehouse/request_metrics_minute/event_day=YYYY-MM-DD/*.parquet
--- Using non-partitioned table with recursive directory scanning to avoid partition sync issues
--- with Trino 351's file-based Hive metastore.
+-- Rollup writes to /data/warehouse/request_metrics_minute/event_day=YYYY-MM-DD/*.parquet
+-- Hive-style directory layout enables future partition pruning when upgrading Trino.
+-- Currently uses recursive directory scanning with file-based metastore.
 DROP TABLE IF EXISTS gravix.raw.request_metrics_minute;
 CREATE TABLE gravix.raw.request_metrics_minute (
     bucket_start VARCHAR,
@@ -50,7 +50,7 @@ CREATE TABLE gravix.raw.request_metrics_minute (
     external_location = '/data/warehouse/request_metrics_minute'
 );
 
--- Service Events Daily Summary (Parquet from service_events_daily rollup)
+-- Service Events Daily Summary (Parquet, Hive-style directory layout)
 DROP TABLE IF EXISTS gravix.raw.service_events_daily;
 CREATE TABLE gravix.raw.service_events_daily (
     event_day VARCHAR,
@@ -60,4 +60,19 @@ CREATE TABLE gravix.raw.service_events_daily (
 ) WITH (
     format = 'PARQUET',
     external_location = '/data/warehouse/service_events_daily'
+);
+
+-- Service Events Detail (Parquet, Hive-style directory layout)
+DROP TABLE IF EXISTS gravix.raw.service_events_detail;
+CREATE TABLE gravix.raw.service_events_detail (
+    tenant_id VARCHAR,
+    event_time VARCHAR,
+    service VARCHAR,
+    event_type VARCHAR,
+    entity_id VARCHAR,
+    message VARCHAR,
+    properties VARCHAR
+) WITH (
+    format = 'PARQUET',
+    external_location = '/data/warehouse/service_events_detail'
 );

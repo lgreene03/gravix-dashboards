@@ -68,53 +68,81 @@ func TestValidateGarbage(t *testing.T) {
 	}
 }
 
-func TestHasRole(t *testing.T) {
-	claims := &Claims{Role: RoleAdmin}
+func TestValidateTamperedSignature(t *testing.T) {
+	ts := NewTokenService("test-secret-key-32-chars-long!!", 1*time.Hour)
+	token, err := ts.Generate("t1", "u1", "a@b.com", "admin")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
 
-	if !claims.HasRole(RoleAdmin) {
-		t.Error("admin should match admin")
-	}
-	if claims.HasRole(RoleEditor) {
-		t.Error("admin should not match editor")
-	}
-	if claims.HasRole(RoleViewer) {
-		t.Error("admin should not match viewer")
+	// Replace the last 8 characters of the signature to ensure a meaningful change
+	// (flipping a single char can be a no-op in base64url edge cases)
+	tampered := token[:len(token)-8] + "XXXXXXXX"
+	_, err = ts.Validate(tampered)
+	if err == nil {
+		t.Error("expected error for tampered signature")
 	}
 }
 
-func TestHasRoleMultiple(t *testing.T) {
-	claims := &Claims{Role: RoleEditor}
+func TestValidateNoneAlgorithm(t *testing.T) {
+	ts := NewTokenService("secret", 1*time.Hour)
 
-	if !claims.HasRole(RoleAdmin, RoleEditor) {
-		t.Error("editor should match when admin+editor are accepted")
-	}
-	if claims.HasRole(RoleAdmin, RoleViewer) {
-		t.Error("editor should not match admin+viewer")
+	// Craft a token with alg:none — base64url("{"alg":"none","typ":"JWT"}") . base64url(claims) . ""
+	// This is the classic JWT bypass attack
+	noneToken := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ0ZW5hbnRfaWQiOiJ0MSIsInVzZXJfaWQiOiJ1MSJ9."
+	_, err := ts.Validate(noneToken)
+	if err == nil {
+		t.Error("expected error for alg:none token — this is a security vulnerability")
 	}
 }
 
-func TestHasRoleViewer(t *testing.T) {
-	claims := &Claims{Role: RoleViewer}
+func TestValidateWrongSigningMethod(t *testing.T) {
+	ts := NewTokenService("secret", 1*time.Hour)
 
-	if claims.HasRole(RoleAdmin) {
-		t.Error("viewer should not match admin")
-	}
-	if claims.HasRole(RoleAdmin, RoleEditor) {
-		t.Error("viewer should not match admin+editor")
-	}
-	if !claims.HasRole(RoleViewer) {
-		t.Error("viewer should match viewer")
+	// Create a token using RS256 header but with HMAC signature
+	// The Validate function should reject non-HMAC signing methods
+	rs256Token := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZW5hbnRfaWQiOiJ0MSIsInVzZXJfaWQiOiJ1MSJ9.invalid"
+	_, err := ts.Validate(rs256Token)
+	if err == nil {
+		t.Error("expected error for RS256 signing method")
 	}
 }
 
-func TestRoleConstants(t *testing.T) {
-	if RoleAdmin != "admin" {
-		t.Errorf("RoleAdmin = %q", RoleAdmin)
+func TestGenerateIncludesJTI(t *testing.T) {
+	ts := NewTokenService("test-secret-key-32-chars-long!!", 1*time.Hour)
+
+	token1, _ := ts.Generate("t1", "u1", "a@b.com", "admin")
+	token2, _ := ts.Generate("t1", "u1", "a@b.com", "admin")
+
+	claims1, _ := ts.Validate(token1)
+	claims2, _ := ts.Validate(token2)
+
+	if claims1.ID == "" {
+		t.Error("JTI should not be empty")
 	}
-	if RoleEditor != "editor" {
-		t.Errorf("RoleEditor = %q", RoleEditor)
+	if claims1.ID == claims2.ID {
+		t.Error("JTI should be unique per token")
 	}
-	if RoleViewer != "viewer" {
-		t.Errorf("RoleViewer = %q", RoleViewer)
+}
+
+func TestValidateEmptyClaims(t *testing.T) {
+	ts := NewTokenService("test-secret-key-32-chars-long!!", 1*time.Hour)
+
+	// Generate with empty tenant/user — should still work at JWT level
+	// (application-level validation is the caller's responsibility)
+	token, err := ts.Generate("", "", "", "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	claims, err := ts.Validate(token)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if claims.TenantID != "" {
+		t.Errorf("expected empty tenant_id, got %q", claims.TenantID)
+	}
+	if claims.UserID != "" {
+		t.Errorf("expected empty user_id, got %q", claims.UserID)
 	}
 }

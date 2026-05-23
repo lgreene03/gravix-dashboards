@@ -1,0 +1,170 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-05-21",
+  "run_count": 1,
+  "industry_patterns": [
+    {
+      "industry": "Construction (NI/UK)",
+      "pattern": "Consistently high-scoring sector. April 2026 CIS rule changes created acute, dateable compliance pain. Mid-market software gap (£50-500/month) confirmed by BuildersAI's own roadmap gap and Eque2's enterprise pricing. Two distinct sub-opportunities: CIS compliance monitoring (opp-001) and job costing + invoicing (opp-003). Consider combining into one platform in future runs.",
+      "last_observed": "2026-05-21",
+      "confidence": "high",
+      "related_opps": ["opp-001", "opp-003"]
+    },
+    {
+      "industry": "Trade & Logistics (NI cross-border)",
+      "pattern": "NI's unique dual-EORI and Windsor Framework situation creates a geography-specific compliance need with no current software solution. High willingness to pay (£48/declaration alternative cost). Build complexity is the primary constraint — HMRC CDS API approval and Windsor Framework rule maintenance.",
+      "last_observed": "2026-05-21",
+      "confidence": "medium",
+      "related_opps": ["opp-002", "opp-006"]
+    },
+    {
+      "industry": "Social Care",
+      "pattern": "CQC 'Always On' SAF created continuous compliance demand. Market has enterprise solutions (Access Group, Radar Healthcare) but nothing affordable for independent homes (10-50 beds). High pain severity and high ACV (£149/month credible). Longer sales cycle (3-6 months) is the main drag. Partnership with Registered Managers is essential for distribution.",
+      "last_observed": "2026-05-21",
+      "confidence": "medium",
+      "related_opps": ["opp-005"]
+    },
+    {
+      "industry": "Food & Beverage",
+      "pattern": "PPDS/Natasha's Law compliance has created demand for allergen management tools. 400,000+ target businesses but low ACV (£19-39/month). Freemium model likely required for distribution. FSA guidance updated March 2025 — timing is good. EHO referral channel is underexplored by current competitors.",
+      "last_observed": "2026-05-21",
+      "confidence": "medium",
+      "related_opps": ["opp-004"]
+    },
+    {
+      "industry": "Cross-Sector HR/Employment",
+      "pattern": "Right-to-work compliance has unusually strong evidence of market failure: 80% employer non-compliance rate from official Home Office survey (April 2025). Large addressable market (all UK employers with non-UK workers). Simple build. Strong self-serve sales motion. Main risk: specialist competitors (Uright, Xydus) already in market — pricing and simplicity must differentiate.",
+      "last_observed": "2026-05-21",
+      "confidence": "high",
+      "related_opps": ["opp-007", "opp-011"]
+    },
+    {
+      "industry": "Cross-Sector Health & Safety",
+      "pattern": "45% UK SME H&S compliance gap statistic is strong evidence. Legal obligation applies to all businesses with employees. Enterprise market has solutions; SME market (5-50 employees) is underserved at sub-£80/month. AI risk assessment drafting is the genuine differentiator over generic document packs.",
+      "last_observed": "2026-05-21",
+      "confidence": "medium",
+      "related_opps": ["opp-009"]
+    }
+  ],
+  "saturation_warnings": [
+    {
+      "category": "Generic job management software for trades",
+      "warning": "Market is fully saturated: Workever, Fergus, BigChange, Tradespanel all serve UK plumbers/electricians with job management. Do NOT build a generic trades job management tool. CIS-specific compliance is the differentiator — target builders specifically.",
+      "severity": "high",
+      "last_observed": "2026-05-21"
+    },
+    {
+      "category": "Generic payroll/HR for SMEs",
+      "warning": "Extremely crowded: Xero, Sage, HiBob, SD Worx, BambooHR, Deputy. No differentiation opportunity without deep vertical specialisation.",
+      "severity": "high",
+      "last_observed": "2026-05-21"
+    },
+    {
+      "category": "MTD/bookkeeping software",
+      "warning": "Xero, FreeAgent, and QuickBooks are all investing heavily in MTD ITSA compliance. Only viable as a narrow vertical niche (specific industry + MTD) — not as a generic bookkeeping product.",
+      "severity": "high",
+      "last_observed": "2026-05-21"
+    },
+    {
+      "category": "General project management",
+      "warning": "Asana, Monday, Notion, ClickUp, Linear already dominate. Avoid.",
+      "severity": "high",
+      "last_observed": "2026-05-21"
+    },
+    {
+      "category": "Property management software",
+      "warning": "LetCompliance is emerging as a focused competitor in the letting agent compliance space. Move quickly or reconsider opp-012. Monitor LetCompliance's pricing and feature set in next run.",
+      "severity": "medium",
+      "last_observed": "2026-05-21"
+    }
+  ],
+  "recurring_problem_types": [
+    {
+      "type": "Regulatory trigger without affordable tooling",
+      "description": "A new UK regulation creates a concrete compliance obligation for SMEs, but the only software solutions are enterprise-priced (£300-1000+/month). This is the highest-scoring pattern in this database. Examples: April 2026 CIS changes (opp-001), CQC SAF (opp-005), MTD ITSA (opp-010).",
+      "signal": "Look for recently enacted UK regulations + absence of sub-£100/month software solutions",
+      "opportunity_score_range": "3.5-4.5"
+    },
+    {
+      "type": "Post-Brexit unique geography (Northern Ireland)",
+      "description": "NI's dual position (GB trade rules + EU single market access via Windsor Framework) creates compliance problems unique to NI businesses. No England-based software company has built for this specificity. Local market knowledge is a genuine competitive moat.",
+      "signal": "Search for 'Northern Ireland' + 'Windsor Framework' + any compliance domain",
+      "opportunity_score_range": "3.7-4.2"
+    },
+    {
+      "type": "Legal liability from 'manual workaround' failures",
+      "description": "Businesses tracking compliance in spreadsheets or memory face disproportionate legal risk relative to the cost of a software solution. When the penalty for failure is £20,000-£60,000 (RTW fines, CIS penalties), a £50/month tool is an obvious buy. Focus on communicating the asymmetric risk.",
+      "signal": "HMRC fine amounts, HSE improvement notices, Home Office civil penalties",
+      "opportunity_score_range": "3.5-4.5"
+    },
+    {
+      "type": "AI enabling previously impractical automation",
+      "description": "AI document extraction (via Claude API) makes several previously tedious manual processes automatable: customs invoice parsing, allergen declaration extraction, RTW document recognition, care home evidence classification. Products in these categories have higher buildability scores because the AI does the hard work.",
+      "signal": "Any workflow involving extraction from unstructured documents (invoices, certificates, declarations)",
+      "opportunity_score_range": "3.4-4.0"
+    },
+    {
+      "type": "Disconnected tools creating reconciliation overhead",
+      "description": "Businesses using 2-4 disconnected tools (WhatsApp + spreadsheet + Xero) spend hours reconciling. The opportunity is a single tool that covers the whole workflow. Examples: construction job costing (opp-003), care home evidence management (opp-005).",
+      "signal": "Search for job postings or Reddit complaints mentioning multiple tool names in same workflow",
+      "opportunity_score_range": "3.5-4.0"
+    }
+  ],
+  "ai_capability_unlocks": [
+    {
+      "capability": "Document extraction from unstructured PDFs and images (Claude API vision)",
+      "products_enabled": ["Customs declaration from invoice (opp-002, opp-006)", "Allergen declaration parsing (opp-004)", "RTW document recognition (opp-007)", "Care home evidence classification (opp-005)", "Construction receipt OCR (opp-003)"],
+      "maturity": "production-ready",
+      "cost_estimate": "£0.002-0.05 per document at current Claude API pricing",
+      "notes": "Claude claude-sonnet-4-6 with vision is production-quality for structured document extraction. Haiku is sufficient for simple document type classification. Use sonnet for commodity code suggestions and allergen extraction where accuracy is safety-critical."
+    },
+    {
+      "capability": "Risk assessment and compliance content generation",
+      "products_enabled": ["H&S risk assessment drafting (opp-009)", "CQC evidence narrative generation (opp-005)"],
+      "maturity": "production-ready with human review",
+      "cost_estimate": "£0.01-0.05 per generation at current pricing",
+      "notes": "AI-generated risk assessments and compliance content are genuinely useful as first drafts, but must always be reviewed by a human before legal use. Position as 'AI draft + human approval' not 'AI generates final document'."
+    },
+    {
+      "capability": "Conversational compliance Q&A",
+      "products_enabled": ["Windsor Framework edge case guidance (opp-002)", "CIS rules Q&A (opp-001)", "RIDDOR reportability guidance (opp-009)"],
+      "maturity": "suitable for FAQ/guidance, NOT for definitive legal determinations",
+      "cost_estimate": "Low — conversational queries are short",
+      "notes": "AI can answer 'is this RIDDOR reportable?' in a helpful way but the legal determination must be a rules-based decision tree, not AI. Use AI for explaining the rules, not applying them."
+    }
+  ],
+  "scoring_adjustments": [
+    {
+      "adjustment": "NI geography bonus",
+      "rationale": "Opportunities specific to Northern Ireland benefit from local market knowledge as a moat. Score NI-specific opportunities +0.1 to +0.2 on Ease of Reaching Buyers when founder is NI-based or NI-connected.",
+      "applied_since": "2026-05-21"
+    },
+    {
+      "adjustment": "High maintenance penalty for regulatory products",
+      "rationale": "Products dependent on HMRC/CQC/HSE API or rule changes require ongoing maintenance investment that constrains growth. When maintenance_complexity is scored 2 (high maintenance), ensure this is weighted appropriately — a 3.9 overall product with high maintenance may be less attractive than a 3.7 product with low maintenance for a small team.",
+      "applied_since": "2026-05-21"
+    },
+    {
+      "adjustment": "Low ACV reality check",
+      "rationale": "opp-008 (SFI26 farm app, £99/year ACV) and opp-004 (allergen manager, £348/year ACV) have scores above 3.3 but require high customer volume to reach meaningful revenue. For a bootstrapped 2-6 engineer team, track 'months to £10k MRR' as a secondary metric alongside overall score. Low-ACV products need 100+ customers to reach that threshold.",
+      "applied_since": "2026-05-21"
+    }
+  ],
+  "meta_observations": [
+    {
+      "observation": "April 2026 was a regulatory forcing function",
+      "detail": "Multiple UK regulations took effect simultaneously in April 2026 (CIS reforms, MTD ITSA, NHS dental contract changes, tachograph extension). Products addressing these have built-in urgency and identifiable trigger dates. Future runs should track similar regulatory trigger clusters — they create compressed windows of high demand.",
+      "date": "2026-05-21"
+    },
+    {
+      "observation": "CHIEF decommissioning is still creating market opportunity",
+      "detail": "CHIEF was only decommissioned December 2024. The customs documentation software market is still adapting to CDS. No AI-native SME customs tool has consolidated market share yet. This window may be 12-24 months before it closes.",
+      "date": "2026-05-21"
+    },
+    {
+      "observation": "80% RTW non-compliance rate is an exceptional signal",
+      "detail": "An official government survey quantifying employer compliance failure at 80% is rare and unusually actionable. Most market research finds 20-40% compliance gaps. The 80% figure for RTW suggests the problem is structural (complexity of post-Brexit rules) not just awareness. Products in spaces with official non-compliance data are easier to sell — you can quote the statistic.",
+      "date": "2026-05-21"
+    }
+  ]
+}

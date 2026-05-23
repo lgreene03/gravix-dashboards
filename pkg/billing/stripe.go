@@ -9,6 +9,7 @@ import (
 	"github.com/stripe/stripe-go/v81"
 	portalsession "github.com/stripe/stripe-go/v81/billingportal/session"
 	"github.com/stripe/stripe-go/v81/customer"
+	"github.com/stripe/stripe-go/v81/invoice"
 	"github.com/stripe/stripe-go/v81/subscription"
 	"github.com/stripe/stripe-go/v81/usagerecord"
 	"github.com/stripe/stripe-go/v81/webhook"
@@ -30,6 +31,10 @@ func NewStripeService(secretKey, webhookSecret string, plans []PlanConfig) *Stri
 	var freeID string
 	for _, p := range plans {
 		planMap[p.PriceID] = p
+		// Also index annual price IDs so PlanForPriceID resolves both periods
+		if p.AnnualPriceID != "" {
+			planMap[p.AnnualPriceID] = p
+		}
 		if p.PlanName == "free" {
 			freeID = p.PriceID
 		}
@@ -141,6 +146,32 @@ func (s *StripeService) extractEvent(event stripe.Event) (*WebhookEvent, error) 
 			we.PlanName = s.PlanForPriceID(we.PriceID)
 		}
 
+	case "customer.subscription.trial_will_end":
+		var sub stripe.Subscription
+		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
+			return nil, fmt.Errorf("unmarshal subscription: %w", err)
+		}
+		we.CustomerID = sub.Customer.ID
+		we.SubscriptionID = sub.ID
+		we.Status = "trialing"
+		if len(sub.Items.Data) > 0 {
+			we.PriceID = sub.Items.Data[0].Price.ID
+			we.PlanName = s.PlanForPriceID(we.PriceID)
+		}
+
+	case "checkout.session.completed":
+		var sess struct {
+			Customer     struct{ ID string } `json:"customer"`
+			Subscription struct{ ID string } `json:"subscription"`
+			Mode         string              `json:"mode"`
+		}
+		if err := json.Unmarshal(event.Data.Raw, &sess); err != nil {
+			return nil, fmt.Errorf("unmarshal checkout session: %w", err)
+		}
+		we.CustomerID = sess.Customer.ID
+		we.SubscriptionID = sess.Subscription.ID
+		we.Status = "active"
+
 	case "invoice.payment_failed":
 		var inv stripe.Invoice
 		if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {
@@ -165,4 +196,57 @@ func (s *StripeService) PlanForPriceID(priceID string) string {
 
 func (s *StripeService) FreePriceID() string {
 	return s.freePriceID
+}
+
+// AnnualPriceIDFor returns the annual price ID for a given monthly price ID.
+// Returns empty string if no annual price is configured for that plan.
+func (s *StripeService) AnnualPriceIDFor(monthlyPriceID string) string {
+	if p, ok := s.plans[monthlyPriceID]; ok {
+		return p.AnnualPriceID
+	}
+	return ""
+}
+
+// IsAnnualPriceID returns true if the given price ID is an annual price ID.
+func (s *StripeService) IsAnnualPriceID(priceID string) bool {
+	if p, ok := s.plans[priceID]; ok {
+		return p.AnnualPriceID == priceID
+	}
+	return false
+}
+
+func (s *StripeService) ListInvoices(ctx context.Context, customerID string) ([]Invoice, error) {
+	// Stripe invoice listing — uses the stripe-go SDK
+	params := &stripe.InvoiceListParams{
+		Customer: stripe.String(customerID),
+	}
+	params.Filters.AddFilter("limit", "", "12")
+
+	var invoices []Invoice
+	iter := invoice.List(params)
+	for iter.Next() {
+		inv := iter.Invoice()
+		date := time.Unix(inv.Created, 0).UTC().Format("2006-01-02")
+		pdfURL := ""
+		if inv.InvoicePDF != "" {
+			pdfURL = inv.InvoicePDF
+		}
+		hostedURL := ""
+		if inv.HostedInvoiceURL != "" {
+			hostedURL = inv.HostedInvoiceURL
+		}
+		invoices = append(invoices, Invoice{
+			ID:        inv.ID,
+			Date:      date,
+			Amount:    inv.AmountDue,
+			Currency:  string(inv.Currency),
+			Status:    string(inv.Status),
+			PDFUrl:    pdfURL,
+			HostedUrl: hostedURL,
+		})
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("list invoices: %w", err)
+	}
+	return invoices, nil
 }

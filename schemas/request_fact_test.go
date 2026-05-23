@@ -21,7 +21,6 @@ func TestRequestFact_Validate(t *testing.T) {
 			name: "Valid Fact",
 			input: &RequestFact{
 				EventId:      validUUIDv7,
-				TenantId:     "tenant-123",
 				EventTime:    timestamppb.Now(),
 				Service:      "auth-service",
 				Method:       "POST",
@@ -30,19 +29,6 @@ func TestRequestFact_Validate(t *testing.T) {
 				LatencyMs:    45,
 			},
 			expectErr: false,
-		},
-		{
-			name: "Missing TenantID",
-			input: &RequestFact{
-				EventId:      validUUIDv7,
-				EventTime:    timestamppb.Now(),
-				Service:      "auth-service",
-				Method:       "POST",
-				PathTemplate: "/login",
-				StatusCode:   200,
-			},
-			expectErr: true,
-			errMsg:    "tenant_id is required",
 		},
 		{
 			name: "Missing EventID",
@@ -304,9 +290,6 @@ func TestRequestFact_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.name != "Missing TenantID" && tt.input != nil && tt.input.TenantId == "" {
-				tt.input.TenantId = "tenant-123"
-			}
 			err := ValidateRequestFact(tt.input)
 			if tt.expectErr {
 				if err == nil {
@@ -325,7 +308,6 @@ func TestRequestFact_Validate(t *testing.T) {
 
 func TestValidateRequestFact_InvalidEventID(t *testing.T) {
 	fact := &RequestFact{
-		TenantId:     "tenant-123",
 		EventId:      "not-a-uuid-at-all",
 		EventTime:    timestamppb.Now(),
 		Service:      "svc",
@@ -345,7 +327,6 @@ func TestValidateRequestFact_InvalidEventID(t *testing.T) {
 func TestValidateRequestFact_ZeroEventTime(t *testing.T) {
 	// Go's zero time is 0001-01-01T00:00:00Z which is epoch -62135596800
 	fact := &RequestFact{
-		TenantId:     "tenant-123",
 		EventId:      validUUIDv7,
 		EventTime:    &timestamppb.Timestamp{Seconds: -62135596800, Nanos: 0},
 		Service:      "svc",
@@ -372,7 +353,7 @@ func TestParseRequestFact_Valid(t *testing.T) {
 		"statusCode": 200,
 		"latencyMs": 45
 	}`
-	fact, err := ParseRequestFact([]byte(json), "tenant-123")
+	fact, err := ParseRequestFact([]byte(json))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +366,7 @@ func TestParseRequestFact_Valid(t *testing.T) {
 }
 
 func TestParseRequestFact_InvalidJSON(t *testing.T) {
-	_, err := ParseRequestFact([]byte(`{not valid json`), "tenant-123")
+	_, err := ParseRequestFact([]byte(`{not valid json`))
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -403,11 +384,29 @@ func TestParseRequestFact_ValidationError(t *testing.T) {
 		"pathTemplate": "/p",
 		"statusCode": 200
 	}`
-	_, err := ParseRequestFact([]byte(json), "tenant-123")
+	_, err := ParseRequestFact([]byte(json))
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
 	if !strings.Contains(err.Error(), "validation error") {
 		t.Errorf("expected 'validation error', got: %v", err)
 	}
+}
+
+// FuzzValidateRequestFact ensures ParseRequestFact never panics on arbitrary input.
+func FuzzValidateRequestFact(f *testing.F) {
+	// Seed corpus with valid and edge-case JSON
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","method":"GET","pathTemplate":"/api","statusCode":200,"latencyMs":10}`))
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","method":"POST","pathTemplate":"/api/{id}","statusCode":100,"latencyMs":0}`))
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","method":"DELETE","pathTemplate":"/api","statusCode":599,"latencyMs":99999}`))
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`not json`))
+	f.Add([]byte(``))
+	f.Add([]byte(`{"statusCode":-1}`))
+	f.Add([]byte(`{"pathTemplate":"/users/52380628-863e-4390-8e12-254245645511"}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		// Must not panic — errors are fine
+		ParseRequestFact(data)
+	})
 }

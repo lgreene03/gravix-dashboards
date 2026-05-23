@@ -19,6 +19,22 @@ message RequestFact {
   string tenant_id = 9;
 }
 
+// TraceSample represents a sampled distributed trace span.
+// Stored separately from RequestFact to avoid adding high-cardinality
+// dimensions to the core fact table. Short retention (7 days).
+message TraceSample {
+  string trace_id = 1;                         // UUIDv7 — shared across all spans in a trace
+  string span_id = 2;                          // 16-char lowercase hex
+  string parent_span_id = 3;                   // empty for root span
+  google.protobuf.Timestamp event_time = 4;    // when the span started
+  string service = 5;
+  string method = 6;                           // HTTP method
+  string path_template = 7;                    // sanitized path template
+  int32 status_code = 8;                       // HTTP status (100-599)
+  int32 latency_ms = 9;                        // span duration in ms (>= 0)
+  map<string, string> tags = 10;               // max 10 key-value pairs
+}
+
 // ServiceEvent represents a generic lifecycle or operational event.
 message ServiceEvent {
   string event_id = 1;

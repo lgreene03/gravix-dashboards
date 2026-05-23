@@ -13,6 +13,22 @@ scrape_configs:
     static_configs:
       - targets: ["ingestion:8080"]
 
-  - job_name: "huginn"
+  - job_name: "gateway"
     static_configs:
-      - targets: ["host.docker.internal:8083"]
+      - targets: ["gateway:8091"]
+
+  - job_name: "request-metrics-rollup"
+    static_configs:
+      - targets: ["request-metrics-rollup:9091"]
+
+  - job_name: "purge"
+    static_configs:
+      - targets: ["purge:9091"]
+
+  - job_name: "service-events-rollup"
+    static_configs:
+      - targets: ["service-events-rollup:9092"]
+
+  - job_name: "service-events-detail-rollup"
+    static_configs:
+      - targets: ["service-events-detail-rollup:9093"]

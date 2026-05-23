@@ -47,6 +47,9 @@ go run ./cmd/seed_tenants/ -db ./data/gravix.db
 
 # Deploy to Kubernetes
 helm install gravix ./deploy/gravix
+
+# Run golden path smoke test (no Docker required)
+./scripts/golden_path_test.sh
 ```
 
 ## Local Service Endpoints
@@ -59,6 +62,7 @@ helm install gravix ./deploy/gravix
 | Cube Playground | http://localhost:4000 |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 |
+| Gateway API | http://localhost:8091 |
 | MinIO Console | http://localhost:9001 |
 
 Local API key: set in `.env` (see `.env.example`)

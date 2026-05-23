@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 type claimsKeyType string
@@ -75,6 +76,7 @@ func (ts *TokenService) Generate(tenantID, userID, email, role string) (string, 
 		Email:    email,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.New().String(),
 			Issuer:    ts.issuer,
 			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(now),

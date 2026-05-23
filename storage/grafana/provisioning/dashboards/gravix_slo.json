@@ -1,0 +1,618 @@
+{
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "datasource": "-- Grafana --",
+                "enable": true,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "name": "Annotations & Alerts",
+                "type": "dashboard"
+            }
+        ]
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 1,
+    "id": null,
+    "links": [],
+    "liveNow": false,
+    "panels": [
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+            "id": 1,
+            "title": "Availability",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 3,
+                    "mappings": [],
+                    "max": 100,
+                    "min": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "red", "value": null },
+                            { "color": "yellow", "value": 99 },
+                            { "color": "green", "value": 99.9 }
+                        ]
+                    },
+                    "unit": "percent"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 8, "x": 0, "y": 1 },
+            "id": 2,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "Availability (24h)",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "(1 - (sum(rate(ingestion_requests_total{status=~\"5..\"}[24h])) or vector(0)) / (sum(rate(ingestion_requests_total[24h])) > 0 or vector(1))) * 100",
+                    "legendFormat": "Availability %",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisCenteredZero": false,
+                        "axisLabel": "",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "never",
+                        "spanNulls": true
+                    },
+                    "decimals": 2,
+                    "min": 95,
+                    "max": 100,
+                    "unit": "percent"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 10, "x": 8, "y": 1 },
+            "id": 3,
+            "options": {
+                "legend": { "displayMode": "list", "placement": "bottom" },
+                "tooltip": { "mode": "single" }
+            },
+            "title": "Rolling Availability (1h windows, 7d)",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "(1 - (sum(rate(ingestion_requests_total{status=~\"5..\"}[1h])) or vector(0)) / (sum(rate(ingestion_requests_total[1h])) > 0 or vector(1))) * 100",
+                    "legendFormat": "Availability %",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 1,
+                    "mappings": [],
+                    "max": 100,
+                    "min": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "red", "value": null },
+                            { "color": "yellow", "value": 25 },
+                            { "color": "green", "value": 50 }
+                        ]
+                    },
+                    "unit": "percent"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 6, "x": 18, "y": 1 },
+            "id": 4,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "Error Budget Remaining (99.9% target)",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "clamp_min(100 - (((sum(rate(ingestion_requests_total{status=~\"5..\"}[24h])) or vector(0)) / (sum(rate(ingestion_requests_total[24h])) > 0 or vector(1))) / 0.001) * 100, 0)",
+                    "legendFormat": "Budget %",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+            "id": 10,
+            "title": "Latency SLOs",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 0,
+                    "mappings": [],
+                    "max": 2000,
+                    "min": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "yellow", "value": 500 },
+                            { "color": "red", "value": 1000 }
+                        ]
+                    },
+                    "unit": "ms"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 },
+            "id": 11,
+            "options": {
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "showThresholdLabels": false,
+                "showThresholdMarkers": true
+            },
+            "title": "P95 Latency vs SLO (500ms)",
+            "type": "gauge",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "histogram_quantile(0.95, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                    "legendFormat": "P95",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisCenteredZero": false,
+                        "axisLabel": "",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "never",
+                        "spanNulls": true
+                    },
+                    "unit": "ms"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 18, "x": 6, "y": 8 },
+            "id": 12,
+            "options": {
+                "legend": { "displayMode": "list", "placement": "bottom" },
+                "tooltip": { "mode": "multi" }
+            },
+            "title": "Latency Percentiles (7d)",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "histogram_quantile(0.50, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                    "legendFormat": "P50",
+                    "refId": "A"
+                },
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "histogram_quantile(0.95, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                    "legendFormat": "P95",
+                    "refId": "B"
+                },
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "histogram_quantile(0.99, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+                    "legendFormat": "P99",
+                    "refId": "C"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+            "id": 20,
+            "title": "Pipeline Freshness",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 0,
+                    "mappings": [
+                        { "options": { "match": "null", "result": { "text": "No data" } }, "type": "special" }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "yellow", "value": 600 },
+                            { "color": "red", "value": 1200 }
+                        ]
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 0, "y": 15 },
+            "id": 21,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "Rollup - Time Since Success",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "time() - rollup_last_success_timestamp_seconds",
+                    "legendFormat": "Rollup",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 0,
+                    "mappings": [
+                        { "options": { "match": "null", "result": { "text": "No data" } }, "type": "special" }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "yellow", "value": 7200 },
+                            { "color": "red", "value": 14400 }
+                        ]
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 6, "y": 15 },
+            "id": 22,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "Events Daily - Time Since Success",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "time() - events_daily_last_success_timestamp_seconds",
+                    "legendFormat": "Events Daily",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 0,
+                    "mappings": [
+                        { "options": { "match": "null", "result": { "text": "No data" } }, "type": "special" }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "yellow", "value": 7200 },
+                            { "color": "red", "value": 14400 }
+                        ]
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 12, "y": 15 },
+            "id": 23,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "Events Detail - Time Since Success",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "time() - events_detail_last_success_timestamp_seconds",
+                    "legendFormat": "Events Detail",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 0,
+                    "mappings": [
+                        { "options": { "match": "null", "result": { "text": "No data" } }, "type": "special" }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "yellow", "value": 86400 },
+                            { "color": "red", "value": 172800 }
+                        ]
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 5, "w": 6, "x": 18, "y": 15 },
+            "id": 24,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "Purge - Time Since Success",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "time() - purge_last_success_timestamp_seconds",
+                    "legendFormat": "Purge",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisCenteredZero": false,
+                        "axisLabel": "",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "never",
+                        "spanNulls": true
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
+            "id": 25,
+            "options": {
+                "legend": { "displayMode": "list", "placement": "bottom" },
+                "tooltip": { "mode": "multi" }
+            },
+            "title": "Job Duration Trends (7d)",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "rollup_duration_seconds",
+                    "legendFormat": "Rollup",
+                    "refId": "A"
+                },
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "events_daily_duration_seconds",
+                    "legendFormat": "Events Daily",
+                    "refId": "B"
+                },
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "events_detail_duration_seconds",
+                    "legendFormat": "Events Detail",
+                    "refId": "C"
+                },
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "purge_duration_seconds",
+                    "legendFormat": "Purge",
+                    "refId": "D"
+                }
+            ]
+        },
+        {
+            "collapsed": false,
+            "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+            "id": 30,
+            "title": "Throughput",
+            "type": "row"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 1,
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "blue", "value": null }
+                        ]
+                    },
+                    "unit": "reqps"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 6, "x": 0, "y": 27 },
+            "id": 31,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "Ingestion Rate (events/sec)",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "sum(rate(ingestion_requests_total[5m]))",
+                    "legendFormat": "events/sec",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "palette-classic" },
+                    "custom": {
+                        "axisCenteredZero": false,
+                        "axisLabel": "",
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "lineWidth": 2,
+                        "pointSize": 5,
+                        "showPoints": "never",
+                        "spanNulls": true
+                    },
+                    "unit": "reqps"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 12, "x": 6, "y": 27 },
+            "id": 32,
+            "options": {
+                "legend": { "displayMode": "list", "placement": "bottom" },
+                "tooltip": { "mode": "single" }
+            },
+            "title": "Ingestion Rate Over Time (7d)",
+            "type": "timeseries",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "sum(rate(ingestion_requests_total[5m]))",
+                    "legendFormat": "events/sec",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "Prometheus" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "decimals": 2,
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "yellow", "value": 0.01 },
+                            { "color": "red", "value": 0.1 }
+                        ]
+                    },
+                    "unit": "reqps"
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 6, "w": 6, "x": 18, "y": 27 },
+            "id": 33,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+                "textMode": "auto"
+            },
+            "title": "DLQ Error Rate",
+            "type": "stat",
+            "targets": [
+                {
+                    "datasource": { "type": "prometheus", "uid": "Prometheus" },
+                    "expr": "rate(ingestion_dlq_write_errors_total[5m]) or vector(0)",
+                    "legendFormat": "DLQ errors/sec",
+                    "refId": "A"
+                }
+            ]
+        }
+    ],
+    "refresh": "30s",
+    "schemaVersion": 36,
+    "style": "dark",
+    "tags": [
+        "gravix",
+        "slo"
+    ],
+    "templating": {
+        "list": []
+    },
+    "time": {
+        "from": "now-7d",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "",
+    "title": "Gravix SLO",
+    "uid": "gravix-slo",
+    "version": 1,
+    "weekStart": ""
+}

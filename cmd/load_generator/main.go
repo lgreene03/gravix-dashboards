@@ -3,19 +3,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -27,7 +30,50 @@ var (
 	paths      = []string{"/api/v1/login", "/api/v1/users/:id", "/api/v1/products", "/api/v1/cart/checkout"}
 	userAgents = []string{"Chrome", "Firefox", "Safari", "Edge", "Postman", "LoadGenerator"}
 	eventTypes = []string{"deploy_started", "deploy_completed", "restart", "scale_up", "scale_down", "health_check_failed"}
+
+	// Throughput counters (atomic for concurrent access)
+	successCount  atomic.Int64
+	failureCount  atomic.Int64
+	totalLatencyNs atomic.Int64
 )
+
+// LoadTestSummary is the structured output for benchmark mode.
+type LoadTestSummary struct {
+	TotalRequests int64   `json:"total_requests"`
+	Successful    int64   `json:"successful"`
+	Failed        int64   `json:"failed"`
+	ActualQPS     float64 `json:"actual_qps"`
+	AvgLatencyMs  float64 `json:"avg_latency_ms"`
+	ErrorRate     float64 `json:"error_rate"`
+	DurationSecs  float64 `json:"duration_secs"`
+}
+
+func computeSummary(elapsed time.Duration) LoadTestSummary {
+	s := successCount.Load()
+	f := failureCount.Load()
+	total := s + f
+	lat := totalLatencyNs.Load()
+
+	var avgLatMs float64
+	if s > 0 {
+		avgLatMs = float64(lat) / float64(s) / 1e6
+	}
+
+	var errRate float64
+	if total > 0 {
+		errRate = float64(f) / float64(total)
+	}
+
+	return LoadTestSummary{
+		TotalRequests: total,
+		Successful:    s,
+		Failed:        f,
+		ActualQPS:     float64(total) / elapsed.Seconds(),
+		AvgLatencyMs:  avgLatMs,
+		ErrorRate:     errRate,
+		DurationSecs:  elapsed.Seconds(),
+	}
+}
 
 func main() {
 	var targetURL string
@@ -37,6 +83,7 @@ func main() {
 	var concurrency int
 	var duration time.Duration
 	var verbose bool
+	var benchmark bool
 
 	flag.StringVar(&targetURL, "target", "http://localhost:8090/api/v1/facts", "Target Ingestion Service URL for facts")
 	flag.StringVar(&eventsURL, "events-target", "", "Target Ingestion Service URL for service events (default: derived from --target)")
@@ -45,7 +92,21 @@ func main() {
 	flag.IntVar(&concurrency, "concurrency", 1, "Number of concurrent workers")
 	flag.DurationVar(&duration, "duration", 0, "Duration to run (0 for infinite)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose logging")
+	flag.BoolVar(&benchmark, "benchmark", false, "Benchmark mode: defaults to 30s/100qps/10 workers, prints JSON summary")
 	flag.Parse()
+
+	// Benchmark mode overrides
+	if benchmark {
+		if duration == 0 {
+			duration = 30 * time.Second
+		}
+		if qps == 5.0 {
+			qps = 100
+		}
+		if concurrency == 1 {
+			concurrency = 10
+		}
+	}
 
 	// Fall back to API_KEY env var if --api-key not provided
 	if apiKey == "" {
@@ -57,9 +118,12 @@ func main() {
 		eventsURL = strings.Replace(targetURL, "/api/v1/facts", "/api/v1/events", 1)
 	}
 
-	log.Printf("Starting Load Generator for %s", targetURL)
-	log.Printf("Events target: %s", eventsURL)
-	log.Printf("Configuration: QPS=%.2f, Concurrency=%d, Duration=%v", qps, concurrency, duration)
+	logging.Init("load-generator")
+	startTime := time.Now()
+
+	slog.Info("starting load generator", "target", targetURL)
+	slog.Info("events target", "url", eventsURL)
+	slog.Info("configuration", "qps", qps, "concurrency", concurrency, "duration", duration)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,13 +133,13 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		log.Println("Received shutdown signal, stopping...")
+		slog.Info("received shutdown signal, stopping")
 		cancel()
 	}()
 
 	if duration > 0 {
 		time.AfterFunc(duration, func() {
-			log.Println("Duration reached, stopping...")
+			slog.Info("duration reached, stopping")
 			cancel()
 		})
 	}
@@ -104,7 +168,29 @@ func main() {
 	}()
 
 	wg.Wait()
-	log.Println("Load Generator stopped.")
+	elapsed := time.Since(startTime)
+	summary := computeSummary(elapsed)
+
+	slog.Info("load test summary",
+		"total_requests", summary.TotalRequests,
+		"successful", summary.Successful,
+		"failed", summary.Failed,
+		"actual_qps", fmt.Sprintf("%.1f", summary.ActualQPS),
+		"avg_latency_ms", fmt.Sprintf("%.1f", summary.AvgLatencyMs),
+		"error_rate", fmt.Sprintf("%.2f%%", summary.ErrorRate*100),
+		"duration", elapsed,
+	)
+
+	if benchmark {
+		out, _ := json.MarshalIndent(summary, "", "  ")
+		fmt.Println(string(out))
+		if summary.ErrorRate > 0.05 {
+			slog.Error("benchmark failed: error rate exceeds 5%")
+			os.Exit(1)
+		}
+	}
+
+	slog.Info("load generator stopped")
 }
 
 func runWorker(ctx context.Context, id int, url, apiKey string, qps float64, verbose bool) {
@@ -131,13 +217,13 @@ func sendRequest(ctx context.Context, client *http.Client, url, apiKey string, v
 
 	payload, err := protojson.Marshal(fact)
 	if err != nil {
-		log.Printf("Error marshaling Protobuf to JSON: %v", err)
+		slog.Error("error marshaling protobuf to JSON", "error", err)
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payload))
 	if err != nil {
-		log.Printf("Error creating request: %v", err)
+		slog.Error("error creating request", "error", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -148,20 +234,28 @@ func sendRequest(ctx context.Context, client *http.Client, url, apiKey string, v
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		failureCount.Add(1)
 		if verbose {
-			log.Printf("Request failed: %v", err)
+			slog.Warn("request failed", "error", err)
 		}
 		return
 	}
 	defer resp.Body.Close()
-	duration := time.Since(start)
+	dur := time.Since(start)
+	totalLatencyNs.Add(dur.Nanoseconds())
+
+	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
+		successCount.Add(1)
+	} else {
+		failureCount.Add(1)
+	}
 
 	if verbose {
-		log.Printf("Sent event %s: Status %d (%v)", fact.EventId, resp.StatusCode, duration)
+		slog.Info("sent fact", "event_id", fact.EventId, "status", resp.StatusCode, "duration", dur)
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		log.Printf("Unexpected status code: %d", resp.StatusCode)
+		slog.Warn("unexpected status code", "status", resp.StatusCode)
 	}
 }
 
@@ -225,13 +319,13 @@ func sendEvent(ctx context.Context, client *http.Client, url, apiKey string, ver
 
 	payload, err := protojson.Marshal(event)
 	if err != nil {
-		log.Printf("Error marshaling event: %v", err)
+		slog.Error("error marshaling event", "error", err)
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payload))
 	if err != nil {
-		log.Printf("Error creating event request: %v", err)
+		slog.Error("error creating event request", "error", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -242,14 +336,14 @@ func sendEvent(ctx context.Context, client *http.Client, url, apiKey string, ver
 	resp, err := client.Do(req)
 	if err != nil {
 		if verbose {
-			log.Printf("Event request failed: %v", err)
+			slog.Warn("event request failed", "error", err)
 		}
 		return
 	}
 	defer resp.Body.Close()
 
 	if verbose {
-		log.Printf("Sent event %s (%s/%s): Status %d", event.EventId, event.Service, event.EventType, resp.StatusCode)
+		slog.Info("sent event", "event_id", event.EventId, "service", event.Service, "event_type", event.EventType, "status", resp.StatusCode)
 	}
 }
 

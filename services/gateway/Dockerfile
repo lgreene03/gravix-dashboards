@@ -2,6 +2,7 @@ FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
+COPY sdk/go/go.mod sdk/go/go.sum ./sdk/go/
 RUN go mod download
 
 COPY . .
@@ -11,7 +12,7 @@ FROM alpine:3.21
 
 # OCI image labels for provenance and registry metadata
 LABEL org.opencontainers.image.title="gravix-gateway" \
-      org.opencontainers.image.description="Gravix gateway service — multi-tenant auth and management API" \
+      org.opencontainers.image.description="Gravix gateway — tenant management, auth, and billing API" \
       org.opencontainers.image.source="https://github.com/gravix/gravix" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="Gravix"
@@ -22,6 +23,6 @@ COPY --from=builder /app/gateway .
 RUN mkdir -p /app/data && chown -R gravix:gravix /app/data
 USER gravix
 
-EXPOSE 8091
+EXPOSE 8080
 
 ENTRYPOINT ["./gateway"]

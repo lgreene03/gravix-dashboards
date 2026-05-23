@@ -12,3 +12,4 @@ export {
   koaMiddleware,
   fastifyPlugin,
 } from "./middleware.js";
+export * from "./generated-types.js";

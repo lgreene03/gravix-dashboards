@@ -56,6 +56,49 @@ groups:
           summary: "Rollup job took over 2 minutes"
           description: "A rollup job execution took {{ $value }}s, which may indicate growing data volume."
 
+  - name: gravix_events_rollup
+    rules:
+      - alert: EventsDailyRollupStale
+        expr: |
+          time() - max(events_daily_last_success_timestamp_seconds) > 7200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Events daily rollup has not completed in 2 hours"
+          description: "The service_events_daily rollup job has not reported a successful run in over 2 hours."
+
+      - alert: EventsDetailRollupStale
+        expr: |
+          time() - max(events_detail_last_success_timestamp_seconds) > 7200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Events detail rollup has not completed in 2 hours"
+          description: "The service_events_detail rollup job has not reported a successful run in over 2 hours."
+
+  - name: gravix_purge
+    rules:
+      - alert: PurgeJobStale
+        expr: |
+          time() - max(purge_last_success_timestamp_seconds) > 172800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Purge job has not completed in 48 hours"
+          description: "The data purge job has not reported a successful run in over 48 hours."
+
+      - alert: PurgeHighErrorRate
+        expr: rate(purge_errors_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Purge job encountering errors"
+          description: "The purge job is reporting errors during execution."
+
   - name: gravix_infrastructure
     rules:
       - alert: HighMemoryUsage
@@ -75,3 +118,77 @@ groups:
         annotations:
           summary: "Ingestion goroutine count above 1000"
           description: "High goroutine count ({{ $value }}) may indicate a goroutine leak."
+
+  - name: gravix_gateway
+    rules:
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway service is down"
+          description: "The gateway service has been unreachable for 2 minutes."
+
+      - alert: GatewayHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway P95 latency above 2 seconds"
+          description: "The gateway service P95 request latency is {{ $value }}s, exceeding the 2s threshold."
+
+      - alert: GatewayHighErrorRate
+        expr: |
+          sum(rate(gateway_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(gateway_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway 5xx error rate above 5%"
+          description: "The gateway service is returning >5% server errors over the last 5 minutes."
+
+      - alert: GatewayBillingWebhookErrors
+        expr: rate(gateway_billing_webhook_total{status="error"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Billing webhook errors detected"
+          description: "Stripe webhook processing errors have been occurring for over 5 minutes."
+
+  - name: gravix_self_monitoring
+    rules:
+      - alert: GravixServiceDown
+        expr: absent(up{job="ingestion"} == 1) or absent(up{job="gateway"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical Gravix service is down"
+          description: "Either the ingestion or gateway service is unreachable by Prometheus."
+
+      - alert: GravixHighDLQRate
+        expr: rate(ingestion_dlq_write_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High DLQ write error rate"
+          description: "Dead letter queue write failures indicate systemic storage issues."
+
+      - alert: GravixHighRejectionRate
+        expr: sum(rate(gateway_rate_limit_rejected_total[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusual rate limit rejection activity"
+          description: "Over 10 requests/s are being rate-limited, which may indicate abuse or misconfigured limits."

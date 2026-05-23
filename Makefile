@@ -1,16 +1,14 @@
-.PHONY: build build-cli build-compaction test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs
+.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
+	go build -o bin/gateway ./services/gateway/
 	go build -o bin/request-metrics-rollup ./transforms/request_metrics_minute/
 	go build -o bin/service-events-rollup ./transforms/service_events_daily/
+	go build -o bin/service-events-detail-rollup ./transforms/service_events_detail/
 	go build -o bin/load-generator ./cmd/load_generator/
 	go build -o bin/purge ./cmd/purge/
 	go build -o bin/gravix ./cmd/cli/
-	go build -o bin/compaction-job ./transforms/compaction/
-
-build-compaction:
-	go build -o bin/compaction-job ./transforms/compaction/
 
 build-cli:
 	go build -o bin/gravix ./cmd/cli/
@@ -60,3 +58,6 @@ trino-init:
 docs:
 	@echo "API docs: open docs/api-site/index.html in a browser"
 	@echo "OpenAPI spec: docs/openapi.yaml"
+
+chaos:
+	bash scripts/chaos/run_all.sh

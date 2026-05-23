@@ -6,9 +6,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
+	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/schemas"
@@ -62,7 +65,7 @@ func startMetricsServer(addr string) *http.Server {
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("Metrics server error: %v", err)
+			slog.Error("metrics server error", "error", err)
 		}
 	}()
 	return srv
@@ -110,7 +113,7 @@ func acquireLock(dir string) (*os.File, error) {
 		if os.IsExist(err) {
 			// Check if the lock holder is still alive
 			if isLockStale(lockPath) {
-				log.Printf("Removing stale lock file %s (owner process is dead)", lockPath)
+				slog.Warn("removing stale lock file", "path", lockPath)
 				os.Remove(lockPath)
 				// Retry once after removing stale lock
 				f, err = os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
@@ -161,6 +164,8 @@ func releaseLock(f *os.File) {
 }
 
 func main() {
+	logging.Init("request-metrics-rollup")
+
 	var inputDir, outputDir string
 	var processingTime, startDay, endDay string
 	var tenantDBPath string
@@ -186,34 +191,39 @@ func main() {
 	}
 
 	// Acquire exclusive lock to prevent concurrent runs
-	lockFile, err := acquireLock(outputDir)
-	if err != nil {
-		log.Fatalf("Cannot start rollup: %v", err)
+	elector := leaderelect.NewFileElector(outputDir, "request-metrics-rollup")
+	acquired, err := elector.Acquire(context.Background())
+	if err != nil || !acquired {
+		slog.Error("cannot start rollup: another instance is running", "error", err)
+		os.Exit(1)
 	}
-	defer releaseLock(lockFile)
+	defer elector.Release(context.Background())
 
 	var days []time.Time
 
 	if startDay != "" && endDay != "" {
 		start, err := time.Parse("2006-01-02", startDay)
 		if err != nil {
-			log.Fatalf("Invalid start-day: %v", err)
+			slog.Error("invalid start-day", "error", err)
+			os.Exit(1)
 		}
 		end, err := time.Parse("2006-01-02", endDay)
 		if err != nil {
-			log.Fatalf("Invalid end-day: %v", err)
+			slog.Error("invalid end-day", "error", err)
+			os.Exit(1)
 		}
 		for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 			days = append(days, d)
 		}
-		log.Printf("Processing %d days from %s to %s", len(days), startDay, endDay)
+		slog.Info("processing day range", "count", len(days), "start_day", startDay, "end_day", endDay)
 	} else {
 		if processingTime == "" {
 			processingTime = time.Now().UTC().Format(time.RFC3339)
 		}
 		procTime, err := time.Parse(time.RFC3339, processingTime)
 		if err != nil {
-			log.Fatalf("Invalid process-time: %v", err)
+			slog.Error("invalid process-time", "error", err)
+			os.Exit(1)
 		}
 		days = append(days, procTime)
 	}
@@ -221,9 +231,20 @@ func main() {
 	// Start metrics server
 	srv := startMetricsServer(":9091")
 
+	// Graceful shutdown: listen for SIGINT/SIGTERM
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	shutdownCh := make(chan os.Signal, 1)
+	signal.Notify(shutdownCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-shutdownCh
+		slog.Info("received shutdown signal", "signal", sig.String())
+		cancel()
+	}()
+
 	var store storage.ObjectStore
 	if os.Getenv("S3_ENDPOINT") != "" {
-		log.Println("Initializing S3/MinIO Storage...")
+		slog.Info("initializing s3/minio storage")
 		var err error
 		store, err = storage.NewS3Store(
 			context.Background(),
@@ -234,14 +255,16 @@ func main() {
 			os.Getenv("S3_SECRET_KEY"),
 		)
 		if err != nil {
-			log.Fatalf("Failed to initialize S3 store: %v", err)
+			slog.Error("failed to initialize s3 store", "error", err)
+			os.Exit(1)
 		}
 	} else {
-		log.Printf("Initializing Local Storage...")
+		slog.Info("initializing local storage")
 		var err error
 		store, err = storage.NewLocalStore("./data")
 		if err != nil {
-			log.Fatalf("Failed to initialize local store: %v", err)
+			slog.Error("failed to initialize local store", "error", err)
+			os.Exit(1)
 		}
 	}
 
@@ -257,13 +280,15 @@ func main() {
 	if tenantDBPath != "" {
 		tdb, err := tenantdb.Open(tenantDBPath)
 		if err != nil {
-			log.Fatalf("Failed to open tenant database: %v", err)
+			slog.Error("failed to open tenant database", "error", err)
+			os.Exit(1)
 		}
 		defer tdb.Close()
 
 		tenants, err := tdb.Tenants().List(context.Background())
 		if err != nil {
-			log.Fatalf("Failed to list tenants: %v", err)
+			slog.Error("failed to list tenants", "error", err)
+			os.Exit(1)
 		}
 
 		for _, t := range tenants {
@@ -276,7 +301,7 @@ func main() {
 				outputDir: fmt.Sprintf("./data/warehouse/%s/request_metrics_minute", t.ID),
 			})
 		}
-		log.Printf("Multi-tenant mode: processing %d active tenants", len(configs))
+		slog.Info("multi-tenant mode", "active_tenants", len(configs))
 	} else {
 		configs = append(configs, tenantConfig{
 			tenantID:  "",
@@ -286,22 +311,30 @@ func main() {
 	}
 
 	for _, cfg := range configs {
+		if ctx.Err() != nil {
+			slog.Info("shutdown requested, skipping remaining tenants")
+			break
+		}
 		if cfg.tenantID != "" {
-			log.Printf("Processing tenant %s...", cfg.tenantID)
+			slog.Info("processing tenant", "tenant_id", cfg.tenantID)
 		}
 		for _, day := range days {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			if err := processDay(ctx, day, store, cfg.inputDir, cfg.outputDir, cfg.tenantID); err != nil {
-				cancel()
-				log.Printf("Failed to process day %s for tenant %s: %v", day.Format("2006-01-02"), cfg.tenantID, err)
+			if ctx.Err() != nil {
+				slog.Info("shutdown requested, skipping remaining days")
+				break
+			}
+			dayCtx, dayCancel := context.WithTimeout(ctx, 10*time.Minute)
+			if err := processDay(dayCtx, day, store, cfg.inputDir, cfg.outputDir, cfg.tenantID); err != nil {
+				dayCancel()
+				slog.Error("failed to process day", "day", day.Format("2006-01-02"), "tenant_id", cfg.tenantID, "error", err)
 				os.Exit(1)
 			}
-			cancel()
+			dayCancel()
 		}
 	}
 
 	rollupLastSuccessTimestamp.SetToCurrentTime()
-	log.Println("Job complete. Waiting for Prometheus scrape...")
+	slog.Info("job complete, waiting for prometheus scrape")
 	time.Sleep(5 * time.Second) // Grace period for scraper
 	srv.Close()
 }
@@ -318,7 +351,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 	// inputDir is passed as a flag, but we assume it's part of the key now
 	inputPrefix := fmt.Sprintf("%s/%s", strings.TrimPrefix(inputDir, "./data/"), dayStr)
 
-	log.Printf("Processing metrics for prefix %s...", inputPrefix)
+	slog.Info("processing metrics", "prefix", inputPrefix)
 	start := time.Now()
 
 	aggs := make(map[AggregationKey]*Aggregator)
@@ -338,7 +371,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		// Process JSONL Object
 		rc, err := store.Get(ctx, key)
 		if err != nil {
-			log.Printf("Error getting object %s: %v", key, err)
+			slog.Error("error getting object", "key", key, "error", err)
 			continue
 		}
 
@@ -354,9 +387,9 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 			}
 
 			// Parse JSON Fact
-			fact, err := schemas.ParseRequestFact(line, tenantID)
+			fact, err := schemas.ParseRequestFact(line)
 			if err != nil {
-				log.Printf("Skipping invalid JSON line in %s: %v", key, err)
+				slog.Warn("skipping invalid json line", "key", key, "error", err)
 				continue
 			}
 
@@ -398,18 +431,24 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		rc.Close()
 	}
 
-	// Output Object: warehouse/request_metrics_minute/metrics_<uuid>_<day>.parquet
+	// Output: warehouse/request_metrics_minute/event_day=YYYY-MM-DD/metrics_<uuid>.parquet
 	outputPrefix := strings.TrimPrefix(outputDir, "./data/")
+	partitionDir := fmt.Sprintf("%s/event_day=%s", outputPrefix, dayStr)
 
 	if len(aggs) == 0 {
 		// Idempotency: clear stale output even when no new data
-		existing, _ := store.List(ctx, outputPrefix)
+		existing, _ := store.List(ctx, partitionDir)
 		for _, k := range existing {
-			if strings.Contains(k, dayStr) {
+			store.Delete(ctx, k)
+		}
+		// Also clean up legacy flat layout files
+		legacyKeys, _ := store.List(ctx, outputPrefix)
+		for _, k := range legacyKeys {
+			if strings.Contains(k, dayStr) && !strings.Contains(k, "event_day=") {
 				store.Delete(ctx, k)
 			}
 		}
-		log.Printf("No data found for %s, partition cleared.", dayStr)
+		slog.Info("no data found, partition cleared", "day", dayStr)
 		return nil
 	}
 
@@ -449,9 +488,9 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		return metrics[i].BucketStart < metrics[j].BucketStart
 	})
 
-	// Write Parquet to buffer
+	// Write Parquet to buffer (Hive-partitioned path)
 	idx := uuid.New().String()
-	destKey := fmt.Sprintf("%s/metrics_%s_%s.parquet", outputPrefix, idx, dayStr)
+	destKey := fmt.Sprintf("%s/metrics_%s.parquet", partitionDir, idx)
 
 	var buf bytes.Buffer
 	writer := parquet.NewGenericWriter[MetricRow](&buf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
@@ -469,15 +508,22 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 		return fmt.Errorf("failed to upload metrics: %w", err)
 	}
 
-	// Idempotency: remove previous objects for this day (now safe -- new file exists)
-	existing, _ := store.List(ctx, outputPrefix)
+	// Idempotency: remove previous objects for this partition (now safe -- new file exists)
+	existing, _ := store.List(ctx, partitionDir)
 	for _, k := range existing {
-		if strings.Contains(k, dayStr) && k != destKey {
+		if k != destKey {
+			store.Delete(ctx, k)
+		}
+	}
+	// Also clean up legacy flat layout files
+	legacyKeys, _ := store.List(ctx, outputPrefix)
+	for _, k := range legacyKeys {
+		if strings.Contains(k, dayStr) && !strings.Contains(k, "event_day=") {
 			store.Delete(ctx, k)
 		}
 	}
 
-	log.Printf("Uploaded %d metrics rows to %s", len(metrics), destKey)
+	slog.Info("uploaded metrics", "row_count", len(metrics), "dest_key", destKey)
 	rollupDurationSeconds.WithLabelValues(dayStr).Set(time.Since(start).Seconds())
 	return nil
 }

@@ -1,0 +1,781 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gravix Helm Chart Values",
+  "description": "Schema for validating Gravix Helm chart values.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["global"],
+  "definitions": {
+    "imageSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Container image repository name"
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Container image tag"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"],
+          "default": "IfNotPresent",
+          "description": "Image pull policy"
+        }
+      }
+    },
+    "resourceRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": "string", "pattern": "^[0-9]+m?$" },
+            "memory": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" }
+          }
+        },
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": "string", "pattern": "^[0-9]+m?$" },
+            "memory": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" }
+          }
+        }
+      }
+    },
+    "persistenceSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(Mi|Gi|Ti)$",
+          "description": "PVC size (e.g. 1Gi, 10Gi)"
+        },
+        "mountPath": {
+          "type": "string",
+          "description": "Mount path inside the container"
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "StorageClass name. Empty uses cluster default."
+        }
+      }
+    },
+    "serviceSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer"],
+          "default": "ClusterIP"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Service port number"
+        }
+      }
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiKey", "cubeApiSecret"],
+      "description": "Global configuration shared across all services",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "description": "API key for ingestion authentication. Must be set for deployment."
+        },
+        "cubeApiSecret": {
+          "type": "string",
+          "description": "Cube.js API secret for dashboard queries."
+        },
+        "jwtSecret": {
+          "type": "string",
+          "description": "JWT signing secret (min 32 chars)."
+        },
+        "databaseUrl": {
+          "type": "string",
+          "description": "PostgreSQL connection string (when gateway.dbDriver=postgres)."
+        },
+        "imageRegistry": {
+          "type": "string",
+          "description": "Container registry prefix (e.g. ghcr.io/org/gravix, ECR URI)"
+        },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 }
+            }
+          },
+          "description": "Pull secrets for private container registries"
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "pattern": "^https?://",
+              "description": "S3/MinIO endpoint URL"
+            },
+            "region": {
+              "type": "string",
+              "description": "S3 region (e.g. us-east-1)"
+            },
+            "bucket": {
+              "type": "string",
+              "minLength": 1,
+              "description": "S3 bucket name"
+            },
+            "accessKey": {
+              "type": "string",
+              "description": "S3 access key"
+            },
+            "secretKey": {
+              "type": "string",
+              "description": "S3 secret key"
+            }
+          }
+        }
+      }
+    },
+    "externalSecrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "External Secrets Operator integration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "refreshInterval": {
+          "type": "string",
+          "pattern": "^[0-9]+[smh]$",
+          "description": "How often to sync secrets from the provider (e.g. 1h, 30m)"
+        },
+        "secretStoreRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "kind": {
+              "type": "string",
+              "enum": ["ClusterSecretStore", "SecretStore"]
+            }
+          }
+        },
+        "remoteBase": {
+          "type": "string",
+          "description": "Base path/prefix in the secret provider"
+        },
+        "property": {
+          "type": "boolean",
+          "description": "Set true if secrets are stored as JSON properties in a single key"
+        }
+      }
+    },
+    "networkPolicies": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Network policy enforcement (requires CNI support)",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false }
+      }
+    },
+    "ingestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ingestion service configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "image": { "$ref": "#/definitions/imageSpec" },
+        "service": { "$ref": "#/definitions/serviceSpec" },
+        "resources": { "$ref": "#/definitions/resourceRequirements" },
+        "persistence": { "$ref": "#/definitions/persistenceSpec" }
+      }
+    },
+    "loadGenerator": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Load generator for testing",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "image": { "$ref": "#/definitions/imageSpec" },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "qps": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 5,
+              "description": "Queries per second"
+            },
+            "concurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2,
+              "description": "Number of concurrent workers"
+            }
+          }
+        }
+      }
+    },
+    "rollupJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request metrics rollup CronJob",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "image": { "$ref": "#/definitions/imageSpec" },
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule expression (e.g. '*/5 * * * *')"
+        }
+      }
+    },
+    "eventsRollupJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Service events daily rollup CronJob",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule expression (e.g. '0 * * * *')"
+        }
+      }
+    },
+    "eventsDetailJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Service events detail rollup CronJob",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule expression (e.g. '0 * * * *')"
+        }
+      }
+    },
+    "retentionJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Data retention/purge CronJob",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "image": { "$ref": "#/definitions/imageSpec" },
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule expression (e.g. '0 3 * * *')"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["auto", "manual"],
+          "default": "manual",
+          "description": "auto = per-plan retention, manual = use retentionDays"
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "Days to retain data (manual mode only)"
+        },
+        "tenantDBPath": {
+          "type": "string",
+          "description": "Path to tenant SQLite database inside the container"
+        },
+        "warmAfterDays": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Move data to warm storage tier after this many days (0=disabled)"
+        },
+        "coldAfterDays": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Move data to cold storage tier after this many days (0=disabled)"
+        }
+      }
+    },
+    "s3Lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "S3 bucket lifecycle policy configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "warmAfterDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 7,
+          "description": "Transition to STANDARD_IA after N days"
+        },
+        "coldAfterDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "Transition to GLACIER after N days"
+        },
+        "deleteAfterDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 90,
+          "description": "Permanently delete after N days"
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Gateway service configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "image": { "$ref": "#/definitions/imageSpec" },
+        "service": { "$ref": "#/definitions/serviceSpec" },
+        "tenantDBPath": {
+          "type": "string",
+          "description": "Path to tenant SQLite database inside the container"
+        },
+        "dbDriver": {
+          "type": "string",
+          "enum": ["sqlite", "postgres"],
+          "default": "sqlite",
+          "description": "Database driver: sqlite or postgres"
+        },
+        "corsAllowedOrigins": {
+          "type": "string",
+          "default": "",
+          "description": "Comma-separated list of allowed CORS origins (empty defaults to '*' for local dev)"
+        },
+        "stripe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false }
+          }
+        },
+        "resources": { "$ref": "#/definitions/resourceRequirements" },
+        "persistence": { "$ref": "#/definitions/persistenceSpec" }
+      }
+    },
+    "dashboard": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Dashboard static file server",
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Storage backend services",
+      "properties": {
+        "minio": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            },
+            "persistence": { "$ref": "#/definitions/persistenceSpec" }
+          }
+        },
+        "trino": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            },
+            "workers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false },
+                "replicaCount": { "type": "integer", "minimum": 1 },
+                "resources": { "$ref": "#/definitions/resourceRequirements" }
+              }
+            }
+          }
+        },
+        "cube": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "devMode": {
+              "type": "boolean",
+              "default": false,
+              "description": "Set to true only for local development"
+            },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            },
+            "hpa": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false },
+                "minReplicas": { "type": "integer", "minimum": 1 },
+                "maxReplicas": { "type": "integer", "minimum": 1 },
+                "targetCPU": { "type": "integer", "minimum": 1, "maximum": 100 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "certManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "cert-manager ClusterIssuer for automatic TLS certificates",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Let's Encrypt contact email (required when enabled)"
+        },
+        "issuerName": {
+          "type": "string",
+          "default": "letsencrypt-prod",
+          "description": "Name of the ClusterIssuer to create"
+        },
+        "solver": {
+          "type": "array",
+          "description": "Custom ACME solver config (defaults to HTTP-01)"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ingress configuration for external access",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "className": { "type": "string" },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["host", "paths"],
+            "additionalProperties": false,
+            "properties": {
+              "host": { "type": "string", "minLength": 1 },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["path", "pathType", "service"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": { "type": "string" },
+                    "pathType": {
+                      "type": "string",
+                      "enum": ["Prefix", "Exact", "ImplementationSpecific"]
+                    },
+                    "service": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "secretName": { "type": "string" },
+              "hosts": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Monitoring and observability (requires Prometheus Operator)",
+      "properties": {
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "interval": { "type": "string", "pattern": "^[0-9]+s$" },
+            "scrapeTimeout": { "type": "string", "pattern": "^[0-9]+s$" },
+            "labels": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "metricRelabelings": { "type": "array" }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "labels": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "grafana": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dashboards": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false },
+                "annotations": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Horizontal Pod Autoscaler configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "minReplicas": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "maxReplicas": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10
+        },
+        "targetCPUUtilizationPercentage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 70
+        }
+      }
+    },
+    "resourceQuota": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Namespace resource limits for production",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "cpu": {
+          "type": "string",
+          "description": "Total CPU requests across all pods"
+        },
+        "memory": {
+          "type": "string",
+          "pattern": "^[0-9]+(Mi|Gi)$",
+          "description": "Total memory requests across all pods"
+        },
+        "limitsCpu": {
+          "type": "string",
+          "description": "Total CPU limits"
+        },
+        "limitsMemory": {
+          "type": "string",
+          "pattern": "^[0-9]+(Mi|Gi)$",
+          "description": "Total memory limits"
+        },
+        "pvcs": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "Max PersistentVolumeClaims"
+        },
+        "pods": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "Max pods in namespace"
+        }
+      }
+    },
+    "syntheticMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Synthetic monitoring CronJob for pipeline health checks",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "schedule": { "type": "string", "description": "Cron schedule expression" }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Log aggregation with Loki and Promtail",
+      "properties": {
+        "loki": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            },
+            "persistence": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi|Ti)$" }
+              }
+            }
+          }
+        },
+        "promtail": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "alertmanager": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Alertmanager for alert routing",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "receivers": { "type": "array" }
+      }
+    },
+    "dbBackup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Database backup CronJob",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "schedule": { "type": "string" },
+        "retentionDays": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "S3/MinIO data backup configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule expression"
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 7,
+          "description": "Days to keep backup snapshots"
+        },
+        "prefix": {
+          "type": "string",
+          "description": "S3 prefix for backup snapshots"
+        },
+        "destinationBucket": {
+          "type": "string",
+          "description": "Separate bucket for cross-region DR"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "description": "Max runtime for backup job"
+        }
+      }
+    }
+  }
+}

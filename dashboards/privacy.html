@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy — Gravix</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem 1rem; line-height: 1.7; color: #1e293b; }
+        h1 { color: #3b82f6; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.5rem; }
+        h2 { color: #334155; margin-top: 2rem; }
+        h3 { color: #475569; }
+        p, li { color: #475569; }
+        a { color: #3b82f6; }
+        .effective-date { color: #64748b; font-size: 0.9rem; }
+        table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+        th, td { border: 1px solid #e2e8f0; padding: 0.5rem 1rem; text-align: left; }
+        th { background: #f1f5f9; }
+    </style>
+</head>
+<body>
+    <h1>Privacy Policy</h1>
+    <p class="effective-date">Effective Date: March 23, 2026 &bull; Version 1.0</p>
+
+    <h2>1. Introduction</h2>
+    <p>Gravix ("we", "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, and protect your personal data when you use our observability platform ("Service").</p>
+
+    <h2>2. Data We Collect</h2>
+    <h3>Account Data</h3>
+    <p>When you register, we collect your name, email address, and password (stored as a bcrypt hash). If you subscribe to a paid plan, payment is processed by Stripe; we store only your Stripe customer ID.</p>
+
+    <h3>Service Data</h3>
+    <p>The Service ingests HTTP request metrics (service name, method, path template, status code, latency). <strong>We do not collect</strong> request bodies, user IDs, IP addresses, or any personally identifiable information from your monitored services.</p>
+
+    <h3>Usage Data</h3>
+    <p>We track event counts per tenant for billing purposes and may collect aggregated usage analytics to improve the Service.</p>
+
+    <h2>3. Legal Basis for Processing (GDPR)</h2>
+    <table>
+        <tr><th>Purpose</th><th>Legal Basis</th></tr>
+        <tr><td>Account management</td><td>Contract performance</td></tr>
+        <tr><td>Billing</td><td>Contract performance</td></tr>
+        <tr><td>Service data processing</td><td>Contract performance</td></tr>
+        <tr><td>Security monitoring</td><td>Legitimate interest</td></tr>
+        <tr><td>Marketing emails</td><td>Consent (opt-in)</td></tr>
+    </table>
+
+    <h2>4. Data Retention</h2>
+    <p>Account data is retained while your account is active and for 30 days after deletion request. Service data (request metrics) is retained according to your plan's retention policy. You may configure custom retention periods.</p>
+
+    <h2>5. Your Rights (GDPR)</h2>
+    <p>If you are in the European Economic Area, you have the right to:</p>
+    <ul>
+        <li><strong>Access</strong> your personal data (Settings &rarr; GDPR &rarr; Data Access)</li>
+        <li><strong>Portability</strong> — download your data in machine-readable JSON format</li>
+        <li><strong>Rectification</strong> — update your account information</li>
+        <li><strong>Erasure</strong> — request account deletion with 30-day grace period</li>
+        <li><strong>Object</strong> to processing based on legitimate interest</li>
+        <li><strong>Withdraw consent</strong> at any time without affecting prior processing</li>
+    </ul>
+
+    <h2>6. Data Sharing</h2>
+    <p>We do not sell your data. We share data only with:</p>
+    <ul>
+        <li><strong>Stripe</strong> — for payment processing</li>
+        <li><strong>Infrastructure providers</strong> — for hosting (data processing agreements in place)</li>
+        <li><strong>Law enforcement</strong> — when legally required</li>
+    </ul>
+
+    <h2>7. Cookies</h2>
+    <p>We use essential cookies only (session authentication). We do not use tracking cookies or third-party analytics. You may manage cookie preferences in your browser settings.</p>
+
+    <h2>8. Security</h2>
+    <p>We protect your data with encryption in transit (TLS), hashed passwords (bcrypt), API key hashing (SHA-256), rate limiting, and regular security reviews.</p>
+
+    <h2>9. International Transfers</h2>
+    <p>Data may be processed in jurisdictions outside your own. We ensure appropriate safeguards (Standard Contractual Clauses) are in place for any international transfers.</p>
+
+    <h2>10. Changes to This Policy</h2>
+    <p>We will notify you of material changes via email. Continued use after 30 days constitutes acceptance of updated terms.</p>
+
+    <h2>11. Contact &amp; DPO</h2>
+    <p>For privacy inquiries or to exercise your rights, contact our Data Protection Officer at <a href="mailto:privacy@gravix.io">privacy@gravix.io</a>.</p>
+
+    <p><a href="index.html">&larr; Back to Dashboard</a></p>
+</body>
+</html>

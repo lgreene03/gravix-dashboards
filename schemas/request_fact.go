@@ -19,16 +19,13 @@ var (
 // RequestFact aliases the generated Protobuf type for convenience and to avoid breaking existing code.
 type RequestFact = gravixv1.RequestFact
 
-// ParseRequestFact decodes, injects tenant context, and validates a raw JSON byte slice into a Protobuf message.
-func ParseRequestFact(data []byte, tenantID string) (*RequestFact, error) {
+// ParseRequestFact decodes and validates a raw JSON byte slice into a Protobuf message.
+func ParseRequestFact(data []byte) (*RequestFact, error) {
 	var fact RequestFact
 	err := protojson.Unmarshal(data, &fact)
 	if err != nil {
 		return nil, fmt.Errorf("protojson unmarshal error: %w", err)
 	}
-
-	// Always override/inject the tenant ID from the trusted auth context
-	fact.TenantId = tenantID
 
 	if err := ValidateRequestFact(&fact); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
@@ -39,11 +36,6 @@ func ParseRequestFact(data []byte, tenantID string) (*RequestFact, error) {
 
 // ValidateRequestFact enforces business rules and schema constraints on the Protobuf message.
 func ValidateRequestFact(f *RequestFact) error {
-	// Constraint: TenantID must be present
-	if f.TenantId == "" {
-		return fmt.Errorf("tenant_id is required")
-	}
-
 	// Constraint: EventID must be present and valid UUIDv7
 	if f.EventId == "" {
 		return fmt.Errorf("event_id is required")

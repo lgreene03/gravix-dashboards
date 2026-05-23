@@ -1,0 +1,23 @@
+{{- if .Values.storage.cube.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "gravix.fullname" . }}-cube
+  labels:
+    {{- include "gravix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cube
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "gravix.fullname" . }}-cube
+  minReplicas: {{ .Values.storage.cube.hpa.minReplicas | default 2 }}
+  maxReplicas: {{ .Values.storage.cube.hpa.maxReplicas | default 5 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.storage.cube.hpa.targetCPU | default 70 }}
+{{- end }}

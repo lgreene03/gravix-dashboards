@@ -1,5 +1,5 @@
-const isDuckDB = process.env.CUBEJS_DB_TYPE === 'duckdb';
-const isMultiTenant = !!process.env.TENANT_DB_PATH;
+const isDuckDB = (typeof process !== 'undefined' && process.env && process.env.CUBEJS_DB_TYPE === 'duckdb');
+const isMultiTenant = (typeof process !== 'undefined' && process.env && !!process.env.TENANT_DB_PATH);
 
 const serviceEventsSql = isDuckDB
   ? isMultiTenant
@@ -50,6 +50,17 @@ cube(`ServiceEventsDaily`, {
       sql: `event_type`,
       type: `string`,
       title: `Event Type`
+    }
+  },
+
+  preAggregations: {
+    dailySummary: {
+      type: `rollup`,
+      measures: [eventCount],
+      dimensions: [service, eventType, eventDay],
+      refreshKey: {
+        every: `10 minute`
+      }
     }
   },
 

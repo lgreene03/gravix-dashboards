@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up — Gravix</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .signup-page { padding: 80px 0; min-height: 80vh; display: flex; align-items: center; }
+        .signup-card { max-width: 480px; margin: 0 auto; padding: 48px; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); }
+        .signup-card h1 { font-size: 1.8rem; margin-bottom: 8px; text-align: center; }
+        .signup-card .plan-badge { display: block; text-align: center; margin-bottom: 24px; padding: 6px 16px; background: #eff6ff; color: var(--primary); border-radius: 12px; font-weight: 600; font-size: 0.9rem; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.95rem; }
+        .form-group input { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 1rem; }
+        .form-group input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+        .form-group small { color: var(--text-muted); font-size: 0.8rem; }
+        .checkbox-group { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 24px; }
+        .checkbox-group input[type="checkbox"] { margin-top: 4px; }
+        .checkbox-group label { font-size: 0.9rem; color: var(--text-muted); }
+        .checkbox-group a { color: var(--primary); }
+        .signup-error { color: #dc2626; font-size: 0.9rem; margin-bottom: 16px; display: none; }
+        .signup-success { color: var(--success); font-size: 0.95rem; text-align: center; display: none; }
+        .divider { text-align: center; margin: 24px 0; color: var(--text-muted); font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="index.html" class="nav-logo">Gravix</a>
+            <div class="nav-links">
+                <a href="pricing.html">Pricing</a>
+                <a href="/docs">Docs</a>
+                <a href="/index.html" class="nav-btn-secondary">Login</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="signup-page">
+        <div class="signup-card">
+            <h1>Create Your Account</h1>
+            <span class="plan-badge" id="plan-badge">Free Plan</span>
+
+            <div class="signup-error" id="signup-error"></div>
+            <div class="signup-success" id="signup-success">
+                Account created! Redirecting to your dashboard...
+            </div>
+
+            <form id="signup-form">
+                <div class="form-group">
+                    <label for="org-name">Organization Name</label>
+                    <input type="text" id="org-name" name="name" required placeholder="Acme Corp">
+                </div>
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required placeholder="you@company.com">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required minlength="8" placeholder="Min 8 characters">
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="accept-tos" required>
+                    <label for="accept-tos">I agree to the <a href="/terms.html" target="_blank">Terms of Service</a> and <a href="/privacy.html" target="_blank">Privacy Policy</a></label>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block btn-lg" id="signup-btn">Create Account</button>
+            </form>
+
+            <div class="divider">Already have an account? <a href="/index.html">Log in</a></div>
+        </div>
+    </section>
+
+    <script>
+    (function() {
+        'use strict';
+
+        // Extract plan from URL params
+        var params = new URLSearchParams(window.location.search);
+        var plan = params.get('plan') || 'free';
+        var planNames = { free: 'Free Plan', team: 'Team Plan', business: 'Business Plan', scale: 'Scale Plan', enterprise: 'Enterprise' };
+        var badge = document.getElementById('plan-badge');
+        if (badge) badge.textContent = planNames[plan] || 'Free Plan';
+
+        var form = document.getElementById('signup-form');
+        var errorEl = document.getElementById('signup-error');
+        var successEl = document.getElementById('signup-success');
+        var btn = document.getElementById('signup-btn');
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            errorEl.style.display = 'none';
+
+            var name = document.getElementById('org-name').value.trim();
+            var email = document.getElementById('email').value.trim();
+            var password = document.getElementById('password').value;
+            var tos = document.getElementById('accept-tos').checked;
+
+            if (!tos) {
+                errorEl.textContent = 'You must accept the Terms of Service.';
+                errorEl.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Creating account...';
+
+            var gatewayUrl = window.location.origin.replace(':80', ':8091').replace(/:\d+/, ':8091');
+
+            fetch(gatewayUrl + '/api/gateway/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    email: email,
+                    password: password,
+                    accept_tos: true
+                })
+            })
+            .then(function(res) {
+                if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || 'Registration failed'); });
+                return res.json();
+            })
+            .then(function(data) {
+                // Store token
+                if (data.token) {
+                    localStorage.setItem('gravix_token', data.token);
+                }
+                successEl.style.display = 'block';
+                form.style.display = 'none';
+
+                // For paid plans, redirect to checkout if billing is enabled
+                if (plan !== 'free' && data.stripe_customer_id) {
+                    // Redirect to checkout would happen here via gateway
+                    setTimeout(function() { window.location.href = '/index.html'; }, 2000);
+                } else {
+                    setTimeout(function() { window.location.href = '/index.html'; }, 2000);
+                }
+            })
+            .catch(function(err) {
+                errorEl.textContent = err.message;
+                errorEl.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Create Account';
+            });
+        });
+    })();
+    </script>
+</body>
+</html>

@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Go module cache
         uses: actions/cache@v4
@@ -36,22 +36,37 @@ jobs:
       - name: Staticcheck
         run: staticcheck ./...
 
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
+
   test:
     runs-on: ubuntu-latest
     needs: lint
+    strategy:
+      matrix:
+        go-version: ['1.24', '1.25']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: ${{ matrix.go-version }}
 
       - name: Go module cache
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
+          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-${{ matrix.go-version }}-
 
       - name: Run tests with race detector
         run: go test ./... -v -race -count=1
@@ -82,7 +97,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Go module cache
         uses: actions/cache@v4
@@ -94,13 +109,25 @@ jobs:
       - name: Build all binaries
         run: |
           go build -o bin/ingestion-service ./services/ingestion/
+          go build -o bin/gateway ./services/gateway/
           go build -o bin/request-metrics-rollup ./transforms/request_metrics_minute/
           go build -o bin/service-events-rollup ./transforms/service_events_daily/
+          go build -o bin/service-events-detail-rollup ./transforms/service_events_detail/
           go build -o bin/load-generator ./cmd/load_generator/
           go build -o bin/purge ./cmd/purge/
 
   helm-validate:
     runs-on: ubuntu-latest
+    env:
+      # Common test secrets for all helm commands. Real deployments inject
+      # these via --set or external secrets — these values exist solely to
+      # satisfy chart `required` checks during lint/template validation.
+      HELM_TEST_SETS: >-
+        --set global.apiKey=test-key-at-least-16ch
+        --set global.jwtSecret=test-jwt-secret-must-be-at-least-32-chars
+        --set global.cubeApiSecret=test-cube-api-secret-32-characters-long
+        --set global.storage.accessKey=test-access-key
+        --set global.storage.secretKey=test-secret-at-least-16ch
     steps:
       - uses: actions/checkout@v4
 
@@ -109,35 +136,24 @@ jobs:
 
       - name: Lint Helm chart (dev values)
         run: |
-          helm lint deploy/gravix \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch
+          helm lint deploy/gravix $HELM_TEST_SETS
 
       - name: Lint Helm chart (prod values)
         run: |
           helm lint deploy/gravix \
             -f deploy/gravix/values-prod.yaml \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
+            $HELM_TEST_SETS \
             --set certManager.email=test@example.com
 
       - name: Template render (dev)
         run: |
-          helm template gravix deploy/gravix \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
-            > /dev/null
+          helm template gravix deploy/gravix $HELM_TEST_SETS > /dev/null
 
       - name: Template render (prod)
         run: |
           helm template gravix deploy/gravix \
             -f deploy/gravix/values-prod.yaml \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
+            $HELM_TEST_SETS \
             --set certManager.email=test@example.com \
             > /dev/null
 
@@ -145,9 +161,7 @@ jobs:
         run: |
           COUNT=$(helm template gravix deploy/gravix \
             -f deploy/gravix/values-prod.yaml \
-            --set global.apiKey=test-key-at-least-16ch \
-            --set global.storage.accessKey=test-access-key \
-            --set global.storage.secretKey=test-secret-at-least-16ch \
+            $HELM_TEST_SETS \
             --set certManager.email=test@example.com \
             2>/dev/null | grep -c '^kind:')
           echo "Production resource count: ${COUNT}"
@@ -176,6 +190,11 @@ jobs:
         with:
           dockerfile: services/load_generator/Dockerfile
 
+      - name: Lint gateway Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: services/gateway/Dockerfile
+
   # ─── Container Image Pipeline (runs only on main branch push) ───
   docker-build:
     runs-on: ubuntu-latest
@@ -193,6 +212,8 @@ jobs:
             dockerfile: services/rollup/Dockerfile
           - image: load-generator
             dockerfile: services/load_generator/Dockerfile
+          - image: gateway
+            dockerfile: services/gateway/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -242,7 +263,7 @@ jobs:
       security-events: write
     strategy:
       matrix:
-        image: [ingestion, rollup, load-generator]
+        image: [ingestion, rollup, load-generator, gateway]
     steps:
       - uses: actions/checkout@v4
 
@@ -268,3 +289,117 @@ jobs:
         with:
           sarif_file: 'trivy-${{ matrix.image }}.sarif'
           category: 'trivy-${{ matrix.image }}'
+
+  # ─── End-to-End Tests ───
+  e2e:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Go module cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Run end-to-end tests
+        env:
+          E2E_TEST: "1"
+        run: go test ./tests/e2e/... -v -count=1 -timeout 300s
+
+  # ─── SDK Tests (Node + Python) ───
+  sdk-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: TypeScript type-check (Node SDK)
+        working-directory: sdk/node
+        run: |
+          npm ci
+          npx tsc --noEmit
+
+      - name: Python SDK tests
+        working-directory: sdk/python
+        run: |
+          pip install -e ".[test]" 2>/dev/null || pip install pytest
+          python -m pytest tests/ -v
+
+  # ─── Docker Compose Smoke Test (main branch only) ───
+  docker-smoke:
+    runs-on: ubuntu-latest
+    needs: [build, docker-lint]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Create .env for CI
+        run: |
+          cat > .env <<'ENVEOF'
+          API_KEY=ci-smoke-test-key-at-least-32-chars-long
+          JWT_SECRET=ci-jwt-secret-must-be-at-least-32-characters-long
+          TOTP_ENCRYPTION_KEY=ci-totp-key-must-be-at-least-32-characters
+          CORS_ALLOWED_ORIGINS=*
+          GRAVIX_ENV=development
+          ENVEOF
+
+      - name: Run full-stack smoke test
+        run: bash scripts/smoke_test.sh
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose logs --tail=100 > /tmp/docker-compose-logs.txt 2>&1
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-compose-logs
+          path: /tmp/docker-compose-logs.txt
+
+  # ─── CI Summary Gate ───
+  ci-summary:
+    runs-on: ubuntu-latest
+    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint]
+    if: always()
+    steps:
+      - name: Check job results
+        run: |
+          echo "Lint:          ${{ needs.lint.result }}"
+          echo "Vuln:          ${{ needs.vuln.result }}"
+          echo "Test:          ${{ needs.test.result }}"
+          echo "Build:         ${{ needs.build.result }}"
+          echo "E2E:           ${{ needs.e2e.result }}"
+          echo "SDK Tests:     ${{ needs.sdk-tests.result }}"
+          echo "Helm Validate: ${{ needs.helm-validate.result }}"
+          echo "Docker Lint:   ${{ needs.docker-lint.result }}"
+
+          # Fail if any required job failed
+          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
+             [[ "${{ needs.test.result }}" == "failure" ]] || \
+             [[ "${{ needs.build.result }}" == "failure" ]] || \
+             [[ "${{ needs.e2e.result }}" == "failure" ]] || \
+             [[ "${{ needs.sdk-tests.result }}" == "failure" ]]; then
+            echo "::error::One or more required CI jobs failed"
+            exit 1
+          fi
+          echo "All required CI checks passed!"

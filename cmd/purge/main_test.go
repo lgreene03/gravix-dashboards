@@ -20,21 +20,47 @@ func TestPlanRetentionDaysFree(t *testing.T) {
 	}
 }
 
+func TestPlanRetentionDaysTeam(t *testing.T) {
+	if got := planRetentionDays("team"); got != 30 {
+		t.Errorf("planRetentionDays(team) = %d, want 30", got)
+	}
+}
+
 func TestPlanRetentionDaysStarter(t *testing.T) {
+	// Legacy name maps to team tier
 	if got := planRetentionDays("starter"); got != 30 {
 		t.Errorf("planRetentionDays(starter) = %d, want 30", got)
 	}
 }
 
+func TestPlanRetentionDaysBusiness(t *testing.T) {
+	if got := planRetentionDays("business"); got != 90 {
+		t.Errorf("planRetentionDays(business) = %d, want 90", got)
+	}
+}
+
 func TestPlanRetentionDaysPro(t *testing.T) {
+	// Legacy name maps to business tier
 	if got := planRetentionDays("pro"); got != 90 {
 		t.Errorf("planRetentionDays(pro) = %d, want 90", got)
 	}
 }
 
+func TestPlanRetentionDaysScale(t *testing.T) {
+	if got := planRetentionDays("scale"); got != 365 {
+		t.Errorf("planRetentionDays(scale) = %d, want 365", got)
+	}
+}
+
+func TestPlanRetentionDaysEnterprise(t *testing.T) {
+	if got := planRetentionDays("enterprise"); got != 365 {
+		t.Errorf("planRetentionDays(enterprise) = %d, want 365", got)
+	}
+}
+
 func TestPlanRetentionDaysUnknown(t *testing.T) {
-	if got := planRetentionDays("enterprise"); got != 30 {
-		t.Errorf("planRetentionDays(enterprise) = %d, want 30 (default)", got)
+	if got := planRetentionDays("nonexistent"); got != 30 {
+		t.Errorf("planRetentionDays(nonexistent) = %d, want 30 (default)", got)
 	}
 }
 
@@ -64,6 +90,13 @@ func TestExtractDateNoDate(t *testing.T) {
 	got := extractDate("raw/request_facts/data.jsonl")
 	if got != "" {
 		t.Errorf("extractDate = %q, want empty", got)
+	}
+}
+
+func TestExtractDateHivePartition(t *testing.T) {
+	got := extractDate("warehouse/request_metrics_minute/event_day=2025-06-15/metrics_abc123.parquet")
+	if got != "2025-06-15" {
+		t.Errorf("extractDate = %q, want 2025-06-15", got)
 	}
 }
 
@@ -146,7 +179,7 @@ func TestPurgeOldDataKeepsRecent(t *testing.T) {
 	}
 	store, _ := setupLocalStore(t, files)
 
-	// Cutoff in the past should keep today's file
+	// Cutoff at today should keep today's file (not strictly less than)
 	deleted, err := purgeOldData(context.Background(), store, "raw/request_facts", today, false)
 	if err != nil {
 		t.Fatal(err)
@@ -239,5 +272,120 @@ func TestPerPlanRetentionDifferentCutoffs(t *testing.T) {
 	}
 	if starter >= pro {
 		t.Errorf("starter (%d) should be < pro (%d)", starter, pro)
+	}
+}
+
+// ─── service_events_detail prefix test ───
+
+func TestPurgeDeletesServiceEventsDetail(t *testing.T) {
+	files := map[string]string{
+		"warehouse/service_events_detail/detail_2025-01-10.parquet": "old",
+		"warehouse/service_events_detail/detail_2026-03-15.parquet": "recent",
+	}
+	store, _ := setupLocalStore(t, files)
+
+	deleted, err := purgeOldData(context.Background(), store, "warehouse/service_events_detail", "2025-06-01", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1", deleted)
+	}
+
+	keys, _ := store.List(context.Background(), "warehouse/service_events_detail")
+	if len(keys) != 1 {
+		t.Errorf("remaining keys = %d, want 1", len(keys))
+	}
+}
+
+// ─── Full multi-tenant integration test ───
+
+func TestFullPurgeFlowMultiTenant(t *testing.T) {
+	ctx := context.Background()
+
+	// Set up tenant DB with two tenants: free (7d) and pro (90d)
+	dbPath := filepath.Join(t.TempDir(), "purge-flow.db")
+	tdb, err := tenantdb.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tdb.Close()
+
+	freeTenant := &tenantdb.Tenant{Name: "Free Corp", Email: "free@test.com", Plan: "free", Status: "active"}
+	proTenant := &tenantdb.Tenant{Name: "Pro Corp", Email: "pro@test.com", Plan: "pro", Status: "active"}
+	if err := tdb.Tenants().Create(ctx, freeTenant); err != nil {
+		t.Fatal(err)
+	}
+	if err := tdb.Tenants().Create(ctx, proTenant); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed files across all 5 prefixes for both tenants
+	// Old date: 60 days ago (free should delete, pro should keep)
+	oldDate := time.Now().UTC().AddDate(0, 0, -60).Format("2006-01-02")
+	// Recent date: 3 days ago (both should keep)
+	recentDate := time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")
+
+	prefixes := []string{"raw/request_facts", "raw/service_events", "warehouse/request_metrics_minute", "warehouse/service_events_daily", "warehouse/service_events_detail"}
+
+	files := map[string]string{}
+	for _, tid := range []string{freeTenant.ID, proTenant.ID} {
+		for _, pfx := range prefixes {
+			files[fmt.Sprintf("%s/%s/%s/data.jsonl", pfx, tid, oldDate)] = "old"
+			files[fmt.Sprintf("%s/%s/%s/data.jsonl", pfx, tid, recentDate)] = "recent"
+		}
+	}
+	store, _ := setupLocalStore(t, files)
+
+	// Run purge for each tenant in auto mode
+	for _, tenant := range []*tenantdb.Tenant{freeTenant, proTenant} {
+		days := planRetentionDays(tenant.Plan)
+		cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+
+		var tenantTotal int
+		for _, pfx := range prefixes {
+			prefix := fmt.Sprintf("%s/%s", pfx, tenant.ID)
+			deleted, err := purgeOldData(ctx, store, prefix, cutoff, false)
+			if err != nil {
+				t.Fatalf("purge %s: %v", prefix, err)
+			}
+			tenantTotal += deleted
+		}
+
+		if tenant.Plan == "free" {
+			// Free plan: 7d retention → 60-day-old files should be deleted (5 prefixes)
+			if tenantTotal != 5 {
+				t.Errorf("free tenant deleted = %d, want 5 (one per prefix)", tenantTotal)
+			}
+		} else {
+			// Pro plan: 90d retention → 60-day-old files should be kept
+			if tenantTotal != 0 {
+				t.Errorf("pro tenant deleted = %d, want 0 (all within 90d retention)", tenantTotal)
+			}
+		}
+	}
+
+	// Verify audit log works for this flow
+	detail := `{"retention_days":7,"files_deleted":5,"cutoff":"test","plan":"free","mode":"auto"}`
+	entry := &tenantdb.AuditEntry{
+		TenantID:   freeTenant.ID,
+		UserID:     "system",
+		Action:     "data.purge",
+		Resource:   "retention",
+		ResourceID: freeTenant.ID,
+		Detail:     detail,
+	}
+	if err := tdb.AuditLog().Log(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	entries, total, err := tdb.AuditLog().ListByTenant(ctx, freeTenant.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 {
+		t.Fatalf("audit total = %d, want 1", total)
+	}
+	if entries[0].Action != "data.purge" {
+		t.Errorf("audit action = %q, want data.purge", entries[0].Action)
 	}
 }

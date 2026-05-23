@@ -20,7 +20,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Valid Event",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "payment-service",
 				EventType: "payment_processed",
@@ -33,20 +32,8 @@ func TestServiceEvent_Validate(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name: "Missing TenantID",
-			input: &ServiceEvent{
-				EventId:   validUUIDv7,
-				EventTime: timestamppb.Now(),
-				Service:   "s",
-				EventType: "e",
-			},
-			expectErr: true,
-			errMsg:    "tenant_id is required",
-		},
-		{
 			name: "Missing EventID",
 			input: &ServiceEvent{
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
@@ -58,7 +45,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Invalid UUIDv7 (v4)",
 			input: &ServiceEvent{
 				EventId:   invalidUUIDv4,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
@@ -70,7 +56,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Missing EventTime",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				Service:   "s",
 				EventType: "e",
 			},
@@ -81,7 +66,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Missing Service",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				EventType: "e",
 			},
@@ -92,7 +76,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Missing EventType",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "s",
 			},
@@ -103,7 +86,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Invalid EventType (CamelCase)",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "UserCreated",
@@ -115,7 +97,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Nested JSON in Properties",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
@@ -130,7 +111,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Large Property Value",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "e",
@@ -145,7 +125,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Empty Service String",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "",
 				EventType: "deploy_started",
@@ -157,7 +136,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Empty EventType String",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "s",
 				EventType: "",
@@ -169,7 +147,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 			name: "Valid Event With No Properties",
 			input: &ServiceEvent{
 				EventId:   validUUIDv7,
-				TenantId:  "tenant-obs-1",
 				EventTime: timestamppb.Now(),
 				Service:   "api-service",
 				EventType: "health_check",
@@ -198,7 +175,6 @@ func TestServiceEvent_Validate(t *testing.T) {
 
 func TestValidateServiceEvent_InvalidEventID(t *testing.T) {
 	event := &ServiceEvent{
-		TenantId:  "tenant-obs-1",
 		EventId:   "not-a-uuid-at-all",
 		EventTime: timestamppb.Now(),
 		Service:   "svc",
@@ -216,14 +192,13 @@ func TestValidateServiceEvent_InvalidEventID(t *testing.T) {
 func TestParseServiceEvent_Valid(t *testing.T) {
 	validJSON := `{
 		"event_id": "018b3e34-5b6c-7e8f-9a0b-1c2d3e4f5a6b",
-		"tenant_id": "tenant-obs-1",
 		"event_time": "2023-10-27T10:05:00Z",
 		"service": "payment-service",
 		"event_type": "payment_processed",
 		"properties": {"currency": "USD", "amount": "45.00"}
 	}`
 
-	event, err := ParseServiceEvent([]byte(validJSON), "tenant-obs-1")
+	event, err := ParseServiceEvent([]byte(validJSON))
 	if err != nil {
 		t.Fatalf("Expected valid parsing, got error: %v", err)
 	}
@@ -242,7 +217,7 @@ func TestParseServiceEvent_Invalid_UnknownFields(t *testing.T) {
 		"user_id": "123" 
 	}`
 
-	_, err := ParseServiceEvent([]byte(invalidJSON), "tenant-obs-1")
+	_, err := ParseServiceEvent([]byte(invalidJSON))
 	if err == nil {
 		t.Fatal("Expected error for unknown field 'user_id', got nil")
 	}
@@ -253,7 +228,7 @@ func TestParseServiceEvent_Invalid_MissingRequired(t *testing.T) {
 		"service": "s"
 	}`
 
-	_, err := ParseServiceEvent([]byte(invalidJSON), "tenant-obs-1")
+	_, err := ParseServiceEvent([]byte(invalidJSON))
 	if err == nil {
 		t.Fatal("Expected error for missing fields, got nil")
 	}
@@ -277,7 +252,7 @@ func TestParseServiceEvent_Invalid_NestedJSONProperties(t *testing.T) {
 
 	for _, props := range cases {
 		jsonStr := strings.Replace(baseJSON, "%s", props, 1)
-		_, err := ParseServiceEvent([]byte(jsonStr), "tenant-obs-1")
+		_, err := ParseServiceEvent([]byte(jsonStr))
 		if err == nil {
 			t.Errorf("Expected error for nested JSON properties %s, got nil", props)
 		}
@@ -300,7 +275,7 @@ func TestParseServiceEvent_Invalid_EventTypeFormat(t *testing.T) {
 
 	for _, etcheck := range cases {
 		jsonStr := strings.Replace(baseJSON, "%s", etcheck, 1)
-		_, err := ParseServiceEvent([]byte(jsonStr), "tenant-obs-1")
+		_, err := ParseServiceEvent([]byte(jsonStr))
 		if err == nil {
 			t.Errorf("Expected error for invalid event_type format %s, got nil", etcheck)
 		}
@@ -314,4 +289,19 @@ func TestParseServiceEvent_Immutability_Check(t *testing.T) {
 	// (though strictly speaking, we parse into a new struct anyway).
 	// The key is that the parser validation runs ONCE.
 	// If a user modifies the struct later, they break the contract, but the *ingestion* path is safe.
+}
+
+// FuzzValidateServiceEvent ensures ParseServiceEvent never panics on arbitrary input.
+func FuzzValidateServiceEvent(f *testing.F) {
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","eventType":"deploy_started","properties":{"version":"1.0"}}`))
+	f.Add([]byte(`{"eventId":"` + validUUIDv7 + `","eventTime":"2024-01-15T10:30:00Z","service":"svc","eventType":"health_check_failed"}`))
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`not json`))
+	f.Add([]byte(``))
+	f.Add([]byte(`{"eventType":"UPPER_CASE"}`))
+	f.Add([]byte(`{"properties":{"key":"` + strings.Repeat("x", 2000) + `"}}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		ParseServiceEvent(data)
+	})
 }

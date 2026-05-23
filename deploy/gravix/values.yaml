@@ -5,7 +5,9 @@ global:
   # REQUIRED: Override these in a separate values file or --set flags.
   # Deploy will fail if these are left empty.
   apiKey: ""
-  cubeApiSecret: ""
+  jwtSecret: ""      # REQUIRED: JWT signing secret (min 32 chars)
+  cubeApiSecret: ""   # REQUIRED: Cube.js API secret
+  databaseUrl: ""     # PostgreSQL connection string (when gateway.dbDriver=postgres)
 
   # Container registry configuration.
   # For GHCR: ghcr.io/<org>/gravix
@@ -85,6 +87,14 @@ rollupJob:
     pullPolicy: IfNotPresent
   schedule: "*/5 * * * *" # Every 5 minutes
 
+eventsRollupJob:
+  enabled: true
+  schedule: "0 * * * *"  # Every hour
+
+eventsDetailJob:
+  enabled: true
+  schedule: "0 * * * *"  # Every hour
+
 retentionJob:
   enabled: true
   image:
@@ -94,7 +104,48 @@ retentionJob:
   schedule: "0 3 * * *" # Daily at 03:00 UTC
   mode: "manual"        # "auto" = per-plan retention (free=7d, starter=30d, pro=90d), "manual" = use retentionDays
   retentionDays: 30     # Only used when mode=manual
+  warmAfterDays: 7      # Move data to warm (STANDARD_IA) after this many days (0=disabled)
+  coldAfterDays: 30     # Move data to cold (GLACIER) after this many days (0=disabled)
   tenantDBPath: "/data/gravix.db"  # Path to tenant SQLite database inside the container
+
+# S3 lifecycle policy configuration.
+# When enabled, creates a ConfigMap with lifecycle rules for the S3 bucket.
+# These are applied to the bucket via the MinIO/S3 API or IaC tooling.
+s3Lifecycle:
+  enabled: false
+  warmAfterDays: 7      # Transition to STANDARD_IA after N days
+  coldAfterDays: 30     # Transition to GLACIER after N days
+  deleteAfterDays: 90   # Permanently delete after N days
+
+gateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: gravix-gateway
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  tenantDBPath: "/data/gravix.db"
+  # Database driver: "sqlite" (default) or "postgres"
+  # When "postgres", set database.url in secrets
+  dbDriver: "sqlite"
+  # CORS allowed origins (empty defaults to "*" for local dev; set in production)
+  corsAllowedOrigins: ""
+  stripe:
+    enabled: false
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  persistence:
+    enabled: true
+    size: 1Gi
+    # storageClass: ""  # Use cluster default if empty
 
 dashboard:
   image:
@@ -109,19 +160,39 @@ storage:
       tag: "RELEASE.2024-03-15T01-07-19Z"
     persistence:
       enabled: true
-      size: 10Gi
+      size: 100Gi
       # storageClass: ""  # Use cluster default if empty
   trino:
     enabled: true
     image:
       repository: trinodb/trino
       tag: "351"
+    workers:
+      enabled: false
+      replicaCount: 2
+      resources:
+        limits:
+          cpu: "2"
+          memory: 4Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
   cube:
     enabled: true
     devMode: false  # Set to true only for local development
     image:
       repository: cubejs/cube
       tag: "v0.35"
+    hpa:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPU: 70
+
+# Synthetic monitoring CronJob — sends health checks to verify the pipeline.
+syntheticMonitor:
+  enabled: false
+  schedule: "*/5 * * * *"  # every 5 minutes
 
 # cert-manager ClusterIssuer for automatic TLS certificates.
 # Requires: cert-manager installed in the cluster.
@@ -169,6 +240,40 @@ monitoring:
     dashboards:
       enabled: false
       # annotations: {}              # Extra annotations for the dashboard ConfigMap
+
+# Log aggregation (Loki + Promtail).
+# Requires: Loki and Promtail images available.
+logging:
+  loki:
+    enabled: false
+    image:
+      repository: grafana/loki
+      tag: "2.9.4"
+    persistence:
+      size: 10Gi
+  promtail:
+    image:
+      repository: grafana/promtail
+      tag: "2.9.4"
+
+# Alertmanager for alert routing (Slack, PagerDuty, email).
+alertmanager:
+  enabled: false
+  image:
+    repository: prom/alertmanager
+    tag: "v0.27.0"
+  # receivers:
+  #   - name: slack
+  #     slack_configs:
+  #       - api_url: "https://hooks.slack.com/services/..."
+  #         channel: "#alerts"
+
+# Database backup CronJob.
+# SQLite: copies the .db file. PostgreSQL: runs pg_dump.
+dbBackup:
+  enabled: false
+  schedule: "0 1 * * *"  # Daily at 01:00 UTC
+  retentionDays: 7
 
 autoscaling:
   enabled: false
