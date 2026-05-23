@@ -24,12 +24,12 @@ type Tenant struct {
 
 // APIKey represents an ingestion API key belonging to a tenant.
 type APIKey struct {
-	ID        string
-	TenantID  string
-	KeyPrefix string // first 8 chars for display (e.g., "grvx_abc1...")
-	Name      string
-	Status    string // active, revoked
-	CreatedAt time.Time
+	ID         string
+	TenantID   string
+	KeyPrefix  string // first 8 chars for display (e.g., "grvx_abc1...")
+	Name       string
+	Status     string // active, revoked
+	CreatedAt  time.Time
 	LastUsedAt *time.Time
 }
 
@@ -47,7 +47,7 @@ type User struct {
 	TenantID     string
 	Email        string
 	PasswordHash string
-	Role         string // admin, viewer
+	Role         string // admin, editor, viewer
 	CreatedAt    time.Time
 }
 
@@ -88,6 +88,10 @@ type UserRepo interface {
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByID(ctx context.Context, id string) (*User, error)
 	ListByTenant(ctx context.Context, tenantID string) ([]*User, error)
+	// UpdateRole changes the role for an existing user.
+	UpdateRole(ctx context.Context, id, role string) error
+	// Delete removes a user record permanently.
+	Delete(ctx context.Context, id string) error
 }
 
 // EventCounterRepo tracks per-tenant daily event counts for billing metering.
@@ -113,8 +117,8 @@ type AlertRule struct {
 	ID              string
 	TenantID        string
 	Name            string
-	Metric          string  // error_rate, p50_latency, p95_latency, p99_latency, throughput
-	Operator        string  // gt, lt
+	Metric          string // error_rate, p50_latency, p95_latency, p99_latency, throughput
+	Operator        string // gt, lt
 	Threshold       float64
 	WindowMinutes   int
 	Service         string // empty = all services

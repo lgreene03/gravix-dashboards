@@ -163,7 +163,7 @@ func (s *SQLiteDB) EventCounters() EventCounterRepo {
 func (s *SQLiteDB) NotificationChannels() NotificationChannelRepo {
 	return &sqliteNotificationChannelRepo{db: s.db}
 }
-func (s *SQLiteDB) AlertRules() AlertRuleRepo     { return &sqliteAlertRuleRepo{db: s.db} }
+func (s *SQLiteDB) AlertRules() AlertRuleRepo      { return &sqliteAlertRuleRepo{db: s.db} }
 func (s *SQLiteDB) AlertHistory() AlertHistoryRepo { return &sqliteAlertHistoryRepo{db: s.db} }
 func (s *SQLiteDB) AuditLog() AuditRepo            { return &sqliteAuditRepo{db: s.db} }
 
@@ -472,6 +472,30 @@ func (r *sqliteUserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+func (r *sqliteUserRepo) UpdateRole(ctx context.Context, id, role string) error {
+	result, err := r.db.ExecContext(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, id)
+	if err != nil {
+		return fmt.Errorf("update user role: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user not found")
+	}
+	return nil
+}
+
+func (r *sqliteUserRepo) Delete(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user not found")
+	}
+	return nil
 }
 
 // --- Event Counter Repo ---

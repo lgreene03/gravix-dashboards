@@ -3,16 +3,20 @@
 //
 // Endpoints:
 //
-//	POST /api/gateway/login            — Authenticate user, return JWT
-//	POST /api/gateway/register         — Create tenant + user + Stripe customer
-//	GET  /api/gateway/me               — Get current user info (JWT required)
-//	POST /api/gateway/api-keys         — Create API key (JWT required, admin only)
-//	GET  /api/gateway/api-keys         — List API keys (JWT required)
-//	DELETE /api/gateway/api-keys/:id   — Revoke API key (JWT required, admin only)
-//	POST /api/gateway/webhooks/stripe  — Handle Stripe webhooks (no auth, signature verified)
-//	POST /api/gateway/billing/portal   — Get Stripe Customer Portal URL (JWT required)
-//	GET  /api/gateway/billing/usage    — Get current usage stats (JWT required)
-//	GET  /live                         — Health check
+//	POST /api/gateway/login              — Authenticate user, return JWT
+//	POST /api/gateway/register           — Create tenant + user + Stripe customer
+//	GET  /api/gateway/me                 — Get current user info (JWT required)
+//	POST /api/gateway/api-keys           — Create API key (JWT required, admin only)
+//	GET  /api/gateway/api-keys           — List API keys (JWT required)
+//	DELETE /api/gateway/api-keys/:id     — Revoke API key (JWT required, admin only)
+//	GET  /api/gateway/users              — List tenant users (JWT required)
+//	POST /api/gateway/users              — Invite user (JWT required, admin only)
+//	PUT  /api/gateway/users/:id          — Update user role (JWT required, admin only)
+//	DELETE /api/gateway/users/:id        — Remove user (JWT required, admin only)
+//	POST /api/gateway/webhooks/stripe    — Handle Stripe webhooks (no auth, signature verified)
+//	POST /api/gateway/billing/portal     — Get Stripe Customer Portal URL (JWT required)
+//	GET  /api/gateway/billing/usage      — Get current usage stats (JWT required)
+//	GET  /live                           — Health check
 package main
 
 import (
@@ -154,6 +158,8 @@ func main() {
 	mux.HandleFunc("/api/gateway/dlq", gw.requireAuth(gw.handleDLQ))
 	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.handleDLQReplay))
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.handleAuditLog))
+	mux.HandleFunc("/api/gateway/users", gw.requireAuth(gw.handleUsers))
+	mux.HandleFunc("/api/gateway/users/", gw.requireAuth(gw.handleUserByID))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -248,9 +254,11 @@ func (gw *gateway) requireRole(roles ...string) func(http.HandlerFunc) http.Hand
 
 // planRank maps plan names to a numeric rank for comparison.
 var planRank = map[string]int{
-	"free":    0,
-	"starter": 1,
-	"pro":     2,
+	"free":       0,
+	"starter":    1,
+	"pro":        2,
+	"business":   3,
+	"enterprise": 4,
 }
 
 // requirePlan returns middleware that checks if the tenant's plan meets the minimum.
@@ -729,6 +737,182 @@ func (gw *gateway) handleBillingUsage(w http.ResponseWriter, r *http.Request) {
 		"month_total": monthTotal,
 		"period":      fmt.Sprintf("%d-%02d", year, month),
 	})
+}
+
+// --- User Management ---
+
+// validRoles is the set of valid role strings for user creation and update.
+var validRoles = map[string]bool{
+	auth.RoleAdmin:  true,
+	auth.RoleEditor: true,
+	auth.RoleViewer: true,
+}
+
+// safeUser converts a User to a map safe for JSON responses (omits password hash).
+func safeUser(u *tenantdb.User) map[string]interface{} {
+	return map[string]interface{}{
+		"id":         u.ID,
+		"tenant_id":  u.TenantID,
+		"email":      u.Email,
+		"role":       u.Role,
+		"created_at": u.CreatedAt,
+	}
+}
+
+// handleUsers handles GET (list) and POST (create) for /api/gateway/users.
+//
+//	GET  — all authenticated users may list their tenant's users
+//	POST — admin only; creates a new user with a specified role
+func (gw *gateway) handleUsers(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+
+	switch r.Method {
+	case http.MethodGet:
+		users, err := gw.db.Users().ListByTenant(r.Context(), claims.TenantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list users")
+			return
+		}
+		resp := make([]map[string]interface{}, len(users))
+		for i, u := range users {
+			resp[i] = safeUser(u)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"users": resp})
+
+	case http.MethodPost:
+		if !claims.HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+			Role     string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Email == "" || req.Password == "" {
+			writeError(w, http.StatusBadRequest, "email and password are required")
+			return
+		}
+		if len(req.Password) < 8 {
+			writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+			return
+		}
+		if req.Role == "" {
+			req.Role = auth.RoleViewer
+		}
+		if !validRoles[req.Role] {
+			writeError(w, http.StatusBadRequest, "role must be admin, editor, or viewer")
+			return
+		}
+
+		if _, err := gw.db.Users().GetByEmail(r.Context(), req.Email); err == nil {
+			writeError(w, http.StatusConflict, "email already registered")
+			return
+		}
+
+		user := &tenantdb.User{
+			TenantID:     claims.TenantID,
+			Email:        req.Email,
+			PasswordHash: req.Password, // hashed by the repo
+			Role:         req.Role,
+		}
+		if err := gw.db.Users().Create(r.Context(), user); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create user")
+			return
+		}
+
+		gw.audit(r, "user.create", "user", user.ID,
+			fmt.Sprintf(`{"email":%q,"role":%q}`, user.Email, user.Role))
+
+		writeJSON(w, http.StatusCreated, safeUser(user))
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// handleUserByID handles PUT (role update) and DELETE for /api/gateway/users/:id.
+// Both operations require admin role. An admin cannot delete their own account.
+func (gw *gateway) handleUserByID(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+
+	parts := strings.Split(strings.TrimRight(r.URL.Path, "/"), "/")
+	if len(parts) < 5 || parts[4] == "" {
+		writeError(w, http.StatusBadRequest, "user ID required")
+		return
+	}
+	userID := parts[4]
+
+	switch r.Method {
+	case http.MethodPut:
+		if !claims.HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		var req struct {
+			Role string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if !validRoles[req.Role] {
+			writeError(w, http.StatusBadRequest, "role must be admin, editor, or viewer")
+			return
+		}
+
+		existing, err := gw.db.Users().GetByID(r.Context(), userID)
+		if err != nil || existing.TenantID != claims.TenantID {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+
+		if err := gw.db.Users().UpdateRole(r.Context(), userID, req.Role); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update role")
+			return
+		}
+
+		gw.audit(r, "user.role_change", "user", userID,
+			fmt.Sprintf(`{"from":%q,"to":%q}`, existing.Role, req.Role))
+
+		existing.Role = req.Role
+		writeJSON(w, http.StatusOK, safeUser(existing))
+
+	case http.MethodDelete:
+		if !claims.HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+		if userID == claims.UserID {
+			writeError(w, http.StatusBadRequest, "cannot delete your own account")
+			return
+		}
+
+		existing, err := gw.db.Users().GetByID(r.Context(), userID)
+		if err != nil || existing.TenantID != claims.TenantID {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+
+		if err := gw.db.Users().Delete(r.Context(), userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete user")
+			return
+		}
+
+		gw.audit(r, "user.delete", "user", userID,
+			fmt.Sprintf(`{"email":%q,"role":%q}`, existing.Email, existing.Role))
+
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 // --- Audit Logging ---

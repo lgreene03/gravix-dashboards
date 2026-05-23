@@ -2562,3 +2562,289 @@ func TestEvaluateAlerts_Anomaly(t *testing.T) {
 		t.Fatalf("Case 5: expected 2 history records, got %d", len(history))
 	}
 }
+
+// ============================================================
+// User management tests (Phase 4.1 RBAC)
+// ============================================================
+
+// createUserInTenant creates an additional user for a tenant with a given role.
+func createUserInTenant(t *testing.T, gw *gateway, tenantID, email, role string) (*tenantdb.User, string) {
+	t.Helper()
+	ctx := context.Background()
+	user := &tenantdb.User{
+		TenantID:     tenantID,
+		Email:        email,
+		PasswordHash: "password123",
+		Role:         role,
+	}
+	if err := gw.db.Users().Create(ctx, user); err != nil {
+		t.Fatalf("createUserInTenant: %v", err)
+	}
+	token, err := gw.tokens.Generate(tenantID, user.ID, user.Email, user.Role)
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+	return user, token
+}
+
+func TestListUsers_Admin(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, adminToken := createTestTenantWithUser(t, gw)
+	createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+
+	req := authRequest(httptest.NewRequest(http.MethodGet, "/api/gateway/users", nil), adminToken)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	users := resp["users"].([]interface{})
+	if len(users) != 2 {
+		t.Errorf("got %d users, want 2", len(users))
+	}
+}
+
+func TestListUsers_Viewer(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	_, viewerToken := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+
+	req := authRequest(httptest.NewRequest(http.MethodGet, "/api/gateway/users", nil), viewerToken)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("viewer should be able to list users; status = %d", rr.Code)
+	}
+}
+
+func TestCreateUser_Admin(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{
+		"email":    "editor@corp.com",
+		"password": "securepass",
+		"role":     "editor",
+	})
+	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["role"] != "editor" {
+		t.Errorf("role = %v, want editor", resp["role"])
+	}
+	if resp["password_hash"] != nil {
+		t.Error("response must not include password_hash")
+	}
+}
+
+func TestCreateUser_DefaultsToViewer(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{
+		"email":    "newuser@corp.com",
+		"password": "securepass",
+		// role omitted
+	})
+	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["role"] != "viewer" {
+		t.Errorf("role = %v, want viewer (default)", resp["role"])
+	}
+}
+
+func TestCreateUser_NonAdminForbidden(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	_, editorToken := createUserInTenant(t, gw, tenant.ID, "editor@corp.com", "editor")
+
+	body := jsonBody(t, map[string]string{
+		"email":    "another@corp.com",
+		"password": "securepass",
+		"role":     "viewer",
+	})
+	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), editorToken)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+}
+
+func TestCreateUser_DuplicateEmail(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{
+		"email":    "admin@corp.com", // already created by createTestTenantWithUser
+		"password": "securepass",
+		"role":     "viewer",
+	})
+	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rr.Code)
+	}
+}
+
+func TestCreateUser_InvalidRole(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+
+	body := jsonBody(t, map[string]string{
+		"email":    "bad@corp.com",
+		"password": "securepass",
+		"role":     "superuser",
+	})
+	req := authRequest(httptest.NewRequest(http.MethodPost, "/api/gateway/users", body), adminToken)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUsers)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestUpdateUserRole_Admin(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, adminToken := createTestTenantWithUser(t, gw)
+	viewer, _ := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+
+	body := jsonBody(t, map[string]string{"role": "editor"})
+	req := authRequest(
+		httptest.NewRequest(http.MethodPut, "/api/gateway/users/"+viewer.ID, body),
+		adminToken,
+	)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUserByID)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeResponse(t, rr, &resp)
+	if resp["role"] != "editor" {
+		t.Errorf("role = %v, want editor", resp["role"])
+	}
+}
+
+func TestUpdateUserRole_NonAdminForbidden(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	viewer, viewerToken := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+
+	body := jsonBody(t, map[string]string{"role": "admin"})
+	req := authRequest(
+		httptest.NewRequest(http.MethodPut, "/api/gateway/users/"+viewer.ID, body),
+		viewerToken,
+	)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUserByID)(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+}
+
+func TestUpdateUserRole_CrossTenantBlocked(t *testing.T) {
+	gw := newTestGateway(t)
+	_, _, _, adminToken := createTestTenantWithUser(t, gw)
+
+	// Create a second tenant and user
+	ctx := context.Background()
+	otherTenant := &tenantdb.Tenant{Name: "Other Corp", Email: "other@other.com", Plan: "free", Status: "active"}
+	if err := gw.db.Tenants().Create(ctx, otherTenant); err != nil {
+		t.Fatal(err)
+	}
+	otherUser := &tenantdb.User{TenantID: otherTenant.ID, Email: "user@other.com", PasswordHash: "pass1234", Role: "viewer"}
+	if err := gw.db.Users().Create(ctx, otherUser); err != nil {
+		t.Fatal(err)
+	}
+
+	body := jsonBody(t, map[string]string{"role": "admin"})
+	req := authRequest(
+		httptest.NewRequest(http.MethodPut, "/api/gateway/users/"+otherUser.ID, body),
+		adminToken,
+	)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUserByID)(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant update should return 404, got %d", rr.Code)
+	}
+}
+
+func TestDeleteUser_Admin(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, adminToken := createTestTenantWithUser(t, gw)
+	viewer, _ := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+
+	req := authRequest(
+		httptest.NewRequest(http.MethodDelete, "/api/gateway/users/"+viewer.ID, nil),
+		adminToken,
+	)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUserByID)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Confirm user is gone
+	if _, err := gw.db.Users().GetByID(context.Background(), viewer.ID); err == nil {
+		t.Error("user should have been deleted")
+	}
+}
+
+func TestDeleteUser_SelfDeleteBlocked(t *testing.T) {
+	gw := newTestGateway(t)
+	_, adminUser, _, adminToken := createTestTenantWithUser(t, gw)
+
+	req := authRequest(
+		httptest.NewRequest(http.MethodDelete, "/api/gateway/users/"+adminUser.ID, nil),
+		adminToken,
+	)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUserByID)(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("self-delete should return 400, got %d", rr.Code)
+	}
+}
+
+func TestDeleteUser_NonAdminForbidden(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, adminUser, _, _ := createTestTenantWithUser(t, gw)
+	_, viewerToken := createUserInTenant(t, gw, tenant.ID, "viewer@corp.com", "viewer")
+
+	req := authRequest(
+		httptest.NewRequest(http.MethodDelete, "/api/gateway/users/"+adminUser.ID, nil),
+		viewerToken,
+	)
+	rr := httptest.NewRecorder()
+	gw.requireAuth(gw.handleUserByID)(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+}
