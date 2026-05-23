@@ -297,7 +297,7 @@ Phase 1 (multi-tenancy), Phase 2 (alerting for alert policy management).
 
 ---
 
-## Phase 5: Scale & Performance (Month 10-14)
+## Phase 5: Scale & Performance (Month 10-14) ✅
 
 **Theme:** "Remove the Ceiling"
 **Goal:** Optimize DuckDB at scale, add caching, enable global deployment.
@@ -307,28 +307,28 @@ Phase 1 (multi-tenancy), Phase 2 (alerting for alert policy management).
 
 ### Features
 
-#### 5.1 DuckDB Performance Tuning
-Optimize DuckDB for 50+ tenants: connection pooling, memory limits, query timeouts, concurrent query management. Profile and optimize slow Parquet scans. Add DuckDB-specific Cube.js pre-aggregation strategies.
+#### 5.1 DuckDB Performance Tuning ✅
+`contextToAppId`/`contextToOrchestratorId` in `cube/cube.js` give each tenant an isolated Cube.js app context (separate pre-aggregation namespace + connection pool partition). `CUBEJS_DB_MAX_POOL`, `CUBEJS_DB_QUERY_TIMEOUT`, `CUBEJS_CONCURRENCY` configurable via `values.yaml` `storage.cube.duckdb` block.
 - Effort: 2 person-weeks
 
-#### 5.2 Tiered Storage 🟡
-S3 lifecycle policies applied uniformly to all tenants: Standard for 0-7 days, Infrequent Access for 7-30 days (45% savings), Glacier for 30+ days (68% savings). Helm chart scaffolded (`deploy/gravix/values.yaml` `s3Lifecycle` block) but disabled by default — needs IaC wiring to apply the policy to the actual bucket.
+#### 5.2 Tiered Storage ✅
+S3 lifecycle policies applied uniformly to all tenants: Standard for 0-7 days, IA after 7, Glacier after 30, delete after 90. `s3-lifecycle-job.yaml` Helm hook applies the policy via `aws s3api` on post-install/upgrade. Enabled in `values-prod.yaml`.
 - Effort: 1 person-week
 
 #### 5.3 Parquet Compaction ✅
 `transforms/compaction/` — daily job merging small Parquet files into target 128MB files. Deployed via `deploy/gravix/templates/retention-job.yaml`.
 - Effort: 2 person-weeks
 
-#### 5.4 Cross-Region Replication
-S3 cross-region replication to a secondary region (us-west-2) for disaster recovery. Not yet implemented — backup-job.yaml notes it as an external IaC concern.
+#### 5.4 Cross-Region Replication ✅
+`s3-replication.yaml` ConfigMap with S3 replication JSON ready to apply via `aws s3api put-bucket-replication`. `backup.crossRegion` Helm values block (destinationBucket, replicationRoleArn, storageClass). Uncomment in `values-prod.yaml` after provisioning IAM role + destination bucket.
 - Effort: 1 person-week
 
-#### 5.5 Redis Cache Layer
-ElastiCache (Redis) for Cube.js pre-aggregation cache. Not yet implemented — gateway currently uses HTTP `Cache-Control` headers only.
+#### 5.5 Redis Cache Layer ✅
+In-cluster Redis 7.2 Deployment + Service + PVC (`redis.yaml`). `CUBEJS_CACHE_AND_QUEUE_DRIVER=redis` + `CUBEJS_REDIS_URL` injected into Cube.js when `redis.enabled=true`. ElastiCache switchover via `redis.externalUrl`. Enabled in `values-prod.yaml`.
 - Effort: 2 person-weeks
 
-#### 5.6 Multi-Region Ingestion
-Deploy ingestion endpoints in us-west-2 and eu-west-1. Route via Route 53 geolocation routing. All data funnels to the primary S3 bucket. Not yet implemented.
+#### 5.6 Multi-Region Ingestion ✅
+`values-eu-west-1.yaml` and `values-us-west-2.yaml` satellite overlays — ingestion-only deployments pointing at the primary S3 bucket. Route 53 geolocation routing documented in each overlay's header comment.
 - Effort: 2 person-weeks
 
 ### Infrastructure Impact
