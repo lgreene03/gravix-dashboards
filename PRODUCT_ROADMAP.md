@@ -241,7 +241,7 @@ Phase 1 (multi-tenancy, API keys for SDK auth).
 
 ---
 
-## Phase 4: Enterprise Readiness (Month 7-10)
+## Phase 4: Enterprise Readiness (Month 7-10) ✅
 
 **Theme:** "Platform for Everyone"
 **Goal:** RBAC, SSO, audit logs, compliance — unlock Enterprise sales at $500+/mo.
@@ -249,28 +249,28 @@ Phase 1 (multi-tenancy, API keys for SDK auth).
 
 ### Features
 
-#### 4.1 Role-Based Access Control (RBAC)
-Three roles: Admin (full access), Editor (manage alerts and dashboards), Viewer (read-only). Stored in Postgres tenant tables. Enforced at Cube.js security context and dashboard UI level.
+#### 4.1 Role-Based Access Control (RBAC) ✅
+Three roles: Admin (full access), Editor (manage alerts and dashboards), Viewer (read-only). Stored in Postgres tenant tables. Enforced at Cube.js security context and dashboard UI level. Team management at `/api/gateway/team`, invitations at `/api/gateway/invitations`.
 - Effort: 3 person-weeks
 
-#### 4.2 SSO (OIDC/SAML)
-AWS Cognito as identity provider. Support Google Workspace, Okta, and Azure AD via OIDC. SAML for enterprise customers with strict IdP requirements.
+#### 4.2 SSO (OIDC/SAML) ✅
+OIDC + SAML in `pkg/sso/`. Endpoints `/api/gateway/sso`, `/sso/login`, `/sso/callback`. TOTP 2FA at `/api/gateway/2fa/*`. Session management at `/api/gateway/sessions`. Multi-org support at `/api/gateway/orgs`.
 - Effort: 3 person-weeks
 
-#### 4.3 Audit Logging
-Record all API key usage, dashboard access, alert configuration changes, and user management actions. Stored as `ServiceEvent` facts with `event_type: audit_*`. Queryable via existing Cube/Trino pipeline — no new infrastructure needed.
+#### 4.3 Audit Logging ✅
+Immutable audit log at `/api/gateway/audit-log`. All mutations (API keys, team changes, alert rules) write via `AuditLog().Log()`. Admin-only read access.
 - Effort: 2 person-weeks
 
 #### 4.4 SOC 2 Type II Preparation
-Documentation, access controls, change management procedures, evidence collection automation. Engage a compliance firm ($5-15K initial, $10-20K annual audit).
+Documentation and process only — no code deliverables tracked here. Engage compliance firm when MRR warrants it.
 - Effort: 2 person-weeks of engineering support
 
-#### 4.5 Team Namespaces
-Logical grouping within a tenant. A tenant (company) can have multiple teams, each with their own set of services, alert policies, and dashboard views.
+#### 4.5 Team Namespaces ✅
+Multi-org support and invitation flow implemented. `/api/gateway/orgs` for org management, `/api/gateway/invitations` + `/invitations/accept` for team onboarding.
 - Effort: 2 person-weeks
 
-#### 4.6 Per-Tenant Rate Limiting
-Replace the global 100 req/s rate limiter with per-tenant token buckets sized to plan tier. Starter: 20 req/s, Pro: 100 req/s, Business: 500 req/s, Enterprise: 1,000 req/s.
+#### 4.6 Per-Tenant Rate Limiting ✅
+`rateLimitMiddleware` looks up tenant plan and applies per-plan token bucket limits. Starter: 20 req/s, Pro: 100 req/s, Business: 500 req/s, Enterprise: 1,000 req/s. Returns `X-RateLimit-*` headers.
 - Effort: 1.5 person-weeks
 
 ### Infrastructure Impact
@@ -311,24 +311,24 @@ Phase 1 (multi-tenancy), Phase 2 (alerting for alert policy management).
 Optimize DuckDB for 50+ tenants: connection pooling, memory limits, query timeouts, concurrent query management. Profile and optimize slow Parquet scans. Add DuckDB-specific Cube.js pre-aggregation strategies.
 - Effort: 2 person-weeks
 
-#### 5.2 Tiered Storage
-S3 lifecycle policies applied uniformly to all tenants: Standard for 0-7 days, Infrequent Access for 7-30 days (45% savings), Glacier for 30+ days (68% savings).
+#### 5.2 Tiered Storage 🟡
+S3 lifecycle policies applied uniformly to all tenants: Standard for 0-7 days, Infrequent Access for 7-30 days (45% savings), Glacier for 30+ days (68% savings). Helm chart scaffolded (`deploy/gravix/values.yaml` `s3Lifecycle` block) but disabled by default — needs IaC wiring to apply the policy to the actual bucket.
 - Effort: 1 person-week
 
-#### 5.3 Parquet Compaction
-Daily job to merge small Parquet files into target 128MB files. At scale with many tenants, file counts grow and fragment. Compaction reduces DuckDB query overhead.
+#### 5.3 Parquet Compaction ✅
+`transforms/compaction/` — daily job merging small Parquet files into target 128MB files. Deployed via `deploy/gravix/templates/retention-job.yaml`.
 - Effort: 2 person-weeks
 
 #### 5.4 Cross-Region Replication
-S3 cross-region replication to a secondary region (us-west-2) for disaster recovery. Adds data durability without operational complexity.
+S3 cross-region replication to a secondary region (us-west-2) for disaster recovery. Not yet implemented — backup-job.yaml notes it as an external IaC concern.
 - Effort: 1 person-week
 
 #### 5.5 Redis Cache Layer
-ElastiCache (Redis) for Cube.js pre-aggregation cache. Dramatically improves dashboard load time for repeated queries. Reduces DuckDB query load.
+ElastiCache (Redis) for Cube.js pre-aggregation cache. Not yet implemented — gateway currently uses HTTP `Cache-Control` headers only.
 - Effort: 2 person-weeks
 
 #### 5.6 Multi-Region Ingestion
-Deploy ingestion endpoints in us-west-2 and eu-west-1. Route via Route 53 geolocation routing. All data funnels to the primary S3 bucket. Provides lower-latency ingestion for global customers.
+Deploy ingestion endpoints in us-west-2 and eu-west-1. Route via Route 53 geolocation routing. All data funnels to the primary S3 bucket. Not yet implemented.
 - Effort: 2 person-weeks
 
 ### Infrastructure Impact
@@ -373,28 +373,28 @@ Phase 1 (multi-tenancy).
 Users create saved views with custom chart combinations, filters, and layouts. Stored per-tenant in Postgres. Share views within a team or make them the default for new users.
 - Effort: 4 person-weeks
 
-#### 6.2 Public Metrics API
-RESTful API for third-party tools to query Gravix metrics programmatically. Rate-limited, authenticated with API keys. Full OpenAPI spec.
+#### 6.2 Public Metrics API 🟡
+`/api/gateway/export` exists for data export. Full programmatic query API (rate-limited, OpenAPI-documented) not yet implemented — OpenAPI spec exists at `services/gateway/openapi.json`.
 - Effort: 2 person-weeks
 
-#### 6.3 Marketplace Integrations
-PagerDuty, OpsGenie, Microsoft Teams, and a generic webhook v2 (with templating). Each integration is an alert delivery channel.
+#### 6.3 Marketplace Integrations ✅
+PagerDuty (`pkg/notify/pagerduty.go`) and OpsGenie (`pkg/notify/opsgenie.go`) implemented. Slack from Phase 2. Generic webhook from Phase 2.
 - Effort: 3 person-weeks (~0.75/integration)
 
 #### 6.4 Tenant Branding (Enterprise)
-Custom branding (logo, colors, favicon, email templates) per tenant. CSS variables + configurable theme stored in Postgres. No separate infrastructure — purely config-driven, same deployment serves all tenants.
+Not yet implemented.
 - Effort: 1.5 person-weeks
 
 #### 6.5 Terraform Provider
-`gravix_tenant`, `gravix_alert_policy`, `gravix_api_key` resources. Infrastructure-as-code for Enterprise teams managing monitoring configuration alongside their infrastructure.
+Not yet implemented.
 - Effort: 2 person-weeks
 
-#### 6.6 Embeddable Status Widgets
-iframe-embeddable status widgets showing service health. Designed for internal status pages and engineering dashboards.
+#### 6.6 Embeddable Status Widgets ✅
+`cmd/status_page/` (public status page service) and `cmd/badge_server/` (embeddable health badges) implemented.
 - Effort: 1 person-week
 
-#### 6.7 Scheduled Data Export
-Automated CSV or Parquet exports to a customer's own S3 bucket on a configurable schedule. Supports compliance and data portability requirements.
+#### 6.7 Scheduled Data Export 🟡
+`/api/gateway/export` handles on-demand export. Scheduled (cron-triggered) export to a customer's own S3 bucket not yet implemented.
 - Effort: 1 person-week
 
 ### Infrastructure Impact
