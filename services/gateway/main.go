@@ -414,6 +414,15 @@ func main() {
 	mux.HandleFunc("/api/gateway/referrals", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleReferrals))))
 	mux.HandleFunc("/api/gateway/referrals/redeem", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleRedeemReferral))))
 	mux.HandleFunc("/api/gateway/feedback", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleFeedback))))
+
+	// Platform features (Phase 6)
+	mux.HandleFunc("/api/gateway/dashboards", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleDashboards))))
+	mux.HandleFunc("/api/gateway/dashboards/", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleDashboardByID))))
+	mux.HandleFunc("/api/gateway/branding", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleBranding))))
+	mux.HandleFunc("/api/gateway/branding/public", gw.ipRateLimitMiddleware(gw.handleBrandingPublic))
+	mux.HandleFunc("/api/gateway/exports/scheduled", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleScheduledExports))))
+	mux.HandleFunc("/api/gateway/exports/scheduled/", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleScheduledExportByID))))
+	mux.HandleFunc("/api/v1/metrics", gw.ipRateLimitMiddleware(gw.handlePublicMetrics))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))

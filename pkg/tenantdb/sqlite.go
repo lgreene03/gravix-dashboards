@@ -111,6 +111,15 @@ func (s *SQLiteDB) SSOStates() SSOStateRepo {
 func (s *SQLiteDB) Referrals() referral.ReferralRepo {
 	return &sqliteReferralRepo{db: s.db}
 }
+func (s *SQLiteDB) CustomDashboards() CustomDashboardRepo {
+	return &sqliteCustomDashboardRepo{db: s.db}
+}
+func (s *SQLiteDB) TenantBranding() TenantBrandingRepo {
+	return &sqliteTenantBrandingRepo{db: s.db}
+}
+func (s *SQLiteDB) ScheduledExports() ScheduledExportRepo {
+	return &sqliteScheduledExportRepo{db: s.db}
+}
 
 // --- Tenant Repo ---
 
@@ -1748,4 +1757,283 @@ func (r *sqliteReferralRepo) CountByTenant(ctx context.Context, tenantID string)
 	err := r.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM referrals WHERE referrer_tenant = ? AND status = 'active'`, tenantID).Scan(&count)
 	return count, err
+}
+
+// --- Custom Dashboard Repo ---
+
+type sqliteCustomDashboardRepo struct{ db *sql.DB }
+
+func (r *sqliteCustomDashboardRepo) Create(ctx context.Context, d *CustomDashboard) error {
+	if d.ID == "" {
+		d.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO custom_dashboards
+			(id, tenant_id, name, description, config, is_default, shared_with, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.TenantID, d.Name, d.Description, d.Config,
+		boolToInt(d.IsDefault), d.SharedWith, d.CreatedBy, now, now)
+	return err
+}
+
+func (r *sqliteCustomDashboardRepo) GetByID(ctx context.Context, id string) (*CustomDashboard, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, name, description, config, is_default, shared_with, created_by, created_at, updated_at
+		FROM custom_dashboards WHERE id = ?`, id)
+	return scanCustomDashboard(row)
+}
+
+func (r *sqliteCustomDashboardRepo) Update(ctx context.Context, d *CustomDashboard) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE custom_dashboards
+		SET name=?, description=?, config=?, is_default=?, shared_with=?, updated_at=?
+		WHERE id=? AND tenant_id=?`,
+		d.Name, d.Description, d.Config, boolToInt(d.IsDefault), d.SharedWith, now, d.ID, d.TenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("custom dashboard not found")
+	}
+	return nil
+}
+
+func (r *sqliteCustomDashboardRepo) Delete(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM custom_dashboards WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("custom dashboard not found")
+	}
+	return nil
+}
+
+func (r *sqliteCustomDashboardRepo) ListByTenant(ctx context.Context, tenantID string) ([]*CustomDashboard, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, name, description, config, is_default, shared_with, created_by, created_at, updated_at
+		FROM custom_dashboards WHERE tenant_id = ? ORDER BY is_default DESC, created_at ASC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*CustomDashboard
+	for rows.Next() {
+		d, err := scanCustomDashboard(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (r *sqliteCustomDashboardRepo) SetDefault(ctx context.Context, tenantID, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE custom_dashboards SET is_default=0 WHERE tenant_id=?`, tenantID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx,
+		`UPDATE custom_dashboards SET is_default=1 WHERE id=? AND tenant_id=?`, id, tenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("custom dashboard not found")
+	}
+	return tx.Commit()
+}
+
+type dashboardScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanCustomDashboard(s dashboardScanner) (*CustomDashboard, error) {
+	var d CustomDashboard
+	var isDefaultInt int
+	var createdAt, updatedAt string
+	err := s.Scan(&d.ID, &d.TenantID, &d.Name, &d.Description, &d.Config,
+		&isDefaultInt, &d.SharedWith, &d.CreatedBy, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	d.IsDefault = isDefaultInt != 0
+	d.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	d.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return &d, nil
+}
+
+// --- Tenant Branding Repo ---
+
+type sqliteTenantBrandingRepo struct{ db *sql.DB }
+
+func (r *sqliteTenantBrandingRepo) Get(ctx context.Context, tenantID string) (*TenantBranding, error) {
+	var b TenantBranding
+	var updatedAt string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT tenant_id, logo_url, favicon_url, primary_color, accent_color, company_name, updated_at
+		FROM tenant_branding WHERE tenant_id = ?`, tenantID).
+		Scan(&b.TenantID, &b.LogoURL, &b.FaviconURL, &b.PrimaryColor, &b.AccentColor, &b.CompanyName, &updatedAt)
+	if err == sql.ErrNoRows {
+		return &TenantBranding{
+			TenantID:     tenantID,
+			PrimaryColor: "#6366f1",
+			AccentColor:  "#8b5cf6",
+		}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	b.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return &b, nil
+}
+
+func (r *sqliteTenantBrandingRepo) Upsert(ctx context.Context, b *TenantBranding) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO tenant_branding (tenant_id, logo_url, favicon_url, primary_color, accent_color, company_name, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(tenant_id) DO UPDATE SET
+			logo_url=excluded.logo_url,
+			favicon_url=excluded.favicon_url,
+			primary_color=excluded.primary_color,
+			accent_color=excluded.accent_color,
+			company_name=excluded.company_name,
+			updated_at=excluded.updated_at`,
+		b.TenantID, b.LogoURL, b.FaviconURL, b.PrimaryColor, b.AccentColor, b.CompanyName, now)
+	return err
+}
+
+// --- Scheduled Export Repo ---
+
+type sqliteScheduledExportRepo struct{ db *sql.DB }
+
+func (r *sqliteScheduledExportRepo) Create(ctx context.Context, e *ScheduledExport) error {
+	if e.ID == "" {
+		e.ID = uuid.New().String()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO scheduled_exports
+			(id, tenant_id, name, schedule, data_type, format, destination_url, lookback_days, status, last_error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.TenantID, e.Name, e.Schedule, e.DataType, e.Format,
+		e.DestinationURL, e.LookbackDays, e.Status, e.LastError, now, now)
+	return err
+}
+
+func (r *sqliteScheduledExportRepo) GetByID(ctx context.Context, id string) (*ScheduledExport, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, name, schedule, data_type, format, destination_url,
+		       lookback_days, status, last_run_at, last_error, created_at, updated_at
+		FROM scheduled_exports WHERE id = ?`, id)
+	return scanScheduledExport(row)
+}
+
+func (r *sqliteScheduledExportRepo) Update(ctx context.Context, e *ScheduledExport) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE scheduled_exports
+		SET name=?, schedule=?, data_type=?, format=?, destination_url=?,
+		    lookback_days=?, status=?, updated_at=?
+		WHERE id=? AND tenant_id=?`,
+		e.Name, e.Schedule, e.DataType, e.Format, e.DestinationURL,
+		e.LookbackDays, e.Status, now, e.ID, e.TenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("scheduled export not found")
+	}
+	return nil
+}
+
+func (r *sqliteScheduledExportRepo) Delete(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM scheduled_exports WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("scheduled export not found")
+	}
+	return nil
+}
+
+func (r *sqliteScheduledExportRepo) ListByTenant(ctx context.Context, tenantID string) ([]*ScheduledExport, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, name, schedule, data_type, format, destination_url,
+		       lookback_days, status, last_run_at, last_error, created_at, updated_at
+		FROM scheduled_exports WHERE tenant_id = ? ORDER BY created_at ASC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduledExports(rows)
+}
+
+func (r *sqliteScheduledExportRepo) ListActive(ctx context.Context) ([]*ScheduledExport, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, name, schedule, data_type, format, destination_url,
+		       lookback_days, status, last_run_at, last_error, created_at, updated_at
+		FROM scheduled_exports WHERE status = 'active' ORDER BY tenant_id, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduledExports(rows)
+}
+
+func (r *sqliteScheduledExportRepo) UpdateLastRun(ctx context.Context, id string, t time.Time, errMsg string) error {
+	ts := t.UTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE scheduled_exports SET last_run_at=?, last_error=?, updated_at=? WHERE id=?`,
+		ts, errMsg, ts, id)
+	return err
+}
+
+type exportScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanScheduledExport(s exportScanner) (*ScheduledExport, error) {
+	var e ScheduledExport
+	var lastRunAt *string
+	var createdAt, updatedAt string
+	err := s.Scan(&e.ID, &e.TenantID, &e.Name, &e.Schedule, &e.DataType, &e.Format,
+		&e.DestinationURL, &e.LookbackDays, &e.Status, &lastRunAt, &e.LastError,
+		&createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if lastRunAt != nil {
+		t, _ := time.Parse(time.RFC3339, *lastRunAt)
+		e.LastRunAt = &t
+	}
+	e.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	e.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return &e, nil
+}
+
+func scanScheduledExports(rows *sql.Rows) ([]*ScheduledExport, error) {
+	var out []*ScheduledExport
+	for rows.Next() {
+		e, err := scanScheduledExport(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }

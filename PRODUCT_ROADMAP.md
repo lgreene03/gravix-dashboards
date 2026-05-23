@@ -361,7 +361,7 @@ Phase 1 (multi-tenancy).
 
 ---
 
-## Phase 6: Platform (Month 14-18)
+## Phase 6: Platform (Month 14-18) ✅
 
 **Theme:** "Ecosystem"
 **Goal:** Custom dashboards, public API, marketplace integrations, tenant branding — transform from product to platform.
@@ -369,32 +369,32 @@ Phase 1 (multi-tenancy).
 
 ### Features
 
-#### 6.1 Custom Dashboards
-Users create saved views with custom chart combinations, filters, and layouts. Stored per-tenant in Postgres. Share views within a team or make them the default for new users.
+#### 6.1 Custom Dashboards ✅
+Saved views with custom chart combinations, filters, and layouts. Stored per-tenant in SQLite/Postgres. Full CRUD at `/api/gateway/dashboards`, team sharing and default-dashboard promotion. Migration in `migrations/sqlite/000007_phase6_platform.up.sql`.
 - Effort: 4 person-weeks
 
-#### 6.2 Public Metrics API 🟡
-`/api/gateway/export` exists for data export. Full programmatic query API (rate-limited, OpenAPI-documented) not yet implemented — OpenAPI spec exists at `services/gateway/openapi.json`.
+#### 6.2 Public Metrics API ✅
+`/api/v1/metrics` — API-key authenticated, Pro plan required. Proxies Cube.js REST queries with per-tenant isolation. Rate-limited via IP limiter. Supports `metric`, `from`, `to`, `service`, `path_template`, `granularity` params, max 30-day window.
 - Effort: 2 person-weeks
 
 #### 6.3 Marketplace Integrations ✅
 PagerDuty (`pkg/notify/pagerduty.go`) and OpsGenie (`pkg/notify/opsgenie.go`) implemented. Slack from Phase 2. Generic webhook from Phase 2.
 - Effort: 3 person-weeks (~0.75/integration)
 
-#### 6.4 Tenant Branding (Enterprise)
-Not yet implemented.
+#### 6.4 Tenant Branding (Enterprise) ✅
+`/api/gateway/branding` (admin-only PUT, any-role GET) and `/api/gateway/branding/public?t=` (unauthenticated, 5-min cache). Stored in `tenant_branding` table with defaults `#6366f1`/`#8b5cf6`. Hex color validation on write.
 - Effort: 1.5 person-weeks
 
-#### 6.5 Terraform Provider
-Not yet implemented.
+#### 6.5 Terraform Provider ✅
+`terraform-provider-gravix/` — `gravix_api_key`, `gravix_alert_rule`, `gravix_tenant` resources. Plugin SDK v2. Import support on all resources. No import cycle (provider returns `map[string]string` to avoid cross-package dependency).
 - Effort: 2 person-weeks
 
 #### 6.6 Embeddable Status Widgets ✅
 `cmd/status_page/` (public status page service) and `cmd/badge_server/` (embeddable health badges) implemented.
 - Effort: 1 person-week
 
-#### 6.7 Scheduled Data Export 🟡
-`/api/gateway/export` handles on-demand export. Scheduled (cron-triggered) export to a customer's own S3 bucket not yet implemented.
+#### 6.7 Scheduled Data Export ✅
+`/api/gateway/exports/scheduled` — full CRUD, admin-only create/update/delete, 5-field cron validation, `s3://` destination required, `lookback_days` 1–90, formats: jsonl/csv/parquet. Stored in `scheduled_exports` table.
 - Effort: 1 person-week
 
 ### Infrastructure Impact

@@ -44,6 +44,9 @@ type PostgresDB struct {
 	revokedTokens         *pgRevokedTokenRepo
 	ssoStates             *pgSSOStateRepo
 	referrals             *pgReferralRepo
+	customDashboards      *pgCustomDashboardRepo
+	tenantBranding        *pgTenantBrandingRepo
+	scheduledExports      *pgScheduledExportRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -91,6 +94,9 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.revokedTokens = &pgRevokedTokenRepo{db: db}
 	pdb.ssoStates = &pgSSOStateRepo{db: db}
 	pdb.referrals = &pgReferralRepo{db: db}
+	pdb.customDashboards = &pgCustomDashboardRepo{db: db}
+	pdb.tenantBranding = &pgTenantBrandingRepo{db: db}
+	pdb.scheduledExports = &pgScheduledExportRepo{db: db}
 	return pdb, nil
 }
 
@@ -115,6 +121,9 @@ func (p *PostgresDB) RecoveryCodes() RecoveryCodeRepo            { return p.reco
 func (p *PostgresDB) RevokedTokens() RevokedTokenRepo            { return p.revokedTokens }
 func (p *PostgresDB) SSOStates() SSOStateRepo                    { return p.ssoStates }
 func (p *PostgresDB) Referrals() referral.ReferralRepo            { return p.referrals }
+func (p *PostgresDB) CustomDashboards() CustomDashboardRepo      { return p.customDashboards }
+func (p *PostgresDB) TenantBranding() TenantBrandingRepo         { return p.tenantBranding }
+func (p *PostgresDB) ScheduledExports() ScheduledExportRepo      { return p.scheduledExports }
 func (p *PostgresDB) Close() error                              { return p.db.Close() }
 
 // --- Tenant Repo ---
@@ -1304,4 +1313,255 @@ func (r *pgReferralRepo) CountByTenant(ctx context.Context, tenantID string) (in
 	err := r.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM referrals WHERE referrer_tenant = $1 AND status = 'active'`, tenantID).Scan(&count)
 	return count, err
+}
+
+// --- Custom Dashboard Repo (Postgres) ---
+
+type pgCustomDashboardRepo struct{ db *sql.DB }
+
+func (r *pgCustomDashboardRepo) Create(ctx context.Context, d *CustomDashboard) error {
+	if d.ID == "" {
+		d.ID = uuid.New().String()
+	}
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO custom_dashboards
+			(id, tenant_id, name, description, config, is_default, shared_with, created_by, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		d.ID, d.TenantID, d.Name, d.Description, d.Config,
+		d.IsDefault, d.SharedWith, d.CreatedBy, now, now)
+	return err
+}
+
+func (r *pgCustomDashboardRepo) GetByID(ctx context.Context, id string) (*CustomDashboard, error) {
+	var d CustomDashboard
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id,tenant_id,name,description,config,is_default,shared_with,created_by,created_at,updated_at
+		FROM custom_dashboards WHERE id=$1`, id).
+		Scan(&d.ID, &d.TenantID, &d.Name, &d.Description, &d.Config,
+			&d.IsDefault, &d.SharedWith, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func (r *pgCustomDashboardRepo) Update(ctx context.Context, d *CustomDashboard) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE custom_dashboards
+		SET name=$1,description=$2,config=$3,is_default=$4,shared_with=$5,updated_at=$6
+		WHERE id=$7 AND tenant_id=$8`,
+		d.Name, d.Description, d.Config, d.IsDefault, d.SharedWith,
+		time.Now().UTC(), d.ID, d.TenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("custom dashboard not found")
+	}
+	return nil
+}
+
+func (r *pgCustomDashboardRepo) Delete(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM custom_dashboards WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("custom dashboard not found")
+	}
+	return nil
+}
+
+func (r *pgCustomDashboardRepo) ListByTenant(ctx context.Context, tenantID string) ([]*CustomDashboard, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id,tenant_id,name,description,config,is_default,shared_with,created_by,created_at,updated_at
+		FROM custom_dashboards WHERE tenant_id=$1 ORDER BY is_default DESC,created_at ASC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*CustomDashboard
+	for rows.Next() {
+		var d CustomDashboard
+		if err := rows.Scan(&d.ID, &d.TenantID, &d.Name, &d.Description, &d.Config,
+			&d.IsDefault, &d.SharedWith, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &d)
+	}
+	return out, rows.Err()
+}
+
+func (r *pgCustomDashboardRepo) SetDefault(ctx context.Context, tenantID, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE custom_dashboards SET is_default=FALSE WHERE tenant_id=$1`, tenantID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx,
+		`UPDATE custom_dashboards SET is_default=TRUE WHERE id=$1 AND tenant_id=$2`, id, tenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("custom dashboard not found")
+	}
+	return tx.Commit()
+}
+
+// --- Tenant Branding Repo (Postgres) ---
+
+type pgTenantBrandingRepo struct{ db *sql.DB }
+
+func (r *pgTenantBrandingRepo) Get(ctx context.Context, tenantID string) (*TenantBranding, error) {
+	var b TenantBranding
+	err := r.db.QueryRowContext(ctx, `
+		SELECT tenant_id,logo_url,favicon_url,primary_color,accent_color,company_name,updated_at
+		FROM tenant_branding WHERE tenant_id=$1`, tenantID).
+		Scan(&b.TenantID, &b.LogoURL, &b.FaviconURL, &b.PrimaryColor, &b.AccentColor, &b.CompanyName, &b.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return &TenantBranding{
+			TenantID:     tenantID,
+			PrimaryColor: "#6366f1",
+			AccentColor:  "#8b5cf6",
+		}, nil
+	}
+	return &b, err
+}
+
+func (r *pgTenantBrandingRepo) Upsert(ctx context.Context, b *TenantBranding) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO tenant_branding (tenant_id,logo_url,favicon_url,primary_color,accent_color,company_name,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT(tenant_id) DO UPDATE SET
+			logo_url=EXCLUDED.logo_url,
+			favicon_url=EXCLUDED.favicon_url,
+			primary_color=EXCLUDED.primary_color,
+			accent_color=EXCLUDED.accent_color,
+			company_name=EXCLUDED.company_name,
+			updated_at=EXCLUDED.updated_at`,
+		b.TenantID, b.LogoURL, b.FaviconURL, b.PrimaryColor, b.AccentColor, b.CompanyName, time.Now().UTC())
+	return err
+}
+
+// --- Scheduled Export Repo (Postgres) ---
+
+type pgScheduledExportRepo struct{ db *sql.DB }
+
+func (r *pgScheduledExportRepo) Create(ctx context.Context, e *ScheduledExport) error {
+	if e.ID == "" {
+		e.ID = uuid.New().String()
+	}
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO scheduled_exports
+			(id,tenant_id,name,schedule,data_type,format,destination_url,lookback_days,status,last_error,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		e.ID, e.TenantID, e.Name, e.Schedule, e.DataType, e.Format,
+		e.DestinationURL, e.LookbackDays, e.Status, e.LastError, now, now)
+	return err
+}
+
+func (r *pgScheduledExportRepo) GetByID(ctx context.Context, id string) (*ScheduledExport, error) {
+	var e ScheduledExport
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id,tenant_id,name,schedule,data_type,format,destination_url,
+		       lookback_days,status,last_run_at,last_error,created_at,updated_at
+		FROM scheduled_exports WHERE id=$1`, id).
+		Scan(&e.ID, &e.TenantID, &e.Name, &e.Schedule, &e.DataType, &e.Format,
+			&e.DestinationURL, &e.LookbackDays, &e.Status, &e.LastRunAt,
+			&e.LastError, &e.CreatedAt, &e.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+func (r *pgScheduledExportRepo) Update(ctx context.Context, e *ScheduledExport) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE scheduled_exports
+		SET name=$1,schedule=$2,data_type=$3,format=$4,destination_url=$5,
+		    lookback_days=$6,status=$7,updated_at=$8
+		WHERE id=$9 AND tenant_id=$10`,
+		e.Name, e.Schedule, e.DataType, e.Format, e.DestinationURL,
+		e.LookbackDays, e.Status, time.Now().UTC(), e.ID, e.TenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("scheduled export not found")
+	}
+	return nil
+}
+
+func (r *pgScheduledExportRepo) Delete(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM scheduled_exports WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("scheduled export not found")
+	}
+	return nil
+}
+
+func (r *pgScheduledExportRepo) ListByTenant(ctx context.Context, tenantID string) ([]*ScheduledExport, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id,tenant_id,name,schedule,data_type,format,destination_url,
+		       lookback_days,status,last_run_at,last_error,created_at,updated_at
+		FROM scheduled_exports WHERE tenant_id=$1 ORDER BY created_at ASC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ScheduledExport
+	for rows.Next() {
+		var e ScheduledExport
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.Name, &e.Schedule, &e.DataType, &e.Format,
+			&e.DestinationURL, &e.LookbackDays, &e.Status, &e.LastRunAt,
+			&e.LastError, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
+func (r *pgScheduledExportRepo) ListActive(ctx context.Context) ([]*ScheduledExport, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id,tenant_id,name,schedule,data_type,format,destination_url,
+		       lookback_days,status,last_run_at,last_error,created_at,updated_at
+		FROM scheduled_exports WHERE status='active' ORDER BY tenant_id,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ScheduledExport
+	for rows.Next() {
+		var e ScheduledExport
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.Name, &e.Schedule, &e.DataType, &e.Format,
+			&e.DestinationURL, &e.LookbackDays, &e.Status, &e.LastRunAt,
+			&e.LastError, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
+func (r *pgScheduledExportRepo) UpdateLastRun(ctx context.Context, id string, t time.Time, errMsg string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE scheduled_exports SET last_run_at=$1,last_error=$2,updated_at=$3 WHERE id=$4`,
+		t.UTC(), errMsg, time.Now().UTC(), id)
+	return err
 }

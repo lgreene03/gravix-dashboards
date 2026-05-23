@@ -446,6 +446,80 @@ type SSOStateRepo interface {
 	Cleanup(ctx context.Context) error
 }
 
+// CustomDashboard represents a tenant-saved dashboard layout with custom panels.
+type CustomDashboard struct {
+	ID          string
+	TenantID    string
+	Name        string
+	Description string
+	Config      string    // JSON array of panel configurations
+	IsDefault   bool
+	SharedWith  string    // private, team
+	CreatedBy   string    // user ID
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// CustomDashboardRepo manages user-saved dashboard configurations.
+type CustomDashboardRepo interface {
+	Create(ctx context.Context, d *CustomDashboard) error
+	GetByID(ctx context.Context, id string) (*CustomDashboard, error)
+	Update(ctx context.Context, d *CustomDashboard) error
+	Delete(ctx context.Context, id string) error
+	ListByTenant(ctx context.Context, tenantID string) ([]*CustomDashboard, error)
+	// SetDefault marks a dashboard as the tenant default and clears the flag on any other.
+	SetDefault(ctx context.Context, tenantID, id string) error
+}
+
+// TenantBranding holds per-tenant visual customization (Enterprise feature).
+type TenantBranding struct {
+	TenantID     string
+	LogoURL      string
+	FaviconURL   string
+	PrimaryColor string // CSS hex, e.g. "#6366f1"
+	AccentColor  string // CSS hex, e.g. "#8b5cf6"
+	CompanyName  string
+	UpdatedAt    time.Time
+}
+
+// TenantBrandingRepo manages per-tenant branding configuration.
+type TenantBrandingRepo interface {
+	// Get returns the branding for a tenant, or a zero-value struct if none is set.
+	Get(ctx context.Context, tenantID string) (*TenantBranding, error)
+	// Upsert creates or replaces the branding config for a tenant.
+	Upsert(ctx context.Context, b *TenantBranding) error
+}
+
+// ScheduledExport represents a recurring data export to a customer's own S3 bucket.
+type ScheduledExport struct {
+	ID             string
+	TenantID       string
+	Name           string
+	Schedule       string // cron expression (e.g. "0 3 * * *")
+	DataType       string // request_facts, service_events
+	Format         string // jsonl, csv, parquet
+	DestinationURL string // s3://bucket/prefix
+	LookbackDays   int
+	Status         string // active, paused
+	LastRunAt      *time.Time
+	LastError      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// ScheduledExportRepo manages recurring data export configurations.
+type ScheduledExportRepo interface {
+	Create(ctx context.Context, e *ScheduledExport) error
+	GetByID(ctx context.Context, id string) (*ScheduledExport, error)
+	Update(ctx context.Context, e *ScheduledExport) error
+	Delete(ctx context.Context, id string) error
+	ListByTenant(ctx context.Context, tenantID string) ([]*ScheduledExport, error)
+	// ListActive returns all active exports across all tenants (used by the export runner).
+	ListActive(ctx context.Context) ([]*ScheduledExport, error)
+	// UpdateLastRun records the completion time and any error from the last run.
+	UpdateLastRun(ctx context.Context, id string, t time.Time, errMsg string) error
+}
+
 // DB bundles all repositories. Implementations must provide all repos.
 type DB interface {
 	Tenants() TenantRepo
@@ -469,5 +543,8 @@ type DB interface {
 	RevokedTokens() RevokedTokenRepo
 	SSOStates() SSOStateRepo
 	Referrals() referral.ReferralRepo
+	CustomDashboards() CustomDashboardRepo
+	TenantBranding() TenantBrandingRepo
+	ScheduledExports() ScheduledExportRepo
 	Close() error
 }
