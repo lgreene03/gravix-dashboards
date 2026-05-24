@@ -218,7 +218,9 @@ func (gw *gateway) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to build query")
 		return
 	}
-	cubeReq.Header.Set("Authorization", "Bearer "+gw.cubeAPIURL) // placeholder; real secret set at startup
+	if gw.cubeAPISecret != "" {
+		cubeReq.Header.Set("Authorization", "Bearer "+gw.cubeAPISecret)
+	}
 
 	resp, err := http.DefaultClient.Do(cubeReq)
 	if err != nil {

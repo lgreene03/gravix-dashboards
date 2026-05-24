@@ -261,6 +261,7 @@ func main() {
 	if cubeURL == "" {
 		cubeURL = "http://localhost:4000/cubejs-api/v1/load"
 	}
+	cubeSecret := os.Getenv("CUBE_API_SECRET")
 
 	// Initialize object store for DLQ access
 	rawDir := os.Getenv("RAW_DATA_DIR")
@@ -301,6 +302,7 @@ func main() {
 		emailSender:     email.NewSenderFromEnv(),
 		captchaVerifier: captcha.NewVerifierFromEnv(),
 		cubeAPIURL:      cubeURL,
+		cubeAPISecret:   cubeSecret,
 		jwtSecret:       *jwtSecret,
 		totpKey:         totpKey,
 		baseURL:         email.BaseURLFromEnv(),
@@ -584,6 +586,7 @@ type gateway struct {
 	emailSender     email.Sender
 	captchaVerifier captcha.Verifier
 	cubeAPIURL      string
+	cubeAPISecret   string // sent as Bearer token to Cube.js (CUBE_API_SECRET)
 	jwtSecret       string
 	baseURL         string // for email links (e.g., https://app.gravix.io)
 	totpKey         []byte   // separate encryption key for TOTP secrets
