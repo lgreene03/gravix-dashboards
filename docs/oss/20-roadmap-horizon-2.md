@@ -374,20 +374,30 @@ the product-level expression of that argument.
 
 ## Investment summary
 
-| Phase | Theme | Duration | Effort | Goal | Cumulative |
-|---|---|---|---|---|---|
-| 7 | Open the Core | M0–1 | 4 pw | G1 | 4 pw |
-| 8 | Correctness Moat | M1–4 | 10 pw | G2 | 14 pw |
-| 9 | Zero-Config Value | M4–6 | 7 pw | G3 | 21 pw |
-| 10 | Cost Proof | M6–7 | 5 pw | G4 | 26 pw |
-| 11 | Interop | M7–9 | 8 pw | G5 | 34 pw |
-| 12 | Community Machine | M9–12 | 6 pw | G6 | 40 pw |
-| 13 | Pro Upgrade Path | M12–16 | 12 pw | G7 | 52 pw |
-| 14 | Gravix Cloud | M16–20 | 10 pw | G8 | 62 pw |
-| 15 | Sustainability | M20–24 | 5 pw | G9 | 67 pw |
+These figures are **derived from the specs**, not estimated at phase level. Each phase's effort is
+the sum of its specs' `Effort` fields, so the roadmap cannot drift from the work actually specified.
+Regenerate with `python3 scripts/gen_spec_index.py`.
 
-**~67 person-weeks** — about 16 months for two engineers, or 24 months for one with the loops
-carrying the recurring work.
+| Phase | Theme | Duration | Specs | Effort | Goal | Cumulative |
+|---|---|---|---|---|---|---|
+| 7 | Open the Core | M0–1 | 11 | 16 pd | G1 | 16 pd |
+| 8 | Correctness Moat | M1–4 | 12 | 48 pd | G2 | 64 pd |
+| 9 | Zero-Config Value | M4–6 | 10 | 41 pd | G3 | 105 pd |
+| 10 | Cost Proof | M6–7 | 8 | 29 pd | G4 | 134 pd |
+| 11 | Interop | M7–9 | 9 | 43 pd | G5 | 177 pd |
+| 12 | Community Machine | M9–12 | 10 | 35 pd | G6 | 212 pd |
+| 13 | Pro Upgrade Path | M12–16 | 12 | 77 pd | G7 | 289 pd |
+| 14 | Gravix Cloud | M16–20 | 8 | 48 pd | G8 | 337 pd |
+| 15 | Sustainability | M20–24 | 8 | 27 pd | G9 | 364 pd |
+
+**88 specs, 364 person-days ≈ 73 person-weeks** — about 17 months for two engineers, or 26 months
+for one with the loops carrying the recurring work.
+
+That is ~9% above the phase-level estimate this document originally carried (67 pw). The specs are
+the truth; the estimate was optimistic, and Phase 13 is where it was most optimistic — writing the
+`ee/` specs surfaced that every one of them needs its own zero-core-files verification and its own
+degrade behaviour, which the phase-level number did not account for. Keeping the larger figure
+rather than trimming specs to fit it is the point of deriving it.
 
 Phases 7–12 are **entirely Apache-2.0**. The first line of paid code is written in month 12, after
 the free product is complete, proven, and adopted. That ordering is the charter made into a

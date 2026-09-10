@@ -299,7 +299,7 @@ The full body of `services/gateway/main.go:195-498` (formerly `func main()`) is 
 // Run starts the Gravix gateway. It blocks until the process receives a shutdown
 // signal or the HTTP server returns a non-ErrServerClosed error. Run calls
 // os.Exit(1) directly on unrecoverable configuration errors (missing TENANT_DB_PATH,
-// missing or too-short JWT_SECRET, malformed STRIPE_SECRET_KEY, etc.) — this is
+// missing or too-short JWT_SECRET, malformed STRIPE_SECRET_KEY) — this is
 // unchanged from the prior func main() behaviour, only its name changed.
 func Run() {
 	// ... identical body ...

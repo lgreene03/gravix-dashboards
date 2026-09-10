@@ -170,6 +170,29 @@ Behaviour:
 | Poll loop observes data at `ELAPSED = 600` (inclusive boundary) | `onboarding_gate -elapsed-seconds 600` | `PASS: time to populated dashboard 600s (budget: 600s)` |
 | `-elapsed-seconds` flag omitted | `main()` exits `2` | `usage: onboarding_gate -elapsed-seconds <n> [-timed-out]` |
 
+## 6. Behaviour
+
+1. Measure the current clone-to-populated-dashboard time three times on a clean runner and record
+   all three plus the median in the report. That median is the baseline the budget is set against.
+2. Implement the timed harness from §5, driving the same path a first-time user takes: clone,
+   `docker compose up`, wait for first data, load the dashboard, assert a chart has points.
+3. Instrument each stage separately, so a regression names the stage that caused it rather than
+   reporting one opaque total.
+4. Wire the harness into CI as its own job, not `continue-on-error`.
+5. Run it against the current `main` and confirm it passes within the budget. If it does not,
+   report the measured time per stage and return `SPEC DEFECT` rather than raising the budget.
+6. Verify the job fails when a deliberate delay is injected, so the gate is proven to bite rather
+   than assumed to.
+
+### 6.1 Failure modes
+
+| Trigger | Behaviour | Exact message |
+|---|---|---|
+| Total exceeds the budget | fail the job, print per-stage timings | `onboarding took <d>, budget is 10m — slowest stage: <stage> at <d>` |
+| A stage never completes | fail after its own timeout | `stage "<stage>" did not complete within <d>` |
+| Dashboard renders with no data | fail | `dashboard loaded but no chart contained data points` |
+| Docker unavailable on the runner | fail loudly, never skip | `onboarding gate requires Docker; refusing to skip a required gate` |
+
 ## 7. Acceptance criteria
 
 | ID | Criterion | Test name |

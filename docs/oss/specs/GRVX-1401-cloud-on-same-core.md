@@ -7,7 +7,7 @@
 | **Goal** | G8.1 |
 | **Placement** | `ee/` (BUSL-1.1) |
 | **Charter basis** | §7.2 — this spec solves a problem that appears only when running Gravix *for other people* (proving to a paying stranger that the operator did not fork the code). Crippleware Test: Q1 NO (a self-hoster has no cloud image to verify), Q2 NO, Q3 NO, Q4 NO (never previously core), Q5 NO (the only reason to gate it is not money — a self-hoster gains nothing from this tooling). |
-| **Implementer role** | `pro-engineer` |
+| **Implementer role** | `senior-engineer` for the `ci.yml` attestation step (core); `pro-engineer` for `ee/cloud/provenance/` |
 | **Depends on** | none |
 | **Blocks** | GRVX-1402, GRVX-1405, GRVX-1406, GRVX-1407 |
 | **Effort** | 6 person-days |
@@ -72,6 +72,24 @@ fork") stops being an assertion and becomes a command anyone can run.
 | `ee/cloud/cmd/verify-provenance/main.go` | CLI entrypoint wrapping `provenance.VerifyImage` |
 | `ee/cloud/cmd/verify-provenance/main_test.go` | Tests for flag parsing and exit codes |
 
+### 4.1a Split of work — read before starting
+
+This spec spans the boundary and therefore has **two implementers**, because
+`pro-engineer` cannot edit a core file (charter §7.2, `.claude/agents/pro-engineer.md`).
+
+| Part | Files | Role | Placement |
+|---|---|---|---|
+| Emit build provenance | `.github/workflows/ci.yml` | `senior-engineer` | **core** |
+| Verify build provenance | `ee/cloud/provenance/**`, `ee/cloud/cmd/**` | `pro-engineer` | `ee/` |
+
+The `ci.yml` change is a **core** change: emitting an attestation belongs with the signing and SBOM
+work in `GRVX-709`, benefits every self-hoster, and must keep working with `ee/` deleted. Only the
+*verification tooling that Gravix Cloud runs against its own images* is commercial.
+
+`pro-engineer` must therefore land the `ee/` half only, against a `ci.yml` that already emits
+attestations. If it does not, return `EXTENSION POINT REQUIRED` naming the missing attestation step
+rather than editing the workflow.
+
 ### 4.2 Files to modify
 
 | Path | Change |
@@ -82,7 +100,8 @@ fork") stops being an assertion and becomes a command anyone can run.
 
 | Path | Why |
 |---|---|
-| `services/ingestion/`, `services/gateway/`, `transforms/`, `pkg/`, `schemas/`, `cmd/` | This spec verifies the build; it does not change what is built. Zero core files beyond the CI workflow are touched. |
+| `services/ingestion/`, `services/gateway/`, `transforms/`, `pkg/`, `schemas/`, `cmd/` | This spec verifies the build; it does not change what is built. |
+| Everything under `ee/` (for `senior-engineer`) and everything outside `ee/` (for `pro-engineer`) | The two halves are landed by different roles per §4.1a. Neither crosses into the other's tree. |
 | `.github/workflows/deploy.yml`, `.github/workflows/release.yml` | Out of scope; provenance is attached at build time in `ci.yml`, not at deploy or release time |
 | `ee/tenancy/`, `ee/billing/` | Out of scope for this spec; other Phase 14 specs own them |
 

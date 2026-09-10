@@ -135,7 +135,7 @@ func dateWindows(since, until time.Time, maxDays int) []dateWindow
 // body {"start_date","end_date","data_type"} set from w and dataType, header
 // "Authorization: Bearer "+token, decodes the gzip+tar response body, and
 // writes every tar entry to filepath.Join(outDir, hdr.Name), creating parent
-// directories as needed. A 404 response is not an error: it returns (0, nil).
+// any missing parent directories. A 404 response is not an error: it returns (0, nil).
 // A 429 response is retried exactly once after sleeping 5 seconds; a second
 // 429 returns (0, ErrExportFailed). Any other non-200 status returns
 // (0, ErrExportFailed) wrapped with the response body's "error" field.
