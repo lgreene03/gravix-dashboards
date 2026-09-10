@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package config provides typed, centralized configuration loaded from
 // environment variables. All services read config through this package
 // instead of calling os.Getenv directly.

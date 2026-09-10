@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package chaos provides fault injection helpers for testing error paths
 // in Gravix services. These are test utilities, not a chaos engineering framework.
 package chaos

@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package otel provides a Gravix span exporter for OpenTelemetry.
 //
 // The exporter converts completed HTTP spans into Gravix RequestFact records

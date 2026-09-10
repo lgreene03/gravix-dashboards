@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package billing
 
 // OverageResult describes the overage for a tenant's usage.

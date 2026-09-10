@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Gateway service provides tenant management, user login, API key management,
 // and Stripe billing for multi-tenant Gravix deployments.
 //

@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command trial_expiry runs as a daily cron job to downgrade tenants
 // whose free trial has expired back to the free plan.
 package main

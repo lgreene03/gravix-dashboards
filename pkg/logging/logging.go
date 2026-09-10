@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package logging provides structured JSON logging for Gravix services.
 // It wraps log/slog to set up a JSON handler with a service name attribute.
 package logging

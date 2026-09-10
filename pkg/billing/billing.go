@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package billing provides Stripe integration for Gravix multi-tenant billing.
 //
 // The Service interface abstracts billing operations for testability.

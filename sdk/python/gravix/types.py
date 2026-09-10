@@ -1,3 +1,6 @@
+# Copyright 2026 The Gravix Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Data types for Gravix SDK."""
 
 from dataclasses import dataclass, field

@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command gravix is a CLI tool for the Gravix observability platform.
 //
 // Usage:

@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package tenantdb provides multi-tenant data access for Gravix.
 //
 // It defines repository interfaces for tenants, API keys, and users,

@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Cube.js data-fetching layer with localStorage caching for graceful degradation.
 // Loaded before app.js — provides CubeClient global.
 

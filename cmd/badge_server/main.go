@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command badge_server serves status badges for services.
 //
 // GET /badge/:tenant/:service.svg returns an SVG badge showing the service's

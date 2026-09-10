@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
         // --- CONFIGURATION ---
         // Override via window.GRAVIX_CONFIG before this script, or edit config.js
         const GRAVIX_CONFIG = Object.assign({
