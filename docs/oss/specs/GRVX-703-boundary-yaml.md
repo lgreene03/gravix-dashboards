@@ -166,13 +166,18 @@ var (
 
 ### 5.4 Required initial content of `boundary.yaml`
 
-Exactly these 18 capabilities. Placements are taken from charter §2.1/§2.2/§2.3 and are **not** the
-implementer's judgement.
+Exactly these **23** capabilities (20 core, 3 `ee`). Placements are taken from charter
+§2.1/§2.2/§2.3 and are **not** the implementer's judgement.
 
-**Core** (no `crippleware_test` block): `ingestion-http`, `ingestion-otlp`, `rollup-engine`,
-`query-duckdb-trino`, `dashboard`, `alerting-threshold`, `alerting-anomaly`, `sdks`, `cli`,
-`rbac-single-org`, `audit-log-local`, `rate-limiting`, `public-metrics-api`, `custom-dashboards`,
-`data-export`.
+*Expanded from 18 by SD-002* (`../spec-defects.md`): the original list omitted `schema-validation`,
+`compaction-retention`, `storage-abstraction`, `terraform-provider` and `deploy-tooling`, all core.
+A map that omits real capabilities cannot guarantee a gate would appear in it.
+
+**Core** (no `crippleware_test` block): `ingestion-http`, `ingestion-otlp`, `schema-validation`,
+`rollup-engine`, `compaction-retention`, `storage-abstraction`, `query-duckdb-trino`, `dashboard`,
+`alerting-threshold`, `alerting-anomaly`, `sdks`, `cli`, `rbac-single-org`, `audit-log-local`,
+`rate-limiting`, `public-metrics-api`, `custom-dashboards`, `data-export`, `terraform-provider`,
+`deploy-tooling`.
 
 **ee** (each with all five answers `no`): `multi-tenancy`, `billing`, `tenant-branding`.
 
@@ -180,9 +185,24 @@ For the three `ee` entries use these `charter_ref` values: `multi-tenancy` → `
 `billing` → `§2.2`, `tenant-branding` → `§2.3`.
 
 For `public-metrics-api`, `custom-dashboards`, `data-export`, `rate-limiting`, `audit-log-local`:
-set `charter_ref: "§2.3"` and add `gate:` reflecting the plan gate that **currently** exists in the
-code, so GRVX-710 has a record of what must change. Their `placement` is `core` because charter
-§2.3 rules them core — the mismatch between `placement: core` and a non-empty `gate` is the
+set `charter_ref: "§2.3"`. Add a `gate:` field **only where a plan gate actually exists in the
+code**, so GRVX-710 has an accurate record of what must change.
+
+**Corrected by SD-001** (`../spec-defects.md`). An earlier draft of this spec asserted all five were
+plan-gated. Exhaustive grep over non-test source shows otherwise:
+
+| Capability | `gate:` field | Reality in code |
+|---|---|---|
+| `public-metrics-api` | `gate: pro` | `services/gateway/gateway_platform.go:132` returns 402 via a direct `planRank` comparison |
+| `custom-dashboards` | *(omit)* | No plan gate. Role-gated only. |
+| `data-export` | *(omit)* | No plan gate. Admin-only for mutations. |
+| `audit-log-local` | *(omit)* | No plan gate. Admin-only by role. |
+| `rate-limiting` | *(omit)* | Varies the limit by plan and returns 429 to everyone. A differentiated limit is not a gate. |
+
+Additionally, `requirePlan` at `services/gateway/main.go:953` has **zero non-test callers** and is
+dead code. Record it in the implementation report; GRVX-710 disposes of it.
+
+The mismatch between `placement: core` and a non-empty `gate:` on `public-metrics-api` is the
 intended signal that GRVX-710 has work to do.
 
 ## 6. Behaviour
@@ -210,7 +230,7 @@ intended signal that GRVX-710 has work to do.
 | ID | Criterion | Test name |
 |---|---|---|
 | AC-1 | `docs/oss/boundary.yaml` loads and validates with zero errors | `TestRealBoundaryMapIsValid` |
-| AC-2 | It contains exactly 18 capabilities | `TestBoundaryMapHasExpectedCapabilityCount` |
+| AC-2 | It contains exactly 23 capabilities (20 core, 3 ee) | `TestBoundaryMapHasExpectedCapabilityCount` |
 | AC-3 | Every `ee` capability has all five answers and all are `no` | `TestEECapabilitiesPassCrippleware` |
 | AC-4 | An `ee` capability with any `yes` answer is rejected | `TestCrippleWareYesRejected` |
 | AC-5 | An `ee` capability missing the test block is rejected | `TestMissingCrippleWareTestRejected` |

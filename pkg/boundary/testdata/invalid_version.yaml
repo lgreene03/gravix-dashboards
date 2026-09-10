@@ -1,0 +1,8 @@
+version: 2
+capabilities:
+  - id: from-the-future
+    name: Written by a newer binary
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Unsupported schema.
+    paths: [pkg/boundary/]

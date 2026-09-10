@@ -10,10 +10,23 @@
 | **Implementer role** | `senior-engineer` |
 | **Depends on** | GRVX-703, GRVX-704 |
 | **Blocks** | GRVX-1312 |
-| **Effort** | 3 person-days |
+| **Effort** | 1 person-day (revised from 3 by SD-001) |
 | **Readiness Gate** | 12/12 — PASS |
 
 ---
+
+> **Rescoped by SD-001** — see [`../spec-defects.md`](../spec-defects.md).
+>
+> This spec was written on the premise that five capabilities were plan-gated. Verification against
+> the code found that **only one actually is**: the public metrics API, at
+> `services/gateway/gateway_platform.go:132`. Custom dashboards, scheduled exports, the audit log
+> and rate limiting were never plan-gated — `PRODUCT_ROADMAP.md` described an intent that was not
+> implemented. `requirePlan` at `services/gateway/main.go:953` has **zero non-test callers**.
+>
+> The work is therefore: remove the one real gate, and dispose of the dead `requirePlan` machinery.
+> Passages below describing five gates are superseded. The acceptance criteria asserting the four
+> ungated capabilities are reachable on the free plan remain valid and valuable as **regression
+> tests** — they now prove those capabilities stay free rather than proving they were freed.
 
 ## 1. Objective
 

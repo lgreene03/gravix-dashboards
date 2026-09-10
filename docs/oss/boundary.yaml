@@ -1,0 +1,248 @@
+# The authoritative core/ee placement map.
+#
+# If this file and the charter's prose disagree, THIS FILE WINS and CI fails
+# (docs/oss/00-open-core-charter.md §2). Placements come from charter §2.1, §2.2
+# and §2.3 — they are not the author's judgement, and every `ee` entry records
+# all five Crippleware Test answers (§7.3), which must all be `no`.
+#
+# Validated by pkg/boundary and enforced by `make check-boundary` (GRVX-704).
+version: 1
+
+capabilities:
+  # ---------------------------------------------------------------- core §2.1
+  - id: ingestion-http
+    name: HTTP fact ingestion
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Getting data in is the product; without it nothing else exists.
+    paths:
+      - services/ingestion/main.go
+      - services/ingestion/deploy_webhook.go
+
+  - id: ingestion-otlp
+    name: OTLP metrics-subset ingestion
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Interoperability with an existing stack is how adoption happens at all.
+    paths:
+      - services/ingestion/otlp.go
+
+  - id: schema-validation
+    name: Fact schema validation and cardinality budget
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Cardinality enforcement is what makes cost predictable; gating it would sell correctness.
+    paths:
+      - schemas/request_fact.go
+      - schemas/service_event.go
+      - schemas/trace_sample.go
+
+  - id: rollup-engine
+    name: Minute-level rollup and aggregation
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Derived metrics are the product's output.
+    paths:
+      - transforms/request_metrics_minute/main.go
+      - transforms/service_events_daily/main.go
+      - transforms/service_events_detail/main.go
+
+  - id: compaction-retention
+    name: Parquet compaction and retention
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Operating your own storage sanely is not a premium concern.
+    paths:
+      - transforms/compaction/main.go
+      - cmd/purge/main.go
+
+  - id: storage-abstraction
+    name: Local disk and S3 object storage
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Your data on your disk. Charter §2.1 Storage row.
+    paths:
+      - pkg/storage/
+
+  - id: query-duckdb-trino
+    name: DuckDB and Trino query engines with the Cube semantic layer
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Reading your own data is not a premium feature.
+    paths:
+      - cube/cube.js
+      - cube/model/schema/
+
+  - id: dashboard
+    name: Dashboard
+    placement: core
+    charter_ref: "§2.1"
+    rationale: A monitoring tool you cannot look at is not a monitoring tool.
+    paths:
+      - dashboards/index.html
+      - dashboards/app.js
+      - dashboards/lib/
+
+  - id: alerting-threshold
+    name: Threshold alerting and notification channels
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Charter §4 permits alerting evaluable from batch facts; it shipped open in Phase 2.
+    paths:
+      - services/gateway/gateway_alerts.go
+      - pkg/notify/
+
+  - id: alerting-anomaly
+    name: Statistical deviation detection
+    placement: core
+    charter_ref: "§2.3"
+    rationale: Shipped open in Horizon 1 Phase 2.5. Charter §7.3 Q4 makes that permanent.
+    paths:
+      - services/gateway/gateway_alerts.go
+
+  - id: sdks
+    name: Go, Python and Node SDKs
+    placement: core
+    charter_ref: "§2.1"
+    rationale: SDKs are the adoption funnel; any friction on them is self-harm.
+    paths:
+      - sdk/go/
+      - sdk/python/
+      - sdk/node/
+
+  - id: cli
+    name: gravix CLI
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Operating the system from a terminal is baseline function.
+    paths:
+      - cmd/cli/
+
+  - id: rbac-single-org
+    name: Single-organisation RBAC, API keys, 2FA and sessions
+    placement: core
+    charter_ref: "§2.3"
+    rationale: Charter §7.3 Q3 — charging for the ability to not be breached is the pattern the charter prevents.
+    paths:
+      - services/gateway/gateway_auth.go
+      - pkg/auth/
+      - pkg/totp/
+      - pkg/sso/
+
+  - id: audit-log-local
+    name: Local immutable audit log
+    placement: core
+    charter_ref: "§2.3"
+    rationale: Baseline security control. Charter §7.3 Q3 = yes, so it cannot be sold.
+    paths:
+      - services/gateway/enterprise.go
+    # No `gate:` — verified by SD-001 that no plan gate exists on this path.
+
+  - id: rate-limiting
+    name: Per-tenant rate limiting
+    placement: core
+    charter_ref: "§2.3"
+    rationale: A safety control that protects the system, not a feature that gates users.
+    paths:
+      - pkg/ratelimit/
+    note: >-
+      Varies the limit by plan and returns 429 to every plan including free.
+      A differentiated limit is not a gate (SD-001).
+
+  - id: public-metrics-api
+    name: Public metrics API
+    placement: core
+    charter_ref: "§2.3"
+    rationale: Reading your own data is not a premium feature. Charter §7.3 Q5 = yes.
+    paths:
+      - services/gateway/gateway_platform.go
+    gate: pro
+    note: >-
+      The only real plan gate in the codebase (gateway_platform.go:132, HTTP 402).
+      Charter §2.3 rules this capability core, so the gate must be removed by
+      GRVX-710. The mismatch between placement: core and a non-empty gate is
+      deliberate and is the signal that work is outstanding.
+
+  - id: custom-dashboards
+    name: Custom saved dashboards
+    placement: core
+    charter_ref: "§2.3"
+    rationale: Charter §7.3 Q1 = yes — any team notices this missing.
+    paths:
+      - services/gateway/gateway_dashboards.go
+    # No `gate:` — verified by SD-001 that no plan gate exists on this path.
+
+  - id: data-export
+    name: Data export, manual and scheduled
+    placement: core
+    charter_ref: "§2.3"
+    rationale: Export is the anti-lock-in guarantee; gating it is hostage-taking.
+    paths:
+      - services/gateway/enterprise.go
+    # No `gate:` — verified by SD-001 that no plan gate exists on this path.
+
+  - id: terraform-provider
+    name: Terraform provider
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Automation drives adoption and costs us nothing to give away.
+    paths:
+      - terraform-provider-gravix/
+
+  - id: deploy-tooling
+    name: Helm chart and docker-compose stacks
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Running it in production is the point of self-hosting.
+    paths:
+      - deploy/gravix/
+      - docker-compose.yml
+      - docker-compose.bootstrap.yml
+
+  # ------------------------------------------------------------------ ee §2.2
+  - id: multi-tenancy
+    name: Multi-tenant control plane
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: Solves running Gravix for other people, which a single team never does.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: Not yet implemented. GRVX-1304 builds it; path updates then.
+
+  - id: billing
+    name: Metering, Stripe billing and invoicing
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: Only needed when charging other people for the service you run for them.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: Not yet implemented. GRVX-1305 builds it; path updates then.
+
+  - id: tenant-branding
+    name: White-label branding, custom domains and embeds
+    placement: ee
+    charter_ref: "§2.3"
+    rationale: Only matters when reselling Gravix under your own brand.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: >-
+      Basic tenant branding shipped Apache-2.0 in Horizon 1 and stays core;
+      only custom domains, embeds and full theming are ee (GRVX-1310).

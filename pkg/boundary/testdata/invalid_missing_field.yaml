@@ -1,0 +1,6 @@
+version: 1
+capabilities:
+  - id: incomplete
+    placement: core
+    charter_ref: "§2.1"
+    paths: []

@@ -23,6 +23,12 @@
 >    tier under `GRVX-710`. Charging for the ability to read your own data, export it, or not be
 >    breached is the pattern the charter exists to prevent.
 >
+> **Accuracy note (SD-001).** Verification during Horizon 2 found that this document's Phase 4 and
+> Phase 6 entries describe plan gating that was never implemented. Only the public metrics API is
+> actually plan-gated in code; custom dashboards, scheduled exports, the audit log and rate
+> limiting are not, and `requirePlan` has no non-test callers. Read the gating claims below as
+> intent, not as description. See [`docs/oss/spec-defects.md`](docs/oss/spec-defects.md).
+>
 > Governing documents: [charter](docs/oss/00-open-core-charter.md) ·
 > [competitive thesis](docs/oss/01-competitive-thesis.md) ·
 > [agent roster](docs/oss/10-agent-roster.md) · [loops](docs/oss/11-agent-loops.md) ·

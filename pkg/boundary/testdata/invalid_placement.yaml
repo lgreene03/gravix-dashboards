@@ -1,0 +1,8 @@
+version: 1
+capabilities:
+  - id: bad-placement
+    name: Neither core nor ee
+    placement: premium
+    charter_ref: "§2.1"
+    rationale: Not a valid placement.
+    paths: [pkg/boundary/]
