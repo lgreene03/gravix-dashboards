@@ -14,9 +14,13 @@ Gravix is open source. This file records which licence applies to which path.
 | `gen/**` | Apache-2.0 (generated from `proto/`) |
 | `**/node_modules/**` | Third-party; see each package |
 
-`ee/` does not exist yet. When it does (GRVX-702) it is **source-available**, not open source.
-Everything else in this repository is open source under an OSI-approved licence and, per the
-Open-Core Charter §7.3 Q4, cannot be relicensed.
+`ee/` is **source-available**, not open source. It holds Gravix Enterprise Edition under BUSL-1.1,
+converting to Apache-2.0 two years after each version is published. Everything else in this
+repository is open source under an OSI-approved licence and, per the Open-Core Charter §7.3 Q4,
+cannot be relicensed.
+
+The core builds and passes its tests with `ee/` deleted — `make build-oss` and `make test-oss`
+prove it on every pull request. See [`ee/README.md`](ee/README.md).
 
 See [`LICENSE`](LICENSE), [`NOTICE`](NOTICE), and
 [`docs/oss/00-open-core-charter.md`](docs/oss/00-open-core-charter.md).
