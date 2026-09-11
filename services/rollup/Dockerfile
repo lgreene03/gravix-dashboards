@@ -24,8 +24,22 @@ LABEL org.opencontainers.image.title="gravix-rollup" \
 RUN addgroup -S gravix && adduser -S gravix -G gravix
 WORKDIR /app
 
-# Install timezone data for cron scheduling
-RUN apk add --no-cache tzdata=2025c-r0
+# Install timezone data for cron scheduling.
+#
+# Deliberately unpinned, against DL3018. Alpine's package repository serves only
+# the CURRENT version of each package, so pinning an exact patch of tzdata does
+# not reproduce an old build — it guarantees a future one fails, on the day
+# upstream bumps it and the pinned version stops being served. That is exactly
+# what happened: the pin read 2025c-r0, the repository moved to 2026c-r0, and
+# every `docker compose up --build` of the bootstrap stack broke with
+# "unable to select packages" (F-019).
+#
+# tzdata is also the package where currency beats reproducibility: a stale copy
+# means a cron job fires at the wrong hour after a timezone rule changes. The
+# base image is pinned by digest above, which is where build reproducibility
+# actually comes from.
+# hadolint ignore=DL3018
+RUN apk add --no-cache tzdata
 
 COPY --from=builder /app/request-metrics-rollup .
 COPY --from=builder /app/service-events-rollup .

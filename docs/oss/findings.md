@@ -945,3 +945,55 @@ guards a single machine has to be documented rather than implied.
 **Worked around in the benchmark** by passing an absolute `OutputDir`, which makes the lock path
 absolute too. That is a workaround in one caller, not a fix: every other caller — the cron rollup and
 `cmd/cli`'s `recompute`, both of which pass relative defaults — still takes a working-directory lock.
+
+## F-019 — the bootstrap stack has not built at all since Alpine bumped tzdata
+
+**Found by** GRVX-910's `timed-onboarding` gate, on its first ever run. The gate did what it was
+built to do on the first attempt, which is the argument for having added it.
+**Severity** high — `docker compose -f docker-compose.bootstrap.yml up -d --build`, the command
+`README.md` gives a first-time reader, fails outright. Nothing starts.
+**Status** fixed in `services/rollup/Dockerfile`.
+
+**The failure**, from the CI log:
+
+```
+#16 [service-events-rollup stage-1 4/10] RUN apk add --no-cache tzdata=2025c-r0
+#16 0.658 ERROR: unable to select packages:
+#16 0.659   tzdata-2026c-r0:
+#16 0.659     breaks: world[tzdata=2025c-r0]
+target bootstrap-init: failed to solve: process "/bin/sh -c apk add --no-cache tzdata=2025c-r0"
+  did not complete successfully: exit code: 1
+```
+
+**Why a version pin caused it.** Alpine's package repository serves only the **current** version of
+each package; there is no archive of superseded ones. So `apk add tzdata=2025c-r0` does not reproduce
+an old build — it works until upstream publishes a new tzdata and then fails forever. The pin was not
+protecting the build, it was scheduling its death. The date it happened is simply the date Alpine
+moved to 2026c-r0.
+
+Both `docker-compose.yml` and `docker-compose.bootstrap.yml` build four services from this one
+Dockerfile (`request-metrics-rollup`, `service-events-rollup`, `purge`, and — since GRVX-901 —
+`bootstrap-init`), so the failure takes out both stacks, not just the lean one.
+
+**The fix.** Unpinned, with `# hadolint ignore=DL3018` and the reasoning in the Dockerfile itself.
+For tzdata specifically, currency is the property you want: a stale copy makes cron jobs fire at the
+wrong hour after a timezone rule changes. Build reproducibility comes from the base image, which is
+already pinned by digest.
+
+**Why nothing caught it.** `docker-smoke` builds the full stack, but it is `if: github.event_name ==
+'push' && github.ref == 'refs/heads/main'` — it never runs on a pull request, and nobody had pushed
+to `main` since Alpine moved. `docker-lint` runs hadolint, which checks that a version *is* pinned
+and has no way to know the pinned version still exists. Every other job builds with `go build`, not
+Docker. So the one stack a new user is told to run had no pull-request-time build at all.
+
+That is precisely the gap GRVX-910 §2 argued for closing:
+
+> a budget that only gates pushes to `main` gates nothing — by the time it fails on `main` the
+> regression is already merged.
+
+The observation generalises past budgets. `timed-onboarding` runs on every pull request and builds
+the bootstrap stack, so this class of failure is now caught before merge rather than by a user.
+
+**Related, and not fixed here:** `docker-smoke` retains its push-to-main-only condition, so the
+*full* stack still has no pull-request build. Worth revisiting once `timed-onboarding` has a few
+green runs to show what it costs in minutes.
