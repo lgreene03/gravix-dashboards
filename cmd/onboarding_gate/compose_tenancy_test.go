@@ -374,3 +374,93 @@ func TestTenancyModeIsUnanimousWithinAStack(t *testing.T) {
 		}
 	}
 }
+
+// ─── The compose-validation step's environment ─────────────────────────────
+
+// `docker compose config` resolves interpolation, and a ${VAR:?message}
+// whose variable is unset fails the parse. The docker-lint job therefore has to
+// supply a value for every such variable in the file it validates.
+//
+// That list was assembled by hand once and was wrong the first time: it named
+// JWT_SECRET and missed MINIO_ROOT_PASSWORD, which would have turned a required
+// check red on a file nothing in CI had ever loaded. Hand-maintained lists of
+// names decay the moment someone adds a name, so this derives both sides — the
+// requirement from the compose files, the provision from the workflow — and
+// fails when they diverge.
+
+// requiredVarRe matches ${VAR:?message}, the form that makes a variable
+// mandatory. ${VAR} and ${VAR:-default} do not fail the parse and are excluded.
+var requiredVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*):\?`)
+
+// composeConfigRe matches the compose file named by a `docker compose -f X config`
+// command, so the test learns which file a step validates rather than assuming.
+var composeConfigRe = regexp.MustCompile(`docker\s+compose\s+-f\s+(\S+)\s+config`)
+
+type workflow struct {
+	Jobs map[string]struct {
+		Steps []struct {
+			Name string            `yaml:"name"`
+			Run  string            `yaml:"run"`
+			Env  map[string]string `yaml:"env"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+func TestComposeValidationStepSuppliesEveryRequiredVariable(t *testing.T) {
+	const workflowPath = "../../.github/workflows/ci.yml"
+	data, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", workflowPath, err)
+	}
+	var wf workflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("parse %s: %v", workflowPath, err)
+	}
+
+	validated := 0
+	for jobName, job := range wf.Jobs {
+		for _, step := range job.Steps {
+			m := composeConfigRe.FindStringSubmatch(step.Run)
+			if m == nil {
+				continue
+			}
+			composePath := filepath.Join("../..", m[1])
+			composeData, err := os.ReadFile(composePath)
+			if err != nil {
+				t.Errorf("job %q step %q validates %s, which cannot be read: %v",
+					jobName, step.Name, m[1], err)
+				continue
+			}
+			validated++
+
+			supplied := map[string]bool{}
+			for k := range step.Env {
+				supplied[k] = true
+			}
+			seen := map[string]bool{}
+			for _, v := range requiredVarRe.FindAllStringSubmatch(string(composeData), -1) {
+				name := v[1]
+				if seen[name] {
+					continue
+				}
+				seen[name] = true
+				if !supplied[name] {
+					t.Errorf("%s declares ${%s:?…}, which `docker compose config` treats as\n"+
+						"mandatory — the parse fails and job %q goes red — but step %q supplies no\n"+
+						"value for it. Add %s to that step's env, or give the variable a :- default\n"+
+						"in the compose file.",
+						m[1], name, jobName, step.Name, name)
+				}
+			}
+		}
+	}
+
+	// Both compose files must actually be validated somewhere. Dropping a step
+	// would otherwise make this test pass by having nothing to check — the same
+	// failure mode as a guard that finds nothing.
+	if validated < 2 {
+		t.Errorf("only %d compose file(s) are validated by a `docker compose ... config` step in\n"+
+			"ci.yml; both docker-compose.yml and docker-compose.bootstrap.yml must be. Nothing in\n"+
+			"CI loaded the full-stack file for four months, which is how F-011 survived.", validated)
+	}
+}

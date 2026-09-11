@@ -230,11 +230,20 @@ jobs:
       - name: Validate the full-stack compose file
         run: docker compose -f docker-compose.yml config >/dev/null
         env:
-          # config resolves ${VAR:?msg} interpolation, so the two required
-          # secrets need values for the parse to complete. They are parse-time
-          # placeholders in a lint job that starts no container, not credentials.
+          # config resolves ${VAR:?msg} interpolation and fails the parse if such
+          # a variable is unset, so every one of them needs a value here. These
+          # are parse-time placeholders in a lint job that starts no container,
+          # not credentials.
+          #
+          # Do not maintain this list by hand — two attempts got it wrong, the
+          # second because the grep used to find the names excluded digits and so
+          # skipped both S3_ variables. TestComposeValidationStepSuppliesEvery
+          # RequiredVariable in cmd/onboarding_gate derives the list from the
+          # compose file and fails if this one falls behind.
           JWT_SECRET: ci-compose-validation-placeholder
-          CUBEJS_API_SECRET: ci-compose-validation-placeholder
+          MINIO_ROOT_PASSWORD: ci-compose-validation-placeholder
+          S3_ACCESS_KEY: ci-compose-validation-placeholder
+          S3_SECRET_KEY: ci-compose-validation-placeholder
 
   # ─── Container Image Pipeline (runs only on main branch push) ───
   docker-build:
