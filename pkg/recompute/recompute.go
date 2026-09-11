@@ -18,6 +18,7 @@ import (
 
 	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
 	"github.com/lgreene/gravix-dashboards/pkg/manifest"
+	"github.com/lgreene/gravix-dashboards/pkg/sketch"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/montanaflynn/stats"
@@ -31,7 +32,12 @@ const MetricRequestMinute = "request_metrics_minute"
 // MetricVersion is the version of the metric definitions this engine computes.
 // It is part of a partition's idempotency key, so changing a formula must change
 // this: two files with the same key are claimed to describe the same thing.
-const MetricVersion = "v1"
+//
+// v2 adds the mergeable latency sketch (GRVX-804). The per-bucket scalar
+// percentiles are unchanged from v1 — within one bucket they were always exact —
+// so a v1 and a v2 partition report the same numbers for a single bucket and
+// differ only in whether a correct cross-bucket percentile is possible.
+const MetricVersion = "v2"
 
 // CompressionLevel pins the zstd level used for every Parquet file this package
 // writes. It is an explicit constant rather than zstd.SpeedDefault because a
@@ -77,7 +83,20 @@ type MetricRow struct {
 	P50LatencyMs float64 `json:"p50_latency_ms" parquet:"p50_latency_ms"`
 	P95LatencyMs float64 `json:"p95_latency_ms" parquet:"p95_latency_ms"`
 	P99LatencyMs float64 `json:"p99_latency_ms" parquet:"p99_latency_ms"`
-	EventDay     string  `json:"event_day" parquet:"event_day"`
+
+	// LatencySketch is a serialised quantile sketch over this bucket's latencies,
+	// mergeable across buckets. Empty when the bucket has no observations.
+	//
+	// The scalars above stay: within one bucket they are exact and cheaper to
+	// read. The sketch is what makes a correct percentile over many buckets
+	// possible at all.
+	LatencySketch []byte `json:"latency_sketch" parquet:"latency_sketch"`
+
+	// SketchVersion is sketch.Version at write time, so a reader can refuse a
+	// format it does not understand rather than misreading it.
+	SketchVersion string `json:"sketch_version" parquet:"sketch_version"`
+
+	EventDay string `json:"event_day" parquet:"event_day"`
 }
 
 // AggregationKey identifies one output row before it is materialised.
@@ -659,6 +678,7 @@ func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, 
 // of a float64. Sorting first removes read order from the result.
 func BuildRows(aggs map[AggregationKey]*Aggregator, tenantID, dayStr string) []MetricRow {
 	rows := make([]MetricRow, 0, len(aggs))
+	var sketchVersion string
 	for key, agg := range aggs {
 		sort.Float64s(agg.Latencies)
 
@@ -671,19 +691,34 @@ func BuildRows(aggs map[AggregationKey]*Aggregator, tenantID, dayStr string) []M
 			rate = float64(agg.Errors) / float64(agg.Requests)
 		}
 
+		// The latencies are already sorted, which is what makes the sketch's
+		// serialised bytes depend only on the multiset and not on the order the
+		// facts were read in.
+		sketchBytes, err := sketch.FromSorted(agg.Latencies).MarshalBinary()
+		if err != nil {
+			// MarshalBinary on a fixed-layout buffer cannot fail; a nil sketch
+			// would silently lose the bucket, so record the version as empty and
+			// let the reader refuse it rather than misread it.
+			sketchBytes, sketchVersion = nil, ""
+		} else {
+			sketchVersion = sketch.Version
+		}
+
 		rows = append(rows, MetricRow{
-			TenantID:     tenantID,
-			BucketStart:  key.BucketStart.Format("2006-01-02 15:04:05"),
-			Service:      key.Service,
-			Method:       key.Method,
-			PathTemplate: key.PathTemplate,
-			RequestCount: agg.Requests,
-			EventDay:     dayStr,
-			ErrorCount:   agg.Errors,
-			ErrorRate:    rate,
-			P50LatencyMs: p50,
-			P95LatencyMs: p95,
-			P99LatencyMs: p99,
+			TenantID:      tenantID,
+			BucketStart:   key.BucketStart.Format("2006-01-02 15:04:05"),
+			Service:       key.Service,
+			Method:        key.Method,
+			PathTemplate:  key.PathTemplate,
+			RequestCount:  agg.Requests,
+			EventDay:      dayStr,
+			ErrorCount:    agg.Errors,
+			ErrorRate:     rate,
+			P50LatencyMs:  p50,
+			P95LatencyMs:  p95,
+			P99LatencyMs:  p99,
+			LatencySketch: sketchBytes,
+			SketchVersion: sketchVersion,
 		})
 	}
 
@@ -706,7 +741,13 @@ func SortRows(rows []MetricRow) {
 		if a.Method != b.Method {
 			return a.Method < b.Method
 		}
-		return a.PathTemplate < b.PathTemplate
+		if a.PathTemplate != b.PathTemplate {
+			return a.PathTemplate < b.PathTemplate
+		}
+		// Two rows that agree on the whole aggregation key cannot occur from one
+		// aggregation, but comparing the sketch bytes last keeps the order total
+		// rather than relying on that.
+		return bytes.Compare(a.LatencySketch, b.LatencySketch) < 0
 	})
 }
 

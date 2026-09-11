@@ -23,8 +23,11 @@ import (
 	"github.com/google/uuid"
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 	"github.com/lgreene/gravix-dashboards/pkg/manifest"
+	"github.com/lgreene/gravix-dashboards/pkg/sketch"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/montanaflynn/stats"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/compress/zstd"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -1110,7 +1113,7 @@ func TestRecomputeWritesManifest(t *testing.T) {
 		t.Fatalf("read manifest: %v", err)
 	}
 
-	if want := "request_metrics_minute:v1:_single:20260909"; m.IdempotencyKey != want {
+	if want := "request_metrics_minute:" + MetricVersion + ":_single:20260909"; m.IdempotencyKey != want {
 		t.Errorf("IdempotencyKey = %q, want %q", m.IdempotencyKey, want)
 	}
 	if m.MetricVersion != MetricVersion {
@@ -1486,4 +1489,225 @@ func readRows(t *testing.T, store storage.ObjectStore, key string) []MetricRow {
 		t.Fatalf("read rows from %s: %v", key, err)
 	}
 	return rows[:n]
+}
+
+// ─── GRVX-804: sketches ───
+
+// AC-9: output stays byte-identical across runs now that sketches are present.
+func TestRecomputeDeterminismWithSketch(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+	d := day("2026-09-09")
+	seedDay(t, store, d)
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	key := partitionKeys(t, store, d)[0]
+	first := readObject(t, store, key)
+
+	// Confirm the sketch column is actually populated, or this test proves nothing.
+	rows := readRows(t, store, key)
+	populated := 0
+	for _, r := range rows {
+		if len(r.LatencySketch) > 0 {
+			populated++
+			if r.SketchVersion != sketch.Version {
+				t.Errorf("SketchVersion = %q, want %q", r.SketchVersion, sketch.Version)
+			}
+		}
+	}
+	if populated != len(rows) {
+		t.Fatalf("%d of %d rows carry a sketch, want all of them", populated, len(rows))
+	}
+
+	// Delete and rebuild, so the second run re-encodes rather than short-circuiting.
+	if err := store.Delete(ctx, key); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	second := readObject(t, store, key)
+
+	if !bytes.Equal(first, second) {
+		t.Fatalf("output differs between runs with sketches present: sha %x vs %x",
+			sha256.Sum256(first), sha256.Sum256(second))
+	}
+
+	// And under a different read order, which is the case that would expose a
+	// sketch whose bytes depend on insertion order.
+	if err := store.Delete(ctx, key); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	opts := baseOptions(store, d)
+	opts.Store = reverseListStore{store}
+	if _, err := Run(ctx, opts); err != nil {
+		t.Fatalf("reversed run: %v", err)
+	}
+	if reversed := readObject(t, store, key); !bytes.Equal(first, reversed) {
+		t.Fatalf("sketch bytes depend on read order: sha %x vs %x",
+			sha256.Sum256(first), sha256.Sum256(reversed))
+	}
+}
+
+// AC-10: the exact per-bucket scalars are what they always were.
+func TestExactScalarsUnchanged(t *testing.T) {
+	bucket := time.Date(2026, 9, 9, 10, 30, 0, 0, time.UTC)
+	latencies := []float64{40, 10, 30, 20}
+
+	aggs := map[AggregationKey]*Aggregator{
+		{BucketStart: bucket, Service: "api", Method: "GET", PathTemplate: "/u/{id}"}: {
+			Requests: 4, Errors: 1, Latencies: append([]float64(nil), latencies...),
+		},
+	}
+	rows := BuildRows(aggs, "", "2026-09-09")
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	r := rows[0]
+
+	// These are the values the rollup produced before GRVX-804 for this input:
+	// stats.Percentile over the sorted latencies. Adding a sketch column must not
+	// move them by a bit.
+	sorted := append([]float64(nil), latencies...)
+	sort.Float64s(sorted)
+	for _, tc := range []struct {
+		name string
+		pct  float64
+		got  float64
+	}{
+		{"p50", 50, r.P50LatencyMs},
+		{"p95", 95, r.P95LatencyMs},
+		{"p99", 99, r.P99LatencyMs},
+	} {
+		want, err := stats.Percentile(sorted, tc.pct)
+		if err != nil {
+			t.Fatalf("stats.Percentile: %v", err)
+		}
+		if tc.got != want {
+			t.Errorf("%s = %v, want %v — the exact per-bucket scalar changed", tc.name, tc.got, want)
+		}
+	}
+
+	if r.ErrorRate != 0.25 {
+		t.Errorf("ErrorRate = %v, want 0.25", r.ErrorRate)
+	}
+	if r.RequestCount != 4 || r.ErrorCount != 1 {
+		t.Errorf("counts = %d/%d, want 4/1", r.RequestCount, r.ErrorCount)
+	}
+
+	// The sketch must agree with the scalars on this bucket, since within one
+	// bucket both see the same observations.
+	var sk sketch.Sketch
+	if err := sk.UnmarshalBinary(r.LatencySketch); err != nil {
+		t.Fatalf("UnmarshalBinary: %v", err)
+	}
+	if sk.Count() != 4 {
+		t.Errorf("sketch Count = %d, want 4", sk.Count())
+	}
+}
+
+// AC-13: a v1 partition and a v2 partition coexist and both read.
+func TestMixedVersionPartitionsReadable(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+
+	v1Day := day("2026-09-08")
+	v2Day := day("2026-09-09")
+	seedDay(t, store, v1Day)
+	seedDay(t, store, v2Day)
+
+	// Write the older day as a v1 partition: the schema without the sketch
+	// columns, which is what every file already in a warehouse looks like.
+	type v1Row struct {
+		TenantID     string  `parquet:"tenant_id"`
+		BucketStart  string  `parquet:"bucket_start"`
+		Service      string  `parquet:"service"`
+		Method       string  `parquet:"method"`
+		PathTemplate string  `parquet:"path_template"`
+		RequestCount int64   `parquet:"request_count"`
+		ErrorCount   int64   `parquet:"error_count"`
+		ErrorRate    float64 `parquet:"error_rate"`
+		P50LatencyMs float64 `parquet:"p50_latency_ms"`
+		P95LatencyMs float64 `parquet:"p95_latency_ms"`
+		P99LatencyMs float64 `parquet:"p99_latency_ms"`
+		EventDay     string  `parquet:"event_day"`
+	}
+
+	agg, err := Aggregate(ctx, store, FactsDirFor(testInputDir, ""), v1Day, nil)
+	if err != nil {
+		t.Fatalf("Aggregate: %v", err)
+	}
+	v2Rows := BuildRows(agg.Aggregators, "", v1Day.Format("2006-01-02"))
+	legacy := make([]v1Row, 0, len(v2Rows))
+	for _, r := range v2Rows {
+		legacy = append(legacy, v1Row{
+			TenantID: r.TenantID, BucketStart: r.BucketStart, Service: r.Service,
+			Method: r.Method, PathTemplate: r.PathTemplate, RequestCount: r.RequestCount,
+			ErrorCount: r.ErrorCount, ErrorRate: r.ErrorRate,
+			P50LatencyMs: r.P50LatencyMs, P95LatencyMs: r.P95LatencyMs,
+			P99LatencyMs: r.P99LatencyMs, EventDay: r.EventDay,
+		})
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[v1Row](&buf, parquet.Compression(&zstd.Codec{Level: CompressionLevel}))
+	if _, err := w.Write(legacy); err != nil {
+		t.Fatalf("write v1 rows: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close v1 writer: %v", err)
+	}
+	v1Key := DeterministicKey(PartitionDir(filepath.Join(testOutputDir, MetricRequestMinute), v1Day),
+		MetricRequestMinute, v1Day)
+	if err := store.Put(ctx, v1Key, bytes.NewReader(buf.Bytes())); err != nil {
+		t.Fatalf("put v1 partition: %v", err)
+	}
+
+	// Now write the newer day through the engine, producing a v2 partition.
+	opts := baseOptions(store, v2Day)
+	if _, err := Run(ctx, opts); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	v2Key := partitionKeys(t, store, v2Day)[0]
+
+	// Both must read. The v1 file has no sketch columns; reading it with the v2
+	// schema must yield empty sketches rather than failing, which is what
+	// union_by_name gives the query layer.
+	v1Read := readRows(t, store, v1Key)
+	if len(v1Read) == 0 {
+		t.Fatal("the v1 partition read back empty")
+	}
+	for _, r := range v1Read {
+		if len(r.LatencySketch) != 0 {
+			t.Errorf("a v1 row carries sketch bytes: %d", len(r.LatencySketch))
+		}
+		if r.SketchVersion != "" {
+			t.Errorf("a v1 row carries SketchVersion %q, want empty", r.SketchVersion)
+		}
+		if r.RequestCount == 0 {
+			t.Error("a v1 row lost its request count")
+		}
+	}
+
+	v2Read := readRows(t, store, v2Key)
+	if len(v2Read) == 0 {
+		t.Fatal("the v2 partition read back empty")
+	}
+	for _, r := range v2Read {
+		if len(r.LatencySketch) == 0 {
+			t.Error("a v2 row has no sketch")
+		}
+	}
+
+	// And the manifests distinguish them, which is how a consumer knows which
+	// partitions can answer a cross-bucket percentile.
+	v2Manifest, err := manifest.Read(ctx, store, v2Key)
+	if err != nil {
+		t.Fatalf("read v2 manifest: %v", err)
+	}
+	if v2Manifest.MetricVersion != MetricVersion {
+		t.Errorf("v2 manifest MetricVersion = %q, want %q", v2Manifest.MetricVersion, MetricVersion)
+	}
 }

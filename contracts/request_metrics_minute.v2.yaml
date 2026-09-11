@@ -1,0 +1,119 @@
+# Copyright 2026 The Gravix Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# v2 percentiles: computed from a mergeable t-digest sketch rather than from a
+# per-bucket scalar.
+#
+# v1 answered a single bucket exactly and had no correct answer for a window of
+# many buckets — the Cube model took the MAX of the per-minute values, which is not
+# a percentile and whose error was unbounded. On a pareto latency distribution that
+# MAX was 62% above the true p95. v2's merged sketch was 0.3% from it.
+#
+# The v1 contracts are deprecated, not edited: they remain the published record of
+# what v1 numbers meant.
+
+contracts:
+  - name: latency_p50
+    version: v2
+    title: Median latency (p50)
+    formula: 50th percentile of latency_ms, from the merged latency_sketch over the queried window
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - latency_ms
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: sketch
+    error_bound: >-
+      relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets
+    mergeability: sketch_merge
+    merge_note: >-
+      Merge the latency_sketch column across buckets, then query the quantile. Never
+      take max, mean, or any other function of the per-bucket scalar percentiles —
+      that is what v1 did and it is why v1 is deprecated. Merging is exact: it is a
+      multiset union of centroids, so any grouping or ordering of the buckets gives
+      the same answer.
+    late_data: >-
+      The bucket is recomputed from all of its facts, sketch included, so a late fact
+      shifts the quantile to its correct value rather than being folded into a stale
+      summary.
+    supersedes: latency_p50@v1
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+
+  - name: latency_p95
+    version: v2
+    title: 95th percentile latency (p95)
+    formula: 95th percentile of latency_ms, from the merged latency_sketch over the queried window
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - latency_ms
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: sketch
+    error_bound: >-
+      relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets
+    mergeability: sketch_merge
+    merge_note: >-
+      Merge the latency_sketch column across buckets, then query the quantile. Never
+      take max, mean, or any other function of the per-bucket scalar percentiles —
+      that is what v1 did and it is why v1 is deprecated. Merging is exact: it is a
+      multiset union of centroids, so any grouping or ordering of the buckets gives
+      the same answer.
+    late_data: >-
+      The bucket is recomputed from all of its facts, sketch included, so a late fact
+      shifts the quantile to its correct value rather than being folded into a stale
+      summary.
+    supersedes: latency_p95@v1
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+
+  - name: latency_p99
+    version: v2
+    title: 99th percentile latency (p99)
+    formula: 99th percentile of latency_ms, from the merged latency_sketch over the queried window
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - latency_ms
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: sketch
+    error_bound: >-
+      relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets
+    mergeability: sketch_merge
+    merge_note: >-
+      Merge the latency_sketch column across buckets, then query the quantile. Never
+      take max, mean, or any other function of the per-bucket scalar percentiles —
+      that is what v1 did and it is why v1 is deprecated. Merging is exact: it is a
+      multiset union of centroids, so any grouping or ordering of the buckets gives
+      the same answer.
+    late_data: >-
+      The bucket is recomputed from all of its facts, sketch included, so a late fact
+      shifts the quantile to its correct value rather than being folded into a stale
+      summary.
+    supersedes: latency_p99@v1
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02

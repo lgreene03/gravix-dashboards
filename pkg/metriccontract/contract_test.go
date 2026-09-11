@@ -76,15 +76,19 @@ func TestRealRegistryIsValid(t *testing.T) {
 
 func TestRegistryHasSixContracts(t *testing.T) {
 	reg := loadReal(t)
-	if got := len(reg.Contracts); got != 6 {
-		t.Fatalf("contracts = %d, want 6", got)
+
+	// Six metrics, as GRVX-803 §5.3 requires. GRVX-804 added a v2 of each
+	// percentile, so the registry holds nine contract *versions* of six metrics —
+	// which is the registry working as designed: a new meaning is a new version,
+	// never an edit.
+	if got := len(reg.Names()); got != 6 {
+		t.Fatalf("distinct metrics = %d, want 6: %v", got, reg.Names())
 	}
 
-	want := []string{
+	for _, id := range []string{
 		"request_count@v1", "error_count@v1", "error_rate@v1",
 		"latency_p50@v1", "latency_p95@v1", "latency_p99@v1",
-	}
-	for _, id := range want {
+	} {
 		if _, err := reg.Get(id); err != nil {
 			t.Errorf("missing contract %s: %v", id, err)
 		}
@@ -93,6 +97,9 @@ func TestRegistryHasSixContracts(t *testing.T) {
 
 // ─── AC-3, AC-4: the percentile defect is disclosed, not hidden ───
 
+// TestPercentileDefectsDisclosed checks the v1 percentiles, which are the
+// approximate ones. GRVX-804's v2 replaces them with a bounded sketch; v1 stays in
+// the registry, deprecated, as the published record of what v1 numbers meant.
 func TestPercentileDefectsDisclosed(t *testing.T) {
 	reg := loadReal(t)
 
@@ -129,6 +136,8 @@ func TestPercentileDefectsDisclosed(t *testing.T) {
 	}
 }
 
+// TestPercentilesNotMergeable applies to v1. v2 is sketch_merge, asserted by
+// TestV2ContractsAreSketch.
 func TestPercentilesNotMergeable(t *testing.T) {
 	reg := loadReal(t)
 	for _, name := range []string{"latency_p50", "latency_p95", "latency_p99"} {
@@ -464,5 +473,108 @@ func TestNamesAndKnownDefects(t *testing.T) {
 func TestVersionNumberOfMalformedVersion(t *testing.T) {
 	if got := (Contract{Version: "nonsense"}).VersionNumber(); got != -1 {
 		t.Errorf("VersionNumber = %d, want -1 for an unparseable version", got)
+	}
+}
+
+// ─── GRVX-804: the v2 percentiles ───
+
+// AC-11: v2 percentile contracts are sketch-backed with a real bound.
+func TestV2ContractsAreSketch(t *testing.T) {
+	reg := loadReal(t)
+
+	for _, name := range []string{"latency_p50", "latency_p95", "latency_p99"} {
+		t.Run(name, func(t *testing.T) {
+			c, err := reg.Get(name + "@v2")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+
+			if c.Exactness != ExactnessSketch {
+				t.Errorf("Exactness = %q, want %q", c.Exactness, ExactnessSketch)
+			}
+			if c.Mergeability != MergeabilitySketchMerge {
+				t.Errorf("Mergeability = %q, want %q", c.Mergeability, MergeabilitySketchMerge)
+			}
+			if strings.TrimSpace(c.ErrorBound) == "" {
+				t.Fatal("ErrorBound is empty; a sketch without a bound is just an approximation")
+			}
+			if strings.Contains(c.ErrorBound, "UNBOUNDED") {
+				t.Errorf("ErrorBound still says UNBOUNDED: %q", c.ErrorBound)
+			}
+			// The bound must name how it was measured, or it is an assertion.
+			for _, must := range []string{"TestAccuracyWithinBound", "1%", "lognormal", "pareto"} {
+				if !strings.Contains(c.ErrorBound, must) {
+					t.Errorf("ErrorBound does not mention %q: %q", must, c.ErrorBound)
+				}
+			}
+			if strings.TrimSpace(c.KnownDefect) != "" {
+				t.Errorf("v2 carries a known_defect, but it is the fix: %q", c.KnownDefect)
+			}
+			if c.Supersedes != name+"@v1" {
+				t.Errorf("Supersedes = %q, want %q", c.Supersedes, name+"@v1")
+			}
+			if !strings.Contains(c.MergeNote, "Never") {
+				t.Errorf("MergeNote does not warn against the old approach: %q", c.MergeNote)
+			}
+
+			// Latest must now resolve to v2, or nothing downstream picks up the fix.
+			latest, err := reg.Latest(name)
+			if err != nil {
+				t.Fatalf("Latest: %v", err)
+			}
+			if latest.Version != "v2" {
+				t.Errorf("Latest(%s) = %s, want v2", name, latest.Version)
+			}
+		})
+	}
+}
+
+// AC-12: the v1 percentile contracts are deprecated and otherwise untouched.
+func TestV1ContractsDeprecatedNotEdited(t *testing.T) {
+	reg := loadReal(t)
+
+	for _, name := range []string{"latency_p50", "latency_p95", "latency_p99"} {
+		c, err := reg.Get(name + "@v1")
+		if err != nil {
+			t.Fatalf("Get %s@v1: %v", name, err)
+		}
+
+		if !c.Deprecated {
+			t.Errorf("%s@v1 is not marked deprecated", name)
+		}
+		// Everything else must still say what v1 said. A superseded contract is the
+		// record of what those numbers meant; editing it rewrites history.
+		if c.Exactness != ExactnessApproximate {
+			t.Errorf("%s@v1 Exactness = %q, want it left as %q", name, c.Exactness, ExactnessApproximate)
+		}
+		if c.Mergeability != MergeabilityNone {
+			t.Errorf("%s@v1 Mergeability = %q, want it left as %q", name, c.Mergeability, MergeabilityNone)
+		}
+		if !strings.Contains(c.ErrorBound, "UNBOUNDED") {
+			t.Errorf("%s@v1 ErrorBound = %q, want the original UNBOUNDED text", name, c.ErrorBound)
+		}
+		if !strings.Contains(c.KnownDefect, "GRVX-804") {
+			t.Errorf("%s@v1 KnownDefect no longer names the fixing spec: %q", name, c.KnownDefect)
+		}
+	}
+
+	// The non-percentile metrics were never defective and must not be deprecated.
+	for _, name := range []string{"request_count", "error_count", "error_rate"} {
+		c, err := reg.Get(name + "@v1")
+		if err != nil {
+			t.Fatalf("Get %s@v1: %v", name, err)
+		}
+		if c.Deprecated {
+			t.Errorf("%s@v1 was deprecated, but nothing replaced it", name)
+		}
+	}
+}
+
+func TestKnownDefectsShrinkToV1Only(t *testing.T) {
+	reg := loadReal(t)
+	for _, c := range reg.KnownDefects() {
+		if c.Version != "v1" {
+			t.Errorf("%s is approximate, but only the superseded v1 percentiles should be", c.ID())
+		}
 	}
 }

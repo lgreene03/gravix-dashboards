@@ -339,3 +339,76 @@ The old `docs/02-derived-metrics.md` documented `p50_latency` and `p95_latency` 
 `p99_latency`**, though the rollup has always computed it and the Cube model has always exposed it.
 The registry contracts all three. This is the registry doing its job on its first day: a metric that
 was shipped and never documented is exactly what it exists to catch.
+
+---
+
+## SD-007 — GRVX-804's 40-byte sketch budget is not achievable by any quantile sketch
+
+**Found by:** `senior-engineer` executing GRVX-804
+**Affects:** GRVX-804 AC-14; G4.4 (storage budget)
+**Severity:** medium — a real cost the roadmap has not accounted for
+**Status:** escalated to `perf-cost-engineer`; implemented with the measured cost recorded
+
+### What the spec asked
+
+AC-14: *"Sketch bytes add ≤40 bytes/row at p95 of realistic bucket sizes."*
+
+### What it actually costs
+
+Measured, at Compression 100:
+
+| Bucket size | Centroids | Serialised bytes |
+|---|---|---|
+| 1 observation | 1 | **48** |
+| 10 | 10 | 192 |
+| 100 | 100 | 1,632 |
+| 1,000 | 122 | 1,984 |
+| 10,000 | 141 | 2,288 |
+
+Mean over 2,000 buckets of 5–500 observations: **1,623 bytes/row**. In a zstd Parquet file the
+column adds **769 bytes/row** on disk, against ~10 bytes/row for the same rows without it — the file
+grows about 78×.
+
+The budget is missed by roughly 19× on disk. It is not missable by a smaller margin: **the fixed
+header alone is 32 bytes and a one-observation sketch is 48**, so 40 bytes/row is below the floor of
+any sketch with this structure, before a single centroid of actual data.
+
+### Lowering compression is not a way out
+
+Compression is the only size knob, and it trades directly against the accuracy this spec exists to
+deliver. Measured worst-case relative error over a merged day of 1,440 buckets, across all five
+distributions:
+
+| Compression | Worst merged error | Max centroids/bucket | Worst-case bytes |
+|---|---|---|---|
+| 20 | **38.3%** | 28 | 480 |
+| 50 | **4.7%** | 64 | 1,056 |
+| 100 | **0.92%** | 127 | 2,064 |
+
+Compression 100 is the smallest setting that meets the 1% bound. Dropping to 50 to save a third of
+the bytes costs a 5× worse error, which would put the metric back outside the contract it was
+written to satisfy — and still would not approach 40 bytes.
+
+### Why it was implemented anyway
+
+The alternative is keeping a number that is wrong by up to 62%. On a pareto latency distribution the
+current `MAX`-of-per-minute-p95 is 62.4% above the true p95; the merged sketch is 0.3% from it. A
+storage budget is a cost question with several answers; a wrong percentile is a correctness question
+with one.
+
+`TestSketchSizeBudget` asserts against the **measured** figure (`MeasuredBytesPerRow = 1700`), not
+against 40. It fails on a regression, and the gap to AC-14 is recorded here rather than hidden by a
+loosened assertion.
+
+### Options for `perf-cost-engineer` (G4.4)
+
+1. **Accept it.** 769 bytes/row on disk. Simplest, and the correctness is paid for.
+2. **Coarser sketch grain.** Keep the exact scalars per minute per endpoint, but store sketches per
+   service-hour. Roughly a 60× reduction in sketch rows; loses per-endpoint cross-bucket percentiles.
+3. **Narrower encoding.** float32 means and varint weights would roughly halve the bytes, at some
+   precision cost that would have to be re-measured against the 1% bound.
+4. **Threshold the sketch.** Below ~30 observations a bucket's sketch is just its sorted data;
+   omitting it there saves little (small buckets are small) and loses those buckets from merges.
+
+Option 2 is the only one that changes the order of magnitude. It is a modelling decision, not an
+implementation detail, so it belongs to `semantic-modeler` and `perf-cost-engineer`, not here.

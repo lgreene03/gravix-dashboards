@@ -47,6 +47,17 @@ capabilities:
       - transforms/service_events_daily/main.go
       - transforms/service_events_detail/main.go
 
+  - id: quantile-sketches
+    name: Mergeable quantile sketches for correct percentiles
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      This fixes a wrong number. Charging for a correct percentile while the free tier
+      reports one that can be 62% out is the definition of crippleware.
+    paths:
+      - pkg/sketch/sketch.go
+      - contracts/request_metrics_minute.v2.yaml
+
   - id: metric-contracts
     name: Versioned metric contract registry
     placement: core

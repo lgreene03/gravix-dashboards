@@ -107,6 +107,7 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 | **Exactness** | `approximate` |
 | **Error bound** | UNBOUNDED across buckets; exact within one bucket |
 | **Mergeability** | `none` |
+| **Deprecated** | yes |
 
 **Aggregating it.** Do not aggregate across buckets. There is no correct way to combine per-bucket percentiles without the underlying distribution, which this metric does not store.
 
@@ -139,6 +140,7 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 | **Exactness** | `approximate` |
 | **Error bound** | UNBOUNDED across buckets; exact within one bucket |
 | **Mergeability** | `none` |
+| **Deprecated** | yes |
 
 **Aggregating it.** Do not aggregate across buckets. There is no correct way to combine per-bucket percentiles without the underlying distribution, which this metric does not store.
 
@@ -171,6 +173,7 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 | **Exactness** | `approximate` |
 | **Error bound** | UNBOUNDED across buckets; exact within one bucket |
 | **Mergeability** | `none` |
+| **Deprecated** | yes |
 
 **Aggregating it.** Do not aggregate across buckets. There is no correct way to combine per-bucket percentiles without the underlying distribution, which this metric does not store. At p99 a one-minute bucket may hold too few requests for the figure to mean much on its own — a bucket with fewer than 100 requests has no 99th percentile in any useful sense.
 
@@ -183,6 +186,81 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 > (cube/model/schema/RequestMetricsMinute.js), which is not the percentile of the
 > combined window and has an unbounded error. Do not aggregate this metric across
 > buckets. Fixed by GRVX-804, which stores a mergeable t-digest sketch.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `latency_p50` — Median latency (p50)
+
+| Field | Value |
+|---|---|
+| **Version** | `v2` |
+| **Formula** | 50th percentile of latency_ms, from the merged latency_sketch over the queried window |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `sketch` |
+| **Error bound** | relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets |
+| **Mergeability** | `sketch_merge` |
+| **Supersedes** | `latency_p50@v1` |
+
+**Aggregating it.** Merge the latency_sketch column across buckets, then query the quantile. Never take max, mean, or any other function of the per-bucket scalar percentiles — that is what v1 did and it is why v1 is deprecated. Merging is exact: it is a multiset union of centroids, so any grouping or ordering of the buckets gives the same answer.
+
+**Late data.** The bucket is recomputed from all of its facts, sketch included, so a late fact shifts the quantile to its correct value rather than being folded into a stale summary.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `latency_p95` — 95th percentile latency (p95)
+
+| Field | Value |
+|---|---|
+| **Version** | `v2` |
+| **Formula** | 95th percentile of latency_ms, from the merged latency_sketch over the queried window |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `sketch` |
+| **Error bound** | relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets |
+| **Mergeability** | `sketch_merge` |
+| **Supersedes** | `latency_p95@v1` |
+
+**Aggregating it.** Merge the latency_sketch column across buckets, then query the quantile. Never take max, mean, or any other function of the per-bucket scalar percentiles — that is what v1 did and it is why v1 is deprecated. Merging is exact: it is a multiset union of centroids, so any grouping or ordering of the buckets gives the same answer.
+
+**Late data.** The bucket is recomputed from all of its facts, sketch included, so a late fact shifts the quantile to its correct value rather than being folded into a stale summary.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `latency_p99` — 99th percentile latency (p99)
+
+| Field | Value |
+|---|---|
+| **Version** | `v2` |
+| **Formula** | 99th percentile of latency_ms, from the merged latency_sketch over the queried window |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `sketch` |
+| **Error bound** | relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets |
+| **Mergeability** | `sketch_merge` |
+| **Supersedes** | `latency_p99@v1` |
+
+**Aggregating it.** Merge the latency_sketch column across buckets, then query the quantile. Never take max, mean, or any other function of the per-bucket scalar percentiles — that is what v1 did and it is why v1 is deprecated. Merging is exact: it is a multiset union of centroids, so any grouping or ordering of the buckets gives the same answer.
+
+**Late data.** The bucket is recomputed from all of its facts, sketch included, so a late fact shifts the quantile to its correct value rather than being folded into a stale summary.
 
 **Rebuild it.**
 
