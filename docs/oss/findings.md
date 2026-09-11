@@ -530,3 +530,46 @@ with a message naming the file to update and the number to put in it.
 ceiling, and what it should be. That is a claim about load time, and the right number comes from
 what the dashboard should cost a first-time user on a slow connection — not from wherever the bundle
 happened to sit when a guard was written. Deliberately not invented here.
+
+---
+
+## F-013 — recorded services and templates briefly vanish from the registry while a flush is in flight
+
+**Found by** CI, on GRVX-905's commit — `TestFactsEndpointAutoLearnsNumericID` reported
+`got 0 templates: []` on a machine where the same test had passed locally every time.
+**Severity** medium — intermittent, and the symptom is the one the feature exists to prevent.
+**Status** fixed, with a regression test that fails without the fix.
+
+`pkg/discovery`'s `Flush` takes the pending batch out of the map and then writes it to SQLite,
+deliberately releasing the lock first so that `RecordFact` never waits on disk I/O. The gap that
+leaves had not been considered: **for the duration of the write, those observations are in neither
+the pending map nor the database.** A concurrent `ListServices` or `ListTemplates` reads both and
+finds nothing.
+
+Reproduced deterministically enough to measure: with a 1 ms flush interval, **1 read in 3,000**
+returned an empty list for a service that had definitely been recorded.
+
+**Why this matters more than the rate suggests.** The whole point of GRVX-902 is that a service
+appears the moment it sends a fact, so a user can answer "is my data arriving?". The failure mode
+here is that same list intermittently answering *no*. A user who refreshes at the wrong moment is
+told the thing they just did has not happened.
+
+**Fixed** with a `sync.RWMutex` that makes a flush atomic from a reader's point of view: readers hold
+it across both the database query and the in-memory merge, and `Flush` holds it across the write.
+`RecordFact` never touches it, so the ingestion hot path is still free of disk I/O and still cannot be
+blocked by a flush — the property the original design was protecting.
+
+The read lock has to span **both** halves of the read, not just one. Holding it only for the query
+would let a flush land before the merge and count those rows twice; holding it only for the merge
+would miss the in-flight batch entirely. `TestRecordedDataIsNeverInvisible` asserts both: nothing
+vanishes across 3,000 reads, and the final count is exactly 3,000.
+
+**Two things made this hard to see.** The window is a single small SQLite transaction, so it needs
+either a fast flush interval or a loaded machine — CI is both. And the correctness suite's own
+`TestFlushRequeuesOnFailure` covers the *failure* path of exactly this function, which made the
+function look well tested; the success path's visibility gap was the thing nobody had asked about.
+
+**The general lesson.** "Take the batch, release the lock, then do the slow thing" is the right shape
+for keeping I/O off a hot path, and it silently introduces a window where the data exists nowhere.
+Any code in this repository that follows that shape — swap a buffer, then persist it — deserves the
+same question: what does a reader see in between?

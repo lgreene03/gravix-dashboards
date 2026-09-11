@@ -529,3 +529,66 @@ func TestFlushRequeuesTemplatesOnFailure(t *testing.T) {
 	r.stopOnce.Do(func() { close(r.stopCh) })
 	<-r.doneCh
 }
+
+// TestRecordedDataIsNeverInvisible is the F-013 regression.
+//
+// Flush takes the pending batch out of the map before writing it. Without a
+// lock spanning the write, those observations are briefly in neither the map
+// nor the database, and a reader in that window sees nothing at all — a service
+// that was definitely recorded simply vanishes, which reads to a user as "my
+// data is not arriving".
+//
+// It reproduced at roughly 1 read in 3,000 with a 1ms flush interval, and it
+// was CI that found it, not a local run. The loop is large on purpose: a
+// smaller one passes against the bug.
+func TestRecordedDataIsNeverInvisible(t *testing.T) {
+	r, err := OpenWithFlushInterval(filepath.Join(t.TempDir(), "discovery.db"), time.Millisecond)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer r.Close()
+
+	now := time.Now().UTC()
+	var vanishedService, vanishedTemplate int
+
+	for i := 0; i < 3000; i++ {
+		r.RecordFact("api", now)
+		r.RecordTemplate("api", "GET", "/users/{id}", now)
+
+		services, err := r.ListServices(context.Background())
+		if err != nil {
+			t.Fatalf("ListServices: %v", err)
+		}
+		if len(services) == 0 {
+			vanishedService++
+		}
+
+		templates, err := r.ListTemplates(context.Background(), "api")
+		if err != nil {
+			t.Fatalf("ListTemplates: %v", err)
+		}
+		if len(templates) == 0 {
+			vanishedTemplate++
+		}
+	}
+
+	if vanishedService > 0 {
+		t.Errorf("F-013 REGRESSION: a recorded service was invisible in %d of 3000 reads",
+			vanishedService)
+	}
+	if vanishedTemplate > 0 {
+		t.Errorf("F-013 REGRESSION: a recorded template was invisible in %d of 3000 reads",
+			vanishedTemplate)
+	}
+
+	// Nothing was double-counted either: a flush landing between the database
+	// query and the pending merge would inflate the total.
+	services, err := r.ListServices(context.Background())
+	if err != nil {
+		t.Fatalf("ListServices: %v", err)
+	}
+	if len(services) != 1 || services[0].RequestCount != 3000 {
+		t.Errorf("F-013 REGRESSION: final count is %+v, want exactly 3000 — an observation "+
+			"must be counted once whichever side of a flush it lands on", services)
+	}
+}

@@ -82,6 +82,20 @@ type pendingCount struct {
 type Registry struct {
 	db *sql.DB
 
+	// flushMu makes a flush atomic from a reader's point of view.
+	//
+	// Flush takes the pending batch out of the map before writing it, so for
+	// the duration of the write those observations are in neither the map nor
+	// the database. A reader in that window sees nothing — a service that was
+	// definitely recorded vanishes from the list, which reads as "my data is
+	// not arriving". Reproduced at roughly 1 read in 3,000 before this lock
+	// existed, and found by a CI run rather than locally. See F-013.
+	//
+	// Readers hold it for their whole read; Flush holds it across the write.
+	// RecordFact never touches it, so the ingestion hot path is still free of
+	// disk I/O and cannot be blocked by a flush.
+	flushMu sync.RWMutex
+
 	mu              sync.Mutex
 	pending         map[string]*pendingCount
 	pendingTemplate map[templateKey]*pendingCount
@@ -238,6 +252,9 @@ func (r *Registry) RecordTemplate(service, method, template string, seenAt time.
 // ListTemplates returns every known template for service, sorted by
 // path_template ascending, merging flushed rows with still-pending counts.
 func (r *Registry) ListTemplates(ctx context.Context, service string) ([]Template, error) {
+	r.flushMu.RLock()
+	defer r.flushMu.RUnlock()
+
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT service, method, path_template, first_seen_at, last_seen_at, request_count
 		 FROM discovered_templates WHERE service = ?`, service)
@@ -301,8 +318,13 @@ func (r *Registry) ListTemplates(ctx context.Context, service string) ([]Templat
 // Flush writes all pending in-memory counters to the database immediately.
 // Called by the background loop and by Close.
 func (r *Registry) Flush(ctx context.Context) error {
-	// Take the batch under the lock and release it before touching the disk, so
-	// RecordFact never waits on I/O.
+	// Held across the whole flush so no reader can observe the window where the
+	// batch has left the pending map and has not yet reached the database.
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
+
+	// Take the batch under the inner lock and release it before touching the
+	// disk, so RecordFact never waits on I/O.
 	r.mu.Lock()
 	batch := r.pending
 	r.pending = make(map[string]*pendingCount)
@@ -433,6 +455,11 @@ func sortedTemplateKeys(m map[templateKey]*pendingCount) []templateKey {
 // still-pending in-memory counts, so a call immediately after RecordFact
 // reflects it without waiting for a flush.
 func (r *Registry) ListServices(ctx context.Context) ([]Service, error) {
+	// Across both the query and the merge: a flush that landed between the two
+	// would be counted twice, and one in flight would be missed entirely.
+	r.flushMu.RLock()
+	defer r.flushMu.RUnlock()
+
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT name, first_seen_at, last_seen_at, request_count FROM discovered_services`)
 	if err != nil {
