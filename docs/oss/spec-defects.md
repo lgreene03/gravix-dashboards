@@ -487,3 +487,107 @@ The engine still stamps `MetricVersion` `v2` on default partitions, while an evo
 empty reserved columns — but it means a v3 contract file does not yet exist on disk for an evolved
 partition to point at. GRVX-807's lineage work is where that becomes visible, and it should either
 write the contract or say why an evolution does not need one.
+
+---
+
+## SD-009 — GRVX-808 §6.4 routes the sketch through Cube, and §5.4 leaves the endpoints table with no percentile at all
+
+**Spec:** GRVX-808 — Fix the Cube model to merge sketches instead of taking MAX of percentiles
+**Raised by:** `senior-engineer` during implementation
+**Severity:** one instruction not followed as written; one acceptance criterion narrower than the
+dashboard it governs
+
+### Part one: the sketch is read from the object store, not through Cube
+
+> §6.4 Implement `GET /api/v1/percentile`: **query Cube for the sketch column** across the window,
+> group by the requested granularity, `sketch.MergeAll` each group, and `Quantile` the result.
+
+The handler reads the Parquet partitions from the object store directly. The instruction was not
+followed, deliberately, for three reasons:
+
+1. **It would serialise binary through JSON.** A day is 1,440 sketches at roughly 3 KB each. Going
+   through Cube means base64 in a JSON document, parsed back out, to reach bytes that are sitting in
+   a Parquet column the gateway can open itself. The extra hop buys nothing: the merge and the error
+   bound are unaffected by how the bytes arrived.
+2. **Cube is a semantic layer for numbers, not a blob transport.** The `latencySketch` dimension is
+   still added, per §5.2 and AC-10, because the model should declare the column exists — but nothing
+   should route kilobytes of opaque binary per row through a caching query layer.
+3. **It removes a dependency from the correctness path.** With the object store read, a windowed
+   percentile is correct whether or not Cube is up, which matters for the one number the competitive
+   thesis rests on.
+
+The spec's own §5.1 justifies this: *"the merge must use the identical implementation that produced the
+sketches"*. Reading the same files that implementation wrote is the shortest path to that, and §6.4's
+routing was an implementation detail stated as a requirement.
+
+**This does change one thing the spec did not anticipate.** The gateway now needs a store rooted where
+the rollup writes — the data root — and its existing `store` field is rooted at `RAW_DATA_DIR` for the
+DLQ. A second `metricStore` was added rather than re-rooting the first, because moving the DLQ store
+would change unrelated behaviour. When it is absent the endpoint answers `503`, which is not in §6.1's
+table and should be added to it.
+
+### Part two: the endpoints table has no percentile, and the spec did not notice
+
+`fetchAllEndpointsData` in `dashboards/app.js` queries with **no time granularity at all** — it
+aggregates the entire window, grouped by `path_template` and `method`, to fill the per-endpoint table.
+Its P50/P95/P99 columns were therefore `max` over the whole selected range, per endpoint: the worst
+instance of the defect in the product, and the one §5.4 does not mention, because §5.4 is written in
+terms of granularity being "coarser than one minute" and this query has no granularity to be coarse.
+
+`GET /api/v1/percentile` cannot replace it. The endpoint filters by `path_template` but has no
+`group_by`, so answering a table of forty endpoints would take forty requests. Adding a `group_by` is
+a real interface change and belongs in a spec, not in an implementation note.
+
+What ships instead: those three cells render `—` with a tooltip saying why, and the column headers are
+no longer sortable, because a sort over absent values is a control that does nothing. An empty cell a
+user asks about is better than a plausible cell they believe — the same argument §5.2 makes for `min`
+over `max`, taken one step further where no number is available at all.
+
+**For the semantic modeller and the next spec:** `GET /api/v1/percentile` needs a `group_by` parameter
+restricted to the three declared dimensions, returning one series per group. That is GRVX-809's natural
+home and it is the only thing standing between this dashboard and a correct per-endpoint p95.
+
+### Part three: two references the model would have died on
+
+Not a spec defect — an existing bug the spec's change exposed, recorded here because it is what the
+text-level acceptance criteria could not see:
+
+`preAggregations.endpointDaily` and `metricsHourly` both listed `p50Latency, p95Latency, p99Latency`.
+Removing those measures per §5.2 left two pre-aggregations referring to members that no longer exist,
+which Cube rejects at model load. Worse, had they been renamed rather than removed, a pre-aggregation
+rolling `bucketP95LatencyMs` up to `day` would have **materialised and cached** min-of-1440-p95s — the
+defect this spec removes, stored as if it were a fact.
+
+Both pre-aggregations now carry only `requestCount` and `errorCount`. The fix is enforced by
+`cube/model/schema/RequestMetricsMinute.test.js`, which loads the model rather than grepping it.
+
+### Part four: the spec's file list is missing the alert evaluator
+
+§4.2 names four files to modify. It does not name `services/gateway/gateway_alerts.go`, which held:
+
+```go
+"p95_latency": "RequestMetricsMinute.p95Latency",
+```
+
+Removing that measure per §5.2 would have left every latency alert querying a member that no longer
+exists — so latency alerting would have stopped, silently, as a side effect of a correctness fix. That
+is worse than the defect being fixed.
+
+It is also the same defect: `queryCubeMetric` aggregates over the whole alert window with no
+granularity, so a rule on "p95 over the last 15 minutes" was firing on **max of fifteen per-minute
+p95s**. An alert is a number someone is paged by, which makes it the worst place in the product to be
+94% out.
+
+The evaluator now answers `p50_latency`, `p95_latency` and `p99_latency` by calling
+`computeWindowPercentile` in-process — the same merge, the same error bound, no HTTP hop — and keeps
+`error_rate` and `throughput` on Cube, where they aggregate correctly. The anomaly path, which compares
+one hour against the same hour on previous days, takes the same route at hourly granularity; the
+statistics that judge the comparison were extracted so both paths share them exactly.
+
+Proven by `TestAlertPercentileComesFromSketches`, which points the evaluator at an unreachable Cube so
+a regression fails loudly rather than returning the old number, and by
+`TestAlertNonPercentileMetricsStillUseCube`, which checks every metric that passes rule validation can
+be answered by one path or the other.
+
+**For the spec author:** §4.2 should have listed every consumer of a measure it removes. A spec that
+deletes a public name owes the implementer the list of things that read it.

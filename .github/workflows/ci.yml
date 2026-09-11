@@ -353,6 +353,15 @@ jobs:
           npm ci
           npx tsc --noEmit
 
+      - name: Node SDK tests
+        working-directory: sdk/node
+        run: npm test
+
+      # The Cube model and the dashboard's query routing are JavaScript, so their
+      # correctness cannot be proven by `go test`. GRVX-808 AC-9/AC-11 live here.
+      - name: Cube model and dashboard routing tests
+        run: node --test cube/model/schema/*.test.js
+
       - name: Python SDK tests
         working-directory: sdk/python
         run: |

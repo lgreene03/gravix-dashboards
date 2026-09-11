@@ -39,6 +39,11 @@ var excludedDirs = map[string]bool{
 	"node_modules": true,
 	"data":         true,
 	"bin":          true,
+	// Compiler output. `npm run build` in sdk/node writes dist/ with no licence
+	// headers, which made `make check-boundary` fail for anyone who had built the
+	// SDK locally — a check that depends on which commands you ran last is a check
+	// nobody trusts. git ignores dist/ for the same reason.
+	"dist": true,
 }
 
 // excludedPaths are specific repo-relative paths exempt from the import check.

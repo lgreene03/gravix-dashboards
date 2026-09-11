@@ -40,6 +40,8 @@ tags:
     description: Dead-letter queue management
   - name: Audit
     description: Audit log
+  - name: Metrics
+    description: Derived metric queries whose correctness needs server-side computation
 
 paths:
   # ── Ingestion endpoints ──────────────────────────────────────────────
@@ -889,6 +891,122 @@ paths:
 
   # ── Audit Log endpoint ─────────────────────────────────────────────
 
+  /api/v1/percentile:
+    get:
+      operationId: getWindowPercentile
+      summary: Percentile over a time window
+      description: >
+        Returns a quantile computed by merging the t-digest sketches stored with each
+        minute bucket.
+
+
+        This endpoint exists because a percentile has no correct aggregation across
+        buckets: the maximum of sixty one-minute p95s is not the hour's p95, and on
+        heavy-tailed latency it was measured 94% above the true value. The semantic
+        layer therefore exposes the per-bucket percentile columns as non-aggregatable
+        and any window wider than one minute is answered here, where the sketches can
+        be merged with the same implementation that wrote them.
+
+
+        The answer is a sketch, not an exact value. `exactness` and `error_bound` in
+        the response say so, and the bound is the one published in
+        contracts/request_metrics_minute.v2.yaml.
+      tags: [Metrics]
+      security:
+        - gravixKeyAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: metric
+          in: query
+          schema:
+            type: string
+            default: request_metrics_minute
+            enum: [request_metrics_minute]
+          description: The metric to query. Only request_metrics_minute carries sketches.
+        - name: quantile
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            exclusiveMinimum: 0
+            exclusiveMaximum: 1
+            example: 0.95
+          description: >
+            The quantile, strictly between 0 and 1. The published error bound covers
+            [0.5, 0.99]; quantiles outside that range are answered but less accurate.
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Start of the window, inclusive (RFC3339).
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: End of the window, exclusive (RFC3339). At most 31 days after `from`.
+        - name: granularity
+          in: query
+          schema:
+            type: string
+            enum: [minute, hour, day, all]
+            default: all
+          description: >
+            How to group the window. `all` returns one bucket covering the whole
+            window; the others return one per period that has data.
+        - name: service
+          in: query
+          schema:
+            type: string
+          description: Restrict to one service.
+        - name: method
+          in: query
+          schema:
+            type: string
+          description: Restrict to one HTTP method.
+        - name: path_template
+          in: query
+          schema:
+            type: string
+          description: >
+            Restrict to one path template. Only the three declared dimensions are
+            accepted; high-cardinality filters are a stated non-goal.
+      responses:
+        "200":
+          description: The merged quantile for each bucket that has data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PercentileResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/PreSketchPartition"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: >
+            Metric storage is not configured, so no sketch can be read. The endpoint
+            reports this rather than falling back to the per-bucket scalars, which
+            would be the wrong number.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "metric storage is not configured"
+                code: 503
+
   /api/gateway/audit-log:
     get:
       operationId: listAuditLog
@@ -938,6 +1056,14 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: JWT token from /api/gateway/login
+    gravixKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Gravix-Key
+      description: >
+        Per-tenant Gravix API key, created via /api/gateway/api-keys. The gateway
+        resolves it to a tenant and answers only for that tenant's partitions.
+        An `Authorization: Bearer <key>` header is accepted as an alternative.
 
   schemas:
     # ── Ingestion schemas ────────────────────────────────────────────
@@ -1434,6 +1560,67 @@ components:
         offset:
           type: integer
 
+    PercentileResponse:
+      type: object
+      description: >
+        A quantile answered by merging stored sketches. Every field that qualifies
+        the number — its exactness, its error bound, and how many sketches went into
+        it — is part of the response, not documentation someone has to go and find.
+      required: [metric, quantile, granularity, exactness, error_bound, buckets]
+      properties:
+        metric:
+          type: string
+          example: request_metrics_minute
+        quantile:
+          type: number
+          format: double
+          example: 0.95
+        granularity:
+          type: string
+          enum: [minute, hour, day, all]
+          example: hour
+        exactness:
+          type: string
+          enum: [sketch]
+          description: >
+            Always `sketch` here. The value is an approximation with a published
+            bound, never an exact order statistic over the raw facts.
+        error_bound:
+          type: string
+          description: The bound published by the metric contract, stated in the response.
+          example: "relative error <= 1% for q in [0.5, 0.99]"
+        buckets:
+          type: array
+          description: One entry per period that had data. Empty when nothing matched.
+          items:
+            $ref: "#/components/schemas/PercentileBucket"
+
+    PercentileBucket:
+      type: object
+      required: [bucket_start, value, observations, sketches_merged]
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+          description: Start of this bucket, UTC. For granularity `all`, the window start.
+          example: "2026-09-09T14:00:00Z"
+        value:
+          type: number
+          format: double
+          description: The quantile in the metric's own unit (milliseconds for latency).
+          example: 142.3
+        observations:
+          type: integer
+          format: int64
+          description: Requests represented by the merged sketches.
+          example: 72240
+        sketches_merged:
+          type: integer
+          description: >
+            How many per-minute sketches were merged. A low count against a wide
+            window means the window is mostly empty.
+          example: 60
+
   responses:
     BadRequest:
       description: Validation failure.
@@ -1474,6 +1661,20 @@ components:
           example:
             error: "not found"
             code: 404
+
+    PreSketchPartition:
+      description: >
+        A partition in the requested window predates sketch storage, so the window
+        cannot be answered correctly. The days are named so `gravix recompute` can
+        rebuild them. This is deliberately an error rather than a silent fallback to
+        the per-bucket scalars.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "partitions 2026-09-01, 2026-09-02 predate sketch storage; run gravix recompute for those days"
+            code: 422
 
     PayloadTooLarge:
       description: Request body exceeds 1 MB limit.

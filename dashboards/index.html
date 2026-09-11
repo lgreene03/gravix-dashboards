@@ -443,9 +443,14 @@
                                 <th class="sortable-header sort-desc" data-sort="requests">Requests</th>
                                 <th class="sortable-header" data-sort="errors">Errors</th>
                                 <th class="sortable-header" data-sort="errorRate">Error Rate</th>
-                                <th class="sortable-header" data-sort="p50">P50 (ms)</th>
-                                <th class="sortable-header" data-sort="p95">P95 (ms)</th>
-                                <th class="sortable-header" data-sort="p99">P99 (ms)</th>
+                                <!-- Not sortable: per-endpoint percentiles over a
+                                     window need a group-by the percentile endpoint
+                                     does not have yet, so these cells are blank.
+                                     A sort control over blank cells is a control
+                                     that does nothing. See SD-009. -->
+                                <th title="Per-endpoint percentiles over a window are not available yet">P50 (ms)</th>
+                                <th title="Per-endpoint percentiles over a window are not available yet">P95 (ms)</th>
+                                <th title="Per-endpoint percentiles over a window are not available yet">P99 (ms)</th>
                             </tr>
                         </thead>
                         <tbody id="all-endpoints-body"></tbody>

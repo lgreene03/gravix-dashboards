@@ -278,6 +278,16 @@ func main() {
 		slog.Info("DLQ store initialized", "dir", rawDir)
 	}
 
+	// Metric partitions live under the data root, written by the rollup with keys
+	// like warehouse/request_metrics_minute/event_day=.../. The percentile
+	// endpoint reads them with the same keys, so it needs a store rooted the same
+	// way the rollup roots its own — which is not RAW_DATA_DIR.
+	metricStore, err := newMetricStore()
+	if err != nil {
+		metricStore = nil
+		slog.Warn("metric store init failed, GET /api/v1/percentile will be unavailable", "error", err)
+	}
+
 	// Per-tenant rate limiting (fallback 100/s for legacy mode)
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
@@ -296,6 +306,7 @@ func main() {
 	}
 
 	gw := &gateway{
+		metricStore:     metricStore,
 		db:              db,
 		tokens:          tokens,
 		notifier:        notify.NewDispatcher(),
@@ -428,6 +439,10 @@ func main() {
 	mux.HandleFunc("/api/gateway/exports/scheduled", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleScheduledExports))))
 	mux.HandleFunc("/api/gateway/exports/scheduled/", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleScheduledExportByID))))
 	mux.HandleFunc("/api/v1/metrics", gw.ipRateLimitMiddleware(gw.handlePublicMetrics))
+	// Windowed percentiles merge t-digest sketches in Go, because a percentile
+	// over many buckets cannot be computed correctly any other way. See
+	// services/gateway/percentile_handler.go.
+	mux.HandleFunc("/api/v1/percentile", gw.ipRateLimitMiddleware(gw.handleWindowPercentile))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -595,6 +610,14 @@ type gateway struct {
 	totpKey         []byte          // separate encryption key for TOTP secrets
 	activeExports   map[string]bool // tracks in-progress exports per tenant
 	activeExportsMu sync.Mutex
+	// metricStore reads metric partitions for GET /api/v1/percentile. It is a
+	// separate store from `store` because that one is rooted at RAW_DATA_DIR for
+	// the DLQ, while metric partitions are written by the rollup under the data
+	// root. nil means the percentile endpoint is unavailable.
+	metricStore storage.ObjectStore
+	// metricWarehouseDir is where metric partitions live, expressed the way the
+	// rollup expresses it. Empty means the default ./data/warehouse.
+	metricWarehouseDir string
 }
 
 // ipRateLimitMiddleware applies per-IP rate limiting. Returns 429 with Retry-After header when exceeded.

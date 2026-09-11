@@ -1,0 +1,258 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// GRVX-808 §4.1. Run with:
+//   node --test cube/model/schema/RequestMetricsMinute.test.js
+//
+// The Go tests in services/gateway/percentile_handler_test.go assert the model's
+// text. These load it, so they catch what text cannot: a measure referenced from
+// a pre-aggregation after it was deleted, a `meta` block that is a comment rather
+// than a property, a model that throws on one of the four configurations.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import vm from 'node:vm';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const modelPath = join(here, 'RequestMetricsMinute.js');
+const clientPath = join(here, '..', '..', '..', 'dashboards', 'lib', 'cube-client.js');
+const appPath = join(here, '..', '..', '..', 'dashboards', 'app.js');
+
+// loadModel evaluates the model with a stubbed `cube()` and the given env, and
+// returns the definition it registered.
+//
+// Cube's DSL refers to members by bare identifier — `measures: [requestCount]`,
+// `drillMembers: [service, ...]` — which are resolved by Cube at load time, not
+// by JavaScript. Evaluating the file therefore needs those names to exist. The
+// Proxy supplies each one as its own name, so a reference to a member that has
+// been deleted still evaluates, and assertMembersExist below is what catches it.
+function loadModel(env = {}) {
+  const src = readFileSync(modelPath, 'utf8');
+  let captured = null;
+
+  const names = new Proxy({}, {
+    has: () => true,
+    get: (_t, prop) => {
+      if (prop === 'cube') return (name, def) => { captured = { name, def }; };
+      if (prop === 'process') return { env };
+      if (prop === Symbol.unscopables) return undefined;
+      return String(prop);
+    }
+  });
+
+  vm.runInNewContext(`with (names) { ${src} }`, { names });
+  assert.ok(captured, 'the model did not call cube()');
+  return captured;
+}
+
+// loadCubeClient evaluates the browser IIFE and returns the CubeClient global.
+function loadCubeClient() {
+  const src = readFileSync(clientPath, 'utf8');
+  return vm.runInNewContext(`${src}; CubeClient;`, { localStorage: undefined });
+}
+
+const CONFIGS = [
+  ['duckdb single-tenant', { CUBEJS_DB_TYPE: 'duckdb' }],
+  ['duckdb multi-tenant', { CUBEJS_DB_TYPE: 'duckdb', TENANT_DB_PATH: '/data/tenants.db' }],
+  ['trino single-tenant', { CUBEJS_DB_TYPE: 'trino' }],
+  ['trino multi-tenant', { CUBEJS_DB_TYPE: 'trino', TENANT_DB_PATH: '/data/tenants.db' }]
+];
+
+// ─── AC-9: all four configurations load ───
+
+test('the model loads in all four configurations', () => {
+  for (const [label, env] of CONFIGS) {
+    const { name, def } = loadModel(env);
+    assert.equal(name, 'RequestMetricsMinute', label);
+    assert.ok(def.sql.includes('SELECT * FROM'), `${label}: no SQL source`);
+  }
+});
+
+test('each configuration selects every column, so latency_sketch is readable', () => {
+  for (const [label, env] of CONFIGS) {
+    const { def } = loadModel(env);
+    assert.ok(def.sql.startsWith('SELECT * FROM'), `${label}: ${def.sql}`);
+  }
+});
+
+// ─── AC-1, AC-2: no max over a percentile ───
+
+test('no measure aggregates a percentile column with max', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+  for (const [name, measure] of Object.entries(def.measures)) {
+    if (!measure.sql || !/p\d\d_latency_ms/.test(measure.sql)) continue;
+    assert.notEqual(measure.type, 'max', `${name} aggregates a percentile with max`);
+    assert.equal(measure.meta?.aggregatable, false, `${name} is not marked non-aggregatable`);
+    assert.equal(measure.meta?.correctOnlyAtGranularity, 'minute',
+      `${name} does not record the granularity it is correct at`);
+  }
+});
+
+test('the removed measures are gone, not merely renamed', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+  for (const gone of ['p50Latency', 'p95Latency', 'p99Latency']) {
+    assert.equal(def.measures[gone], undefined, `${gone} is still defined`);
+  }
+  for (const kept of ['bucketP50LatencyMs', 'bucketP95LatencyMs', 'bucketP99LatencyMs']) {
+    assert.ok(def.measures[kept], `${kept} is missing`);
+  }
+});
+
+// ─── AC-5: the correct measures are untouched ───
+
+test('the measures that were already correct are unchanged', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+  assert.equal(def.measures.requestCount.type, 'sum');
+  assert.equal(def.measures.errorCount.type, 'sum');
+  assert.equal(def.measures.errorRate.sql, 'sum(error_count) / NULLIF(sum(request_count), 0)');
+});
+
+// ─── AC-10: the sketch is present but hidden ───
+
+test('latencySketch is exposed and hidden', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+  const d = def.dimensions.latencySketch;
+  assert.ok(d, 'latencySketch is not exposed');
+  assert.equal(d.sql, 'latency_sketch');
+  assert.equal(d.shown, false);
+});
+
+// ─── the defect the text assertions could not see ───
+
+test('every pre-aggregation names only measures that exist', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+  for (const [aggName, agg] of Object.entries(def.preAggregations)) {
+    for (const measure of agg.measures || []) {
+      assert.ok(def.measures[measure],
+        `pre-aggregation ${aggName} references measure ${measure}, which does not exist`);
+    }
+    for (const dim of agg.dimensions || []) {
+      assert.ok(def.dimensions[dim],
+        `pre-aggregation ${aggName} references dimension ${dim}, which does not exist`);
+    }
+  }
+});
+
+test('no pre-aggregation materialises a non-aggregatable measure', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+  for (const [aggName, agg] of Object.entries(def.preAggregations)) {
+    if (agg.granularity === 'minute') continue;
+    for (const measure of agg.measures || []) {
+      assert.notEqual(def.measures[measure].meta?.aggregatable, false,
+        `pre-aggregation ${aggName} rolls ${measure} up to ${agg.granularity}, ` +
+        `caching a number the model itself says cannot be aggregated`);
+    }
+  }
+});
+
+test('drillMembers name members that exist', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+  for (const [name, measure] of Object.entries(def.measures)) {
+    for (const member of measure.drillMembers || []) {
+      assert.ok(def.dimensions[member] || def.measures[member],
+        `measure ${name} drills into ${member}, which does not exist`);
+    }
+  }
+});
+
+// ─── AC-11: the dashboard never asks Cube for a coarse percentile ───
+
+test('TestDashboardRoutesCoarsePercentiles', () => {
+  const client = loadCubeClient();
+  const p95 = 'RequestMetricsMinute.bucketP95LatencyMs';
+
+  // A percentile at minute granularity is exact in the row, so Cube may answer.
+  assert.equal(client.routeFor([p95], 'minute'), 'cube');
+
+  // Anything wider has no correct answer in Cube, at any aggregation type.
+  for (const granularity of ['hour', 'day', 'week', 'month', undefined, null, '']) {
+    assert.equal(client.routeFor([p95], granularity), 'gateway',
+      `granularity ${String(granularity)} was routed to Cube`);
+  }
+
+  // Non-percentile measures are unaffected, whatever the granularity.
+  for (const granularity of ['minute', 'hour', 'day']) {
+    assert.equal(client.routeFor(['RequestMetricsMinute.requestCount'], granularity), 'cube');
+  }
+
+  // A mixed query contains a percentile, so it routes to the gateway: splitting
+  // it and letting Cube answer the percentile half is the defect returning.
+  assert.equal(client.routeFor([p95, 'RequestMetricsMinute.requestCount'], 'day'), 'gateway');
+
+  // And an empty or absent measure list must not throw.
+  assert.equal(client.routeFor([], 'day'), 'cube');
+  assert.equal(client.routeFor(undefined, 'day'), 'cube');
+});
+
+test('every percentile measure the client knows about exists in the model', () => {
+  const client = loadCubeClient();
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+
+  for (const measure of client.PERCENTILE_MEASURES) {
+    const short = measure.split('.')[1];
+    assert.ok(def.measures[short], `the client routes ${measure}, which the model does not define`);
+  }
+
+  // And the reverse: a non-aggregatable measure the client does not know about
+  // would be queried from Cube at any granularity, silently.
+  for (const [name, measure] of Object.entries(def.measures)) {
+    if (measure.meta?.aggregatable !== false) continue;
+    assert.ok(client.PERCENTILE_MEASURES.includes(`RequestMetricsMinute.${name}`),
+      `${name} is non-aggregatable but the dashboard client does not route it`);
+  }
+});
+
+test('the gateway request carries the quantile the measure names', () => {
+  const client = loadCubeClient();
+  const req = client.percentileRequest('RequestMetricsMinute.bucketP95LatencyMs', {
+    from: '2026-09-09T00:00:00Z',
+    to: '2026-09-09T01:00:00Z',
+    granularity: 'hour',
+    filters: { service: 'api', user_id: 'nope' }
+  });
+
+  assert.equal(req.path, '/api/v1/percentile');
+  assert.equal(req.params.quantile, 0.95);
+  assert.equal(req.params.metric, 'request_metrics_minute');
+  assert.equal(req.params.granularity, 'hour');
+  assert.equal(req.params.service, 'api');
+
+  // High-cardinality dimensions are a non-goal; an unknown filter is dropped
+  // rather than forwarded.
+  assert.equal(req.params.user_id, undefined);
+});
+
+// app.js is a browser script with top-level DOM access, so it cannot be loaded
+// here. What can be checked is that no Cube query it builds names a percentile:
+// routing helpers are worthless if a query bypasses them.
+test('no Cube query in the dashboard asks for a percentile measure', () => {
+  const app = readFileSync(appPath, 'utf8');
+  const client = loadCubeClient();
+  const short = client.PERCENTILE_MEASURES.map(m => m.split('.')[1]);
+
+  // Every `measures: [ ... ]` literal in the file, whether it goes to
+  // fetchCubeData or straight to fetch(CUBE_API_URL).
+  const literals = app.match(/measures:\s*\[[^\]]*\]/g) || [];
+  assert.ok(literals.length > 0, 'no measures literal found; the regex needs updating');
+
+  for (const literal of literals) {
+    for (const measure of short) {
+      if (!literal.includes(measure)) continue;
+      // A percentile may appear only in a single-measure literal, which
+      // fetchCubeData can route wholesale to the gateway.
+      const count = (literal.match(/RequestMetricsMinute\./g) || []).length;
+      assert.equal(count, 1,
+        `a Cube query mixes ${measure} with other measures, so it cannot be routed:\n${literal}`);
+    }
+  }
+});
+
+test('the dashboard renders percentiles through the routing helpers', () => {
+  const app = readFileSync(appPath, 'utf8');
+  assert.match(app, /CubeClient\.routeFor\(/, 'fetchCubeData does not consult routeFor');
+  assert.match(app, /CubeClient\.percentileRequest\(/, 'nothing builds a gateway percentile request');
+  assert.match(app, /fetchPercentileSeries\(/, 'no gateway percentile fetch exists');
+});

@@ -95,6 +95,20 @@ capabilities:
       - pkg/sketch/sketch.go
       - contracts/request_metrics_minute.v2.yaml
 
+  - id: windowed-percentiles
+    name: Windowed percentile API merging stored sketches
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      The only place a percentile spanning more than one bucket can be answered
+      correctly, because the semantic layer cannot merge a t-digest. Gating it would
+      leave the free tier with no correct percentile at all, not a smaller one — the
+      Crippleware Test's second question, answered as plainly as it ever is.
+    paths:
+      - services/gateway/percentile_handler.go
+      - cube/model/schema/RequestMetricsMinute.js
+      - dashboards/lib/cube-client.js
+
   - id: metric-contracts
     name: Versioned metric contract registry
     placement: core

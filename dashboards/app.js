@@ -6,12 +6,21 @@
         const GRAVIX_CONFIG = Object.assign({
             cubeApiUrl: "http://localhost:4000/cubejs-api/v1/load",
             gatewayUrl: "",  // e.g. "http://localhost:8091" for multi-tenant mode
+            percentileApiUrl: "", // gateway base URL for GET /api/v1/percentile
             refreshIntervalMs: 60000,
             staleThresholdMs: 10 * 60 * 1000 // 10 minutes
         }, window.GRAVIX_CONFIG || {});
 
         const CUBE_API_URL = GRAVIX_CONFIG.cubeApiUrl;
         const GATEWAY_URL = GRAVIX_CONFIG.gatewayUrl;
+        // Percentiles over more than one minute-bucket cannot be answered by Cube
+        // at all — see cube/model/schema/RequestMetricsMinute.js. They come from
+        // the gateway, which merges the stored t-digests in Go. Default to the
+        // documented gateway port, which docker-compose publishes and the
+        // dashboard's own CSP already allows.
+        const PERCENTILE_API_URL = (GRAVIX_CONFIG.percentileApiUrl
+            || GATEWAY_URL
+            || "http://localhost:8091") + "/api/v1/percentile";
         const REFRESH_INTERVAL_MS = GRAVIX_CONFIG.refreshIntervalMs;
         const IS_MULTI_TENANT = !!GATEWAY_URL;
 
@@ -436,6 +445,12 @@
         let currentEndpointPath = null;
         let currentEndpointMethod = null;
 
+        // A percentile has no correct value across buckets, so rather than print a
+        // number that can be 62% wrong on skewed latency, print nothing and say why.
+        // An empty cell a user asks about beats a plausible cell they believe.
+        const UNAGGREGATABLE_CELL = '<td title="A percentile cannot be aggregated across '
+            + 'time buckets. Use GET /api/v1/percentile, which merges the stored sketches.">—</td>';
+
         function getErrorRateSeverityClass(rate) {
             if (rate <= 0.01) return 'severity-healthy';
             if (rate <= 0.05) return 'severity-warning';
@@ -444,10 +459,15 @@
 
         async function fetchAllEndpointsData(filters) {
             const query = {
+                // No percentiles here. This query has no time granularity, so it
+                // aggregates the whole window — and there is no correct way to
+                // aggregate a percentile across buckets. Cube would answer with
+                // min (formerly max) of the per-minute values, which is not a
+                // percentile at all. The columns render as "—" until the gateway
+                // endpoint can group by path_template; see SD-009.
                 measures: [
                     "RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount",
-                    "RequestMetricsMinute.errorRate", "RequestMetricsMinute.p50Latency",
-                    "RequestMetricsMinute.p95Latency", "RequestMetricsMinute.p99Latency"
+                    "RequestMetricsMinute.errorRate"
                 ],
                 dimensions: ["RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"],
                 order: { "RequestMetricsMinute.requestCount": "desc" },
@@ -487,8 +507,9 @@
             const sortKeyMap = {
                 path: "RequestMetricsMinute.pathTemplate", method: "RequestMetricsMinute.method",
                 requests: "RequestMetricsMinute.requestCount", errors: "RequestMetricsMinute.errorCount",
-                errorRate: "RequestMetricsMinute.errorRate", p50: "RequestMetricsMinute.p50Latency",
-                p95: "RequestMetricsMinute.p95Latency", p99: "RequestMetricsMinute.p99Latency"
+                errorRate: "RequestMetricsMinute.errorRate"
+                // No p50/p95/p99: this table has no per-endpoint percentile to sort
+                // by, and a sort key over absent values compares 0 to 0 forever.
             };
             const sortKey = sortKeyMap[endpointsSortColumn] || "RequestMetricsMinute.requestCount";
 
@@ -527,9 +548,7 @@
                     + '<td>' + Number(row["RequestMetricsMinute.requestCount"] || 0).toLocaleString() + '</td>'
                     + '<td>' + Number(row["RequestMetricsMinute.errorCount"] || 0).toLocaleString() + '</td>'
                     + '<td><span class="' + sevClass + ' severity-badge">' + (errorRate * 100).toFixed(2) + '%</span></td>'
-                    + '<td>' + Number(row["RequestMetricsMinute.p50Latency"] || 0).toFixed(0) + '</td>'
-                    + '<td>' + Number(row["RequestMetricsMinute.p95Latency"] || 0).toFixed(0) + '</td>'
-                    + '<td>' + Number(row["RequestMetricsMinute.p99Latency"] || 0).toFixed(0) + '</td>';
+                    + UNAGGREGATABLE_CELL + UNAGGREGATABLE_CELL + UNAGGREGATABLE_CELL;
                 tr.querySelector('.ep-path-link').dataset.path = row["RequestMetricsMinute.pathTemplate"];
                 tr.querySelector('.ep-path-link').dataset.method = row["RequestMetricsMinute.method"] || '';
                 body.appendChild(tr);
@@ -552,15 +571,20 @@
                 + '</div><div class="metric-label">Total Requests</div></div>'
                 + '<div class="metric-card"><div class="metric-value"><span class="' + sevClass + ' severity-badge">'
                 + (errorRate * 100).toFixed(2) + '%</span></div><div class="metric-label">Error Rate</div></div>'
-                + '<div class="metric-card"><div class="metric-value">'
-                + Number(data["RequestMetricsMinute.p50Latency"] || 0).toFixed(0)
-                + ' ms</div><div class="metric-label">P50 Latency</div></div>'
-                + '<div class="metric-card"><div class="metric-value">'
-                + Number(data["RequestMetricsMinute.p95Latency"] || 0).toFixed(0)
-                + ' ms</div><div class="metric-label">P95 Latency</div></div>'
-                + '<div class="metric-card"><div class="metric-value">'
-                + Number(data["RequestMetricsMinute.p99Latency"] || 0).toFixed(0)
-                + ' ms</div><div class="metric-label">P99 Latency</div></div>';
+                + latencyCard(data, "RequestMetricsMinute.bucketP50LatencyMs", 'P50 Latency')
+                + latencyCard(data, "RequestMetricsMinute.bucketP95LatencyMs", 'P95 Latency')
+                + latencyCard(data, "RequestMetricsMinute.bucketP99LatencyMs", 'P99 Latency');
+        }
+
+        // A latency card shows a number only when the gateway answered. Rendering
+        // "0 ms" for an unreachable endpoint invents a healthy-looking service.
+        function latencyCard(data, measure, label) {
+            const v = data[measure];
+            const shown = (v === undefined || v === null || isNaN(Number(v)))
+                ? '<span title="Unavailable: GET /api/v1/percentile could not answer for this window.">—</span>'
+                : Number(v).toFixed(0) + ' ms';
+            return '<div class="metric-card"><div class="metric-value">' + shown
+                + '</div><div class="metric-label">' + label + '</div></div>';
         }
 
         function renderLatencyMultiChart(p50Data, p95Data, p99Data) {
@@ -573,13 +597,13 @@
                 return v.length >= 16 ? v.substring(11, 16) : v;
             });
             const datasets = [
-                { label: 'P50', data: p50Data.map(d => d["RequestMetricsMinute.p50Latency"]),
+                { label: 'P50', data: p50Data.map(d => d["RequestMetricsMinute.bucketP50LatencyMs"]),
                   borderColor: '#22c55e', backgroundColor: 'transparent', fill: false, tension: 0.4,
                   pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5 },
-                { label: 'P95', data: p95Data.map(d => d["RequestMetricsMinute.p95Latency"]),
+                { label: 'P95', data: p95Data.map(d => d["RequestMetricsMinute.bucketP95LatencyMs"]),
                   borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)', fill: true, tension: 0.4,
                   pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 },
-                { label: 'P99', data: p99Data.map(d => d["RequestMetricsMinute.p99Latency"]),
+                { label: 'P99', data: p99Data.map(d => d["RequestMetricsMinute.bucketP99LatencyMs"]),
                   borderColor: '#ef4444', backgroundColor: 'transparent', fill: false, tension: 0.4,
                   pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5, borderDash: [4, 4] }
             ];
@@ -624,28 +648,38 @@
             });
 
             try {
-                // Summary aggregate
+                // Summary aggregate. The counts and the error rate aggregate
+                // correctly over the whole window; the percentiles do not, so they
+                // come from the gateway with granularity=all and are merged into
+                // the same row the summary cards read.
                 const summaryQuery = {
                     measures: ["RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount",
-                        "RequestMetricsMinute.errorRate", "RequestMetricsMinute.p50Latency",
-                        "RequestMetricsMinute.p95Latency", "RequestMetricsMinute.p99Latency"],
+                        "RequestMetricsMinute.errorRate"],
                     filters: filters
                 };
-                const summaryResp = await fetch(CUBE_API_URL, {
-                    method: "POST", headers: cubeHeaders(),
-                    body: JSON.stringify({ query: summaryQuery })
-                });
+                const [summaryResp, ...summaryPercentiles] = await Promise.all([
+                    fetch(CUBE_API_URL, {
+                        method: "POST", headers: cubeHeaders(),
+                        body: JSON.stringify({ query: summaryQuery })
+                    }),
+                    ...CubeClient.PERCENTILE_MEASURES.map(
+                        m => fetchPercentileSeries(m, filters, 'all'))
+                ]);
                 const summaryResult = await summaryResp.json();
                 const sd = (summaryResult.results && summaryResult.results[0])
                     ? summaryResult.results[0].data[0] : (summaryResult.data && summaryResult.data[0]) || {};
+                CubeClient.PERCENTILE_MEASURES.forEach((m, i) => {
+                    const rows = summaryPercentiles[i];
+                    if (rows && rows.length) sd[m] = rows[0][m];
+                });
                 renderEndpointSummary(sd);
 
                 // Time-series in parallel
                 const [errorData, p50Data, p95Data, p99Data, tpData] = await Promise.all([
                     fetchCubeData(["RequestMetricsMinute.errorRate"], filters, compare || null),
-                    fetchCubeData(["RequestMetricsMinute.p50Latency"], filters, null),
-                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters, null),
-                    fetchCubeData(["RequestMetricsMinute.p99Latency"], filters, null),
+                    fetchCubeData(["RequestMetricsMinute.bucketP50LatencyMs"], filters, null),
+                    fetchCubeData(["RequestMetricsMinute.bucketP95LatencyMs"], filters, null),
+                    fetchCubeData(["RequestMetricsMinute.bucketP99LatencyMs"], filters, null),
                     fetchCubeData(["RequestMetricsMinute.requestCount"], filters, compare || null)
                 ]);
 
@@ -761,6 +795,114 @@
             if (banner) banner.style.display = 'none';
         }
 
+        // ─── Windowed percentiles ───
+        //
+        // Cube has no correct answer for a percentile spanning more than one
+        // minute-bucket: t-digests cannot be merged in SQL, so any aggregation it
+        // applies to the scalar columns is min or max of the per-minute values,
+        // not a percentile. These helpers send those queries to the gateway, which
+        // merges the sketches with the same code that wrote them, and shape the
+        // answer like a Cube result so every chart downstream is unchanged.
+
+        // percentileWindow converts the dashboard's filters into the endpoint's
+        // half-open [from, to). Cube's dateRange is inclusive of both whole days,
+        // so the exclusive end is the day after the last one.
+        function percentileWindow(filters) {
+            let fromDay = null, toDay = null;
+            (filters || []).forEach(f => {
+                if (f.member !== "RequestMetricsMinute.bucketStart") return;
+                if (f.operator === "gte") fromDay = f.values[0].slice(0, 10);
+                else if (f.operator === "lte") toDay = f.values[0].slice(0, 10);
+            });
+            if (!fromDay) {
+                // No range selected: the last 7 days, matching Cube's default view.
+                const now = new Date();
+                toDay = now.toISOString().slice(0, 10);
+                const start = new Date(now.getTime() - 6 * 86400000);
+                fromDay = start.toISOString().slice(0, 10);
+            }
+            if (!toDay) toDay = fromDay;
+            const exclusiveEnd = new Date(Date.parse(toDay + "T00:00:00Z") + 86400000);
+            return { from: fromDay + "T00:00:00Z", to: exclusiveEnd.toISOString().replace(/\.\d+Z$/, "Z") };
+        }
+
+        // percentileDimensionFilters extracts the three dimensions the endpoint
+        // accepts. Anything else is dropped rather than forwarded: high-cardinality
+        // dimensions are a non-goal, and a filter the server ignores would quietly
+        // widen the answer.
+        function percentileDimensionFilters(filters) {
+            const map = {
+                "RequestMetricsMinute.service": "service",
+                "RequestMetricsMinute.method": "method",
+                "RequestMetricsMinute.pathTemplate": "path_template"
+            };
+            const out = {};
+            (filters || []).forEach(f => {
+                const dim = map[f.member];
+                if (dim && f.operator === "equals" && f.values && f.values.length === 1) {
+                    out[dim] = f.values[0];
+                }
+            });
+            return out;
+        }
+
+        function percentileHeaders() {
+            const h = {};
+            const apiKey = localStorage.getItem('gravix_api_key');
+            if (apiKey) h['X-Gravix-Key'] = apiKey;
+            else if (dashboardApiToken) h['Authorization'] = 'Bearer ' + dashboardApiToken;
+            return h;
+        }
+
+        /**
+         * Fetch one percentile measure from the gateway, shaped like Cube rows.
+         * Returns [] on any failure — an empty chart is the honest outcome when the
+         * only correct source is unreachable, and is better than the number Cube
+         * would have produced.
+         */
+        async function fetchPercentileSeries(measure, filters, granularity) {
+            const win = percentileWindow(filters);
+            const req = CubeClient.percentileRequest(measure, {
+                from: win.from,
+                to: win.to,
+                granularity: granularity === 'all' ? 'all' : granularity,
+                filters: percentileDimensionFilters(filters)
+            });
+
+            const qs = Object.keys(req.params)
+                .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(req.params[k]))
+                .join('&');
+
+            let resp;
+            try {
+                resp = await fetch(PERCENTILE_API_URL + '?' + qs, { headers: percentileHeaders() });
+            } catch (e) {
+                console.warn('percentile endpoint unreachable:', e);
+                return [];
+            }
+            if (!resp.ok) {
+                // 422 means the window predates sketch storage. Saying so is the
+                // point of the status code; drawing the old wrong line is not.
+                let detail = '';
+                try { detail = (await resp.json()).error || ''; } catch (e) { /* no body */ }
+                console.warn('percentile endpoint returned ' + resp.status + ': ' + detail);
+                return [];
+            }
+
+            const body = await resp.json();
+            const timeKey = granularity && granularity !== 'all'
+                ? "RequestMetricsMinute.bucketStart." + granularity
+                : "RequestMetricsMinute.bucketStart";
+            return (body.buckets || []).map(b => {
+                const row = {};
+                row[timeKey] = b.bucket_start;
+                row[measure] = b.value;
+                row._observations = b.observations;
+                row._sketchesMerged = b.sketches_merged;
+                return row;
+            });
+        }
+
         async function fetchCubeData(measures, filters = [], compareType = null) {
             // Separate bucketStart date filters from other filters
             const otherFilters = [];
@@ -779,6 +921,39 @@
                 dimension: "RequestMetricsMinute.bucketStart",
                 granularity: "hour"
             };
+
+            // A percentile at this granularity has no correct answer in Cube. Route
+            // it to the gateway instead of asking a question whose answer would be
+            // wrong. See cube-client.js routeFor and GRVX-808 §5.4.
+            if (CubeClient.routeFor(measures, timeDim.granularity) === 'gateway') {
+                if (measures.length !== 1) {
+                    console.warn('a mixed percentile query cannot be routed; drop the percentile');
+                    return [];
+                }
+                if (!compareType) {
+                    return await fetchPercentileSeries(measures[0], filters, timeDim.granularity);
+                }
+                const shiftDays = compareType === "day" ? 1 : 7;
+                const win = percentileWindow(filters);
+                const shift = iso => new Date(Date.parse(iso) - shiftDays * 86400000)
+                    .toISOString().replace(/\.\d+Z$/, "Z");
+                const previousFilters = (filters || []).map(f => {
+                    if (f.member !== "RequestMetricsMinute.bucketStart") return f;
+                    return Object.assign({}, f, { values: [shift(f.values[0].slice(0, 10) + "T00:00:00Z").slice(0, 10)] });
+                });
+                if (!previousFilters.some(f => f.member === "RequestMetricsMinute.bucketStart")) {
+                    previousFilters.push(
+                        { member: "RequestMetricsMinute.bucketStart", operator: "gte", values: [shift(win.from).slice(0, 10)] },
+                        { member: "RequestMetricsMinute.bucketStart", operator: "lte", values: [shift(win.to).slice(0, 10)] }
+                    );
+                }
+                const [cur, prev] = await Promise.all([
+                    fetchPercentileSeries(measures[0], filters, timeDim.granularity),
+                    fetchPercentileSeries(measures[0], previousFilters, timeDim.granularity)
+                ]);
+                return cur.map(d => Object.assign({}, d, { _comparison: "Current" }))
+                    .concat(prev.map(d => Object.assign({}, d, { _comparison: "Previous" })));
+            }
 
             const shiftDate = (dateStr, days) => {
                 const parts = dateStr.slice(0, 10).split('-');
@@ -1071,7 +1246,7 @@
             try {
                 const [errorData, latencyData, throughputData, endpointData] = await Promise.all([
                     fetchCubeData(["RequestMetricsMinute.errorRate"], filters, compare || null),
-                    fetchCubeData(["RequestMetricsMinute.p95Latency"], filters, compare || null),
+                    fetchCubeData(["RequestMetricsMinute.bucketP95LatencyMs"], filters, compare || null),
                     fetchCubeData(["RequestMetricsMinute.requestCount"], filters, compare || null),
                     fetchEndPointsData(filters)
                 ]);
@@ -1115,7 +1290,7 @@
                 };
 
                 const errorRes = processSeries(errorData, "RequestMetricsMinute.errorRate");
-                const latencyRes = processSeries(latencyData, "RequestMetricsMinute.p95Latency");
+                const latencyRes = processSeries(latencyData, "RequestMetricsMinute.bucketP95LatencyMs");
                 const throughputRes = processSeries(throughputData, "RequestMetricsMinute.requestCount");
 
                 updateChart('errorRate', 'errorRateChart', 'Error Rate', errorRes.labels, errorRes.values, {

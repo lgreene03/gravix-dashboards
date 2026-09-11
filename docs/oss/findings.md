@@ -164,3 +164,70 @@ The scan also reports 18 vulnerabilities in required modules that current code d
 not urgent by definition, but they are a reason to keep dependencies moving rather than letting them
 settle — and `docs/oss/30-technology-review.md` §3 already records the infrastructure images sitting one
 to three major versions behind for the same reason.
+
+---
+
+## F-005 — `/api/v1/metrics` has never been able to serve a percentile, and its JS tests never ran
+
+Found while implementing GRVX-808. Neither is a regression from that work; both predate it.
+
+### The public metrics endpoint asks Cube for members that do not exist
+
+`services/gateway/gateway_platform.go` maps its public `metric` parameter onto Cube members:
+
+```go
+"p50_latency": "RequestMetricsMinute.p50LatencyMs",
+"p95_latency": "RequestMetricsMinute.p95LatencyMs",
+"p99_latency": "RequestMetricsMinute.p99LatencyMs",
+```
+
+The model has never defined `p50LatencyMs`. Before GRVX-808 the measures were `p50Latency`,
+`p95Latency` and `p99Latency`; after it they are `bucketP50LatencyMs` and friends. Neither spelling
+matches. The same query names the time dimension `RequestMetricsMinute.timestamp`, which has never
+existed either — the model's time dimension is `bucketStart`.
+
+So three of the five metrics this endpoint advertises, and the granularity parameter for all five, have
+been returning Cube errors since they were written. It is documented in `docs/openapi.yaml` and offered
+to Pro customers.
+
+**Not fixed here.** GRVX-808's §4.2 names the files it may change and `gateway_platform.go` is not one
+of them; improvising past that is how product decisions end up in implementation code. It also is not a
+rename away from working: GRVX-808 establishes that *no* Cube member can answer a percentile above
+minute granularity, so this endpoint's percentile metrics have to be re-pointed at
+`GET /api/v1/percentile`, which is an interface decision. It belongs in GRVX-809 with the `group_by`
+work SD-009 asks for.
+
+**Until then the endpoint advertises numbers it cannot produce**, which is the failure mode the
+correctness axis exists to rule out. It should either be fixed or the three percentile values removed
+from its `validMetrics` map and from the OpenAPI document.
+
+### The Node SDK's tests existed but CI never ran them
+
+`sdk/node/package.json` defines `"test": "node --test tests/*.test.js"` and the repo has 29 passing
+assertions across `client.test.js` and `sanitize.test.js`. The `sdk-tests` CI job ran `npm ci` and
+`npx tsc --noEmit` — a type-check — and then stopped. A test suite that is never executed is
+documentation.
+
+**Fixed.** `.github/workflows/ci.yml` now runs `npm test` in `sdk/node`, and runs
+`node --test cube/model/schema/*.test.js` for the Cube model and dashboard-routing tests GRVX-808
+added. All 29 SDK assertions and all 14 model assertions pass.
+
+### `make check-boundary` failed for anyone who had built the SDK
+
+Running `npm test` in `sdk/node` triggers its `pretest` (`tsc`), which rewrites `sdk/node/dist/`.
+The regenerated `.d.ts` files carry no licence header, so the boundary checker immediately reported six
+violations — on a clean checkout it reports none. A check whose result depends on which commands you
+happened to run last is a check nobody trusts. `cmd/checkboundary` now skips `dist/` the same way it
+already skipped `node_modules/`, `gen/` and `bin/`.
+
+**The underlying problem is left alone deliberately, and someone should take it.** `sdk/node/dist/` is
+compiled output **committed to the repository**, ten files of it. `.gitignore` lists `dist/`, which has
+no effect on files already tracked, so the ignore rule reads as if the build output is excluded when it
+is not. Its licence headers exist only because GRVX-701's header pass edited the generated files by
+hand — the next `npm run build` removes them again, which is exactly what happened here.
+
+It cannot simply be deleted: `.github/workflows/publish-sdks.yml` runs `npm ci && npm publish` with no
+build step, so the published package's contents come from whatever `dist/` is in the checkout. Removing
+it needs a `prepublishOnly` (or `prepack`) script added first, and that belongs in its own change
+rather than riding along with an unrelated one — deleting it here would have silently published a
+broken SDK. Same family as F-001, and the same fix: build artefacts do not belong in version control.

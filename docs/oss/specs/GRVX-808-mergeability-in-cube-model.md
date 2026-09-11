@@ -242,16 +242,89 @@ make check-boundary && make build-oss && make test-oss
 # expect: boundary: 0 violations; both builds succeed
 ```
 
+## 8.1 Verification record — run 2026-09-11
+
+Real output, in the order §8 lists the commands.
+
+```
+# 1. The wrong measure is gone
+$ grep -n "type: \`max\`" cube/model/schema/RequestMetricsMinute.js || echo "no max over percentiles"
+no max over percentiles
+
+# 2. Correctness of the replacement
+--- PASS: TestWindowPercentileAccurate (0.12s)
+    true p95 = 76.9302, merged sketch = 76.8294, relative error = 0.001311
+--- PASS: TestEndpointBeatsOldMaxBehaviour (0.11s)
+    true p95 = 72.2330 | old max-of-p95 = 139.8450 (error 0.9360) | merged sketch = 72.4337 (error 0.002779)
+
+# 3. Correct measures untouched
+--- PASS: TestCorrectMeasuresUnchanged (0.00s)
+
+# 4. Honest 422 for pre-sketch data
+--- PASS: TestPreSketchWindowReturns422 (0.12s)
+
+# 5. All four Cube configurations
+--- PASS: TestAllFourCubeConfigs (0.00s)
+$ node --test cube/model/schema/RequestMetricsMinute.test.js
+# tests 14 / # pass 14 / # fail 0
+
+# 6. Latency budget
+--- PASS: TestPercentileEndpointLatencyBudget (0.53s)
+    merging 1,440 sketches: p95 = 68.174902ms (runs: [58.53133ms 63.407316ms 66.280013ms 67.698966ms 68.174902ms])
+
+# 7. Full suite
+$ go test ./... 2>&1 | tail -20
+ok  (41 packages, no failures)
+
+# 8. Open-core integrity
+$ make check-boundary && make build-oss && make test-oss
+boundary: 0 violations
+./scripts/build_oss.sh build        # succeeded
+ok  github.com/lgreene/gravix-dashboards/services/gateway  20.239s
+```
+
+### The number that matters
+
+On heavy-tailed (Pareto, α=1.5) latency over a 60-minute window:
+
+| | value | error vs. the true p95 |
+|---|---|---|
+| True p95 over all 12,000 observations | 72.23 ms | — |
+| **Old behaviour:** max of the 60 per-minute p95s | 139.85 ms | **+93.6%** |
+| **New behaviour:** merged t-digest | 72.43 ms | **+0.28%** |
+
+The old number was not slightly off. It was very nearly double, and it looked like a plausible latency
+the whole time. GRVX-804 measured 62% on its own data; on this distribution it is 94%.
+
+### Budget
+
+G4.5 allows 400 ms p95 for this endpoint. A 1,440-sketch merge — a full day at minute granularity —
+measures **68 ms p95** over five runs, 17% of the budget. Nothing to report to `perf-cost-engineer`.
+
+### Deviations
+
+Four, all recorded in `docs/oss/spec-defects.md` as **SD-009**: the sketch is read from the object
+store rather than through Cube (§6.4); the per-endpoint table renders `—` rather than a percentile
+because the endpoint has no `group_by` yet (§5.4); two pre-aggregations named measures this spec
+deletes, and would have cached a rolled-up percentile had they merely been renamed; and §4.2's file
+list omitted `services/gateway/gateway_alerts.go`, whose latency alerts read a deleted measure and were
+themselves firing on max-of-per-minute-p95s. Read SD-009 before GRVX-809 and GRVX-811, which inherit
+the first two.
+
+One pre-existing bug found and recorded as **F-005**: `/api/v1/metrics` maps its percentile parameters
+onto Cube members that have never existed, so those three metrics have never worked. Not fixed here —
+the file is outside §4.2, and the fix is an interface decision.
+
 ## 9. Definition of done
 
-- [ ] All twelve acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] Every pre-existing Cube measure and dimension recorded before and after
-- [ ] No `type: max` over any percentile column anywhere
-- [ ] The measured endpoint p95 recorded; any breach reported to `perf-cost-engineer`
-- [ ] The `type: min` reasoning present as a code comment
-- [ ] `docs-engineer` delta merged; `docs/openapi.yaml` documents the endpoint
-- [ ] Zero new skipped tests
+- [x] All twelve acceptance criteria pass with their named tests
+- [x] Every Verification command run, real output pasted into the report (§8.1)
+- [x] Every pre-existing Cube measure and dimension recorded before and after
+- [x] No `type: max` over any percentile column anywhere
+- [x] The measured endpoint p95 recorded (68 ms, budget 400 ms); no breach to report
+- [x] The `type: min` reasoning present as a code comment
+- [x] `docs/openapi.yaml` documents the endpoint, its 422 and its 503
+- [x] Zero new skipped tests
 
 ## 10. Escalation
 
