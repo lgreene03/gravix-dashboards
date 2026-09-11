@@ -220,3 +220,79 @@ hit it because it runs no cron, but any real deployment would within a day.
 Until it is fixed, `gravix evolve` should at minimum refuse to run against a partition that already
 carries an evolution it is not preserving, rather than silently dropping it — a loud failure is a much
 smaller bug than a quiet one.
+
+---
+
+## CD-005 — compaction re-encodes Parquet at a different zstd level than recompute, so a compacted partition can never be byte-identical to a recomputed one
+
+**Owning spec:** GRVX-801 (byte-identical recompute), surfaced by GRVX-1003
+**Found by:** reading the three Parquet writers while measuring the storage footprint
+**State:** open
+
+### What happens
+
+`pkg/recompute/recompute.go:45-49` pins the level, and says why:
+
+```go
+// CompressionLevel pins the zstd level used for every Parquet file this package
+// writes. It is an explicit constant rather than zstd.SpeedDefault because a
+// [library default change] would change every content digest.
+const CompressionLevel = zstd.SpeedFastest
+```
+
+Four other writers ignore it:
+
+| File | Level |
+|---|---|
+| `pkg/recompute/recompute.go:1052` | `CompressionLevel` — `SpeedFastest` |
+| `transforms/compaction/main.go:397, 440, 483` | `zstd.SpeedDefault` |
+| `transforms/service_events_daily/main.go:423` | `zstd.SpeedDefault` |
+| `transforms/service_events_detail/main.go:420` | `zstd.SpeedDefault` |
+
+The same rows written at the two levels produce different bytes, confirmed directly:
+
+```
+recompute  (CompressionLevel=SpeedFastest): 6627 bytes  sha256:c92b444de45fa463
+compaction (zstd.SpeedDefault):             6421 bytes  sha256:de2f65a2c8f1f747
+RESULT: digests DIFFER (-206 bytes)
+```
+
+### Why it matters
+
+`Run` is documented as "idempotent: running twice over the same window with the same facts produces
+byte-identical output and reports `Rebuilt == 0` on the second run". That is the mechanism behind the
+recomputability axis, and behind `Result.Unchanged`, `Result.Revised` and the digests `gravix explain`
+prints.
+
+Once compaction has touched a partition, that stops holding:
+
+1. **`Unchanged` can never be reported again for it.** Recompute compares its output against what is
+   stored; the stored file was written at a different level, so the bytes differ and the partition is
+   rebuilt on every run, forever.
+2. **`Revised` becomes a false alarm.** Its comment says a non-zero value "means numbers someone may
+   have already read have moved". After compaction, it fires when nothing has moved — only the
+   compression level differs. A signal that cries wolf on every run is worse than no signal.
+3. **The digest in `gravix explain` is not stable across compaction.** A user who records a digest,
+   waits for compaction to run, and re-reads it gets a different value for identical data.
+
+None of the numbers are wrong. What is broken is the guarantee that lets a reader *prove* they are
+not, which is the claim Gravix makes that the alternatives do not.
+
+### Why nothing caught it
+
+`TestRecomputeDeterminism` runs recompute twice and compares — both runs use `CompressionLevel`, so
+they agree. Nothing exercises recompute *after* compaction, which is the only order in which the two
+levels meet. The compaction tests check row counts and merge correctness, not byte-identity against a
+recomputed file.
+
+### The repair
+
+Export the constant's use: every Parquet writer in the repository takes its level from
+`recompute.CompressionLevel` (or a shared package that both import, to avoid `transforms/` depending
+on `pkg/recompute` for a constant). Then add the test that would have caught it — recompute a
+partition, compact it, recompute again, and assert `Rebuilt == 0`.
+
+Not fixed under GRVX-1003: that spec's §4.2 covers the compaction and recompute writers but its
+§5.3 forbids changing the compression level without changing GRVX-801's constant and re-verifying
+determinism, and the decision of which level wins (fastest, or the smaller default) is a
+size-versus-CPU trade this spec was not given the authority to make. It belongs to GRVX-801's owner.

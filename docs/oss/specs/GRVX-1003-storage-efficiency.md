@@ -205,3 +205,107 @@ make check-boundary && make build-oss && make test-oss
 | The 120-byte budget unreachable without losing correctness | Report the achievable number per component and return `SPEC DEFECT: §5.1`. Never trade a correctness guarantee for bytes; the budget is `perf-cost-engineer`'s to renegotiate with `cpo`. |
 | An encoding that shrinks files but breaks determinism | Revert it. GRVX-801 outranks this spec. |
 | Output no longer readable by a third-party reader | STOP. This breaks thesis Axis 3 and GRVX-1101. |
+
+---
+
+## 11. Implementation report
+
+**`SPEC DEFECT: §5.1 — the ≤70 bytes/event raw term assumes JSONL is "compressed at rest", and
+nothing in the repository compresses it; §4 provides no file where that could be added.`**
+
+Returned under §10 row 1, with the measured decomposition below rather than an adjusted target.
+
+### 11.1 §6 step 1 — the current footprint, measured
+
+`./bench/run.sh --scale small`, 1,008,000 facts, then every file under the work directory sized by
+component:
+
+| Component | bytes | bytes/event | Budget | |
+|---|---:|---:|---:|---|
+| Raw JSONL, **as stored today** | 205,410,959 | **203.78** | ≤70 | **over by 133.78** |
+| Rolled-up Parquet (incl. sketch) | 2,914,137 | 2.89 | ≤30 + ≤15 | 42.11 under |
+| Manifests | 11,624 | 0.01 | ≤1 | 0.99 under |
+| **Total** | | **206.68** | **≤120** | **over by 86.68** |
+
+**The entire overage is one term, and it is not the one this spec optimises.** Parquet sits at 2.89
+against a 45-byte allowance — roughly one twentieth of its budget. The per-column encodings in §5.2
+would optimise that 2.89. Even reducing it to zero leaves the total at 203.79, still 70% over.
+
+### 11.2 The budget is reachable, by the one change §4 forbids
+
+Raw JSONL is stored as plain text. Nothing compresses it — not ingestion
+(`services/ingestion/main.go` writes the buffer through `LocalStore` verbatim), and not compaction
+(`compactJSONLGroup` concatenates lines into a `bytes.Buffer` and `Put`s it uncompressed).
+
+Compressing the same bytes with `gzip -6`:
+
+| | bytes | bytes/event |
+|---|---:|---:|
+| Raw JSONL, gzip -6 | 32,946,467 | **32.68** |
+| **Total with compressed raw** | | **35.59** |
+
+35.59 against a budget of 120. The raw term alone lands at 32.68 against its own ≤70. The budget is
+not ambitious — it is met with room to spare by the single change nobody has made.
+
+### 11.3 Why it cannot be made under this spec
+
+§5.1 describes the raw term as "Raw JSONL, **compressed at rest**". That capability does not exist,
+and §4 gives nowhere to build it:
+
+- **§4.3 forbids `services/ingestion/**`**, "Raw JSONL format is the recompute source of truth" —
+  which is where compression at write would go.
+- **§4.2 lists `transforms/compaction/main.go`**, but only "Apply the same encodings on merge",
+  meaning Parquet column encodings. Compressing JSONL there is a different change.
+- **No reader is in §4 at all.** `pkg/storage`, `pkg/etl`'s `ReadLines`, and `pkg/recompute`'s fact
+  scan would each need to handle a compressed member, or every consumer breaks the moment a `.gz`
+  appears. Adding compression without them is a change that destroys the data's readability, which
+  §3 and thesis Axis 3 both forbid.
+
+So the work is real, worth doing, and roughly six times more valuable than everything §5.2 asks for —
+and it is a different spec.
+
+### 11.4 What was implemented
+
+Nothing. Per CLAUDE.md, a spec insufficient to execute returns a `SPEC DEFECT` rather than
+improvising, and implementing §5.2's encodings would have meant shipping a change that optimises 2.4%
+of the footprint, reports the budget still missed by 86 bytes, and leaves the reader to discover that
+the dominant term was never in scope.
+
+### 11.5 Also found — CD-005, a correctness defect
+
+While reading the three Parquet writers for §5.2: `pkg/recompute` pins `CompressionLevel =
+zstd.SpeedFastest` explicitly for determinism, and `transforms/compaction` (three writers) plus both
+service-events transforms use `zstd.SpeedDefault`. The same rows at the two levels differ:
+
+```
+recompute  (SpeedFastest):  6627 bytes  sha256:c92b444de45fa463
+compaction (SpeedDefault):  6421 bytes  sha256:de2f65a2c8f1f747
+```
+
+Once compaction touches a partition, recompute can never report it `Unchanged` again, `Revised` fires
+on every run for data that has not moved, and the digest `gravix explain` prints is not stable across
+compaction. Recorded as **CD-005** against GRVX-801.
+
+This is AC-8's subject (`TestCompressionLevelMatchesDeterminismConstant`), so it is in this spec's
+scope to *detect* — and it fails today. It is not in scope to fix: §5.3 forbids changing the level
+without changing GRVX-801's constant, and choosing which level wins is a size-versus-CPU trade
+belonging to GRVX-801's owner.
+
+### 11.6 Recommended sequencing
+
+1. **Fix CD-005** under GRVX-801: one shared constant, and a test that recomputes, compacts, and
+   recomputes again expecting `Rebuilt == 0`.
+2. **A new spec for raw-JSONL compression at rest**, scoped to include the readers — the ~171
+   bytes/event this spec's budget actually turns on.
+3. **Then GRVX-1003's §5.2 encodings**, which are worth doing on their merits and will move the total
+   by at most 2.89 bytes/event.
+
+### 11.7 Definition of done
+
+Every box stays unticked; the spec was not executed.
+
+- [ ] All nine acceptance criteria pass — AC-8 fails today (CD-005); the rest were not attempted
+- [x] Footprint recorded per component, before any change (§11.1)
+- [ ] Both compression levels measured with the size/CPU trade — partially: sizes measured for
+      CD-005, CPU not, because the level is not this spec's to change
+- [ ] `docs-engineer` delta merged — nothing shipped to document
