@@ -1128,8 +1128,12 @@ bug waiting in it.
 
 ## SD-019 — GRVX-910 §2's Cube auth assumption names the wrong environment variable, and the right one is set
 
-**Severity** high — blocks §5.2 step 4, the only step that decides whether the gate passes.
-**Status** open. Returned as `SPEC DEFECT: §2` per the spec's own §10 escalation table.
+**Severity** high — blocked §5.2 step 4, the only step that decides whether the gate passes.
+**Status** cleared in implementation; the spec text is still wrong. Returned as `SPEC DEFECT: §2`
+per the spec's own §10, then unblocked by fixing **F-016** (`bootstrap_seed` now creates a user), so
+`scripts/timed_onboarding_test.sh` logs into the gateway with the generated credentials and sends the
+JWT as a bearer token — the same path the dashboard takes. §2's sentence about `CUBEJS_API_SECRET`
+remains incorrect and should be rewritten to name `JWT_SECRET` and the inline compose setting.
 
 §2 states the assumption and invites verification:
 

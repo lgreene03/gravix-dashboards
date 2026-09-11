@@ -157,6 +157,7 @@ Three of the newer roles hold a veto the CPO cannot overrule inside a sprint:
 | `docs/oss/20-roadmap-horizon-2.md` | Phases 7-15. Phases 7-12 are entirely Apache-2.0. |
 | `docs/oss/specs/` | 88 executable specifications. One spec is one work order. |
 | `docs/oss/correctness-defects.md` | Where a published number or claim failed a test. Read before making any accuracy claim. |
+| `docs/oss/open-decisions.md` | The subset of the registers that needs a person, not an implementer — decisions, permissions, and external checks. Start here when picking the work back up. |
 
 **Implementing a spec:** read exactly one spec file and the files it names in §4. Not the roadmap,
 not the charter, not the issue thread. If the spec is insufficient to execute, return
