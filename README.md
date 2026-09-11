@@ -1,21 +1,86 @@
 # Gravix
 
 [![CI](https://github.com/lgreene03/gravix-dashboards/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/gravix-dashboards/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Gravix is a low-cost, data-first observability system for HTTP service health monitoring. It ingests raw request events (facts), aggregates them into minute-level metrics, and visualizes them on a dashboard.
+Gravix is a low-cost, data-first observability system for HTTP service health monitoring. It ingests
+raw request events (facts), aggregates them into minute-level metrics, and visualises them on a
+dashboard.
 
-**What it is:** A self-hosted alternative for teams that need basic service health visibility (latency percentiles, error rates, throughput) without the cost and complexity of full observability platforms.
+## What Gravix is
 
-**What it is not:** A Datadog/Grafana Cloud replacement. No distributed tracing, no log aggregation, no per-request querying.
+A self-hosted tool for teams who need to know whether their HTTP services are healthy — latency
+percentiles, error rates, throughput — without the cost and operational weight of a full
+observability platform.
 
-## Quick Start
+It stores **facts**, not metrics. Every number it shows is derived from immutable raw events and can
+be recomputed from them.
+
+## What Gravix is not
+
+- No distributed tracing
+- No log aggregation or search
+- No agents or host-level daemons, and no infrastructure metrics
+- No sub-minute dashboards or streaming query engines
+- No high-cardinality dimensions (`user_id`, `request_id`, `session_id`, `ip_address`)
+- No custom query language
+- No feature parity with Datadog or New Relic
+
+**These are permanent. They are in our constitution, not our backlog.**
+
+If you need one of them, we will point you at a tool that does it well. See
+[`docs/04-non-goals.md`](docs/04-non-goals.md).
+
+## Everything below is free forever, under Apache-2.0
+
+| Area | What you get |
+|---|---|
+| Ingestion | HTTP and OTLP-subset ingest, fsync durability, DLQ, all SDKs |
+| Schemas | Protobuf contracts, validation, cardinality budget enforcement |
+| Storage | Local disk, S3/MinIO, Parquet, compaction, retention, tiering |
+| Compute | Rollup jobs, percentiles, error rates |
+| Query | DuckDB and Trino engines, Cube semantic layer, SQL access, public metrics API |
+| Visualise | Dashboard, custom saved dashboards |
+| Alert | Threshold and statistical-deviation rules; Slack, webhook, PagerDuty, OpsGenie |
+| Operate | Helm chart, docker-compose, `gravix` CLI, backup and restore |
+| Secure | TLS, API keys, RBAC, audit log, 2FA, rate limiting |
+| Automate | Terraform provider, GitHub Action, all public APIs |
+
+**RBAC, audit logging, 2FA, TLS, unlimited retention, unlimited services and unlimited seats are
+free. Charging for the ability to not be breached is the pattern our charter exists to prevent.**
+
+Unlimited means unlimited. There is no seat count, no service cap, no retention limit, and no
+ingestion throttle in the core — and adding one would violate
+[the charter](docs/oss/00-open-core-charter.md) §7.4.
+
+## What costs money
+
+Gravix has a paid tier for organisations that run it *for other people*. Code for it lives in
+[`ee/`](ee/), is source-available under BUSL-1.1, and converts to Apache-2.0 two years after each
+release.
+
+| Area | What it solves |
+|---|---|
+| Multi-tenancy | Running Gravix for other people |
+| Billing and metering | Charging those people |
+| SAML and SCIM | Many identity providers *(single-org OIDC stays free)* |
+| Fleet management | Many installations |
+| Compliance streaming | Many auditors *(the local audit log stays free)* |
+| White-label | Reselling |
+
+**The core builds, tests and runs with `ee/` deleted. CI proves this on every pull request.**
+
+None of the paid features exist yet. They are Phase 13. See
+[`docs/oss/20-roadmap-horizon-2.md`](docs/oss/20-roadmap-horizon-2.md).
+
+## Quick start
 
 ### Prerequisites
 
-- Docker & Docker Compose
-- Go 1.24+ (for local development and running tests)
+- Docker and Docker Compose
+- Go 1.24+ for local development and tests
 
-### 1. Configure Environment
+### 1. Configure
 
 ```bash
 cp .env.example .env
@@ -23,23 +88,30 @@ cp .env.example .env
 # Set CUBEJS_API_SECRET to enable dashboard authentication
 ```
 
-### 2. Start Services
+### 2. Start
 
 ```bash
 docker-compose up -d --build
 ```
 
-This starts: Ingestion API, MinIO (S3-compatible storage), Trino (SQL engine), Cube.js (semantic layer), Dashboard, Prometheus + Grafana (monitoring), and automated rollup/purge jobs.
+This starts ingestion, MinIO, Trino, Cube.js, the dashboard, Prometheus, Grafana, and the rollup and
+purge jobs. The load generator sends synthetic traffic automatically; metrics appear after the first
+rollup cycle, about five minutes.
 
-The load generator automatically sends synthetic traffic. Metrics appear after the first rollup cycle (~5 minutes).
+For a leaner stack (~800 MB rather than ~7.8 GB), use the bootstrap compose file:
 
-### 3. View the Dashboard
+```bash
+cp .env.bootstrap.example .env
+docker-compose -f docker-compose.bootstrap.yml up -d --build
+```
+
+### 3. View the dashboard
 
 Open [http://localhost:8000/index.html](http://localhost:8000/index.html).
 
-If `CUBEJS_API_SECRET` is set, you'll be prompted for a password before accessing the dashboard.
+If `CUBEJS_API_SECRET` is set, you will be prompted for a password.
 
-### 4. Send Your Own Data
+### 4. Send your own data
 
 ```bash
 curl -X POST http://localhost:8090/api/v1/facts \
@@ -56,94 +128,69 @@ curl -X POST http://localhost:8090/api/v1/facts \
   }'
 ```
 
-Or use the built-in load generator locally:
+Or use the built-in load generator:
 
 ```bash
 go run ./cmd/load_generator/ --api-key "$(grep API_KEY .env | cut -d= -f2)"
 ```
+
+## Local service endpoints
+
+| Service | URL |
+|---------|-----|
+| Dashboard | http://localhost:8000/index.html |
+| Ingestion API | http://localhost:8090/api/v1/facts |
+| Gateway API | http://localhost:8091 |
+| Trino UI | http://localhost:8081 |
+| Cube Playground | http://localhost:4000 |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 |
+| MinIO Console | http://localhost:9001 |
 
 ## Architecture
 
 ```
 Load Generator → Ingestion (HTTP/JSONL) → Local Disk / S3 (MinIO)
                                              ↓
-                                    Rollup ETL Jobs (Go)
-                                    ├── request_metrics_minute (every 5 min)
-                                    └── service_events_daily  (every hour)
+                                    Rollup ETL Job (Go)
                                              ↓
-                               Parquet files in data/warehouse/ (ZSTD compressed)
+                               Parquet files in data/warehouse/
                                              ↓
                                   Trino (SQL query engine)
                                              ↓
                                    Cube.js (semantic layer)
                                              ↓
                                    Dashboard (static HTML/JS)
-
-Monitoring: Prometheus → Grafana (alerting rules for ingestion errors, rollup health)
 ```
 
-### Core Principle
-
-Gravix stores **facts** (immutable, append-only request events), not pre-computed metrics. All metrics are derived and recomputable. Historical correctness matters more than real-time speed.
-
-## Dashboard Features
-
-- **Error rate chart** — 5xx percentage over time
-- **P95 latency chart** — 95th percentile response time
-- **Throughput chart** — Requests per minute
-- **Top failing endpoints** — Table with drill-down links
-- **Service events** — Deploys, restarts, and lifecycle events
-- **Service filter** — Dropdown populated from data
-- **Custom date ranges** — From/to date picker for arbitrary time windows
-- **Day-over-Day / Week-over-Week** — Comparison overlays
-- **Path drill-down** — Click an endpoint for filtered view
-- **Bookmarkable URLs** — Filter state persisted in URL hash
-- **Auth gate** — Password prompt when `CUBEJS_API_SECRET` is configured
-- **Empty/error states** — Clear messaging when data is unavailable
-- **Data freshness** — "Last updated" timestamp with stale data warning
-
-## Security
-
-| Layer | Auth |
-|-------|------|
-| Ingestion API | API key via `X-API-Key` header |
-| Cube.js API | `CUBEJS_API_SECRET` (optional) |
-| Dashboard | Password gate (uses Cube.js API secret) |
-
-To enable dashboard authentication, set `CUBEJS_API_SECRET` in your `.env` file.
-
-## Monitoring & Alerting
-
-Prometheus alerting rules are included for:
-
-- **Ingestion**: High error rate (>5%), service down, high fsync latency
-- **Rollup**: Stale data (no metric in 10 min), slow execution (>2 min)
-- **Infrastructure**: High memory usage (>512MB), goroutine leak (>1000)
-
-Access Prometheus at http://localhost:9090 and Grafana at http://localhost:3000.
+Facts are immutable and append-only. Metrics are derived and disposable — if the definition changes,
+they are recomputed from the facts. See [`docs/00-system-truth.md`](docs/00-system-truth.md).
 
 ## Development
 
-### Makefile Targets
-
 ```bash
-make build       # Build all Go binaries to bin/
-make test        # Run all tests with verbose output and coverage
-make up          # docker-compose up -d --build
-make down        # docker-compose down
-make clean       # Remove binaries and tear down volumes
-make lint        # go vet ./...
-make purge       # Run data retention purge (30 days)
-make trino-init  # Initialize Trino schemas
+make build             # Build all Go binaries to bin/
+make test              # Run all tests with verbose output and coverage
+make up                # docker-compose up -d --build
+make down              # docker-compose down
+make clean             # Remove binaries and tear down volumes
+make lint              # go vet ./...
+make purge             # Run data retention purge (30 days)
+make trino-init        # Initialize Trino schemas
+
+make check-boundary    # Enforce the open-core boundary
+make build-oss         # Build the core with ee/ deleted
+make test-oss          # Build and test the core with ee/ deleted
+make verify-reproducible  # Build every binary twice, compare digests
 ```
 
-### Running Tests
+### Running tests
 
 ```bash
 # All tests
 go test ./... -v -cover
 
-# Schema validation tests only
+# Schema validation tests only — held at 100% coverage
 go test ./schemas/... -v -cover
 
 # Ingestion handler tests
@@ -152,89 +199,71 @@ go test ./services/ingestion/... -v
 # Rollup aggregation tests
 go test ./transforms/request_metrics_minute/... -v
 
-# Service events rollup tests
-go test ./transforms/service_events_daily/... -v
-
 # Storage tests (includes path traversal checks)
 go test ./pkg/storage/... -v
-
-# End-to-end tests (requires building binaries)
-E2E_TEST=1 go test ./tests/e2e/... -v
 ```
 
-### CI
+Without Docker, the golden-path smoke test exercises the pipeline end to end:
 
-GitHub Actions runs on every push to `main` and on pull requests:
-- `go vet ./...`
-- Build all binaries (ingestion, rollup, events rollup, load generator, purge)
-- `go test ./... -v -cover`
-
-### Local Service Endpoints
-
-| Service | URL |
-|---------|-----|
-| Dashboard | http://localhost:8000/index.html |
-| Ingestion API | http://localhost:8090/api/v1/facts |
-| Trino UI | http://localhost:8081 |
-| Cube Playground | http://localhost:4000 |
-| Prometheus | http://localhost:9090 |
-| Grafana | http://localhost:3000 |
-| MinIO Console | http://localhost:9001 |
-
-## Project Structure
-
+```bash
+./scripts/golden_path_test.sh
 ```
-services/ingestion/                    # Go HTTP service — validates facts, buffers to JSONL, rotates to S3
-transforms/request_metrics_minute/     # Go ETL job — aggregates JSONL → Parquet (p50/p95/p99, error rates)
-transforms/service_events_daily/       # Go ETL job — aggregates service events into daily summaries
-schemas/                               # Protobuf validation layer (100% test coverage target)
-proto/                                 # Source-of-truth .proto definitions
-gen/                                   # Generated Go code from protobuf
-pkg/storage/                           # ObjectStore interface (local + S3 backends, retry with backoff)
-cube/                                  # Cube.js semantic layer configuration
-dashboards/                            # Static HTML/JS frontend
-cmd/load_generator/                    # Synthetic traffic + service events generator
-cmd/purge/                             # Data retention cleanup tool
-storage/trino/                         # Trino catalog and schema configuration
-storage/prometheus/                    # Prometheus config + alerting rules
-deploy/gravix/                         # Helm charts for Kubernetes deployment
-tests/e2e/                             # End-to-end pipeline tests
+
+## Verify what you are running
+
+Releases are signed with keyless cosign and their builds are reproducible.
+
+```bash
+make verify-reproducible
 ```
+
+```bash
+cosign verify-blob \
+  --certificate-identity-regexp 'https://github.com/lgreene03/gravix-dashboards/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate <file>.pem --signature <file>.sig <file>
+```
+
+Full instructions: [`docs/verifying-releases.md`](docs/verifying-releases.md).
 
 ## Documentation
 
-### Getting Started
+| Topic | Where |
+|---|---|
+| System invariants | [`docs/00-system-truth.md`](docs/00-system-truth.md) |
+| What we will not build | [`docs/04-non-goals.md`](docs/04-non-goals.md) |
+| Architecture | [`docs/architecture.md`](docs/architecture.md) |
+| Deployment | [`docs/deployment-guide.md`](docs/deployment-guide.md) |
+| API reference | [`docs/07-api-reference.md`](docs/07-api-reference.md) |
+| Operations | [`docs/operations.md`](docs/operations.md) |
+| Upgrading | [`docs/upgrade-guide.md`](docs/upgrade-guide.md) |
+| Open-core charter | [`docs/oss/00-open-core-charter.md`](docs/oss/00-open-core-charter.md) |
+| Current roadmap | [`docs/oss/20-roadmap-horizon-2.md`](docs/oss/20-roadmap-horizon-2.md) |
 
-- [Development Guide](docs/development-guide.md) — Developer onboarding, local setup, test patterns, code conventions
-- [Deployment Guide](docs/deployment-guide.md) — Local, staging, and production deployment steps
-- [API Reference](docs/07-api-reference.md) — Endpoints, authentication, rate limiting, validation rules
+## Contributing
 
-### Architecture & Design
+See [`CONTRIBUTING.md`](CONTRIBUTING.md), [`GOVERNANCE.md`](GOVERNANCE.md) and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
-- [Architecture & Design](docs/architecture.md) — Comprehensive system architecture, components, data flow, design decisions
-- [System Truth](docs/00-system-truth.md) — Core invariants and non-negotiable principles
-- [Facts & Events](docs/01-facts-and-events.md) — Schema definitions and constraints
-- [Derived Metrics](docs/02-derived-metrics.md) — Metric computation rules
-- [Storage Layout](docs/03-storage-layout.md) — File formats and partitioning strategy
-- [Non-Goals](docs/04-non-goals.md) — What Gravix explicitly does not do
-- [MVP Scope](docs/05-mvp-scope.md) — Original project requirements and goals
+**Gravix uses the DCO. There is no CLA, and there will never be one — see
+[`docs/oss/00-open-core-charter.md`](docs/oss/00-open-core-charter.md) §3 for why.**
 
-### Operations
+Start with a [`good first issue`](https://github.com/lgreene03/gravix-dashboards/labels/good%20first%20issue).
 
-- [Local Operations](docs/06-operations.md) — Docker Compose maintenance and troubleshooting
-- [Kubernetes Operations](docs/operations.md) — Production K8s procedures, scaling, monitoring
-- [Disaster Recovery](docs/disaster-recovery.md) — RTO/RPO targets, recovery procedures for 6 scenarios
+## Licence
 
-## Kubernetes Deployment
+| Path | Licence |
+|---|---|
+| Everything except `ee/` | Apache-2.0 |
+| `ee/**` | BUSL-1.1 — **source-available, not open source** — converting to Apache-2.0 after two years |
+| `docs/**` | CC-BY-4.0 |
 
-```bash
-helm install gravix ./deploy/gravix \
-  --set global.apiKey="your-api-key" \
-  --set global.imageRegistry="ghcr.io/your-org/gravix-dashboards" \
-  --set global.storage.accessKey="your-access-key" \
-  --set global.storage.secretKey="your-secret-key"
-```
+Full map: [`LICENSES.md`](LICENSES.md). Trademark policy: [`TRADEMARK.md`](TRADEMARK.md) — forks are
+welcome; the name is reserved.
 
-The Helm chart produces 49 production resources including Deployments, CronJobs, RBAC, NetworkPolicies, HPA, PDB, ServiceMonitors, and optional External Secrets integration.
+## Security
 
-See [Deployment Guide](docs/deployment-guide.md) for full instructions and [deploy/gravix/values.yaml](deploy/gravix/values.yaml) for configuration options.
+See [`SECURITY.md`](SECURITY.md).
+
+**Please do not open a public issue for a vulnerability.** Use
+[private vulnerability reporting](https://github.com/lgreene03/gravix-dashboards/security/advisories/new).
