@@ -1085,3 +1085,43 @@ they check that the output *contains* the right substrings, and it did. What cau
 Definition of Done's insistence on a **manual POST with the 201 pasted into the report**. That line
 looked like ceremony next to eight automated checks. It was the only thing standing between this and
 a shipped empty state that fails on contact.
+
+---
+
+## SD-018 — GRVX-909 requires the Gin test to run in-process and requires Gin never to enter the root module
+
+**Severity** low — resolved without changing what AC-11 asserts.
+**Status** resolved in implementation; the spec text should be corrected.
+
+§6 step 5 is explicit that the Gin example has its own `go.mod`:
+
+> so it is never compiled as part of the root module's `go build ./...` or `go test ./...`
+
+§6 step 7e is equally explicit that AC-11 runs in-process:
+
+> runs in-process — no subprocess. Uses `net/http/httptest.NewServer` wrapping the Gin router …
+> this test duplicates the ~15-line router construction inline
+
+But `examples/recipes/recipes_test.go` has no `go.mod` of its own, so it **is** part of the root
+module. Importing Gin there is exactly what step 5 forbids, and the toolchain agrees:
+
+```
+$ go vet ./examples/recipes/
+examples/recipes/zz_gin_probe_test.go:3:8: no required module provides package
+    github.com/gin-gonic/gin; to add it:
+	go get github.com/gin-gonic/gin
+```
+
+Running that `go get` would add Gin to the root `go.mod` — the thing step 5 exists to prevent.
+
+**Resolved in favour of step 5**, which states a real constraint, over step 7e, which states a
+mechanism. The Gin example is built and executed as a subprocess like the other five. AC-11's
+criterion is unchanged and unaffected: *"requesting `/users/1234` … asserts the recorded
+`PathTemplate == "/users/{id}"`"* says nothing about which process the router runs in.
+
+**A second, unrelated hazard found while doing it.** The first implementation used `go run .`, and
+the package timed out at 300 seconds against a server that answers in under 25 seconds standalone.
+`go run` compiles and then execs a child; killing the `go` process orphans that child, which keeps
+the stdout pipe the test handed it open, so `cmd.Wait()` never returns. The test now builds the
+binary first and runs it directly — 0.87s. Any test that supervises a `go run` subprocess has this
+bug waiting in it.

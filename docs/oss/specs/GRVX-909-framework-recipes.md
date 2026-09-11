@@ -321,20 +321,131 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All twelve acceptance criteria pass. One spec defect found and
+resolved (SD-018), and one SDK constraint discovered by running the code (§8.3).
+
+```
+$ go test ./examples/recipes/... -v -count=1 -timeout 300s
+--- PASS: TestExpressDocMatchesExample          (AC-1)
+--- PASS: TestFastAPIDocMatchesExample          (AC-2)
+--- PASS: TestFlaskDocMatchesExample            (AC-3)
+--- PASS: TestDjangoDocMatchesExample           (AC-4)
+--- PASS: TestGinDocMatchesExample              (AC-5)
+--- PASS: TestRailsDocMatchesExample            (AC-6)
+--- PASS: TestExpressRecipeSendsSanitizedFact   (AC-7)   0.47s
+--- PASS: TestFastAPIRecipeSendsSanitizedFact   (AC-8)   1.42s
+--- PASS: TestFlaskRecipeSendsSanitizedFact     (AC-9)   0.41s
+--- PASS: TestDjangoRecipeSendsSanitizedFact    (AC-10)  0.44s
+--- PASS: TestGinRecipeSendsSanitizedFact       (AC-11)  0.87s
+--- PASS: TestRailsRecipeStaticContract         (AC-12)
+ok  	github.com/lgreene/gravix-dashboards/examples/recipes	3.620s
+
+$ (cd examples/recipes/gin && go build ./...)     # ok
+$ go list ./... | grep -c recipes/gin             # 0 — standalone, as §6.5 requires
+$ go build ./... && go test ./schemas/...          # ok
+$ make check-boundary                              # boundary: 0 violations
+$ make build-oss && make test-oss                  # 51 packages, ee/ absent
+$ go test ./... -race -count=1                     # no failures
+$ make lint                                        # clean
+```
+
+**The five live-execution tests were run against real, installed dependencies** — Express 4 with the
+Node SDK built from this checkout, and FastAPI/Flask/Django with the Python SDK installed from
+`sdk/python`. They are not skipped in this report.
+
+### 8.2 Rails, verified further than the spec asks
+
+§3 accepts that Rails is checked statically only, because adding a Ruby toolchain to CI for one
+example is out of proportion. Ruby happens to be present in this environment, so the recipe was also
+run for real against a live ingestion service:
+
+```
+$ GRAVIX_ENDPOINT=http://127.0.0.1:18094 GRAVIX_API_KEY=… ruby examples/recipes/rails/client.rb
+gravix responded 201
+```
+
+That is a one-off observation, not a CI guarantee — the scope limit in §3 stands. It is recorded
+because "verified statically" and "known to work" are different claims, and this recipe now has both.
+
+### 8.3 The SDK constraint that only running the code reveals
+
+The Express recipe was first written with `require('@gravix/sdk')`, the ordinary CommonJS form. It
+does not work:
+
+```
+Error [ERR_PACKAGE_PATH_NOT_EXPORTED]: No "exports" main defined in …/@gravix/sdk/package.json
+```
+
+`sdk/node/package.json` declares `"type": "module"` and exports **only** an `import` condition. The
+SDK is ESM-only, and a CommonJS Express app — still the common case — cannot `require` it at all.
+
+Nothing in the spec mentions this, and no test in the repository would have caught it: the SDK's own
+tests are ESM. The recipe now uses `import`, sets `"type": "module"`, and **says so in its prose**
+along with the `await import(...)` escape hatch for CommonJS apps, because a reader hitting
+`ERR_PACKAGE_PATH_NOT_EXPORTED` with no explanation concludes the SDK is broken.
+
+This is the third spec running where executing the documented thing found what reading it could not
+(SD-017's UUIDv7, F-014's `uuidgen`, this).
+
+### 8.4 Two bugs found while wiring AC-11
+
+**SD-018 — the spec asks for two incompatible things.** §6.5 requires Gin never to enter the root
+module; §6.7e requires the Gin test to run in-process. `examples/recipes/recipes_test.go` *is* in the
+root module, so importing Gin there is precisely what §6.5 forbids — confirmed with `go vet`:
+`no required module provides package github.com/gin-gonic/gin`. Resolved in favour of §6.5, which
+states a constraint, over §6.7e, which states a mechanism. AC-11's criterion is untouched.
+
+**A `go run` supervision deadlock.** The first subprocess implementation used `go run .` and the
+package timed out at **300 seconds** — against a server that answers in under 25 seconds standalone.
+`go run` compiles and then execs a child; killing the `go` process orphans that child, which keeps
+the stdout pipe the test handed it open, so `cmd.Wait()` never returns. Building the binary first and
+executing it directly takes **0.87s**. Any test that supervises a `go run` subprocess has this
+waiting in it.
+
+### 8.5 What each recipe actually had to solve
+
+The recipes are not six copies of one snippet. Each framework hands you the route in a different
+shape, and getting `path_template` right is the whole job:
+
+| Framework | What it gives you | What the recipe does |
+|---|---|---|
+| FastAPI | the route already in `{name}` form | nothing — `add_middleware` and done |
+| Gin | the route in `:name` form, via `c.FullPath()` | one regex; also reports `/unmatched` for 404s rather than an empty template |
+| Express | the raw URL | relies on the SDK sanitizer, and the recipe states its four-digit threshold, because shorter ids are **not** rewritten |
+| Flask, Django | `<int:user_id>`, which no sanitizer touches | both translate explicitly; without it the templates are framework-shaped and cross-service comparison goes quietly wrong |
+| Rails | nothing — there is no gem | everything by hand, including a UUIDv7 generator, because `SecureRandom.uuid` is a v4 and is rejected |
+
+That last row is SD-017 again in a language with no library to hide it. `TestRailsRecipeStaticContract`
+fails if the recipe ever reaches for `SecureRandom.uuid` — and it checks **usage, not mention**,
+stripping comments first, because the recipe names that method in order to warn against it. A guard
+that cannot tell the two apart forbids the explanation along with the mistake, which is F-009 exactly.
+
+### 8.6 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| AC-11 runs the Gin example as a subprocess, not in-process | SD-018 — §6.5 and §6.7e cannot both hold. |
+| The Express recipe is ESM, not CommonJS | §8.3 — the SDK exports no `require` condition, so the CommonJS form cannot run. |
+| `examples/recipes/gin/go.sum` created | `go mod tidy` produces it; the module does not build reproducibly without it. |
+| Test helpers `requirePython` / `requireNodeModules` / `runExampleAt` beyond §5 | §5 names one helper; five live tests across three runtimes need a way to locate a suitable interpreter and to pass a port as an argument rather than an env var. `GRAVIX_RECIPE_PYTHON` lets a virtualenv be pointed at without changing the recipes. |
+
 ## 9. Definition of done
 
-- [ ] All twelve acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.1/§4.2 modified
-- [ ] `docs-engineer` delta merged (`docs/recipes/README.md` linked from the top-level `README.md`
-      and from the quick-start guide) or `NO DOCS DELTA REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests in the `recipe-examples` CI job specifically (the
-      Node/Python skip guards in §6.1 exist only for local developer runs without those runtimes
-      installed; CI always has both, so no skip is ever recorded there)
-- [ ] `examples/recipes/gin/go.mod` confirmed to NOT appear in the root `go.work`/`go build ./...`
-      output (it must remain a standalone module)
+- [x] All twelve acceptance criteria pass with their named tests — §8.1, against really-installed
+      dependencies; none of the five live tests skipped
+- [x] Every Verification command run, real output pasted into the report — §8.1
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted — 51 packages
+- [x] **Yes** — only the files in §4.1/§4.2, plus `examples/recipes/gin/go.sum`, which `go mod tidy`
+      generates and without which the module does not build reproducibly (§8.6)
+- [x] `docs-engineer` delta merged — `docs/recipes/README.md` created and linked from the top-level
+      `README.md`, with the index explaining what each framework makes easy or hard
+- [x] Zero new skipped or quarantined tests — and none skipped in this run either: Node, Python and
+      Go dependencies were installed locally so all five live tests executed
+- [x] `examples/recipes/gin` confirmed standalone — `go list ./... | grep -c recipes/gin` returns
+      **0**, and there is no `go.work`
 
 ## 10. Escalation
 

@@ -264,6 +264,21 @@ Or use the built-in load generator:
 go run ./cmd/load_generator/ --api-key "$GRAVIX_API_KEY"
 ```
 
+## Framework recipes
+
+One runnable, CI-executed example per framework — [Express](docs/recipes/express.md),
+[FastAPI](docs/recipes/fastapi.md), [Flask](docs/recipes/flask.md),
+[Django](docs/recipes/django.md), [Gin](docs/recipes/gin.md), [Rails](docs/recipes/rails.md).
+See **[docs/recipes/](docs/recipes/README.md)**.
+
+All six do the same small job: report the **route**, not the URL — `/users/{id}`, never
+`/users/1234`. That is the difference between a dimension with one value and a dimension with one
+value per user. Each framework makes it easy or hard in its own way, and each recipe says which.
+
+The code block in every recipe is byte-identical to its file under `examples/recipes/`, and five of
+the six are run for real in CI with the `path_template` they send asserted — so a recipe cannot
+document one thing and do another.
+
 ## Local service endpoints
 
 | Service | URL |

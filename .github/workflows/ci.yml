@@ -447,9 +447,47 @@ jobs:
           path: /tmp/docker-compose-logs.txt
 
   # ─── CI Summary Gate ───
+  # ─── Framework recipe examples ───
+  # Every recipe is executed for real against a stub ingestion server, and the
+  # path_template it sends is asserted. A recipe that documents /users/{id} and
+  # sends /users/1234 is worse than no recipe, and only running it catches that.
+  recipe-examples:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The SDKs are consumed from this checkout, not from a registry: a recipe
+      # must work against the code in the pull request, not the last release.
+      - name: Build the Node SDK
+        working-directory: sdk/node
+        run: npm ci && npm run build
+
+      - name: Install the Express recipe's dependencies
+        working-directory: examples/recipes/express
+        run: npm install express && npm install --install-links ../../../sdk/node
+
+      - name: Install the Python SDK and framework dependencies
+        run: python -m pip install --quiet ./sdk/python flask fastapi uvicorn django
+
+      - name: Run the recipe tests
+        run: go test ./examples/recipes/... -v -timeout 300s
+
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness]
+    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples]
     if: always()
     steps:
       - name: Check job results
@@ -463,9 +501,11 @@ jobs:
           echo "Helm Validate: ${{ needs.helm-validate.result }}"
           echo "Docker Lint:   ${{ needs.docker-lint.result }}"
           echo "Correctness:   ${{ needs.correctness.result }}"
+          echo "Recipes:       ${{ needs.recipe-examples.result }}"
 
           # Fail if any required job failed
-          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
+          if [[ "${{ needs.recipe-examples.result }}" == "failure" ]] || \
+             [[ "${{ needs.lint.result }}" == "failure" ]] || \
              [[ "${{ needs.test.result }}" == "failure" ]] || \
              [[ "${{ needs.build.result }}" == "failure" ]] || \
              [[ "${{ needs.e2e.result }}" == "failure" ]] || \

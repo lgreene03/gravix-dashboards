@@ -82,3 +82,9 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# The Express recipe installs against the in-repo SDK (`file:../../../sdk/node`),
+# which CI links with `npm install --install-links`. A lock file pinning that
+# path would be rewritten on every install and go stale against the SDK it
+# points at, so the recipe deliberately has none.
+examples/recipes/express/package-lock.json
