@@ -934,3 +934,46 @@ that a retried batch can count twice.
 after `WriteBatch` returns, matching §6.4. That is a two-line change; it was not made here because
 choosing different semantics from the ones a spec states is how implementation quietly becomes
 product design.
+
+---
+
+## SD-015 — Phase 9's "one alert rule armed" exit criterion has no owning key result
+
+**Filed under GRVX-904 §10**, which names this exact condition and says to return the escalation
+rather than invent the missing KR.
+
+`SPEC DEFECT: docs/oss/12-goal-tree.md — Phase 9 exit criterion "one alert rule armed" has no
+owning KR`
+
+**Confirmed, not assumed.** G3's key results are:
+
+| KR | Covers |
+|---|---|
+| G3.1 | clone → populated dashboard ≤10 min |
+| G3.2 | 0 required config steps before first data |
+| G3.3 | services auto-discovered |
+| G3.4 | default SLO dashboard per service |
+| G3.5 | `gravix doctor` diagnoses the top 10 failures |
+| G3.6 | path templates auto-learned within the cardinality budget |
+| G3.7 | every empty state contains the command that fills it |
+
+None mentions alerting. GRVX-904's header records the same gap — its **Goal** field reads "no
+individual G3 KR names this" — so the spec was written knowing it was building toward an unowned
+criterion.
+
+**Why the KR was not simply added.** The goal tree is product: a key result fixes a number, a
+measurement source and an accountable role, and choosing those is the CPO's call, not the
+implementer's. GRVX-904's Definition of Done offers exactly this either/or — "gains a KR … **or the
+escalation is filed instead**" — and filing is the branch that keeps product decisions out of
+implementation.
+
+**The implementation is complete and verified regardless.** This defect is about the goal tree, not
+the feature: nine acceptance criteria pass, and the arming path is proven end to end.
+
+**What a KR would need to say**, if one is added: the measurable thing is not "an alert rule exists"
+but "a rule armed from a proposal fires correctly on the traffic it was derived from". A rule that
+is armed and inert is worse than none, which is the failure this spec's own guard now catches —
+`TestEvaluatorFiresRulesOnALogChannel`. A plausible G3.8 is *"A user can arm a working alert rule
+without choosing a threshold or configuring a destination — target 100%, measured by
+`TestArmProposalCreatesRuleAndChannel` and `TestEvaluatorFiresRulesOnALogChannel`, owned by
+`senior-engineer`"*, but the number and the owner are the CPO's to set.

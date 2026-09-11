@@ -293,18 +293,157 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All nine acceptance criteria pass, plus six more. One
+escalation filed under §10 (SD-015) — it concerns the goal tree, not the feature.
+
+**1. Baseline package tests**
+
+```
+$ go test ./pkg/baseline/... -v -cover
+--- PASS: TestComputeAggregatesAcrossDays        (AC-1)
+--- PASS: TestComputeNoDataReturnsErrNoData      (AC-2)
+--- PASS: TestComputeSeparatesServices
+--- PASS: TestComputeIsolatesTenants
+--- PASS: TestComputeIgnoresDaysOutsideLookback
+--- PASS: TestComputeHonoursContextCancellation
+--- PASS: TestProposeOmitsZeroLatencyBaseline    (AC-3)
+--- PASS: TestProposeErrorRateFloor              (AC-4)
+--- PASS: TestProposeFormulasAndShape
+--- PASS: TestProposalNamesAreFixed
+--- PASS: TestFindRecomputesRatherThanTrusting
+ok  	github.com/lgreene/gravix-dashboards/pkg/baseline	coverage: 85.0% of statements
+```
+
+These write real Parquet with `parquet.NewGenericWriter` rather than stubbing a reader. The entire
+point of the package is that it reads what the rollup actually wrote, so a fake reader would prove
+nothing about the thing that can break.
+
+**2. Notify package tests**
+
+```
+$ go test ./pkg/notify/... -run TestParseChannelConfigForType -v
+--- PASS: TestParseChannelConfigForTypeLogChannel      (AC-5)
+--- PASS: TestParseChannelConfigForTypeWebhookUnchanged (AC-6)
+--- PASS: TestSendLogChannelIsANoOp
+ok  	github.com/lgreene/gravix-dashboards/pkg/notify	0.005s
+```
+
+**3. Ingestion integration tests**
+
+```
+$ go test ./services/ingestion/... -run TestArmProposal -v
+--- PASS: TestArmProposalCreatesRuleAndChannel        (AC-7)
+--- PASS: TestArmProposalReusesExistingLogChannel     (AC-8)
+--- PASS: TestArmProposalRequiresTenantDB             (AC-9)
+--- PASS: TestArmProposalRejectsIncompleteRequests    (six §6.1 cases)
+--- PASS: TestArmProposalIgnoresAClientSuppliedThreshold
+--- PASS: TestAlertProposalsEndpoint
+--- PASS: TestAlertProposalsEndpointWithNoData
+--- PASS: TestAlertProposalEndpointsRejectWrongMethods
+ok  	github.com/lgreene/gravix-dashboards/services/ingestion	0.214s
+```
+
+**4. Gateway evaluator still passes with the one-line change**
+
+```
+$ go test ./services/gateway/... -run TestAlert -v
+ok  	github.com/lgreene/gravix-dashboards/services/gateway	1.855s
+```
+
+**5-6. Nothing else broke, and open-core integrity**
+
+```
+$ go build ./... && go test ./schemas/...
+ok  	github.com/lgreene/gravix-dashboards/schemas	0.006s
+$ make check-boundary
+boundary: 0 violations
+$ make build-oss && make test-oss        # 49 packages, ee/ absent
+$ go test ./... -race -count=1           # no failures
+$ make lint                               # clean
+$ make test-js                            # 61 pass, 0 fail
+```
+
+### 8.2 The one line nothing was testing
+
+§4.2 changes a single line in `gateway_alerts.go`, and it is the line the whole feature rests on:
+the evaluator parses a rule's channel config before dispatching, and the type-blind parser rejects a
+`log` channel for having no webhook URL. It then `continue`s — **no fire, no history row, one log
+line.** Every rule this spec arms would be silently inert.
+
+Mutation testing found that **reverting that line passed every test in the repository**: gateway,
+notify and ingestion all green. Nine acceptance criteria would have passed on a feature that does
+nothing.
+
+`TestEvaluatorFiresRulesOnALogChannel` now closes that. It drives the real `evaluateAlerts` against a
+seeded tenant, a stub Cube returning an error rate above the threshold, and exactly the rule and
+`log` channel the arm endpoint creates, then requires an alert-history row. It also requires a
+*webhook* channel with an empty config to still be rejected, so the fix cannot have turned config
+validation off for everyone.
+
+Reverting the line now fails with the evaluator's own log line visible in the output:
+`ERROR alert evaluator invalid config for channel error="webhook_url is required"`.
+
+### 8.3 Guards proven by mutation
+
+| Guard | Mutation | Reported |
+|---|---|---|
+| AC-4 `TestProposeErrorRateFloor` | removed the 0.05 floor | yes — "threshold for a flawless service is 0 … a zero threshold pages on one failed request" |
+| AC-8 `TestArmProposalReusesExistingLogChannel` | always create a channel instead of reusing | yes — "three arms created 3 channels, want 1 reused" |
+| `TestEvaluatorFiresRulesOnALogChannel` | reverted the evaluator to the type-blind parser | yes — **and nothing did before this test existed** |
+
+### 8.4 A bug the tests found in the tests
+
+AC-7 and AC-8 first called the handler directly, and both failed with a `500`. The cause was not the
+handler: `notification_channels.tenant_id` is `NOT NULL REFERENCES tenants(id)`, and a handler called
+without the auth middleware sees an empty tenant id, so the insert violated the foreign key.
+
+Verified rather than assumed — a throwaway probe confirmed an empty tenant id fails and a real one
+succeeds. The tests now run through `multiTenantAuthMiddleware` with a real API key, which is the
+only way a tenant id is ever set in production; testing the handler bare was testing a path that
+cannot occur.
+
+The handler also gained a guard, because the failure it produced was a `500` reading "failed to
+create notification channel", which says nothing about the cause. A request with no authenticated
+tenant now gets a `501` naming the real problem.
+
+### 8.5 Escalation filed: SD-015
+
+§10's first row names this condition, and it holds: G3.1–G3.7 contain no alert-arming key result,
+confirmed by reading them. GRVX-904's own header already said so ("no individual G3 KR names this").
+
+The Definition of Done offers "gains a KR … **or** the escalation is filed instead", and filing is
+the right branch: a key result fixes a number, a measurement source and an accountable role, and
+choosing those is the CPO's call. SD-015 records what such a KR would need to measure — not "a rule
+exists" but "a rule armed from a proposal fires on the traffic it was derived from", which is exactly
+the distinction §8.2 turned out to hinge on.
+
+### 8.6 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| §2 cites `gateway_alerts.go:572`; the evaluator's call is now at line 732 | Line numbers drifted. All three `ParseChannelConfig` call sites were read and the evaluator identified by §2's own description (`GetByID(ctx, rule.ChannelID)` then `continue` on error). The other two — channel creation and the send-test handler — are untouched, as §4.3 requires. |
+| `services/gateway/alert_log_channel_test.go` created, beyond §4.1 | §8.2. The spec's load-bearing line had no test, and a feature that silently does nothing would have shipped. |
+| `services/ingestion/alert_proposals_test.go` created, beyond §4.1 | AC-7 to AC-9 are ingestion-side and need a home. |
+| `pkg/notify/notify_test.go` modified, beyond §4.2 | AC-5 and AC-6 name tests in this package. |
+| A `501` guard added for a request with no authenticated tenant | §8.4. Not in §5.1, but the alternative is a foreign-key error surfacing as an opaque `500`. |
+| `baseline.Find` and `ProposalName` added beyond §5's listed API | Both are the arm path's half of §6.5c and §6.5f. Keeping the lookup in the package with the formulas is what lets `TestFindRecomputesRatherThanTrusting` prove thresholds are never taken from the client. |
+
 ## 9. Definition of done
 
-- [ ] All nine acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.1/§4.2 modified
-- [ ] `docs-engineer` delta merged (document both new endpoints in `docs/openapi.yaml`) or `NO DOCS
-      DELTA REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests
-- [ ] `docs/oss/12-goal-tree.md` gains a KR for "Phase 9 exit criterion: one alert rule armed" (see
-      §10) or the escalation is filed instead
+- [x] All nine acceptance criteria pass with their named tests — §8.1, plus six more
+- [x] Every Verification command run, real output pasted into the report — §8.1
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted — 49 packages
+- [ ] **No** — four beyond §4.1/§4.2, each with its reason in §8.6. One was not optional: the
+      evaluator line this spec depends on had no test, and reverting it passed the entire suite.
+- [x] `docs-engineer` delta merged — both endpoints and an `AlertProposal` schema in
+      `docs/openapi.yaml`, including that `request_count`-style figures are recomputed server-side
+      and that a client-supplied threshold is ignored
+- [x] Zero new skipped or quarantined tests
+- [x] **The escalation is filed** — SD-015. The KR was not invented here: a key result fixes a
+      number, a measurement source and an owner, and those are the CPO's to set.
 
 ## 10. Escalation
 

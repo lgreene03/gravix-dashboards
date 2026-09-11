@@ -243,3 +243,76 @@ func TestWebhookNoAuthHeader(t *testing.T) {
 		t.Errorf("auth header should be empty, got %q", receivedAuth)
 	}
 }
+
+// ─── GRVX-904 AC-5, AC-6: the "log" channel type ───
+
+// TestParseChannelConfigForTypeLogChannel — a log channel has nothing to
+// configure, and must not be made to invent a webhook URL to satisfy a parser.
+func TestParseChannelConfigForTypeLogChannel(t *testing.T) {
+	for _, config := range []string{"{}", "", `{"webhook_url":""}`, "not json at all"} {
+		cfg, err := ParseChannelConfigForType("log", config)
+		if err != nil {
+			t.Errorf("AC-5 FAILED: ParseChannelConfigForType(\"log\", %q) returned %v", config, err)
+		}
+		if cfg != (ChannelConfig{}) {
+			t.Errorf("AC-5 FAILED: a log channel produced a non-empty config: %+v", cfg)
+		}
+	}
+}
+
+// TestParseChannelConfigForTypeWebhookUnchanged — the new function must not
+// quietly relax validation for the types that already had it.
+func TestParseChannelConfigForTypeWebhookUnchanged(t *testing.T) {
+	for _, config := range []string{"{}", `{"webhook_url":""}`, "not json"} {
+		_, wantErr := ParseChannelConfig(config)
+		_, gotErr := ParseChannelConfigForType("webhook", config)
+
+		if (wantErr == nil) != (gotErr == nil) {
+			t.Errorf("AC-6 FAILED: for %q, ParseChannelConfig gave %v but ForType gave %v",
+				config, wantErr, gotErr)
+			continue
+		}
+		if wantErr != nil && wantErr.Error() != gotErr.Error() {
+			t.Errorf("AC-6 FAILED: for %q, errors differ: %q vs %q",
+				config, wantErr, gotErr)
+		}
+	}
+
+	// A valid webhook config still parses to the same value.
+	valid := `{"webhook_url":"https://example.invalid/hook"}`
+	want, err := ParseChannelConfig(valid)
+	if err != nil {
+		t.Fatalf("ParseChannelConfig on a valid config: %v", err)
+	}
+	got, err := ParseChannelConfigForType("webhook", valid)
+	if err != nil {
+		t.Fatalf("AC-6 FAILED: %v", err)
+	}
+	if got != want {
+		t.Errorf("AC-6 FAILED: got %+v, want %+v", got, want)
+	}
+
+	// An unknown type is still routed to the strict parser, so a typo in a
+	// channel type cannot become a channel that accepts anything.
+	if _, err := ParseChannelConfigForType("slak", "{}"); err == nil {
+		t.Error("AC-6 FAILED: a misspelled channel type bypassed config validation")
+	}
+}
+
+// TestSendLogChannelIsANoOp — the log channel must reach the "delivered" path
+// rather than the default case, or every armed rule would record a send error.
+func TestSendLogChannelIsANoOp(t *testing.T) {
+	d := NewDispatcher()
+	alert := AlertPayload{RuleName: "test", Service: "api", Metric: "error_rate", Threshold: 0.05}
+
+	if err := d.Send(context.Background(), "log", ChannelConfig{}, alert); err != nil {
+		t.Errorf("Send to a log channel returned %v, want nil", err)
+	}
+	if err := d.SendTest(context.Background(), "log", ChannelConfig{}); err != nil {
+		t.Errorf("SendTest to a log channel returned %v, want nil", err)
+	}
+	// And an unknown type is still rejected.
+	if err := d.Send(context.Background(), "carrier-pigeon", ChannelConfig{}, alert); err == nil {
+		t.Error("an unknown channel type was accepted")
+	}
+}

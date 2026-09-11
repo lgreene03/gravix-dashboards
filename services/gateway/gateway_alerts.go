@@ -729,7 +729,10 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				continue
 			}
 
-			cfg, err := notify.ParseChannelConfig(ch.Config)
+			// By type: a "log" channel has no webhook URL, and the plain parser
+			// requires one. Without this the evaluator would skip every
+			// auto-armed rule here and the rule would never fire.
+			cfg, err := notify.ParseChannelConfigForType(ch.Type, ch.Config)
 			if err != nil {
 				slog.Error("alert evaluator invalid config for channel", "channel_id", ch.ID, "error", err)
 				continue

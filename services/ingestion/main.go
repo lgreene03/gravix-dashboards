@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/google/uuid"
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
+	"github.com/lgreene/gravix-dashboards/pkg/baseline"
 	"github.com/lgreene/gravix-dashboards/pkg/circuitbreaker"
 	"github.com/lgreene/gravix-dashboards/pkg/discovery"
 	"github.com/lgreene/gravix-dashboards/pkg/lateness"
@@ -759,6 +761,7 @@ func main() {
 	port := flag.Int("port", 8080, "HTTP port")
 	baseDir := flag.String("base-dir", "./data", "Base directory for buffer and raw storage")
 	discoveryDB := flag.String("discovery-db", "", "Path to the service discovery database (default <base-dir>/discovery.db)")
+	warehouseDir := flag.String("warehouse-dir", "", "Path to the rollup warehouse, read for alert baselines (default <base-dir>/warehouse)")
 	flag.Parse()
 
 	// Auth mode: multi-tenant (TENANT_DB_PATH) or legacy (API_KEY)
@@ -881,6 +884,11 @@ func main() {
 	}
 	defer reg.Close()
 
+	warehousePath := *warehouseDir
+	if warehousePath == "" {
+		warehousePath = filepath.Join(*baseDir, "warehouse")
+	}
+
 	// Per-tenant rate limiting (fallback 100/s for legacy mode)
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
@@ -912,6 +920,11 @@ func main() {
 	// nor the buffer check: a full buffer is precisely when someone needs to see
 	// what is reporting.
 	http.Handle("/api/v1/services", authMW(requireScope("admin:read", handleServices(reg))))
+	// Thresholds a user never has to choose, derived from their own traffic.
+	// Read and write are separate scopes: seeing what would be proposed is not
+	// the same permission as arming it.
+	http.Handle("/api/v1/alert-proposals", authMW(requireScope("admin:read", handleAlertProposals(warehousePath))))
+	http.Handle("/api/v1/alert-proposals/arm", authMW(requireScope("admin:write", handleArmAlertProposal(warehousePath, tdb))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -1149,6 +1162,187 @@ func handleServices(reg *discovery.Registry) http.HandlerFunc {
 			slog.Error("failed to encode services", "error", err)
 		}
 	}
+}
+
+// baselineLookbackDays is how much history a proposal is derived from. Seven
+// days covers a weekly cycle, so a service that is quiet at weekends does not
+// get a traffic-drop threshold set from weekdays alone.
+const baselineLookbackDays = 7
+
+// handleAlertProposals returns ready-to-arm alert rules with thresholds already
+// computed from what the user's own services actually do.
+//
+// A threshold nobody can choose is a threshold nobody sets: a new user does not
+// know their service's normal error rate, so asking for a number yields either
+// one that never fires or one that always does.
+func handleAlertProposals(warehouseDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only GET is accepted")
+			return
+		}
+
+		proposals, err := computeProposals(r.Context(), warehouseDir, getTenantID(r))
+		if err != nil {
+			slog.Error("failed to compute alert proposals", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to compute alert proposals")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"proposals": proposals}); err != nil {
+			slog.Error("failed to encode alert proposals", "error", err)
+		}
+	}
+}
+
+// computeProposals flattens every service's proposals into one list.
+//
+// No rolled-up data yet is an empty list, not an error: it is the state of every
+// stack whose first rollup has not run, and the remedy is to wait.
+func computeProposals(ctx context.Context, warehouseDir, tenantID string) ([]baseline.Proposal, error) {
+	baselines, err := baseline.Compute(ctx, warehouseDir, tenantID, baselineLookbackDays, time.Now())
+	if errors.Is(err, baseline.ErrNoData) {
+		return []baseline.Proposal{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	proposals := make([]baseline.Proposal, 0, len(baselines)*3)
+	for _, b := range baselines {
+		proposals = append(proposals, baseline.Propose(b)...)
+	}
+	return proposals, nil
+}
+
+// handleArmAlertProposal turns one proposal into a live alert rule.
+//
+// The threshold is recomputed here rather than read from the request, so a
+// stale or forged number cannot be armed. The client names which proposal it
+// wants; the server decides what it means.
+func handleArmAlertProposal(warehouseDir string, tdb tenantdb.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
+			return
+		}
+		if tdb == nil {
+			writeErrorJSON(w, http.StatusNotImplemented,
+				"alert proposals require a tenant database (TENANT_DB_PATH)")
+			return
+		}
+		// An armed rule needs a notification channel, and a channel needs a real
+		// tenant: notification_channels.tenant_id is NOT NULL REFERENCES
+		// tenants(id). Reaching the insert without one turns a misconfiguration
+		// into a 500 reading "failed to create notification channel", which says
+		// nothing about the cause.
+		if getTenantID(r) == "" {
+			writeErrorJSON(w, http.StatusNotImplemented,
+				"alert proposals require an authenticated tenant; this request carried none")
+			return
+		}
+
+		var req struct {
+			Service    string `json:"service"`
+			ProposalID string `json:"proposal_id"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, "service and proposal_id are required")
+			return
+		}
+		if req.Service == "" || req.ProposalID == "" {
+			writeErrorJSON(w, http.StatusBadRequest, "service and proposal_id are required")
+			return
+		}
+
+		ctx := r.Context()
+		tenantID := getTenantID(r)
+
+		baselines, err := baseline.Compute(ctx, warehouseDir, tenantID, baselineLookbackDays, time.Now())
+		if err != nil && !errors.Is(err, baseline.ErrNoData) {
+			slog.Error("failed to compute baselines while arming", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to compute alert proposals")
+			return
+		}
+
+		proposal, err := baseline.Find(baselines, req.Service, req.ProposalID)
+		if err != nil {
+			writeErrorJSON(w, http.StatusNotFound,
+				fmt.Sprintf("no proposal %s for service %s", req.ProposalID, req.Service))
+			return
+		}
+
+		channel, err := localAlertChannel(ctx, tdb, tenantID)
+		if err != nil {
+			slog.Error("failed to resolve the local alert channel", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to create notification channel")
+			return
+		}
+
+		rule := &tenantdb.AlertRule{
+			TenantID:        tenantID,
+			Name:            fmt.Sprintf("%s: %s (auto-proposed)", proposal.Service, proposal.Name),
+			Metric:          proposal.Metric,
+			Operator:        proposal.Operator,
+			Threshold:       proposal.Threshold,
+			WindowMinutes:   proposal.WindowMinutes,
+			Service:         proposal.Service,
+			ChannelID:       channel.ID,
+			CooldownMinutes: 30,
+			Status:          "active",
+		}
+		if err := tdb.AlertRules().Create(ctx, rule); err != nil {
+			slog.Error("failed to create alert rule", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to create alert rule")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"alert_rule_id": rule.ID,
+			"channel_id":    channel.ID,
+		}); err != nil {
+			slog.Error("failed to encode arm response", "error", err)
+		}
+	}
+}
+
+// localAlertChannelName is the one channel auto-armed rules are attached to.
+const localAlertChannelName = "Local (dashboard only)"
+
+// localAlertChannel finds or creates the channel auto-armed rules notify.
+//
+// alert_rules.channel_id is NOT NULL REFERENCES notification_channels(id), so
+// there is no "no channel" state — a rule cannot exist without one. Rather than
+// make a self-hoster configure Slack before they can arm anything, rules go to a
+// "log" channel that delivers nowhere: the alert still fires and still lands in
+// alert history, which is what the dashboard reads.
+//
+// Reused rather than recreated, so arming five rules leaves one channel.
+func localAlertChannel(ctx context.Context, tdb tenantdb.DB, tenantID string) (*tenantdb.NotificationChannel, error) {
+	existing, err := tdb.NotificationChannels().ListByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list notification channels: %w", err)
+	}
+	for _, ch := range existing {
+		if ch.Name == localAlertChannelName && ch.Type == "log" {
+			return ch, nil
+		}
+	}
+
+	ch := &tenantdb.NotificationChannel{
+		TenantID: tenantID,
+		Name:     localAlertChannelName,
+		Type:     "log",
+		Config:   "{}",
+		Status:   "active",
+	}
+	if err := tdb.NotificationChannels().Create(ctx, ch); err != nil {
+		return nil, fmt.Errorf("create notification channel: %w", err)
+	}
+	return ch, nil
 }
 
 // handleBatchFacts handles JSONL (newline-delimited JSON) payloads with multiple facts per request.

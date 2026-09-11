@@ -53,6 +53,24 @@ func ParseChannelConfig(configJSON string) (ChannelConfig, error) {
 	return c, nil
 }
 
+// ParseChannelConfigForType parses a channel config knowing what kind of
+// channel it is.
+//
+// ParseChannelConfig cannot: it has no type parameter and requires a webhook
+// URL, so every channel that is not a webhook fails it. That was invisible
+// while slack and webhook were the only kinds — both carry a URL — and it
+// becomes a silent bug the moment one does not, because the alert evaluator
+// skips any rule whose channel config will not parse. The rule never fires and
+// nothing records that it did not.
+func ParseChannelConfigForType(channelType, configJSON string) (ChannelConfig, error) {
+	// A log channel has nothing to configure. It exists so that a rule can be
+	// armed without first asking a self-hoster to set up Slack.
+	if channelType == "log" {
+		return ChannelConfig{}, nil
+	}
+	return ParseChannelConfig(configJSON)
+}
+
 // Dispatcher sends alert notifications.
 type Dispatcher struct {
 	client *http.Client
@@ -68,6 +86,12 @@ func NewDispatcher() *Dispatcher {
 // Send dispatches an alert notification to the given channel.
 func (d *Dispatcher) Send(ctx context.Context, channelType string, config ChannelConfig, alert AlertPayload) error {
 	switch channelType {
+	case "log":
+		// Delivered nowhere on purpose. The alert still fires and still lands in
+		// alert history, which is where the dashboard reads it from; this is the
+		// destination for someone who wants a rule armed now and will decide
+		// where it should go later.
+		return nil
 	case "slack":
 		return d.sendSlack(ctx, config, alert)
 	case "webhook":
@@ -90,6 +114,8 @@ func (d *Dispatcher) SendTest(ctx context.Context, channelType string, config Ch
 	}
 
 	switch channelType {
+	case "log":
+		return nil
 	case "slack":
 		return d.sendSlackTest(ctx, config)
 	case "webhook":

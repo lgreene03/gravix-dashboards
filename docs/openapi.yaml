@@ -256,6 +256,110 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/alert-proposals:
+    get:
+      operationId: listAlertProposals
+      summary: Alert rules proposed from observed traffic
+      description: |
+        Returns ready-to-arm alert rules whose thresholds are derived from what each
+        service actually does, computed from the last seven days of rollup output.
+
+        A threshold nobody can choose is a threshold nobody sets: a new user does not
+        know their own service's normal error rate, so asking for a number yields
+        either one that never fires or one that fires constantly. Thresholds here are
+        multiples of observed behaviour — three times the mean error rate (never below
+        5%), twice the mean P95 latency, half the mean throughput.
+
+        A proposal whose baseline is zero is omitted rather than returned with a zero
+        threshold, because an alert that fires whenever latency exceeds zero trains its
+        reader to ignore it.
+
+        Before the first rollup there is nothing to derive from, and the response is
+        `200` with an empty list rather than an error.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      responses:
+        "200":
+          description: Candidate rules, or an empty list if nothing has been rolled up yet.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proposals]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlertProposal"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/alert-proposals/arm:
+    post:
+      operationId: armAlertProposal
+      summary: Arm one proposed alert rule
+      description: |
+        Creates a live alert rule from a proposal. No login and no manually-chosen
+        threshold: the caller names which proposal it wants and the server decides what
+        that means.
+
+        The threshold is always recomputed from the current baseline and never read
+        from the request, so a stale or forged number cannot be armed. Any threshold,
+        metric or operator sent in the body is ignored.
+
+        An alert rule requires a notification channel, so the first arm also creates a
+        channel named "Local (dashboard only)" of type `log`, which delivers nowhere:
+        the alert still fires and still lands in alert history, which is what the
+        dashboard reads. Later arms reuse it rather than creating another.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service, proposal_id]
+              properties:
+                service:
+                  type: string
+                  example: auth-service
+                proposal_id:
+                  type: string
+                  enum: [error_rate, p95_latency, throughput_drop]
+                  example: error_rate
+      responses:
+        "201":
+          description: The rule was created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alert_rule_id, channel_id]
+                properties:
+                  alert_rule_id:
+                    type: string
+                  channel_id:
+                    type: string
+        "400":
+          description: "`service` or `proposal_id` was missing."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: |
+            No such proposal for that service — either the service has no rollup data,
+            or the proposal was omitted because its baseline is zero.
+        "501":
+          description: |
+            The deployment has no tenant database (`TENANT_DB_PATH` unset), so there is
+            nothing to create an alert rule in.
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   # ── Health endpoints ─────────────────────────────────────────────────
 
   /live:
@@ -1475,6 +1579,40 @@ components:
         An `Authorization: Bearer <key>` header is accepted as an alternative.
 
   schemas:
+    AlertProposal:
+      type: object
+      required: [id, service, name, metric, operator, threshold, window_minutes]
+      properties:
+        id:
+          type: string
+          enum: [error_rate, p95_latency, throughput_drop]
+        service:
+          type: string
+          example: auth-service
+        name:
+          type: string
+          description: Display name the armed rule will carry.
+          example: Elevated error rate
+        metric:
+          type: string
+          enum: [error_rate, p95_latency, throughput]
+        operator:
+          type: string
+          enum: [gt, lt]
+          description: "`lt` for the traffic-drop rule, which fires when throughput falls."
+        threshold:
+          type: number
+          format: double
+          description: |
+            Derived from the service's own baseline. Recomputed server-side when armed,
+            so a value read here and sent back later has no effect.
+          example: 0.06
+        window_minutes:
+          type: integer
+          description: |
+            Evaluation window. Never shorter than the rollup cadence, or the rule would
+            evaluate against partial data.
+          example: 15
     # ── Ingestion schemas ────────────────────────────────────────────
 
     RequestFact:
