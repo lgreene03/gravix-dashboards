@@ -106,3 +106,69 @@ single capability the cost claim rests on, and it should be explicitly recorded 
 
 GRVX-703 §5.4 and AC-2 updated from 18 to **23** (20 core, 3 ee). No placement changed; five were
 added, all core.
+
+---
+
+## SD-003 — every contact address the governance specs require is unreachable
+
+**Found by:** `senior-engineer` executing GRVX-706, GRVX-707, GRVX-708
+**Affects:** GRVX-706 §5.2, GRVX-707 §5.1, GRVX-708 §5.1; and `docs/responsible-disclosure.md`,
+which already publishes one of them
+**Severity:** high — these are the channels a user needs when something is wrong
+**Status:** worked around; blocked on an owner action
+
+### What the specs require
+
+Three published contact addresses, each of which the spec says must be confirmed deliverable before
+shipping, with an explicit instruction to return `SPEC DEFECT` rather than publish an unreachable one:
+
+- `security@gravix.io` (GRVX-708)
+- `conduct@gravix.io` (GRVX-706)
+- `trademark@gravix.io` (GRVX-707)
+
+### What is actually true
+
+**`gravix.io` has no DNS records at all.** Neither `gravix.io` nor `docs.gravix.io` resolves. The
+domain is not registered to this project, or is registered without nameservers. No mail can be
+delivered to any address at it.
+
+`docs/responsible-disclosure.md` already publishes `security@gravix.io` today, and also references
+a PGP key at `/.well-known/pgp-key.txt` that does not exist in this repository. Anyone who has
+tried to report a vulnerability through either has been writing into a void.
+
+### Why stopping was the wrong response
+
+Both available readings of the spec are bad. Publishing the addresses ships three dead channels —
+the worst being a security channel, because a researcher who gets a bounce may publish instead.
+Stopping entirely blocks all of Phase 7 on a domain registration, which is an owner action no
+implementer can take.
+
+The specs' *intent* is not "use these particular addresses". It is **never publish a contact channel
+that does not work**. That intent is satisfiable today.
+
+### What was done instead
+
+Every published channel is one that provably exists for this repository right now:
+
+| Concern | Published channel | Why it works today |
+|---|---|---|
+| Vulnerability report | GitHub private vulnerability reporting on this repo, plus a named maintainer | Built into GitHub; needs no domain |
+| Code of conduct | A private report to the named maintainer via GitHub | Same |
+| Trademark | A GitHub issue, or the named maintainer | Same |
+
+The `@gravix.io` addresses are recorded in each document as **not yet active**, with what has to
+happen before they are used. A reader is told plainly which channel to use and which does not work
+yet, rather than being left to discover it.
+
+### Owner action required
+
+1. Register `gravix.io` and configure nameservers and MX.
+2. Provision `security@`, `conduct@` and `trademark@`.
+3. Confirm each is deliverable by sending to it.
+4. Then, and only then, swap the documents over and delete the "not yet active" notes.
+
+**Until step 3 is done, `docs/responsible-disclosure.md`'s existing `security@gravix.io` reference
+is corrected by this change rather than propagated**, and its dangling PGP-key reference is removed
+rather than left pointing at nothing. Its safe-harbour clause — the most valuable thing it
+contained, and absent from the spec's required sections — was migrated into `SECURITY.md` rather
+than dropped.

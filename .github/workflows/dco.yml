@@ -1,0 +1,47 @@
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check every commit is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for sha in $(git rev-list "$BASE_SHA".."$HEAD_SHA"); do
+            # Merge commits carry no authorship of their own and are exempt.
+            parents=$(git rev-list --parents -n 1 "$sha" | wc -w)
+            if [ "$parents" -gt 2 ]; then
+              echo "$(git rev-parse --short "$sha") merge commit, skipped"
+              continue
+            fi
+            if ! git log -1 --format=%B "$sha" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "$(git rev-parse --short "$sha") missing Signed-off-by"
+              missing=$((missing+1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            cat <<'MSG'
+
+          Every commit needs a DCO sign-off. To fix the most recent commit:
+              git commit --amend -s --no-edit && git push --force-with-lease
+          For several commits:
+              git rebase --signoff origin/main && git push --force-with-lease
+          Gravix uses the DCO and has no CLA. See CONTRIBUTING.md.
+          MSG
+            exit 1
+          fi
+          echo "DCO: all commits signed off"
