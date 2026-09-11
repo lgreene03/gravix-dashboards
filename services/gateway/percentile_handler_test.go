@@ -520,9 +520,6 @@ func TestPercentileDimensionFilter(t *testing.T) {
 
 // AC-12: the latency budget for a full day's merge.
 func TestPercentileEndpointLatencyBudget(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing test; skipped under -short")
-	}
 	gw, store, tenantID, apiKey := percentileGateway(t)
 
 	// A full day: 1,440 one-minute sketches, which is the worst realistic case.
@@ -556,7 +553,18 @@ func TestPercentileEndpointLatencyBudget(t *testing.T) {
 
 	t.Logf("merging 1,440 sketches: p95 = %s (runs: %v)", p95, durations)
 
+	// The merge itself is checked either way: every one of the five runs returned
+	// 200 with an answer, above. What changes under the race detector is whether
+	// the stopwatch means anything.
 	const budget = 400 * time.Millisecond
+	if raceDetectorEnabled {
+		// Not a skip, and not a softened assertion: the work ran and its result was
+		// checked. The race detector adds roughly 8x to this merge, so timing it
+		// measures the instrumentation. G4.5 is a budget for the binary users run.
+		t.Logf("race detector enabled, so the %s budget is not asserted: it is a production "+
+			"number and this binary is instrumented. Run without -race to check it.", budget)
+		return
+	}
 	if p95 > budget {
 		t.Errorf("p95 = %s, above the %s budget (G4.5). Report to perf-cost-engineer; "+
 			"do not fall back to max — a fast wrong answer is not an improvement", p95, budget)
