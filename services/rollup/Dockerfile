@@ -16,7 +16,7 @@ FROM alpine:3.21
 # OCI image labels for provenance and registry metadata
 LABEL org.opencontainers.image.title="gravix-rollup" \
       org.opencontainers.image.description="Gravix rollup and purge jobs — ETL from JSONL facts to Parquet metrics" \
-      org.opencontainers.image.source="https://github.com/gravix/gravix" \
+      org.opencontainers.image.source="https://github.com/lgreene03/gravix-dashboards" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Gravix"
 

@@ -8,9 +8,10 @@ info:
   version: 0.1.0
   contact:
     name: Gravix
-    url: https://github.com/gravix-io/gravix
+    url: https://github.com/lgreene03/gravix-dashboards
   license:
-    name: MIT
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
 
 servers:
   - url: http://localhost:8090
@@ -929,8 +930,13 @@ paths:
           schema:
             type: number
             format: double
-            exclusiveMinimum: 0
-            exclusiveMaximum: 1
+            # OpenAPI 3.0 spells an exclusive bound as a boolean beside the
+            # bound itself; the numeric form is 3.1 syntax and is silently
+            # ignored by 3.0 tooling, which would document the wrong range.
+            minimum: 0
+            exclusiveMinimum: true
+            maximum: 1
+            exclusiveMaximum: true
             example: 0.95
           description: >
             The quantile, strictly between 0 and 1. The published error bound covers

@@ -271,3 +271,35 @@ in the UI and in nobody's server code. Two readings, and the choice is the CPO's
 
 Either is defensible. What is not defensible is leaving the two halves disagreeing, because whichever
 one a customer discovers first is the one they will believe.
+
+---
+
+## F-007 — there are two OpenAPI documents and they have diverged
+
+The repository maintains two, by hand, with nothing keeping them in step:
+
+| File | Paths | Version | Who reads it |
+|---|---|---|---|
+| `docs/openapi.yaml` | 25 | 0.1.0 | The Makefile, `scripts/golden_path_test.sh`, human readers |
+| `services/gateway/openapi.json` | 57 | 1.0.0 | `scripts/generate-sdk-types.sh` → the Node, Python, Go and Java SDKs |
+
+They disagree on almost everything a reader would check first: the number of endpoints, the version
+number, and — until this commit — the licence, which both gave as MIT for a repository that has been
+Apache-2.0 since GRVX-701.
+
+**The concrete consequence right now:** GRVX-808's `GET /api/v1/percentile` and GRVX-809's
+`GET /api/v1/lineage` are documented in the YAML, because that is the file both specs name in their
+§4.2. They are absent from the JSON, so the generated SDKs do not have them. A user who installs
+`@gravix/sdk` cannot call either endpoint without writing the request by hand, while the documentation
+says they exist.
+
+Only the licence was corrected here — a document that misstates its own project's licence is wrong
+whichever way you read the scope question, and it was a one-line change in each file that leaves the
+generated SDKs byte-identical (verified by re-running the generator).
+
+**The fix is to delete one of them.** Two hand-maintained descriptions of one API is one description
+and one lie, and which is which changes depending on who last edited what. The JSON is the one with
+teeth — it generates code and CI validates it — so the likely answer is to generate the YAML from it,
+or to drop the YAML and point `docs/` at the JSON. Either way it needs a spec: `docs-engineer` owns
+"no merged behaviour change ships undocumented", and that promise is unenforceable while there are two
+places to forget.
