@@ -23,6 +23,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Required for keyless cosign signing via GitHub OIDC. There is no
+      # long-lived signing key to steal or hand over at succession.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,6 +102,55 @@ jobs:
             echo "| \`ghcr.io/${{ github.repository }}-load-generator\` | \`${{ steps.version.outputs.version }}\` |"
           } > /tmp/release-notes.md
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build release binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for entry in \
+            "ingestion:./services/ingestion/" \
+            "gateway:./services/gateway/" \
+            "rollup:./transforms/request_metrics_minute/" \
+            "compaction:./transforms/compaction/" \
+            "load-generator:./cmd/load_generator/" \
+            "gravix:./cmd/cli/"; do
+            name="${entry%%:*}"; pkg="${entry#*:}"
+            CGO_ENABLED=0 GOFLAGS=-trimpath \
+              go build -ldflags="-s -w -buildid=" -o "dist/$name" "$pkg"
+          done
+          ls -la dist/
+
+      - name: Verify the build is reproducible
+        run: make verify-reproducible
+
+      - name: Generate SBOM
+        run: |
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+          ./scripts/generate_sbom.sh dist/sbom.json
+          jq '.components | length' dist/sbom.json
+
+      - name: Generate checksums
+        run: |
+          cd dist && sha256sum * > checksums.txt && cat checksums.txt
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign binaries, SBOM and checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in *; do
+            case "$f" in *.sig|*.pem) continue ;; esac
+            cosign sign-blob --yes \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.pem" \
+              "$f"
+          done
+          ls -la
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -106,3 +160,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
           generate_release_notes: false
+          # Binaries, their signatures and certificates, the SBOM, and the
+          # checksums. Without these attached, signing them proves nothing to
+          # anyone downloading the release.
+          files: |
+            dist/*

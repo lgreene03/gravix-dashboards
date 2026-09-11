@@ -109,6 +109,18 @@ not consider that a breach of this policy. A deadline that only we control is no
 With your permission, we credit you in the advisory and the release notes. If you would rather stay
 anonymous, say so and we will not name you.
 
+## Verifying a release
+
+Every release is signed with keyless cosign and its build is reproducible. You can confirm that a
+binary came from this repository, and that it matches the published source, before running it:
+
+```bash
+make verify-reproducible   # build twice, compare digests
+```
+
+Full instructions, including signature and SBOM verification:
+[`docs/verifying-releases.md`](docs/verifying-releases.md).
+
 ## Past advisories
 
 See [`docs/security-advisories.md`](docs/security-advisories.md).

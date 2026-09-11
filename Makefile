@@ -1,4 +1,4 @@
-.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary
+.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -74,3 +74,13 @@ test-oss: ## Build and test the Apache-2.0 core with ee/ absent
 
 check-boundary: ## Enforce the open-core boundary (imports, gates, headers, map)
 	go run ./cmd/checkboundary -root . -map docs/oss/boundary.yaml
+
+# --- Supply chain (GRVX-709) ----------------------------------------------
+# A signature says who built an artefact. Reproducibility says it matches the
+# source. The SBOM says what is inside it. All three, or none of them help.
+
+verify-reproducible: ## Build every binary twice and compare digests
+	./scripts/verify_reproducible.sh
+
+sbom: ## Generate a CycloneDX SBOM at sbom.json
+	./scripts/generate_sbom.sh sbom.json
