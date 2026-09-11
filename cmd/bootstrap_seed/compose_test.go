@@ -274,3 +274,74 @@ func TestBootstrapInitOwnsTheDataVolume(t *testing.T) {
 		}
 	}
 }
+
+// TestFileMountsInsideReadOnlyMountsExist is the regression guard for F-023.
+//
+// Docker cannot create a mountpoint inside a read-only bind mount. So whenever a
+// service mounts a FILE to a path that falls inside one of its own read-only
+// DIRECTORY mounts, the target must already exist in the repository, or the
+// container refuses to start with an error about a read-only file system that
+// names neither the compose file nor the missing file's purpose.
+//
+// The dashboard hit exactly this: ./dashboards is mounted :ro at
+// /usr/share/nginx/html, and the generated ./data/dashboard_config.js is mounted
+// over a path inside it that nothing tracked. Four containers had already
+// started successfully by the time it failed.
+func TestFileMountsInsideReadOnlyMountsExist(t *testing.T) {
+	doc := loadCompose(t)
+	repoRoot := filepath.Join("..", "..")
+
+	type mount struct {
+		source, target string
+		readOnly       bool
+	}
+
+	checked := 0
+	for name, svc := range doc.Services {
+		var mounts []mount
+		for _, v := range svc.Volumes {
+			parts := strings.Split(v, ":")
+			if len(parts) < 2 {
+				continue
+			}
+			m := mount{source: parts[0], target: parts[1]}
+			if len(parts) > 2 && parts[2] == "ro" {
+				m.readOnly = true
+			}
+			mounts = append(mounts, m)
+		}
+
+		for _, m := range mounts {
+			// Only file mounts matter: a directory target Docker will happily
+			// create, and only inside a writable parent anyway.
+			if !strings.Contains(filepath.Base(m.target), ".") {
+				continue
+			}
+			for _, parent := range mounts {
+				if parent.target == m.target || !parent.readOnly {
+					continue
+				}
+				if !strings.HasPrefix(m.target, strings.TrimSuffix(parent.target, "/")+"/") {
+					continue
+				}
+				checked++
+
+				// The mountpoint's path inside the read-only source.
+				rel := strings.TrimPrefix(m.target, strings.TrimSuffix(parent.target, "/")+"/")
+				onDisk := filepath.Join(repoRoot, strings.TrimPrefix(parent.source, "./"), rel)
+				if _, err := os.Stat(onDisk); err != nil {
+					t.Errorf("service %q mounts a file at %q, inside the read-only mount %q -> %q, "+
+						"but %s does not exist. Docker cannot create a mountpoint inside a "+
+						"read-only mount, so the container will refuse to start. Commit a "+
+						"placeholder at that path.",
+						name, m.target, parent.source, parent.target, onDisk)
+				}
+			}
+		}
+	}
+
+	if checked == 0 {
+		t.Error("no file-inside-read-only-mount pairs found; the compose file's shape has changed " +
+			"and this guard is no longer checking anything")
+	}
+}

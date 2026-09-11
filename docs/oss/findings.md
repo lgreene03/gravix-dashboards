@@ -1151,3 +1151,63 @@ must be reproducible from a commit in this repository.**
 `dashboards/tco-measurement.json` fed 213.68 to the cost model and now feeds 206.68 (raw 203.78 plus
 rolled-up 2.90). GRVX-1003's §11.1 decomposition was measured independently, from the directory
 rather than from the result file, and was already correct.
+
+## F-023 — the dashboard cannot mount its config, because the mountpoint would have to be created inside a read-only mount
+
+**Found by** GRVX-910's `timed-onboarding` gate, on the first run where the stack got far enough to
+try starting the dashboard.
+**Severity** high — four containers start successfully and then `docker compose up` fails. The stack
+is closer to working than ever and still does not work.
+**Status** fixed by committing `dashboards/dashboard_config.js` as a placeholder, guarded by
+`TestFileMountsInsideReadOnlyMountsExist`.
+
+**How far it got**, which is the good news in this finding:
+
+```
+Container gravix-bootstrap-init  Exited        ← seeded and exited 0
+Container gravix-ingestion       Healthy
+Container gravix-cube            Healthy
+Container gravix-synthetic-traffic Started
+Container gravix-dashboard       Starting
+Error response from daemon: failed to create shim task: OCI runtime create failed:
+  error mounting ".../data/dashboard_config.js" to rootfs at
+  "/usr/share/nginx/html/dashboard_config.js": make mountpoint
+  "/usr/share/nginx/html/dashboard_config.js": openat dashboard_config.js: read-only file system
+```
+
+F-015, F-016, F-019 and F-021 are all genuinely fixed: the images build, the volume is writable, the
+tenant and its login are created, ingestion and Cube both report healthy.
+
+**The mechanism.** Two mounts on the same service:
+
+```yaml
+- ./dashboards:/usr/share/nginx/html:ro                                  # first
+- ./data/dashboard_config.js:/usr/share/nginx/html/dashboard_config.js:ro # second, inside the first
+```
+
+The second must create `dashboard_config.js` inside the first — which is `:ro`. Docker cannot, so the
+container never starts. It works only if the file already exists at `dashboards/dashboard_config.js`,
+and nothing tracked it: not in git, not on disk, not even gitignored.
+
+**The intent was right and the mechanics were not.** The compose file's own comment explains the
+single-file mount:
+
+> One file, not the ./data directory: mounting the directory would serve api_key.txt over HTTP.
+
+That reasoning is correct and worth keeping — it is the mitigation for half of SD-013. The fix
+preserves it and adds the missing mountpoint rather than widening the mount.
+
+**The placeholder is deliberately empty** (`window.GRAVIX_CONFIG = {}`). `app.js` merges that object
+over its own built-in defaults, so a dashboard opened without the stack behaves exactly as it would
+with no config at all, rather than appearing configured with values nobody provisioned.
+
+**The guard generalises past this one file.** `TestFileMountsInsideReadOnlyMountsExist` walks every
+service and, for each file mounted into a path inside one of that service's own read-only directory
+mounts, requires the target to exist in the repository. Removing the placeholder reproduces the CI
+failure as a one-second test failure naming the file and the reason.
+
+**Fifth independent break on this path** — F-015, F-016, F-019, F-021, and this. The pattern has not
+changed: each was invisible until something actually ran `docker compose up`, and each is a different
+layer (object-store paths, credentials, image build, volume ownership, mount ordering). The gate has
+now found three of the five on its own, which is three more than every other check in the repository
+combined.
