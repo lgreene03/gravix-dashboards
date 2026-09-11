@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const measuredSource = "bench/results/20260911T220715Z-small.json"
+const measuredSource = "bench/results/20260911T224752Z-small.json"
 
 // measuredBytesPerEvent is the total steady-state footprint GRVX-1001 measured:
 // raw JSONL plus warehouse Parquet plus manifests, per ingested event. It is

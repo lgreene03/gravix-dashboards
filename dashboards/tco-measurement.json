@@ -1,5 +1,5 @@
 {
   "bytes_per_event": 206.68,
-  "source": "bench/results/ (regenerated from a clean tree; see F-022)",
+  "source": "bench/results/20260911T224752Z-small.json",
   "_comment": "raw 203.78 + rolled-up 2.90, from ./bench/run.sh --scale small. The model refuses to run without this file, because a cost model whose dominant term is a constant is a guess. Regenerate with bench/run.sh and update both fields together."
 }

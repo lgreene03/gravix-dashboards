@@ -1,6 +1,6 @@
 {
   "_comment": "Shared fixtures for the Go/JS parity test (GRVX-1004 §5.4). Both pkg/costmodel and dashboards/lib/tco.js read this file, so a divergence fails a test rather than reaching a reader. A calculator that disagrees with the model behind it is worse than having neither.",
-  "measurement_source": "bench/results/20260911T220715Z-small.json",
+  "measurement_source": "bench/results/20260911T224752Z-small.json",
   "cases": [
     { "name": "a small team, default retention",
       "events_per_month": 1000000, "retention_days": 30, "services": 3, "dashboard_users": 2, "bytes_per_event": 206.68 },
