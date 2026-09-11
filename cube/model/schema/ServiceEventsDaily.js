@@ -18,8 +18,16 @@ cube(`ServiceEventsDaily`, {
   },
 
   measures: {
+    // Cube's built-in row count counts ROWS of the daily table — one per
+    // service/event_type/day — not events. Beside eventCount that is easy to
+    // misread: a service with one event a day for a week and one with a million
+    // both report 7. Hidden rather than removed, because deleting a measure that
+    // existing saved queries may name is a breaking change. Same trap, same fix
+    // as RequestMetricsMinute.count. See SD-006.
     count: {
       type: `count`,
+      title: `Daily Rows (not events)`,
+      shown: false,
       drillMembers: [service, eventType, eventDay]
     },
 

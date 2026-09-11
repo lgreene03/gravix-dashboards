@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check
+.PHONY: build build-cli test test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -79,6 +79,12 @@ build-oss: ## Build the Apache-2.0 core with ee/ absent
 
 test-oss: ## Build and test the Apache-2.0 core with ee/ absent
 	./scripts/build_oss.sh test
+
+# --- Correctness suite (GRVX-810) ----------------------------------------
+# Proves the Phase 8 properties hold together rather than one spec at a time.
+# No Docker, and it must stay under five minutes or nobody runs it.
+test-correctness: ## Run the correctness suite (determinism, late data, mergeability, lineage)
+	./scripts/correctness_test.sh
 
 check-boundary: ## Enforce the open-core boundary (imports, gates, headers, map)
 	go run ./cmd/checkboundary -root . -map docs/oss/boundary.yaml

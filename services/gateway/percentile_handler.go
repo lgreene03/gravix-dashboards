@@ -268,9 +268,43 @@ func (g *gateway) computeWindowPercentile(ctx context.Context, req percentileReq
 		Quantile:    req.quantile,
 		Granularity: req.granularity,
 		Exactness:   "sketch",
-		ErrorBound:  fmt.Sprintf("relative error <= %g%% for q in [0.5, 0.99]", sketch.MaxRelativeError*100),
+		ErrorBound:  errorBoundFor(totalObservations(counts)),
 		Buckets:     buckets,
 	}, 0, ""
+}
+
+// totalObservations sums the requests represented by every answered bucket.
+func totalObservations(counts map[time.Time]int64) int64 {
+	var n int64
+	for _, c := range counts {
+		n += c
+	}
+	return n
+}
+
+// errorBoundFor states the bound that actually applies to this answer.
+//
+// It used to return a flat "relative error <= 1%" regardless of the query. CD-001
+// established that this is false below roughly ten thousand observations: a
+// t-digest guarantees RANK accuracy, and on a heavy tail one observation of rank
+// error at q=0.99 is an order of magnitude in value. The rank bound holds always
+// and is stated always; the value bound is stated only where it was measured to
+// hold, and the caller is told plainly when it does not.
+//
+// See contracts/request_metrics_minute.v2.yaml, whose error_bound this mirrors.
+func errorBoundFor(observations int64) string {
+	const rank = "rank error <= 1% at q in [0.5, 0.99]"
+	switch {
+	case observations >= 100_000:
+		return rank + "; relative value error <= 1% at this sample size (100,000+ observations)"
+	case observations >= 10_000:
+		return rank + "; relative value error up to ~6% at this sample size (10,000+ observations)"
+	case observations >= 1_000:
+		return rank + "; relative value error up to ~17% at this sample size (1,000+ observations)"
+	default:
+		return rank + "; relative value error is NOT bounded at this sample size " +
+			"(under 1,000 observations) — treat the value as indicative, not accurate"
+	}
 }
 
 // readPartitionRows loads one day's metric rows, reporting whether the partition

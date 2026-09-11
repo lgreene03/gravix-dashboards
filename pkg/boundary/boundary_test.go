@@ -29,15 +29,16 @@ func TestBoundaryMapHasExpectedCapabilityCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	// 32 total: 29 core, 3 ee. Expanded from 18 by SD-002, then by Phase 8: the
+	// 33 total: 30 core, 3 ee. Expanded from 18 by SD-002, then by Phase 8: the
 	// recompute engine (GRVX-801), metric manifests (GRVX-802), the contract
 	// registry (GRVX-803), quantile sketches (GRVX-804), late-data revisions
 	// (GRVX-805), retroactive evolution (GRVX-806), lineage (GRVX-807) and the
-	// windowed percentile API (GRVX-808) and the lineage UI (GRVX-809).
-	if got, want := len(m.Capabilities), 32; got != want {
+	// windowed percentile API (GRVX-808), the lineage UI (GRVX-809) and the
+	// correctness suite (GRVX-810).
+	if got, want := len(m.Capabilities), 33; got != want {
 		t.Errorf("capabilities = %d, want %d", got, want)
 	}
-	if got, want := len(m.CoreCapabilities()), 29; got != want {
+	if got, want := len(m.CoreCapabilities()), 30; got != want {
 		t.Errorf("core capabilities = %d, want %d", got, want)
 	}
 	if got, want := len(m.EECapabilities()), 3; got != want {

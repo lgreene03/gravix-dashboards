@@ -682,3 +682,56 @@ func TestAlertNonPercentileMetricsStillUseCube(t *testing.T) {
 		}
 	}
 }
+
+// ─── CD-001: the bound must describe the answer it is attached to ───
+
+func TestErrorBoundMatchesSampleSize(t *testing.T) {
+	// A flat "relative error <= 1%" was returned for every query regardless of
+	// how much data backed it. CD-001 measured up to 157% at a hundred
+	// observations, so the response now says which regime the caller is in.
+	cases := []struct {
+		observations int64
+		wantContains string
+		wantAbsent   string
+	}{
+		{100, "NOT bounded", "value error <= 1%"},
+		{999, "NOT bounded", "value error <= 1%"},
+		{1_000, "up to ~17%", "NOT bounded"},
+		{10_000, "up to ~6%", "NOT bounded"},
+		{100_000, "value error <= 1%", "NOT bounded"},
+		{5_000_000, "value error <= 1%", "NOT bounded"},
+	}
+	for _, c := range cases {
+		got := errorBoundFor(c.observations)
+		if !strings.Contains(got, c.wantContains) {
+			t.Errorf("errorBoundFor(%d) = %q, want it to contain %q", c.observations, got, c.wantContains)
+		}
+		if c.wantAbsent != "" && strings.Contains(got, c.wantAbsent) {
+			t.Errorf("errorBoundFor(%d) = %q, want it NOT to contain %q", c.observations, got, c.wantAbsent)
+		}
+		// The rank bound is the one that always holds, so it is always stated.
+		if !strings.Contains(got, "rank error <= 1%") {
+			t.Errorf("errorBoundFor(%d) omits the rank bound, which holds at every size: %q",
+				c.observations, got)
+		}
+	}
+}
+
+func TestResponseBoundReflectsTheDataBehindIt(t *testing.T) {
+	gw, store, tenantID, apiKey := percentileGateway(t)
+	minutes, _ := skewedMinutes(31)
+	// Ten minutes of 200 requests each: 2,000 observations, the middle regime.
+	seedPartition(t, store, tenantID, percentileDay, latencyRows(t, percentileDay, minutes[:10], true))
+
+	rr, body := callPercentile(t, gw, apiKey, windowParams("0.95"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+	}
+	bound, _ := body["error_bound"].(string)
+	if !strings.Contains(bound, "up to ~17%") {
+		t.Errorf("error_bound = %q, want the 1,000+ observation regime for 2,000 observations", bound)
+	}
+	if strings.Contains(bound, "relative value error <= 1%") {
+		t.Error("the response claims a 1% value bound on 2,000 observations, which CD-001 measured at up to 17%")
+	}
+}

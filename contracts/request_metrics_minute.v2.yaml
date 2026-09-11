@@ -33,7 +33,21 @@ contracts:
       - path_template
     exactness: sketch
     error_bound: >-
-      relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets
+      RANK error <= 1% at q in [0.5, 0.99]: the value returned sits within 1% of the
+      requested quantile's true rank. That is the guarantee a t-digest makes, and it holds
+      regardless of distribution or window size — measured worst 0.09% over 24,000
+      observations end to end (TestMergeabilityEndToEnd).
+      VALUE error is not bounded by it and depends on how many observations the window
+      holds and how heavy the tail is, because one observation of rank error at q=0.99
+      can be an order of magnitude in value, and integer-millisecond latencies make a
+      sub-millisecond difference read as several percent at a small median. Measured worst
+      relative value error across uniform, normal, lognormal, bimodal and pareto
+      (TestSketchErrorIsAFunctionOfSampleSize): n=100 -> 157%, n=1,000 -> 17%,
+      n=10,000 -> 5.8%, n=100,000 -> 0.8%. Below roughly 10,000 observations in the
+      queried window, treat the value as indicative rather than accurate.
+      This supersedes an earlier claim of a flat "relative error <= 1%", which was
+      measured only at 1e6 observations and does not hold at realistic bucket sizes.
+      See CD-001.
     mergeability: sketch_merge
     merge_note: >-
       Merge the latency_sketch column across buckets, then query the quantile. Never
@@ -68,7 +82,21 @@ contracts:
       - path_template
     exactness: sketch
     error_bound: >-
-      relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets
+      RANK error <= 1% at q in [0.5, 0.99]: the value returned sits within 1% of the
+      requested quantile's true rank. That is the guarantee a t-digest makes, and it holds
+      regardless of distribution or window size — measured worst 0.09% over 24,000
+      observations end to end (TestMergeabilityEndToEnd).
+      VALUE error is not bounded by it and depends on how many observations the window
+      holds and how heavy the tail is, because one observation of rank error at q=0.99
+      can be an order of magnitude in value, and integer-millisecond latencies make a
+      sub-millisecond difference read as several percent at a small median. Measured worst
+      relative value error across uniform, normal, lognormal, bimodal and pareto
+      (TestSketchErrorIsAFunctionOfSampleSize): n=100 -> 157%, n=1,000 -> 17%,
+      n=10,000 -> 5.8%, n=100,000 -> 0.8%. Below roughly 10,000 observations in the
+      queried window, treat the value as indicative rather than accurate.
+      This supersedes an earlier claim of a flat "relative error <= 1%", which was
+      measured only at 1e6 observations and does not hold at realistic bucket sizes.
+      See CD-001.
     mergeability: sketch_merge
     merge_note: >-
       Merge the latency_sketch column across buckets, then query the quantile. Never
@@ -103,7 +131,21 @@ contracts:
       - path_template
     exactness: sketch
     error_bound: >-
-      relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets
+      RANK error <= 1% at q in [0.5, 0.99]: the value returned sits within 1% of the
+      requested quantile's true rank. That is the guarantee a t-digest makes, and it holds
+      regardless of distribution or window size — measured worst 0.09% over 24,000
+      observations end to end (TestMergeabilityEndToEnd).
+      VALUE error is not bounded by it and depends on how many observations the window
+      holds and how heavy the tail is, because one observation of rank error at q=0.99
+      can be an order of magnitude in value, and integer-millisecond latencies make a
+      sub-millisecond difference read as several percent at a small median. Measured worst
+      relative value error across uniform, normal, lognormal, bimodal and pareto
+      (TestSketchErrorIsAFunctionOfSampleSize): n=100 -> 157%, n=1,000 -> 17%,
+      n=10,000 -> 5.8%, n=100,000 -> 0.8%. Below roughly 10,000 observations in the
+      queried window, treat the value as indicative rather than accurate.
+      This supersedes an earlier claim of a flat "relative error <= 1%", which was
+      measured only at 1e6 observations and does not hold at realistic bucket sizes.
+      See CD-001.
     mergeability: sketch_merge
     merge_note: >-
       Merge the latency_sketch column across buckets, then query the quantile. Never

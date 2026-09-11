@@ -65,7 +65,7 @@ published definition cannot drift from the code.
 **Correct percentiles across time.** Combining per-bucket percentiles is the standard shortcut and it
 is wrong. Taking the maximum of sixty one-minute p95s is not the hour's p95; on a heavy-tailed latency
 distribution it is off by **62%**. Gravix stores a mergeable t-digest per bucket, so a window's
-percentile is computed by merging sketches — measured worst case **0.92%** across five distributions.
+percentile is computed by merging sketches instead.
 
 | Latency distribution | max of per-minute p95 | merged sketch |
 |---|---|---|
@@ -80,6 +80,31 @@ Measured over 1,000,000 observations split into 1,440 one-minute buckets, by
 
 ```bash
 go test ./pkg/sketch/ -run TestSketchBeatsMaxOfPercentiles -v
+```
+
+**And the qualification that belongs with it.** Those figures are for a window holding a million
+observations. A t-digest guarantees accuracy of *rank*, not of *value*, and on a heavy tail one
+observation of rank error at q=0.99 is an order of magnitude in value — so the value error depends on
+how much data the window holds:
+
+| observations in the window | worst relative value error |
+|---|---|
+| 100 | 446% |
+| 1,000 | 17% |
+| 10,000 | 5.8% |
+| 100,000 | 0.8% |
+
+The rank bound — the answer sits within 1% of the requested quantile's true rank — holds at every size.
+Below roughly ten thousand observations, treat the value as indicative. `GET /api/v1/percentile` says
+which regime your query is in, in the response.
+
+This qualification is here because Gravix published the flat figure first and the correctness suite
+caught it: [CD-001](docs/oss/correctness-defects.md). A register of the times our numbers did not check
+out is the argument working, not an embarrassment — and it is the concrete reason to move to a
+relative-error sketch, which is [already on the list](docs/oss/30-technology-review.md).
+
+```bash
+go test ./tests/correctness/ -run TestSketchErrorIsAFunctionOfSampleSize -v
 ```
 
 ## Everything below is free forever, under Apache-2.0

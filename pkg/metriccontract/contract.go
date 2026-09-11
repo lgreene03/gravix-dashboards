@@ -36,6 +36,15 @@ const (
 	ExactnessApproximate Exactness = "approximate"
 )
 
+// NotRecomputableByCLI prefixes a recompute_cmd for a metric the gravix CLI
+// cannot rebuild yet. The contract must still say what does rebuild it.
+//
+// It exists because `gravix recompute` handles request_metrics_minute and
+// nothing else, so the service-event metrics have no CLI path. Quoting a command
+// that exits non-zero would be a worse answer to "how do I reproduce this
+// number?" than admitting there is not one yet. See CD-002.
+const NotRecomputableByCLI = "not rebuildable by the gravix CLI yet; run:"
+
 // Mergeability says whether two grains of this metric may be combined.
 type Mergeability string
 

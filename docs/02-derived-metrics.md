@@ -204,7 +204,7 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 | **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
 | **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
 | **Exactness** | `sketch` |
-| **Error bound** | relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets |
+| **Error bound** | RANK error <= 1% at q in [0.5, 0.99]: the value returned sits within 1% of the requested quantile's true rank. That is the guarantee a t-digest makes, and it holds regardless of distribution or window size — measured worst 0.09% over 24,000 observations end to end (TestMergeabilityEndToEnd). VALUE error is not bounded by it and depends on how many observations the window holds and how heavy the tail is, because one observation of rank error at q=0.99 can be an order of magnitude in value, and integer-millisecond latencies make a sub-millisecond difference read as several percent at a small median. Measured worst relative value error across uniform, normal, lognormal, bimodal and pareto (TestSketchErrorIsAFunctionOfSampleSize): n=100 -> 157%, n=1,000 -> 17%, n=10,000 -> 5.8%, n=100,000 -> 0.8%. Below roughly 10,000 observations in the queried window, treat the value as indicative rather than accurate. This supersedes an earlier claim of a flat "relative error <= 1%", which was measured only at 1e6 observations and does not hold at realistic bucket sizes. See CD-001. |
 | **Mergeability** | `sketch_merge` |
 | **Supersedes** | `latency_p50@v1` |
 
@@ -229,7 +229,7 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 | **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
 | **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
 | **Exactness** | `sketch` |
-| **Error bound** | relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets |
+| **Error bound** | RANK error <= 1% at q in [0.5, 0.99]: the value returned sits within 1% of the requested quantile's true rank. That is the guarantee a t-digest makes, and it holds regardless of distribution or window size — measured worst 0.09% over 24,000 observations end to end (TestMergeabilityEndToEnd). VALUE error is not bounded by it and depends on how many observations the window holds and how heavy the tail is, because one observation of rank error at q=0.99 can be an order of magnitude in value, and integer-millisecond latencies make a sub-millisecond difference read as several percent at a small median. Measured worst relative value error across uniform, normal, lognormal, bimodal and pareto (TestSketchErrorIsAFunctionOfSampleSize): n=100 -> 157%, n=1,000 -> 17%, n=10,000 -> 5.8%, n=100,000 -> 0.8%. Below roughly 10,000 observations in the queried window, treat the value as indicative rather than accurate. This supersedes an earlier claim of a flat "relative error <= 1%", which was measured only at 1e6 observations and does not hold at realistic bucket sizes. See CD-001. |
 | **Mergeability** | `sketch_merge` |
 | **Supersedes** | `latency_p95@v1` |
 
@@ -254,7 +254,7 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 | **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
 | **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
 | **Exactness** | `sketch` |
-| **Error bound** | relative error <= 1% at q in [0.5, 0.99], measured by TestAccuracyWithinBound over 1e6 observations across five distributions (uniform, normal, lognormal, bimodal, pareto); worst observed 0.66% for a single bucket and 0.92% for a merged day of 1440 buckets |
+| **Error bound** | RANK error <= 1% at q in [0.5, 0.99]: the value returned sits within 1% of the requested quantile's true rank. That is the guarantee a t-digest makes, and it holds regardless of distribution or window size — measured worst 0.09% over 24,000 observations end to end (TestMergeabilityEndToEnd). VALUE error is not bounded by it and depends on how many observations the window holds and how heavy the tail is, because one observation of rank error at q=0.99 can be an order of magnitude in value, and integer-millisecond latencies make a sub-millisecond difference read as several percent at a small median. Measured worst relative value error across uniform, normal, lognormal, bimodal and pareto (TestSketchErrorIsAFunctionOfSampleSize): n=100 -> 157%, n=1,000 -> 17%, n=10,000 -> 5.8%, n=100,000 -> 0.8%. Below roughly 10,000 observations in the queried window, treat the value as indicative rather than accurate. This supersedes an earlier claim of a flat "relative error <= 1%", which was measured only at 1e6 observations and does not hold at realistic bucket sizes. See CD-001. |
 | **Mergeability** | `sketch_merge` |
 | **Supersedes** | `latency_p99@v1` |
 
@@ -266,6 +266,54 @@ gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-
 
 ```bash
 gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `service_event_count` — Service events
+
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | count of ServiceEvent facts |
+| **Grain** | one row per event, per service/event_type |
+| **Input facts** | `ServiceEvent` |
+| **Input fields** | `event_time`, `service`, `event_type` |
+| **Dimensions** | `tenant_id`, `service`, `event_type` |
+| **Exactness** | `exact` |
+| **Error bound** | none — this is a count of stored facts, not an estimate |
+| **Mergeability** | `sum` |
+
+**Aggregating it.** Counts of disjoint sets add. Summing this measure across services, event types or any time range gives the same answer as counting the underlying facts over that range, because every fact is counted once and belongs to exactly one group.
+
+**Late data.** The detail table is rebuilt from all facts for the day, so an event that arrives late appears at its event_time rather than at its arrival time.
+
+**Rebuild it.**
+
+```bash
+not rebuildable by the gravix CLI yet; run: go run ./transforms/service_events_detail/
+```
+
+### `service_event_count_daily` — Service events per day
+
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | count of ServiceEvent facts, grouped by day |
+| **Grain** | 1 day, per service/event_type |
+| **Input facts** | `ServiceEvent` |
+| **Input fields** | `event_time`, `service`, `event_type` |
+| **Dimensions** | `tenant_id`, `service`, `event_type` |
+| **Exactness** | `exact` |
+| **Error bound** | none — this is a count of stored facts, not an estimate |
+| **Mergeability** | `sum` |
+
+**Aggregating it.** Summing across days, services or event types is exact. Note that this is the SUM of the event_count column, never the row count: the daily table holds one row per service/event_type/day, so counting its rows counts groups rather than events. That is the same trap the Cube model's built-in `count` measure sets, which is why that one is hidden.
+
+**Late data.** The day is rebuilt from all of its facts, so a late event is counted in the day its event_time names.
+
+**Rebuild it.**
+
+```bash
+not rebuildable by the gravix CLI yet; run: go run ./transforms/service_events_daily/
 ```
 
 ## Known defects

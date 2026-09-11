@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -74,20 +75,27 @@ func TestRealRegistryIsValid(t *testing.T) {
 	}
 }
 
-func TestRegistryHasSixContracts(t *testing.T) {
+func TestRegistryCoversEveryPublishedMetric(t *testing.T) {
 	reg := loadReal(t)
 
-	// Six metrics, as GRVX-803 §5.3 requires. GRVX-804 added a v2 of each
-	// percentile, so the registry holds nine contract *versions* of six metrics —
-	// which is the registry working as designed: a new meaning is a new version,
-	// never an edit.
-	if got := len(reg.Names()); got != 6 {
-		t.Fatalf("distinct metrics = %d, want 6: %v", got, reg.Names())
+	// Six request metrics, as GRVX-803 §5.3 requires, plus the two service-event
+	// counts. Those two were Cube measures with no contract until GRVX-810's exit
+	// gate enumerated the model and found them — which is the gate doing its job,
+	// and the reason this test is about "every published metric" rather than a
+	// number someone wrote down once.
+	//
+	// GRVX-804 added a v2 of each percentile, so the registry holds more contract
+	// *versions* than metrics. That is the registry working as designed: a new
+	// meaning is a new version, never an edit.
+	if got := len(reg.Names()); got != 8 {
+		t.Fatalf("distinct metrics = %d, want 8: %v", got, reg.Names())
 	}
 
 	for _, id := range []string{
 		"request_count@v1", "error_count@v1", "error_rate@v1",
 		"latency_p50@v1", "latency_p95@v1", "latency_p99@v1",
+		"latency_p50@v2", "latency_p95@v2", "latency_p99@v2",
+		"service_event_count@v1", "service_event_count_daily@v1",
 	} {
 		if _, err := reg.Get(id); err != nil {
 			t.Errorf("missing contract %s: %v", id, err)
@@ -448,9 +456,18 @@ func TestLoadEmptyDirectoryIsValid(t *testing.T) {
 func TestNamesAndKnownDefects(t *testing.T) {
 	reg := loadReal(t)
 
+	// Six request metrics plus the two service-event counts GRVX-810's exit gate
+	// found had no contract at all. The count is asserted rather than the list
+	// only so that adding a metric is a deliberate act.
+	want := []string{
+		"error_count", "error_rate",
+		"latency_p50", "latency_p95", "latency_p99",
+		"request_count",
+		"service_event_count", "service_event_count_daily",
+	}
 	names := reg.Names()
-	if len(names) != 6 {
-		t.Errorf("Names = %v, want six distinct metrics", names)
+	if len(names) != len(want) {
+		t.Errorf("Names = %v, want %d distinct metrics: %v", names, len(want), want)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] > names[i] {
@@ -479,6 +496,9 @@ func TestVersionNumberOfMalformedVersion(t *testing.T) {
 // ─── GRVX-804: the v2 percentiles ───
 
 // AC-11: v2 percentile contracts are sketch-backed with a real bound.
+// measuringTestRe matches a Go test name, which is how a bound cites its evidence.
+var measuringTestRe = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]+`)
+
 func TestV2ContractsAreSketch(t *testing.T) {
 	reg := loadReal(t)
 
@@ -502,7 +522,17 @@ func TestV2ContractsAreSketch(t *testing.T) {
 				t.Errorf("ErrorBound still says UNBOUNDED: %q", c.ErrorBound)
 			}
 			// The bound must name how it was measured, or it is an assertion.
-			for _, must := range []string{"TestAccuracyWithinBound", "1%", "lognormal", "pareto"} {
+			//
+			// It used to require the literal "TestAccuracyWithinBound", which pinned
+			// the wording to one test and to the flat "relative error <= 1%" that
+			// test measured at 1e6 observations. CD-001 established that claim does
+			// not hold at realistic bucket sizes, so the requirement is now the one
+			// that was always meant: name a test, so a reader can go and check.
+			if !measuringTestRe.MatchString(c.ErrorBound) {
+				t.Errorf("ErrorBound names no test that measured it, so it is an assertion "+
+					"rather than a measurement: %q", c.ErrorBound)
+			}
+			for _, must := range []string{"1%", "lognormal", "pareto"} {
 				if !strings.Contains(c.ErrorBound, must) {
 					t.Errorf("ErrorBound does not mention %q: %q", must, c.ErrorBound)
 				}

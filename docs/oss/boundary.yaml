@@ -122,6 +122,19 @@ capabilities:
       - services/gateway/lineage_handler.go
       - dashboards/lib/lineage-panel.js
 
+  - id: correctness-suite
+    name: The correctness test suite
+    placement: core
+    charter_ref: "§2.1, §7.3 Q2"
+    rationale: >-
+      The tests that prove Gravix's numbers are right cannot be a paid add-on. A free tier
+      whose correctness is unverifiable is not a free tier of a correctness product — and the
+      Crippleware Test's second question, does gating it affect accuracy, answers itself when
+      the thing being gated IS the accuracy check.
+    paths:
+      - tests/correctness/
+      - scripts/correctness_test.sh
+
   - id: metric-contracts
     name: Versioned metric contract registry
     placement: core

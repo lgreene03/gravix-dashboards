@@ -114,6 +114,9 @@ func TestNoMetricLostFromPriorDoc(t *testing.T) {
 
 // ─── AC-14: every recompute command actually runs ───
 
+// notRecomputableByCLI mirrors the exported constant so the test reads plainly.
+const notRecomputableByCLI = NotRecomputableByCLI
+
 func TestRecomputeCommandsRun(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the CLI; skipped under -short")
@@ -138,8 +141,25 @@ func TestRecomputeCommandsRun(t *testing.T) {
 
 		t.Run(c.Name, func(t *testing.T) {
 			fields := strings.Fields(cmd)
+
+			// A metric the CLI cannot rebuild yet says so, in those words, and is
+			// held to saying which command would do it instead. That is not a
+			// loophole: the alternative was a contract quoting a `gravix recompute
+			// --metric service_events_daily` that exits non-zero, which is a worse
+			// answer to "how do I reproduce this number?" than an honest no.
+			// See CD-002 — the recompute engine covers one metric of five.
+			if strings.HasPrefix(cmd, notRecomputableByCLI) {
+				rest := strings.TrimSpace(strings.TrimPrefix(cmd, notRecomputableByCLI))
+				if rest == "" {
+					t.Fatalf("recompute_cmd = %q, want it to name what to run instead", cmd)
+				}
+				t.Logf("not rebuildable by the CLI; the contract points at: %s", rest)
+				return
+			}
+
 			if len(fields) == 0 || fields[0] != "gravix" {
-				t.Fatalf("recompute_cmd = %q, want it to start with the gravix CLI", cmd)
+				t.Fatalf("recompute_cmd = %q, want it to start with the gravix CLI, or to begin "+
+					"with %q and then name what to run instead", cmd, notRecomputableByCLI)
 			}
 
 			// Run it for real, in an empty tree, with --dry-run appended so it

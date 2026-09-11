@@ -333,6 +333,28 @@ jobs:
           E2E_TEST: "1"
         run: go test ./tests/e2e/... -v -count=1 -timeout 300s
 
+  # ─── Correctness suite (GRVX-810) ───
+  # Proves the Phase 8 properties hold together — determinism, late data,
+  # retroactive backfill, mergeability, lineage, contract coverage — rather than
+  # one spec at a time. No Docker, and budgeted at five minutes.
+  #
+  # A failure here is a defect report against the spec that owns the property.
+  # It is never fixed by softening the assertion, and this job is never
+  # continue-on-error.
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Run the correctness suite
+        run: make test-correctness
+
   # ─── SDK Tests (Node + Python) ───
   sdk-tests:
     runs-on: ubuntu-latest
@@ -409,7 +431,7 @@ jobs:
   # ─── CI Summary Gate ───
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint]
+    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness]
     if: always()
     steps:
       - name: Check job results
@@ -422,13 +444,15 @@ jobs:
           echo "SDK Tests:     ${{ needs.sdk-tests.result }}"
           echo "Helm Validate: ${{ needs.helm-validate.result }}"
           echo "Docker Lint:   ${{ needs.docker-lint.result }}"
+          echo "Correctness:   ${{ needs.correctness.result }}"
 
           # Fail if any required job failed
           if [[ "${{ needs.lint.result }}" == "failure" ]] || \
              [[ "${{ needs.test.result }}" == "failure" ]] || \
              [[ "${{ needs.build.result }}" == "failure" ]] || \
              [[ "${{ needs.e2e.result }}" == "failure" ]] || \
-             [[ "${{ needs.sdk-tests.result }}" == "failure" ]]; then
+             [[ "${{ needs.sdk-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.correctness.result }}" == "failure" ]]; then
             echo "::error::One or more required CI jobs failed"
             exit 1
           fi

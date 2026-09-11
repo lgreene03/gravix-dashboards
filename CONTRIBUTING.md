@@ -45,9 +45,29 @@ end to end without it:
 
 ```bash
 go test ./...                       # everything
+make test-correctness               # the properties Gravix's claims rest on — see below
 go test ./schemas/... -v -cover     # must stay at 100% — see below
+make lint                           # go vet and staticcheck, the same two CI runs
 make check-boundary                 # open-core boundary
+node --test cube/model/schema/*.test.js dashboards/lib/*.test.js   # the Cube model and dashboard
 ```
+
+### The correctness suite
+
+`make test-correctness` runs `tests/correctness/`, which proves the properties the product's claims
+rest on: that a recompute is byte-identical under adversarial conditions, that a late fact lands in
+its own bucket and the prior value stays reproducible, that a retroactively added dimension gives
+exactly what a from-scratch build would, that a merged sketch's percentile is within its bound, and
+that no number the dashboard can show lacks a published contract.
+
+It needs no Docker and runs in about twenty seconds. It is budgeted at five minutes, because a suite
+nobody runs locally protects nothing.
+
+**A failure is a defect report, not a chore.** Each one prints the exact `fixtures.Spec` that
+reproduces the dataset — paste it into a test and you have the failing case. Do not widen a tolerance
+or skip the test to get green: the property is the thing being shipped, and
+`docs/oss/correctness-defects.md` is where the ones we have found are recorded, along with what
+fixing each would mean.
 
 `schemas/` is held at **100% line coverage**. It is the validation layer every fact passes through,
 and a gap there is a gap in the guarantee that bad data never reaches storage. If your change
@@ -112,7 +132,8 @@ Five gates, in order. A failure stops the review rather than opening a negotiati
 1. **Boundary** — `make check-boundary`, `make build-oss`, `make test-oss` all clean.
 2. **Security** — required for any change to authentication, crypto, licence verification,
    ingestion parsing, or SQL construction.
-3. **Acceptance** — every acceptance criterion proven by a named test. Zero new skipped tests.
+3. **Acceptance** — every acceptance criterion proven by a named test. Zero new skipped tests,
+   and `make test-correctness` green. A softened assertion counts as a skipped test.
 4. **Docs** — every new flag, endpoint, env var and CLI subcommand documented.
 5. **Scope** — the diff touches only what the change needs.
 
