@@ -66,6 +66,8 @@ func main() {
 		runRecompute(os.Args[2:])
 	case "evolve":
 		runEvolve(os.Args[2:])
+	case "explain":
+		runExplain(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version":
@@ -88,6 +90,7 @@ Usage:
   gravix replay       Replay DLQ entries back to ingestion
   gravix recompute    Rebuild derived metrics from raw facts
   gravix evolve       Add a percentile or dimension and backfill history
+  gravix explain      Show where a number came from
   gravix version      Print version
   gravix help         Show this help
 

@@ -47,6 +47,18 @@ capabilities:
       - transforms/service_events_daily/main.go
       - transforms/service_events_detail/main.go
 
+  - id: metric-lineage
+    name: Provenance from any number back to its source facts
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      Being able to ask "why is this number what it is" is the product's central claim.
+      A free tier that could show numbers but not justify them would be selling the part
+      that is easy and charging for the part that matters.
+    paths:
+      - pkg/lineage/lineage.go
+      - cmd/cli/cmd_explain.go
+
   - id: retroactive-evolution
     name: Retroactive percentiles and dimensions with historical backfill
     placement: core

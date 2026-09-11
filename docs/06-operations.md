@@ -300,3 +300,71 @@ Exit codes: `0` success, `1` partial failure, `2` invalid flags or a refused cha
 It never edits or deletes a fact. An evolution is a rebuild of derivatives, and every partition it
 rewrites gets a revision bump and a manifest recording what it superseded, exactly as a late-arriving
 fact would.
+
+## 7. Where did this number come from? (`gravix explain`)
+
+```bash
+gravix explain request_metrics_minute "2026-09-09 14:23" --filter service=api
+gravix explain latency_p95 2026-09-09T14:23:00Z --filter service=api --json
+```
+
+Real output:
+
+```
+metric:        request_metrics_minute@v2
+bucket:        2026-09-09T14:23:00Z
+filters:       service=api
+values:        request_count=3  error_count=1  error_rate=0.333333  p50_latency_ms=16 ...
+
+contract:      latency_p50@v2
+               (a rollup covers several metrics; this is the weakest guarantee among them)
+formula:       50th percentile of latency_ms, from the merged latency_sketch over the queried window
+grain:         1 minute, per service/method/path_template
+exactness:     sketch (relative error <= 1% at q in [0.5, 0.99], measured by ...)
+mergeability:  sketch_merge — Merge the latency_sketch column across buckets, then query the
+               quantile. Never take max, mean, or any other function of the per-bucket scalars.
+
+derived from:  3 facts in 1 file(s)
+  raw/request_facts/2026-09-09/14/facts.jsonl
+
+data file:     warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet
+idempotency:   request_metrics_minute:v2:_single:20260909
+digest:        sha256:ddf7cdf1...
+revision:      0
+
+reproduce:     gravix recompute --metric request_metrics_minute --from 2026-09-09 --to 2026-09-10
+```
+
+Exit codes: `0` success, `1` no partition or no matching row, `2` invalid flags or a filter on a
+non-dimension, `4` the partition has no manifest.
+
+### 7.1 Provenance is aggregate, deliberately
+
+`explain` reports **which fact files** and **how many facts**. It never returns a request record, and
+no output path is capable of it: the manifest is the only source of provenance, and a manifest holds
+keys and counts, not contents.
+
+`--filter` is restricted to the metric's declared dimensions for the same reason. A filter on
+`event_id` would be exactly the per-request drill-down [`04-non-goals.md`](04-non-goals.md) §5 forbids,
+so the check is a whitelist — a new fact field cannot quietly become queryable.
+
+### 7.2 A missing manifest is an answer, not a crash
+
+A partition written before manifests existed has no recorded provenance. `explain` says so and exits
+`4`, a distinct code because it is a known and recoverable state:
+
+```
+lineage unavailable: this partition was written before manifests existed
+  data file: warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet
+  metric version: unknown
+  to make lineage available, run: gravix recompute --metric request_metrics_minute --from 2026-09-09 --to 2026-09-10
+```
+
+Inferring a plausible lineage would be worse than admitting the gap. The whole value of the feature is
+that its output can be trusted.
+
+### 7.3 How far back revisions go
+
+A manifest records the digest it superseded and when — one step. So `explain` can tell you a partition
+is at revision 5 and what revision 4 held, but not revisions 1 through 3. The report never implies
+otherwise.
