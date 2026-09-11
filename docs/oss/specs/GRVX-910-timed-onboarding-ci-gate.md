@@ -254,3 +254,206 @@ make build-oss && make test-oss
 | The real, measured onboarding time on the CI reference machine already exceeds 600s before any further optimization | Return `SPEC DEFECT: §5.1 — BudgetSeconds=600 is unachievable on the current CI runner class; needs a product decision, not a silent threshold raise` |
 | Cube's `load` endpoint in this bootstrap configuration *does* require an API secret (contradicting §2's assumption) | Return `SPEC DEFECT: §2 — Cube auth assumption is wrong; §5.2 step 4's poll request needs a credential` |
 | CI's `ubuntu-latest` runner cannot run `docker compose -f docker-compose.bootstrap.yml up -d --build` within any reasonable multiple of the budget due to image-layer caching differences from a real user's machine | Return `SPEC DEFECT: §2 — CI environment is not representative enough to enforce this budget meaningfully` |
+
+
+---
+
+## 11. Implementation report
+
+**Returned: `SPEC DEFECT: §2 — Cube auth assumption is wrong; §5.2 step 4's poll request needs a
+credential`** — the exact return named by §10, row 2.
+
+### 11.1 What landed
+
+`cmd/onboarding_gate` is complete. AC-1 through AC-5 pass:
+
+```
+$ go test ./cmd/onboarding_gate/... -v
+--- PASS: TestEvaluatePassesUnderBudget                 (AC-1)
+--- PASS: TestEvaluatePassesAtExactBudget               (AC-2)
+--- PASS: TestEvaluateFailsOverBudget                   (AC-3)
+--- PASS: TestEvaluateFailsOnTimeoutRegardlessOfElapsed (AC-4)
+--- PASS: TestMainRequiresElapsedSecondsFlag            (AC-5)
+ok      github.com/lgreene/gravix-dashboards/cmd/onboarding_gate    0.188s
+```
+
+The messages match §5.1 verbatim, including the inclusive boundary at exactly 600s and the
+precedence of `-timed-out` over `-elapsed-seconds`. AC-4 additionally asserts `evaluate(900, true)`,
+so it distinguishes "timeout wins" from "anything under the budget passes" — polling that gives up
+stops as soon as it despairs, so its stopwatch reading is usually *small*, and ranking elapsed above
+timed-out would report the total failure the gate exists to catch as the fastest onboarding ever
+recorded.
+
+AC-5 exercises `main()` through a built binary rather than `go run`, for the reason recorded in
+GRVX-909: `go run` execs the compiled binary as a child, so the exit code and the pipe belong to a
+process the test holds no handle on.
+
+### 11.2 What did not land, and why
+
+`scripts/timed_onboarding_test.sh` and the `timed-onboarding` CI job are **not** implemented.
+
+§2 asks the implementer to verify its own assumption that Cube's `load` endpoint is unauthenticated
+in this stack. It is not. `cube/cube.js`'s `checkAuth` tests `JWT_SECRET` **before**
+`CUBEJS_API_SECRET`, and `docker-compose.bootstrap.yml` sets `JWT_SECRET` inline on the `cube`
+service — not through `.env`, which is where §2 looked. The endpoint requires a `Bearer` JWT signed
+with that secret. Recorded as **SD-019**, with the `checkAuth` run that confirms it.
+
+Chasing the credential found something larger, recorded as **F-016**: the bootstrap stack holds *no*
+credential Cube accepts, for the poll or for the dashboard. `bootstrap_seed` creates a tenant and an
+API key but no user; the dashboard's multi-tenant path needs a JWT from `POST /api/gateway/login`,
+which requires an email and bcrypt password. So the gate as specified would fail every run — which
+would be *correct*, because it would be reporting F-016 — and a job that can never pass on `main`
+cannot be merged as a blocking gate.
+
+Writing the poll anyway would mean choosing between minting a token against a hardcoded dev secret
+and removing `JWT_SECRET` from the `cube` service so `checkAuth` falls through to allowing
+everything. The second ships an unauthenticated metrics API as a side effect of adding a timer. Both
+are the product's authentication posture, decided inside a CI script. That is the improvisation
+CLAUDE.md's spec rule exists to prevent, so it was not done.
+
+**Sequencing:** F-016 is decided (option 1 — `bootstrap_seed` creates a user — is the recommendation)
+→ §5.2 step 4 inherits that credential → the script and CI job land → AC-6 passes. No part of this
+spec needs rewriting beyond §2's assumption.
+
+### 11.3 Also found while verifying
+
+**F-015 is fixed** (separate commit, outside this spec's §4 fence). Ingestion's local object store
+was rooted at `<base>/raw` while its keys already began with `raw/`, so every fact landed in
+`<base>/raw/raw/<topic>/` and the rollup read an empty directory. Without that fix the poll would
+have had nothing to find even with a valid credential. Guarded by
+`TestUploadedFactsLandWhereTheRollupReads`.
+
+**SD-020:** this document contains `### 6.1 Failure modes` twice, with contradictory rows, and §6
+steps 1–3 describe per-stage instrumentation and clone timing that §3 explicitly forbids. Resolved by
+precedence — §7's acceptance criteria name §5.1's messages verbatim, so §5.1 and the first §6.1
+govern. The second §6.1 and §6 steps 1–3 are residue from an earlier draft.
+
+### 11.4 AC-6's test, written and held
+
+Complete and ready; it fails today only because the job it asserts does not exist. Held out of the
+tree rather than committed red or committed skipped. It checks more than AC-6's literal wording,
+because a job carrying `docker-smoke`'s `if: github.event_name == 'push' && github.ref ==
+'refs/heads/main'` would satisfy "the workflow's `on` includes `pull_request`" while never running on
+a single pull request — and copying `docker-smoke` is the realistic way this job arrives neutered.
+
+```go
+// AC-6 — the gate has to be wired in, and wired in so it actually blocks.
+//
+// A budget that only runs on push-to-main gates nothing: by the time it fails,
+// the regression is merged. The existing docker-smoke job carries exactly such
+// an `if:`, so "somebody copied docker-smoke" is the realistic way this job
+// arrives neutered. That is why this test checks the job's own `if` as well as
+// the workflow's triggers.
+func TestCIWorkflowHasOnboardingGate(t *testing.T) {
+	path := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	// yaml.v3 uses the YAML 1.2 core schema, so the `on:` key stays the string
+	// "on" rather than resolving to the boolean true the way YAML 1.1 parsers
+	// do. Asserted here so a parser change surfaces as this line rather than as
+	// a silently empty trigger set.
+	var workflow struct {
+		On   map[string]any `yaml:"on"`
+		Jobs map[string]struct {
+			If              string `yaml:"if"`
+			ContinueOnError any    `yaml:"continue-on-error"`
+			TimeoutMinutes  int    `yaml:"timeout-minutes"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	if len(workflow.On) == 0 {
+		t.Fatal("workflow has no `on:` triggers; the yaml parser did not resolve the key as a string")
+	}
+
+	for _, trigger := range []string{"pull_request", "push"} {
+		if _, ok := workflow.On[trigger]; !ok {
+			t.Errorf("workflow `on:` is missing %q trigger", trigger)
+		}
+	}
+
+	job, ok := workflow.Jobs["timed-onboarding"]
+	if !ok {
+		names := make([]string, 0, len(workflow.Jobs))
+		for name := range workflow.Jobs {
+			names = append(names, name)
+		}
+		t.Fatalf("no job named timed-onboarding in %s; jobs present: %v", path, names)
+	}
+
+	if job.ContinueOnError != nil && job.ContinueOnError != false {
+		t.Errorf("timed-onboarding has continue-on-error: %v; a budget that can silently pass is not a gate",
+			job.ContinueOnError)
+	}
+
+	// The substance behind "runs on pull_request": a job-level `if` that
+	// narrows to push-to-main would satisfy the workflow-trigger check above
+	// while never running on a single pull request.
+	if strings.Contains(job.If, "refs/heads/main") || strings.Contains(job.If, "'push'") {
+		t.Errorf("timed-onboarding has if: %q, which stops it running on pull requests; "+
+			"the budget then only fails after a regression is already merged", job.If)
+	}
+
+	// The job boots Docker images and waits up to the full budget, so it needs
+	// headroom above 600s or the runner kills it before the gate decides.
+	if job.TimeoutMinutes != 0 && job.TimeoutMinutes <= BudgetSeconds/60 {
+		t.Errorf("timed-onboarding timeout-minutes = %d, want more than the %ds budget allows",
+			job.TimeoutMinutes, BudgetSeconds)
+	}
+
+	// The summary gate must actually depend on it.
+	if !strings.Contains(string(raw), "timed-onboarding") {
+		t.Fatal("timed-onboarding is not referenced anywhere in the workflow")
+	}
+	summary := workflowJobBlock(t, string(raw), "ci-summary")
+	if !strings.Contains(summary, "timed-onboarding") {
+		t.Error("ci-summary does not reference timed-onboarding, so the job's failure cannot fail the build")
+	}
+}
+
+// workflowJobBlock returns the raw text of one job, from its `  <name>:` line to
+// the next job at the same indentation. Used to assert on ci-summary's needs and
+// failure condition, which are shell text rather than structured YAML.
+func workflowJobBlock(t *testing.T, raw, name string) string {
+	t.Helper()
+	lines := strings.Split(raw, "\n")
+	start := -1
+	for i, line := range lines {
+		if line == "  "+name+":" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("job %q not found in workflow", name)
+	}
+	for i := start + 1; i < len(lines); i++ {
+		line := lines[i]
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+			strings.HasSuffix(strings.TrimSpace(line), ":") {
+			return strings.Join(lines[start:i], "\n")
+		}
+	}
+	return strings.Join(lines[start:], "\n")
+}
+```
+
+### 11.5 Definition of done
+
+- [x] AC-1 – AC-5 pass with their named tests
+- [ ] AC-6 — blocked on F-016; test written, §11.4
+- [ ] Full `bash scripts/timed_onboarding_test.sh` run — blocked on F-016, and no Docker daemon is
+      available in this environment regardless (`docker info` fails); the measurement has to happen
+      on a CI runner
+- [x] `make check-boundary` clean — `boundary: 0 violations`
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted
+- [x] No file outside §4.1/§4.2 modified *by this spec*; the F-015 fix is a separate commit
+- [x] Zero new skipped or quarantined tests
+- [ ] `timed-onboarding` confirmed to block merge on a real PR run — blocked on F-016
+- [ ] `docs/oss/12-goal-tree.md` G3.1 source column — deliberately **not** updated, because the job
+      it would cite does not exist yet. Citing a gate that does not run is exactly the kind of
+      unbacked claim the claim register forbids.

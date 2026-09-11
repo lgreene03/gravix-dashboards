@@ -19,6 +19,7 @@ bin/
 /ingestion-service
 /load-generator
 /load_generator
+/onboarding_gate
 /purge
 /request_metrics_minute
 /rollup-job

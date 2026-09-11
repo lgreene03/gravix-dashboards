@@ -1125,3 +1125,80 @@ the package timed out at 300 seconds against a server that answers in under 25 s
 the stdout pipe the test handed it open, so `cmd.Wait()` never returns. The test now builds the
 binary first and runs it directly — 0.87s. Any test that supervises a `go run` subprocess has this
 bug waiting in it.
+
+## SD-019 — GRVX-910 §2's Cube auth assumption names the wrong environment variable, and the right one is set
+
+**Severity** high — blocks §5.2 step 4, the only step that decides whether the gate passes.
+**Status** open. Returned as `SPEC DEFECT: §2` per the spec's own §10 escalation table.
+
+§2 states the assumption and invites verification:
+
+> Cube's `load` endpoint in this stack's configuration is unauthenticated per
+> `docker-compose.bootstrap.yml`'s `cube` service env — no `CUBEJS_API_SECRET` is set in the
+> bootstrap `.env.bootstrap.example` by default — so the poll needs no key; verify this assumption
+> during implementation and record the finding in the report.
+
+The assumption is wrong, and it is wrong about which variable matters. `cube/cube.js`'s `checkAuth`
+checks `JWT_SECRET` **first**, and only falls through to `CUBEJS_API_SECRET` when `JWT_SECRET` is
+unset:
+
+```js
+checkAuth: (req, auth) => {
+    const jwtSecret = process.env.JWT_SECRET;
+    const apiSecret = process.env.CUBEJS_API_SECRET;
+    if (jwtSecret) {                                   // ← taken in the bootstrap stack
+        const token = auth && auth.replace('Bearer ', '');
+        if (!token) { throw new Error('No authorization token provided'); }
+        …
+```
+
+`docker-compose.bootstrap.yml`'s `cube` service sets `JWT_SECRET=supersecretjwtkey12345!` **inline,
+not through `.env`**, so reading `.env.bootstrap.example` — which is what §2 did — cannot see it. The
+endpoint requires a JWT signed with that secret.
+
+Confirmed by running the real `checkAuth`, with the environment the compose file produces:
+
+```
+$ JWT_SECRET=supersecretjwtkey12345!  node -e '…conf.checkAuth({}, auth)…'
+no Authorization header (what the bootstrap dashboard sends) => REJECTED: No authorization token provided
+empty string                                                => REJECTED: No authorization token provided
+the api key bootstrap_seed wrote                            => REJECTED: Invalid or expired token
+Bearer + that api key                                       => REJECTED: Invalid or expired token
+```
+
+**This is not only a poll-credential problem.** Chasing the credential found **F-016**: the bootstrap
+stack holds no credential that Cube accepts, for the poll *or for the dashboard*. `bootstrap_seed`
+creates a tenant and an API key but no user, and the JWT the dashboard needs comes from
+`POST /api/gateway/login`, which requires an email and bcrypt password. So §5.2 step 4 cannot be
+written against any existing credential, and the gate as specified would fail every run — correctly,
+because it would be reporting F-016.
+
+**What the spec needs before this is executable:** the decision in F-016 — how a first-time user of
+the bootstrap stack authenticates to Cube at all. Once that exists, §5.2 step 4 inherits it and needs
+no independent credential design. Guessing one here (minting a token against the hardcoded dev
+secret, or dropping `JWT_SECRET` from the `cube` service so `checkAuth` falls through) would be
+choosing the product's authentication posture inside a CI script, and the second option would ship an
+unauthenticated metrics API as a side effect of adding a timer.
+
+## SD-020 — GRVX-910 has two contradictory §6.1 tables
+
+**Severity** low — resolved by precedence; no ambiguity about what to build.
+**Status** resolved in implementation; the spec text should be corrected.
+
+The document contains `### 6.1 Failure modes` **twice**: once after §5.2, and again inside
+`## 6. Behaviour`. They disagree on every row.
+
+| | First §6.1 (after §5.2) | Second §6.1 (inside §6) |
+|---|---|---|
+| over budget | `FAIL: onboarding budget of 600s regressed to 601s` | `onboarding took <d>, budget is 10m — slowest stage: <stage> at <d>` |
+| never completes | `FAIL: no populated dashboard within 600s (timed out waiting for RequestMetricsMinute data)` | `stage "<stage>" did not complete within <d>` |
+
+The second table implies per-stage instrumentation, which §6 steps 1–3 also describe ("Instrument
+each stage separately", "clone, `docker compose up`, …, assert a chart has points"). Both contradict
+§3, which forbids measuring `git clone`, and §5.2, which specifies one Cube poll and no stage
+breakdown.
+
+**Resolved by precedence:** §7's acceptance criteria are the binding contract, and AC-1 through AC-5
+name the first table's messages verbatim. §5.1's table and the first §6.1 govern; the second §6.1 and
+§6 steps 1–3 are residue from an earlier draft that measured stages. `cmd/onboarding_gate` implements
+§5.1 exactly.

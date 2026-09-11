@@ -709,3 +709,78 @@ observable one. Before it, the dashboard showed "send your first event" forever,
 did it wrong". With it, the dashboard says traffic was received and the first chart is coming — and
 then sits at *"Almost there — checking for data…"* indefinitely, which is unmistakably the product's
 problem rather than the user's.
+
+## F-016 — the bootstrap stack holds no credential Cube will accept, so the dashboard can never load data
+
+**Found by** trying to write GRVX-910's poll request and asking what it should authenticate as.
+**Severity** high — with F-015 fixed, metrics are now produced correctly and still cannot reach a
+chart. Every service reports healthy. This is the second independent break on the same path.
+**Status** open. Needs a product decision, not a patch — see the options below.
+
+**The chain.** Four facts, each fine alone:
+
+| | |
+|---|---|
+| `docker-compose.bootstrap.yml`, `cube` service | sets `JWT_SECRET=supersecretjwtkey12345!` inline |
+| `cube/cube.js` `checkAuth` | when `JWT_SECRET` is set, requires a `Bearer` JWT signed with it, before ever considering `CUBEJS_API_SECRET` |
+| `dashboards/app.js:29,173,851` | `IS_MULTI_TENANT = !!GATEWAY_URL`; the token comes from `sessionStorage.getItem('gravix_token')`, set only by a gateway login |
+| `cmd/bootstrap_seed/main.go:92-136` | creates a tenant and an API key — and **no user** |
+
+`POST /api/gateway/login` (`services/gateway/gateway_auth.go:213`) needs an email and a bcrypt
+password hash. With no user there is nothing to log in as, so `dashboardApiToken` stays `''`,
+`cubeHeaders()` sends no `Authorization`, and `checkAuth` throws on the first query.
+
+**Reproduced with the real code, both halves:**
+
+```
+$ go run ./cmd/bootstrap_seed -db …/gravix.db -api-key-file …/api_key.txt -dashboard-config …/dashboard_config.js
+provisioned tenant "local" (id=5ee3cd4a-…)
+api key written to …/api_key.txt
+
+$ sqlite3 …/gravix.db
+users: 0        tenants: 1      api_keys: 1
+
+$ cat …/dashboard_config.js
+window.GRAVIX_CONFIG = {
+  ingestionApiUrl: "http://localhost:8090",
+  gatewayUrl: "http://localhost:8091",       ← sets IS_MULTI_TENANT, so a JWT is required
+  apiKey: "grvx_…"
+};
+```
+
+```
+$ JWT_SECRET=supersecretjwtkey12345!  node -e '…require("./cube.js").checkAuth({}, auth)…'
+no Authorization header (what the bootstrap dashboard sends) => REJECTED: No authorization token provided
+empty string                                                => REJECTED: No authorization token provided
+the api key bootstrap_seed wrote                            => REJECTED: Invalid or expired token
+Bearer + that api key                                       => REJECTED: Invalid or expired token
+```
+
+The API key the stack does mint is the wrong kind of credential entirely: it authenticates *writes*
+to ingestion, and Cube wants a signed JWT carrying a `tenant_id` (which `queryRewrite` then uses to
+force a tenant filter).
+
+**Why nothing caught it.** The same reason as F-015, one layer up. `docker-compose.yml` — the stack
+CI actually smoke-tests — runs the same `cube.js`, but its dashboard is reached through a gateway
+login by a user that the full seeding path creates. Only the bootstrap stack seeds a tenant without a
+user, and only the bootstrap stack is the one a new reader is told to run first.
+
+**Three candidate fixes, and they are not equivalent:**
+
+1. **`bootstrap_seed` creates a user** with a generated password, printed once and written to
+   `data/` beside the API key. Keeps authentication on, costs the user one copy-paste, and is the
+   only option that leaves the bootstrap stack's security posture the same as the full stack's.
+2. **Drop `JWT_SECRET` from the `cube` service** so `checkAuth` falls through to the
+   `CUBEJS_API_SECRET` branch, which with no secret set returns `{}` and allows everything. One line,
+   and it ships an unauthenticated metrics API on port 4000 as the default first-run experience.
+3. **`bootstrap_seed` mints a long-lived JWT** into `dashboard_config.js`. No login step at all, and
+   it puts a bearer token in a file served over HTTP — the same exposure already recorded as
+   **SD-013** for the API key in that file.
+
+Option 1 is the recommendation. Options 2 and 3 both make the zero-config path faster by removing
+authentication from it, which is the trade the charter's data-ownership axis exists to refuse.
+
+**This blocks GRVX-910.** Its §5.2 step 4 polls Cube's `load` endpoint and needs a credential; there
+is no correct one to use until this is decided. Recorded as **SD-019**, returned as
+`SPEC DEFECT: §2` under that spec's own §10. `cmd/onboarding_gate` — the pass/fail half, which does
+not touch Cube — is complete and tested regardless.
