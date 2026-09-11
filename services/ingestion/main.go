@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 	"github.com/lgreene/gravix-dashboards/pkg/circuitbreaker"
+	"github.com/lgreene/gravix-dashboards/pkg/discovery"
 	"github.com/lgreene/gravix-dashboards/pkg/lateness"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
@@ -757,6 +758,7 @@ func main() {
 
 	port := flag.Int("port", 8080, "HTTP port")
 	baseDir := flag.String("base-dir", "./data", "Base directory for buffer and raw storage")
+	discoveryDB := flag.String("discovery-db", "", "Path to the service discovery database (default <base-dir>/discovery.db)")
 	flag.Parse()
 
 	// Auth mode: multi-tenant (TENANT_DB_PATH) or legacy (API_KEY)
@@ -864,6 +866,21 @@ func main() {
 	}
 	defer sink.Close()
 
+	// Services register themselves by sending a fact. This is why there is no
+	// registration step to forget: the list cannot drift from what is actually
+	// reporting. It is deliberately independent of the tenant database, so it
+	// works the same in legacy single-key mode.
+	discoveryPath := *discoveryDB
+	if discoveryPath == "" {
+		discoveryPath = filepath.Join(*baseDir, "discovery.db")
+	}
+	reg, err := discovery.Open(discoveryPath)
+	if err != nil {
+		slog.Error("failed to open discovery registry", "error", err, "path", discoveryPath)
+		os.Exit(1)
+	}
+	defer reg.Close()
+
 	// Per-tenant rate limiting (fallback 100/s for legacy mode)
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
@@ -885,12 +902,16 @@ func main() {
 	}
 
 	// Wrap handlers: auth first (sets tenant context), then scope check, rate limit, buffer check, handler
-	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleFacts(sink, tdb))))))
-	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb))))))
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleFacts(sink, tdb, reg))))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb, reg))))))
 	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleEvents(sink, tdb))))))
 	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleTraces(sink, tdb, traceSampleRate))))))
 	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleOTLPTraces(sink))))))
 	http.Handle("/api/v1/deploy", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleDeployWebhook(sink, tdb)))))
+	// Read-only and off the ingest path, so it carries neither the rate limiter
+	// nor the buffer check: a full buffer is precisely when someone needs to see
+	// what is reporting.
+	http.Handle("/api/v1/services", authMW(requireScope("admin:read", handleServices(reg))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -1010,7 +1031,7 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
+func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -1067,6 +1088,11 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			return
 		}
 
+		// Recorded only after the write succeeded, so the registry never claims a
+		// service whose fact was not persisted. In-memory and lock-only: no disk
+		// I/O between here and the 201.
+		reg.RecordFact(fact.Service, fact.EventTime.AsTime())
+
 		// Increment event counter for billing (best-effort, non-blocking)
 		incrementEventCounter(tdb, tenantID, 1)
 
@@ -1095,8 +1121,38 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 	}
 }
 
+// handleServices lists every service that has ever sent a fact.
+//
+// It answers the question a new user asks first — "is my data arriving?" —
+// without waiting for the five-minute rollup that the dashboard's Cube query
+// depends on. An empty registry is a 200 with an empty list, not a 404: no data
+// yet is a state to render, not an error to report.
+//
+// Aggregate only. One row per service with three counters, never anything about
+// an individual request.
+func handleServices(reg *discovery.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only GET is accepted")
+			return
+		}
+
+		services, err := reg.ListServices(r.Context())
+		if err != nil {
+			slog.Error("failed to list services", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to list services")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"services": services}); err != nil {
+			slog.Error("failed to encode services", "error", err)
+		}
+	}
+}
+
 // handleBatchFacts handles JSONL (newline-delimited JSON) payloads with multiple facts per request.
-func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
+func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -1173,6 +1229,13 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			}
 
 			validRecords = append(validRecords, cleanData)
+			// Spec §6.5 puts this in the loop, before the batch write. That
+			// differs from the single-fact path above, which records only after
+			// a successful write: if WriteBatch fails, these services stay in
+			// the registry and a client retry counts them twice. Discovery
+			// counters are a "what exists" aid, not billing, so the spec's
+			// placement is followed rather than silently improved. See SD-014.
+			reg.RecordFact(fact.Service, fact.EventTime.AsTime())
 
 			if classifyFact(fact, now) == lateness.ClassUnprocessable {
 				unprocessable = append(unprocessable,

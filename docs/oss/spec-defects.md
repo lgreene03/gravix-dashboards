@@ -820,8 +820,8 @@ command in the spec did not, and only the shell command is what a reader runs by
 
 ## SD-013 — GRVX-901's `dashboard_config.js` cannot pre-configure the dashboard's API key, because nothing reads it
 
-**Severity** high — §1's stated objective is not achieved by §5.1's mandated file.
-**Status** open. Needs a product decision; the rest of GRVX-901 is implemented and verified.
+**Severity** high when filed; **largely resolved by GRVX-902**, which adds the missing consumers.
+**Status** partly closed. See the update at the end of this entry.
 
 §1 promises a stack "whose dashboard is pre-configured with a working API key". §5.1 fixes the file
 that is supposed to deliver it:
@@ -877,3 +877,60 @@ this worse by design. `security-engineer` should rule before any of the three sh
 **Implemented as specified meanwhile.** `provision` writes all three fields, because AC-3 requires
 the key to be in the file and deviating would improvise in the opposite direction. The field is inert
 rather than wrong, and when the decision lands only the consumer side changes.
+
+### Update, 2026-09-11 — GRVX-902 supplies the consumers
+
+GRVX-902 §4.2 adds `ingestionApiUrl` and `apiKey` to the `GRAVIX_CONFIG` defaults in
+`dashboards/app.js`, and §5.3 adds `ingestionFetch`, which sends `X-API-Key` from
+`GRAVIX_CONFIG.apiKey`. Both fields now have a reader. The spec sequence intended this all along —
+GRVX-901's §4.3 fenced `app.js` because GRVX-902 owns it — so the defect was in the two specs being
+read one at a time, which is the working rule, not in either spec alone.
+
+**What is fixed.** The generated config now reaches ingestion: `ingestionFetch` is the path by which
+the dashboard asks "is my data arriving?" and it authenticates with the generated key. Proven by
+`TestServicesEndpointRequiresAuth`, which exercises the real middleware chain.
+
+**What is still open, and is the part that always needed a person:**
+
+1. **The dashboard's *Cube* queries still read their key from `localStorage`.** `ingestionFetch`
+   covers the ingestion API only. Nothing in this pair of specs made `GRAVIX_CONFIG.apiKey` the
+   source for the rest of the dashboard, so §1's "pre-configured with a working API key" is true for
+   the services endpoint and not for the metric charts.
+2. **The key is still served over HTTP.** `dashboard_config.js` is in the nginx web root, so
+   `GET /dashboard_config.js` returns a live ingestion key to anyone who can load the dashboard —
+   which grants *write*, so a reader could inject false facts. On a localhost self-host that is close
+   to a non-issue; on an exposed dashboard it is not. `security-engineer` should rule on whether the
+   bootstrap key should be ingest-scoped, or the config served with a narrower key than the one in
+   `api_key.txt`.
+
+Item 2 is the reason this entry stays open rather than being marked fixed.
+
+---
+
+## SD-014 — GRVX-902 records batch facts before they are persisted, and single facts after
+
+**Severity** low — a discovery counter, not a billing figure.
+**Status** implemented as specified, documented in code and in the OpenAPI description.
+
+§6.4 and §6.5 place the same call on opposite sides of the write:
+
+| Path | Where `RecordFact` is called |
+|---|---|
+| `handleFacts` (§6.4) | "immediately after the successful `sink.Write` call" |
+| `handleBatchFacts` (§6.5) | "in the same loop iteration that appends to `validRecords`" — the loop runs *before* `sink.WriteBatch` |
+
+So if `WriteBatch` fails, the handler returns `500` and the client retries, but every service in
+that batch is already counted. Retry and they are counted again. The single-fact path cannot do
+this: nothing is recorded unless the write succeeded.
+
+**Implemented as written.** The divergence is small and the registry is a "what exists" aid rather
+than an accounting record — but in a project whose thesis is correctness, an unstated discrepancy
+between two paths computing the same thing is the sort of thing that is discovered later by someone
+comparing two numbers. So it is stated: in a comment at the call site, and in the `request_count`
+description in `docs/openapi.yaml`, which says the figure is not reconciled against stored facts and
+that a retried batch can count twice.
+
+**If it is ever worth fixing**, the fix is to collect the services during the loop and record them
+after `WriteBatch` returns, matching §6.4. That is a two-line change; it was not made here because
+choosing different semantics from the ones a spec states is how implementation quietly becomes
+product design.

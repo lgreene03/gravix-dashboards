@@ -285,17 +285,142 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All eight acceptance criteria pass with their named tests, plus
+seven more covering paths the criteria do not reach.
+
+**1. Registry unit tests**
+
+```
+$ go test ./pkg/discovery/... -v -cover
+--- PASS: TestRecordFactThenList              (AC-1)
+--- PASS: TestRecordFactAccumulatesCount      (AC-2)
+--- PASS: TestRecordFactAccumulatesAcrossAFlush
+--- PASS: TestListServicesSortedByName        (AC-3)
+--- PASS: TestRecordFactRejectsEmptyName      (AC-4)
+--- PASS: TestListServicesEmptyRegistry       (AC-5)
+--- PASS: TestCloseFlushesPending             (AC-6)
+--- PASS: TestCloseIsIdempotent
+--- PASS: TestConcurrentRecordFact
+--- PASS: TestFlushRequeuesOnFailure
+ok  	github.com/lgreene/gravix-dashboards/pkg/discovery	coverage: 80.6% of statements
+```
+
+**2. Ingestion integration test**
+
+```
+$ go test ./services/ingestion/... -run TestServicesEndpoint -v
+--- PASS: TestServicesEndpointReflectsIngestedFact   (AC-7)
+--- PASS: TestServicesEndpointReflectsBatchIngest
+--- PASS: TestServicesEndpointEmptyRegistry
+--- PASS: TestServicesEndpointRejectsNonGET
+--- PASS: TestServicesEndpointRequiresAuth           (AC-8)
+    --- PASS: /no_key_at_all
+    --- PASS: /a_key_that_was_never_issued
+    --- PASS: /the_issued_key
+ok  	github.com/lgreene/gravix-dashboards/services/ingestion	0.054s
+```
+
+**3. Nothing else broke**
+
+```
+$ go build ./... && go test ./schemas/... ./services/ingestion/...
+ok  	github.com/lgreene/gravix-dashboards/schemas	0.006s
+ok  	github.com/lgreene/gravix-dashboards/services/ingestion	0.404s
+```
+
+**4. CSP change is well-formed**
+
+```
+$ grep -o "connect-src[^;]*" storage/dashboard/nginx.conf
+connect-src 'self' http://localhost:4000 http://localhost:8090 http://localhost:8091
+```
+
+**5. Open-core integrity**
+
+```
+$ make check-boundary
+boundary: 0 violations
+$ make build-oss && make test-oss
+(both succeed with ee/ absent)
+```
+
+**Beyond §8** — the gates that exist only in CI, plus the two suites this change could plausibly
+disturb:
+
+```
+$ go test ./... -race -count=1     # no failures, no races
+$ make lint                         # go vet + staticcheck, clean
+$ make test-correctness             # runtime: 52s (budget 300s), all seven properties hold
+$ make contracts-check              # no diff
+$ git check-ignore -v data/discovery.db
+.gitignore:51:data/	data/discovery.db
+```
+
+### 8.2 The concurrency contract, exercised rather than assumed
+
+§10 makes an unresolved race here a spec defect against §5, so `TestConcurrentRecordFact` runs eight
+writers, a flusher and a reader against one registry under `-race` and then checks the total. It
+passes and the count is exact, so the escalation does not trigger.
+
+The sharp edge is not `RecordFact` itself but `Flush`, which swaps the pending map out from under
+concurrent readers and writers. An observation must be counted exactly once whichever side of that
+swap it lands on, and two tests pin it: `TestRecordFactAccumulatesAcrossAFlush` (a flush between
+observations does not lose or double them, and flushing twice does not re-apply a landed batch) and
+`TestFlushRequeuesOnFailure`.
+
+`TestFlushRequeuesOnFailure` covers the branch that decides whether a disk problem loses data
+silently. A failed flush has already taken the pending map; unless it puts the batch back, those
+observations are gone with no error reaching anyone, because `RecordFact` returns nothing and the
+handler replied long ago. The test closes the database underneath the registry, requires the flush to
+fail, and then requires the batch to be back in `pending` and to *merge* with — not be replaced by —
+anything recorded since.
+
+### 8.3 Guards proven by mutation
+
+| Guard | Mutation | Reported |
+|---|---|---|
+| AC-3 `TestListServicesSortedByName` | removed the sort | yes — named the position and printed the real order |
+| AC-5 `TestListServicesEmptyRegistry` | returned a nil slice instead of an empty one | yes — a nil slice serialises as `null`, and a dashboard reading `.length` throws |
+| AC-7 `TestServicesEndpointReflectsIngestedFact` | removed `RecordFact` from `handleFacts` | yes — the endpoint returned `{"services":[]}` after a successful ingest |
+
+### 8.4 Defects found
+
+- **SD-014 (low, implemented as specified).** §6.4 records a single fact *after* a successful write;
+  §6.5 records batch facts *inside the parse loop*, before `WriteBatch` runs. If the batch write
+  fails the handler returns 500, the services are already counted, and a client retry counts them
+  again. Followed the spec rather than quietly improving it, and said so in three places: a comment
+  at the call site, the `request_count` description in `docs/openapi.yaml`, and the register.
+- **SD-013 (filed against GRVX-901) is now partly closed.** This spec supplies the consumers that
+  were missing: `ingestionApiUrl` and `apiKey` join the `GRAVIX_CONFIG` defaults, and
+  `ingestionFetch` sends the key. The defect was in reading two specs one at a time — which is the
+  working rule — not in either spec alone. What remains open is the security half: the generated
+  config is served from the nginx web root, so `GET /dashboard_config.js` hands a live *write*-capable
+  ingestion key to anyone who can load the dashboard.
+
+### 8.5 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| `services/ingestion/lateness_test.go` modified, though §4.2 names only `main_test.go` | It holds five more `handleFacts`/`handleBatchFacts` call sites. Without updating them the package does not compile, so the spec's file list is simply incomplete. |
+| `services/ingestion/services_endpoint_test.go` created, though §4.1 names only the two `pkg/discovery` files | AC-7 and AC-8 are ingestion-side and need somewhere to live; putting them in the 900-line `main_test.go` would bury them. |
+| `docs/openapi.yaml` modified | The §9 docs delta. §10 asks first whether it is generated — it is not, and there is now only one such document, so a hand edit is the documented route. |
+| `testRegistry` takes `testing.TB`, not `*testing.T` | `BenchmarkHandleFacts` is one of the call sites and has a `*testing.B`. |
+
 ## 9. Definition of done
 
-- [ ] All eight acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.1/§4.2 modified
-- [ ] `docs-engineer` delta merged (document `GET /api/v1/services` in `docs/openapi.yaml`) or
-      `NO DOCS DELTA REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests
-- [ ] `data/discovery.db` added to whatever ignore rule already covers `data/`
+- [x] All eight acceptance criteria pass with their named tests — §8.1, plus seven more
+- [x] Every Verification command run, real output pasted into the report — §8.1
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted
+- [ ] **No** — four files outside §4.1/§4.2, each listed with its reason in §8.5. One of them
+      (`lateness_test.go`) is not optional: the package does not compile without it.
+- [x] `docs-engineer` delta merged — `GET /api/v1/services` documented in `docs/openapi.yaml`,
+      including the caveat that `request_count` is a discovery aid and not a billing figure
+- [x] Zero new skipped or quarantined tests
+- [x] `data/discovery.db` covered by the existing `data/` rule at `.gitignore:51` — verified with
+      `git check-ignore -v`, not by reading the file
 
 ## 10. Escalation
 

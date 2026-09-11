@@ -185,6 +185,77 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/services:
+    get:
+      operationId: listServices
+      summary: List every service that has sent a fact
+      description: |
+        Returns every distinct `service` value observed on an accepted RequestFact,
+        with the first and last time it was seen and how many facts it has sent.
+
+        Services register themselves by sending data — there is no registration
+        step, so this list cannot drift from what is actually reporting. The
+        registry is updated the moment a fact is accepted, so a service appears
+        here without waiting for the five-minute rollup that metric queries need.
+
+        Aggregate only: one row per service and three counters, never anything
+        about an individual request.
+
+        An empty registry returns `200` with an empty list. No data yet is a
+        state to render, not an error.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      responses:
+        "200":
+          description: The services observed so far, sorted by name ascending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, first_seen_at, last_seen_at, request_count]
+                      properties:
+                        name:
+                          type: string
+                          description: The service name as sent on the fact.
+                          example: auth-service
+                        first_seen_at:
+                          type: string
+                          format: date-time
+                          description: Event time of the earliest fact seen from this service.
+                          example: "2026-09-10T12:00:00Z"
+                        last_seen_at:
+                          type: string
+                          format: date-time
+                          description: Event time of the most recent fact seen from this service.
+                          example: "2026-09-10T12:05:00Z"
+                        request_count:
+                          type: integer
+                          format: int64
+                          description: |
+                            Facts accepted from this service since the registry was created.
+                            A discovery aid, not a billing figure: it is not reconciled against
+                            stored facts, and a retried batch can count twice.
+                          example: 482
+              example:
+                services:
+                  - name: auth-service
+                    first_seen_at: "2026-09-10T12:00:00Z"
+                    last_seen_at: "2026-09-10T12:05:00Z"
+                    request_count: 482
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The API key lacks the `admin:read` scope.
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   # ── Health endpoints ─────────────────────────────────────────────────
 
   /live:

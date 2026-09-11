@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/discovery"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
@@ -28,6 +29,19 @@ import (
 
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 )
+
+// testRegistry gives a handler a real, isolated discovery registry. Tests that
+// assert on discovery use their own; for everyone else this is the cheapest way
+// to satisfy the parameter without a nil that would hide a missing call.
+func testRegistry(t testing.TB) *discovery.Registry {
+	t.Helper()
+	reg, err := discovery.OpenInMemory()
+	if err != nil {
+		t.Fatalf("discovery.OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { reg.Close() })
+	return reg
+}
 
 // failingStore is a mock ObjectStore where Put always returns an error.
 type failingStore struct{}
@@ -131,7 +145,7 @@ func setupSink(t *testing.T) *DurableSink {
 
 func TestHandleFacts_ValidPost(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -147,7 +161,7 @@ func TestHandleFacts_ValidPost(t *testing.T) {
 
 func TestHandleFacts_InvalidJSON(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(`{"bad json`))
 	req = withMockTenant(req)
@@ -169,7 +183,7 @@ func TestHandleFacts_InvalidJSON(t *testing.T) {
 
 func TestHandleFacts_MissingContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -185,7 +199,7 @@ func TestHandleFacts_MissingContentType(t *testing.T) {
 
 func TestHandleFacts_WrongContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -201,7 +215,7 @@ func TestHandleFacts_WrongContentType(t *testing.T) {
 
 func TestHandleFacts_MethodNotAllowed(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/facts", nil)
 	req = withMockTenant(req)
@@ -386,7 +400,7 @@ func TestWriteErrorJSON(t *testing.T) {
 
 func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t))
 
 	line1 := validFactJSON(t)
 	line2 := validFactJSON(t)
@@ -416,7 +430,7 @@ func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 
 func TestHandleBatchFacts_MixedValid(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t))
 
 	validLine := validFactJSON(t)
 	body := validLine + "\n{bad json}\n"
@@ -443,7 +457,7 @@ func TestHandleBatchFacts_MixedValid(t *testing.T) {
 
 func TestHandleBatchFacts_EmptyBody(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/batch", strings.NewReader(""))
 	req = withMockTenant(req)
@@ -608,7 +622,7 @@ func TestSecurityHeadersHSTSOnHTTPS(t *testing.T) {
 
 func TestHandleFacts_BodyTooLarge(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t))
 
 	// Create a body >1MB
 	bigBody := strings.Repeat("x", 1<<20+100)
@@ -624,7 +638,7 @@ func TestHandleFacts_BodyTooLarge(t *testing.T) {
 
 func TestHandleBatchFacts_PartialSuccess(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t))
 
 	validLine := validFactJSON(t)
 	body := validLine + "\n{\"bad\":\"json\",\"missing_fields\":true}\n" + validLine + "\n"
@@ -682,7 +696,7 @@ func TestHandleFacts_DLQEntryWritten(t *testing.T) {
 	}
 	defer sink.Close()
 
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t))
 
 	// Send an invalid fact (missing required fields)
 	invalidJSON := `{"event_id": "not-a-uuid", "service": ""}`
@@ -726,7 +740,7 @@ func TestHandleFacts_DLQEntryWritten(t *testing.T) {
 
 func TestHandleFacts_RequestIDInResponse(t *testing.T) {
 	sink := setupSink(t)
-	handler := logging.RequestIDMiddleware(http.HandlerFunc(handleFacts(sink, nil)))
+	handler := logging.RequestIDMiddleware(http.HandlerFunc(handleFacts(sink, nil, testRegistry(t))))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -767,7 +781,7 @@ func TestMultiTenantAuth_ExpiredKeyRejected(t *testing.T) {
 	}
 
 	sink := setupSink(t)
-	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb))
+	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t)))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -804,7 +818,7 @@ func TestMultiTenantAuth_ValidKeyAccepted(t *testing.T) {
 	}
 
 	sink := setupSink(t)
-	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb))
+	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t)))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -851,7 +865,7 @@ func BenchmarkHandleFacts(b *testing.B) {
 	}
 	defer sink.Close()
 
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(b))
 	body := benchmarkFactJSON(b)
 
 	b.ResetTimer()
@@ -891,7 +905,7 @@ func BenchmarkHandleBatchFacts(b *testing.B) {
 	}
 	defer sink.Close()
 
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(b))
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
