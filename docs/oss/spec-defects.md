@@ -698,3 +698,76 @@ that block — roughly 1,700 lines of `app.js` that had never run. Pre-existing;
 harness records console errors, and "zero console errors" is in this spec's definition of done.
 
 Fixed by moving all five script tags to the end of `<body>`, which is where they belonged.
+
+---
+
+## SD-011 — GRVX-811 names a type it never defines, asks for a rollback the repository cannot do, and leaves a burn-rate rule nowhere to record its kind
+
+**Spec:** GRVX-811 — SLO engine and error-budget burn-rate alerts
+**Raised by:** `senior-engineer` during implementation
+**Severity:** one undefined type; one untestable acceptance criterion; one schema gap worked around
+
+### Part one: `MetricQuerier` is used twice and defined nowhere
+
+§5.1 gives two signatures that take it:
+
+```go
+func Evaluate(ctx context.Context, q MetricQuerier, s SLO, now time.Time) (*Status, error)
+func EvaluateTiers(ctx context.Context, q MetricQuerier, s SLO, now time.Time) (*Tier, error)
+```
+
+and never says what it is. §6.3 and §6.4 constrain it — availability comes from `request_count` and
+`error_count`, latency from the merged sketch — so the shape is inferable, and the smallest interface
+that satisfies both is one method returning minute buckets.
+
+Defined that way, deliberately, with `slo.Bucket` carrying only the four aggregate fields. **The engine
+cannot reach a fact even if someone later wants it to**, which makes "no per-request querying"
+(docs/04-non-goals.md §5) a property of the types rather than a rule someone has to remember. A wider
+interface would have been easier to write against and would have made the guarantee a promise again.
+
+### Part two: AC-12 asks for a rollback this repository has never supported
+
+> AC-12 | Both migrations apply and roll back on SQLite and Postgres
+
+**There are no down migrations anywhere in this repository** — not for SLOs, not for any of the seven
+versions that came before. `pkg/tenantdb/migrate.go` embeds `migrations/*/\*.sql` and applies them
+forward; nothing reads a `.down.sql` because none exists.
+
+So half of AC-12 cannot be satisfied without first building a rollback mechanism, which is a change to
+the migration runner and its own piece of work. What is tested instead is everything that can be:
+
+- both migrations apply, which is implied by every gateway test running against a migrated database;
+- the CHECK constraints they declare are enforced, so a direct writer cannot store what the API would
+  refuse;
+- both files declare the same constraints, and the Postgres one uses Postgres types — `DOUBLE
+  PRECISION` rather than `REAL`, which is four bytes there and cannot hold 0.999 exactly.
+
+**For the engineering lead:** either add down migrations as a general capability and restore this
+criterion, or drop "and roll back" from the spec template. Asking for it once per spec while the
+runner cannot do it means every implementer either lies or writes this paragraph.
+
+### Part three: a burn-rate rule has nowhere to record which SLO it watches
+
+§6.5 says to add `burn_rate` as a rule type "in the existing evaluator, reusing its cron, its
+notification dispatch and its deduplication". That was straightforward. What the spec does not address
+is that a burn-rate rule needs to name an SLO, and `tenantdb.AlertRule` has no field for one.
+
+A rule's `Service` names the service. The SLO *kind* — availability or latency — has nowhere to go, and
+a service may have one of each. The implementation reuses the unused `PathTemplate` field to carry it,
+defaulting to availability when empty.
+
+**That is a compromise and it should not survive.** Reusing a field for an unrelated purpose is how a
+schema becomes unreadable, and a reader of `AlertRule` has no way to know that `PathTemplate` means
+something different on one rule type. The clean fix is a nullable `slo_id` column on `alert_rules`,
+pointing at the SLO directly, which also removes the lookup-by-service-and-kind entirely. It needs a
+migration and therefore a spec.
+
+### Also worth recording: the tier table's numbers are derived, not chosen
+
+`TestDefaultTiersMatchTheSpecTable` checks each threshold against the fraction of a 30-day budget it
+consumes over its long window — 14.4× for an hour is 2%, 6× for six hours is 5%, and so on. The table
+in §5.2 gives both columns, and they agree.
+
+That is worth a test rather than a comment because the two halves can drift: someone tuning a threshold
+down to reduce noise would leave the "budget consumed before firing" column saying something false, and
+the column is what a reader uses to decide whether the tier is reasonable.

@@ -135,6 +135,20 @@ capabilities:
       - tests/correctness/
       - scripts/correctness_test.sh
 
+  - id: slo-engine
+    name: SLOs, error budgets and burn-rate alerting
+    placement: core
+    charter_ref: "§2.1, §7.3 Q1"
+    rationale: >-
+      Charter §7.3 Q1 answers yes: a ten-person team monitoring its own services considers
+      error budgets table stakes, not a premium extra. A free tier that can show you an error
+      rate but not how much of the month it has cost you is a demo of a monitoring product
+      rather than one. The engine reads the same minute buckets the dashboard does and adds
+      no write path, so there is nothing here that could be gated without gating the data.
+    paths:
+      - pkg/slo/
+      - services/gateway/slo_handler.go
+
   - id: metric-contracts
     name: Versioned metric contract registry
     placement: core

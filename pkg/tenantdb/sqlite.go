@@ -123,6 +123,9 @@ func (s *SQLiteDB) TenantBranding() TenantBrandingRepo {
 func (s *SQLiteDB) ScheduledExports() ScheduledExportRepo {
 	return &sqliteScheduledExportRepo{db: s.db}
 }
+func (s *SQLiteDB) SLOs() SLORepo {
+	return &sqliteSLORepo{db: s.db}
+}
 
 // --- Tenant Repo ---
 

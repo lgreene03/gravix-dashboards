@@ -48,6 +48,7 @@ type PostgresDB struct {
 	ssoStates            *pgSSOStateRepo
 	referrals            *pgReferralRepo
 	customDashboards     *pgCustomDashboardRepo
+	slos                 *pgSLORepo
 	tenantBranding       *pgTenantBrandingRepo
 	scheduledExports     *pgScheduledExportRepo
 }
@@ -98,6 +99,7 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	pdb.ssoStates = &pgSSOStateRepo{db: db}
 	pdb.referrals = &pgReferralRepo{db: db}
 	pdb.customDashboards = &pgCustomDashboardRepo{db: db}
+	pdb.slos = &pgSLORepo{db: db}
 	pdb.tenantBranding = &pgTenantBrandingRepo{db: db}
 	pdb.scheduledExports = &pgScheduledExportRepo{db: db}
 	return pdb, nil
@@ -127,6 +129,7 @@ func (p *PostgresDB) Referrals() referral.ReferralRepo              { return p.r
 func (p *PostgresDB) CustomDashboards() CustomDashboardRepo         { return p.customDashboards }
 func (p *PostgresDB) TenantBranding() TenantBrandingRepo            { return p.tenantBranding }
 func (p *PostgresDB) ScheduledExports() ScheduledExportRepo         { return p.scheduledExports }
+func (p *PostgresDB) SLOs() SLORepo                                 { return p.slos }
 func (p *PostgresDB) Close() error                                  { return p.db.Close() }
 
 // --- Tenant Repo ---

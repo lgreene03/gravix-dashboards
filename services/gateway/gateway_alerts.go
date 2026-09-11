@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -19,6 +20,7 @@ import (
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
 	"github.com/lgreene/gravix-dashboards/pkg/pagination"
 	"github.com/lgreene/gravix-dashboards/pkg/recompute"
+	"github.com/lgreene/gravix-dashboards/pkg/slo"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/montanaflynn/stats"
 )
@@ -163,6 +165,9 @@ func (gw *gateway) handleChannelByID(w http.ResponseWriter, r *http.Request) {
 // --- Alert Rule handlers ---
 
 var validMetrics = map[string]bool{
+	// An error-budget burn rate, evaluated against the service's SLO rather than
+	// against a threshold on this rule. See evaluateBurnRateRule.
+	"burn_rate":   true,
 	"error_rate":  true,
 	"p50_latency": true,
 	"p95_latency": true,
@@ -379,7 +384,7 @@ func validateAlertRule(name, metric, operator string, threshold float64, windowM
 		return "name is required"
 	}
 	if !validMetrics[metric] {
-		return "metric must be one of: error_rate, p50_latency, p95_latency, p99_latency, throughput"
+		return "metric must be one of: error_rate, p50_latency, p95_latency, p99_latency, throughput, burn_rate"
 	}
 	if operator != "gt" && operator != "lt" && operator != "anomaly" {
 		return "operator must be gt, lt, or anomaly"
@@ -480,10 +485,15 @@ func alertMetricKey(metric string) string {
 }
 
 // knownAlertMetric reports whether a rule's metric can be evaluated at all.
+//
+// Three routes now: Cube for the counts and rates, the sketch merge for the
+// percentiles, and the SLO engine for a burn rate. A metric that passes rule
+// validation but matches none of them is a rule that silently never fires,
+// which is worse than one that fails loudly.
 func knownAlertMetric(metric string) bool {
 	_, cube := metricToCubeMeasure[metric]
 	_, pct := percentileAlertQuantile[metric]
-	return cube || pct
+	return cube || pct || metric == burnRateMetric
 }
 
 // alertPercentileRows answers a percentile rule by merging sketches, returning
@@ -531,6 +541,57 @@ func (gw *gateway) alertPercentileRows(ctx context.Context, rule *tenantdb.Alert
 		})
 	}
 	return rows, key, nil
+}
+
+// burnRateMetric is the rule metric that selects error-budget burn-rate
+// evaluation. It is a metric name rather than an operator because a burn-rate
+// rule has no threshold of its own: the thresholds come from the SLO's tier
+// table, and a rule carrying its own would be a second opinion nobody asked for.
+const burnRateMetric = "burn_rate"
+
+// evaluateBurnRateRule finds the SLO a rule points at and returns the
+// highest-severity tier currently firing, or nil.
+//
+// The rule's Service names the SLO's service; its PathTemplate field, unused by
+// burn-rate rules, is reused to carry the SLO kind so no schema change is needed
+// for a rule type this spec adds beside the existing ones. That is a compromise
+// and it is recorded as such in SD-011.
+func (gw *gateway) evaluateBurnRateRule(ctx context.Context, rule *tenantdb.AlertRule) (*slo.Firing, error) {
+	if gw.metricStore == nil {
+		return nil, errors.New("metric storage is not configured")
+	}
+
+	kind := strings.TrimSpace(rule.PathTemplate)
+	if kind == "" {
+		kind = string(slo.KindAvailability)
+	}
+
+	records, err := gw.db.SLOs().ListByTenant(ctx, rule.TenantID)
+	if err != nil {
+		return nil, fmt.Errorf("listing SLOs: %w", err)
+	}
+
+	var target *tenantdb.SLORecord
+	for _, r := range records {
+		if r.Enabled && r.Service == rule.Service && r.Kind == kind {
+			target = r
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("no enabled %s SLO for service %q", kind, rule.Service)
+	}
+
+	firings, err := slo.EvaluateAllTiers(ctx, warehouseQuerier{gw}, recordToSLO(target), time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	for i := range firings {
+		if firings[i].Firing {
+			return &firings[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (gw *gateway) alertEvaluatorLoop(ctx context.Context) {
@@ -596,7 +657,27 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 			var message string
 			var anomalyRes *anomalyResult
 
-			if rule.Operator == "anomaly" {
+			if rule.Metric == burnRateMetric {
+				// An error-budget burn-rate rule. It reuses this loop's cron, its
+				// cooldown, its channel dispatch and its history — GRVX-811 adds a
+				// rule TYPE, not a second alerting system, because two alerting
+				// systems is how a team ends up with two places to silence a page.
+				firing, err := gw.evaluateBurnRateRule(ctx, rule)
+				if err != nil {
+					slog.Error("alert evaluator burn rate error", "tenant_id", tenantID,
+						"rule_id", rule.ID, "error", err)
+					gatewayAlertEvalErrorsTotal.Inc()
+					continue
+				}
+				if firing == nil {
+					continue
+				}
+				value = firing.LongBurnRate
+				triggered = true
+				message = fmt.Sprintf("%s: error budget burning at %.2fx over %s (%s severity) — %s",
+					rule.Name, firing.LongBurnRate, firing.Tier.LongWindow, firing.Tier.Severity,
+					firing.Reason)
+			} else if rule.Operator == "anomaly" {
 				// Anomaly detection: compare current value against historical baseline
 				var err error
 				anomalyRes, err = gw.evaluateAnomalyRule(ctx, token, rule)

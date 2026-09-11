@@ -474,6 +474,38 @@ type CustomDashboardRepo interface {
 	SetDefault(ctx context.Context, tenantID, id string) error
 }
 
+// SLORecord is a stored service level objective.
+//
+// It mirrors pkg/slo.SLO but keeps its own shape: the storage layer holds the
+// window as days because that is what the CHECK constraint can enforce, while
+// the engine works in durations. Converting at the boundary keeps the database
+// from having an opinion about time arithmetic.
+type SLORecord struct {
+	ID          string
+	TenantID    string
+	Service     string
+	Kind        string // availability | latency
+	Objective   float64
+	ThresholdMs float64
+	WindowDays  int
+	Enabled     bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// SLORepo manages service level objectives.
+type SLORepo interface {
+	Create(ctx context.Context, s *SLORecord) error
+	GetByID(ctx context.Context, id string) (*SLORecord, error)
+	Update(ctx context.Context, s *SLORecord) error
+	Delete(ctx context.Context, id string) error
+	ListByTenant(ctx context.Context, tenantID string) ([]*SLORecord, error)
+	// ListEnabled returns every enabled SLO across all tenants, for the alert
+	// evaluator's cron. It is the one method that crosses tenants, and it exists
+	// only so the evaluator does not have to enumerate tenants itself.
+	ListEnabled(ctx context.Context) ([]*SLORecord, error)
+}
+
 // TenantBranding holds per-tenant visual customization (Enterprise feature).
 type TenantBranding struct {
 	TenantID     string
@@ -549,5 +581,6 @@ type DB interface {
 	CustomDashboards() CustomDashboardRepo
 	TenantBranding() TenantBrandingRepo
 	ScheduledExports() ScheduledExportRepo
+	SLOs() SLORepo
 	Close() error
 }

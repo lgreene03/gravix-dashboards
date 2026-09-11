@@ -446,6 +446,10 @@ func main() {
 	// Provenance over HTTP, so the dashboard can show where a number came from.
 	// See services/gateway/lineage_handler.go.
 	mux.HandleFunc("/api/v1/lineage", gw.ipRateLimitMiddleware(gw.handleLineage))
+	// SLOs and error-budget burn rates. No plan gate on any of these: charter
+	// §7.3 Q1 rules SLOs core, and docs/oss/boundary.yaml has no entry for them.
+	mux.HandleFunc("/api/gateway/slos", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleSLOs))))
+	mux.HandleFunc("/api/gateway/slos/", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleSLOByID))))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))

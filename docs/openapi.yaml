@@ -43,6 +43,8 @@ tags:
     description: Audit log
   - name: Metrics
     description: Derived metric queries whose correctness needs server-side computation
+  - name: SLOs
+    description: Service level objectives, error budgets and burn-rate alerting
 
 paths:
   # ── Ingestion endpoints ──────────────────────────────────────────────
@@ -1097,6 +1099,252 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/gateway/slos:
+    get:
+      operationId: listSLOs
+      summary: List service level objectives
+      description: >
+        Returns every SLO for the caller's tenant, with the note about detection
+        latency that every burn-rate response carries.
+
+
+        SLOs are not a paid feature. A team monitoring its own services considers
+        error budgets table stakes, so gating them would make the free tier a demo
+        rather than a product (charter §7.3).
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The tenant's SLOs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SLO"
+                  detection_latency_note:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+    post:
+      operationId: createSLO
+      summary: Create a service level objective
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SLOInput"
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SLO"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: An SLO already exists for that service and kind.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/gateway/slos/{id}:
+    put:
+      operationId: updateSLO
+      summary: Update a service level objective
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SLOInput"
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SLO"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: An SLO already exists for that service and kind.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteSLO
+      summary: Delete a service level objective
+      description: Requires the admin role.
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted.
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/gateway/slos/{id}/status:
+    get:
+      operationId: getSLOStatus
+      summary: Current error-budget status
+      description: >
+        How much of the error budget has been spent over the SLO's rolling window.
+
+
+        `data_through_utc` is the start of the newest bucket counted, never the
+        time of the request. Gravix aggregates in batches, so the newest data is
+        minutes old, and a status that reported `now` would claim a freshness it
+        does not have.
+
+
+        `exactness` is `exact` for an availability SLO, which counts two exact
+        counters, and `sketch` for a latency SLO, which reads the fraction under
+        the threshold from merged t-digests. The `error_bound` field says what
+        that is worth at this window's sample size.
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The SLO's current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SLOStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: >
+            No metric data in the window. This is distinct from a healthy SLO:
+            reporting 100% for a service that stopped sending data is how a
+            monitoring system lies.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum: [no_data]
+                  window_start:
+                    type: string
+                    format: date-time
+                  window_end:
+                    type: string
+                    format: date-time
+                  message:
+                    type: string
+
+  /api/gateway/slos/{id}/burn:
+    get:
+      operationId: getSLOBurnRate
+      summary: Error-budget burn rate per alerting tier
+      description: >
+        The burn rate over each of the four multi-window tiers, and which if any
+        is firing.
+
+
+        A burn rate is a multiple of the rate that would exhaust the budget
+        exactly when the window closes: 1.0 is on track, 14.4 exhausts a 30-day
+        budget in 50 hours. A tier fires only when its long AND its short window
+        both exceed the threshold — the long window is the signal, and the short
+        window is what makes the alert stop once the burn does.
+
+
+        Non-firing tiers are returned too, because "2.1x against a 3x threshold"
+        is how someone sees a problem coming.
+
+
+        **Detection latency.** The five-minute short window is not five-minute
+        detection. Gravix aggregates in batches, so an alert is detected 5-15
+        minutes after the requests that caused it. Every response repeats this in
+        `detection_latency_note`.
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Burn rates per tier.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slo:
+                    $ref: "#/components/schemas/SLO"
+                  tiers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SLOBurnTier"
+                  firing:
+                    nullable: true
+                    description: The highest-severity firing tier, or null.
+                    allOf:
+                      - $ref: "#/components/schemas/SLOTier"
+                  exactness:
+                    type: string
+                    enum: [exact, sketch]
+                  detection_latency_note:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/gateway/audit-log:
     get:
       operationId: listAuditLog
@@ -1649,6 +1897,141 @@ components:
           type: integer
         offset:
           type: integer
+
+    SLOInput:
+      type: object
+      required: [service, kind, objective, window_days]
+      properties:
+        service:
+          type: string
+        kind:
+          type: string
+          enum: [availability, latency]
+        objective:
+          type: number
+          format: double
+          description: Strictly between 0 and 1, e.g. 0.999.
+          example: 0.999
+        threshold_ms:
+          type: number
+          format: double
+          description: Required and positive for a latency SLO; ignored otherwise.
+        window_days:
+          type: integer
+          enum: [7, 28, 30]
+          description: >
+            Three values, not arbitrary: an error budget is only meaningful against a
+            period a team reasons about, and the burn-rate tier thresholds are
+            calibrated against a month.
+        enabled:
+          type: boolean
+          default: true
+
+    SLO:
+      allOf:
+        - $ref: "#/components/schemas/SLOInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            tenant_id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    SLOStatus:
+      type: object
+      properties:
+        slo:
+          $ref: "#/components/schemas/SLO"
+        good_events:
+          type: integer
+          format: int64
+        total_events:
+          type: integer
+          format: int64
+        actual_ratio:
+          type: number
+          format: double
+        budget_total:
+          type: number
+          format: double
+          description: Bad events the objective allows over the window.
+        budget_consumed:
+          type: number
+          format: double
+        budget_remaining:
+          type: number
+          format: double
+          description: Negative once the budget is overspent.
+        budget_remaining_pct:
+          type: number
+          format: double
+        breaching:
+          type: boolean
+        exactness:
+          type: string
+          enum: [exact, sketch]
+        error_bound:
+          type: string
+          description: Present for a latency SLO. What its numbers are worth at this sample size.
+        computed_at:
+          type: string
+          format: date-time
+        data_through_utc:
+          type: string
+          format: date-time
+          description: Start of the newest bucket counted. Always older than computed_at.
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+
+    SLOTier:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [page, ticket]
+        long_window:
+          type: integer
+          format: int64
+          description: Nanoseconds.
+        short_window:
+          type: integer
+          format: int64
+        threshold:
+          type: number
+          format: double
+
+    SLOBurnTier:
+      type: object
+      properties:
+        tier:
+          $ref: "#/components/schemas/SLOTier"
+        long_burn_rate:
+          type: number
+          format: double
+        short_burn_rate:
+          type: number
+          format: double
+        firing:
+          type: boolean
+        time_to_exhaustion:
+          type: integer
+          format: int64
+          description: Nanoseconds the budget lasts at the long window's rate.
+        reason:
+          type: string
+          description: >
+            One sentence saying why this tier is or is not firing. It travels with
+            the verdict so whoever is woken does not have to re-derive it.
 
     Lineage:
       type: object

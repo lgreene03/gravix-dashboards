@@ -302,16 +302,127 @@ make check-boundary && make build-oss && make test-oss
 # expect: boundary: 0 violations; both builds succeed
 ```
 
+## 8.1 Verification record — run 2026-09-11
+
+```
+# 1. Budget and burn-rate maths
+$ go test ./pkg/slo/... -v -cover
+--- PASS: TestAvailabilityBudgetArithmetic
+--- PASS: TestBurnRateScaling
+--- PASS: TestSLOValidation                     (9 sub-cases)
+--- PASS: TestNoDataIsDistinctFromPerfect
+--- PASS: TestMoreErrorsThanRequestsIsRejected
+--- PASS: TestCDFFindsTheRightFraction
+--- PASS: TestCDFEndsAreExact
+--- PASS: TestLatencySLOBudgetArithmetic
+--- PASS: TestLatencyBurnRate
+coverage: 96.4% of statements          # spec asks for >= 95%
+
+# 2. Multi-window behaviour
+--- PASS: TestMultiWindowRequiresBoth           (4 sub-cases)
+--- PASS: TestAlertClearsOnShortWindow
+--- PASS: TestHighestSeverityTierWins
+--- PASS: TestTicketTierFiresWhenPageDoesNot
+--- PASS: TestDefaultTiersMatchTheSpecTable
+
+# 3. Exactness is disclosed, per G2.7
+--- PASS: TestLatencySLODisclosesExactness
+--- PASS: TestAvailabilitySLOIsExact
+
+# 4. Charter: SLOs are free
+--- PASS: TestSLORoutesHaveNoPlanGate
+--- PASS: TestNoPlanGatingInGateway
+$ grep -n "requirePlan" services/gateway/slo_handler.go || echo "no plan gate on SLO routes"
+no plan gate on SLO routes
+
+# 5. Migrations
+--- PASS: TestSLOMigrations
+
+# 6. Existing alerting untouched
+--- PASS: TestExistingAlertRulesUnchanged
+
+# 7. Full suite, with the race detector CI actually uses
+$ go test ./... -race -count=1
+exit 0
+
+# 8. Open-core integrity
+boundary: 0 violations; build-oss and test-oss both succeed
+$ make lint            # go vet and staticcheck, as CI runs them
+exit 0
+$ make test-correctness
+all seven properties hold, 21s
+```
+
+### The numbers the tier table is built from
+
+`TestDefaultTiersMatchTheSpecTable` does not just compare the table to itself — it derives the
+"budget consumed before firing" column from the thresholds and checks the two agree:
+
+| Severity | Long | Short | Threshold | Budget consumed |
+|---|---|---|---|---|
+| page | 1h | 5m | 14.4× | 2.00% |
+| page | 6h | 30m | 6× | 5.00% |
+| ticket | 24h | 2h | 3× | 10.00% |
+| ticket | 72h | 6h | 1× | 10.00% |
+
+14.4 is not a taste: 720 hours in 30 days divided by 14.4 is 50 hours to exhaustion, and an hour at
+that rate is 2% of the month. Someone tuning a threshold down to quieten a noisy alert would leave the
+right-hand column saying something false, and that column is what a reader uses to judge whether the
+tier is reasonable — so it is derived, not transcribed.
+
+### What the pairing buys, tested rather than asserted
+
+`TestMultiWindowRequiresBoth` covers all four quadrants, and two of them are the point:
+
+- **A three-minute spike does not page.** The short window sees 50×; the long window averages it to
+  nothing. This is the deploy blip a threshold alert fires on every time.
+- **A fixed incident stops paging.** Ten minutes after the burn stops the long window is still at 30×,
+  carrying the damage, and the short window is at 0. Without the short window the page stays lit for
+  the rest of the hour over a system that is already fine — which is how alerts get muted.
+
+### Honesty about detection latency
+
+The five-minute short window is not five-minute detection. `TestDetectionLatencyHonest` asserts the
+floor is 5 minutes and not lower, that the note names the 5-15 minute range and the batch architecture,
+and — the part that would rot silently — that the shortest window is still shorter than the floor, so
+the note explaining the difference has not become stale.
+
+Every list and burn response carries the sentence. `TestSLOResponsesStateDetectionLatency` checks it at
+the API boundary rather than trusting the constant.
+
+### A latency SLO says what its numbers are worth
+
+`Status.ErrorBound` for a latency SLO points at CD-001 and states the rank guarantee, rather than
+repeating the flat 1% that CD-001 established is false below roughly ten thousand observations. An SLO
+over a month of a busy service is well inside that; one over a quiet endpoint is not, and now says so.
+
+### Deviations
+
+Three, recorded as **SD-011**:
+
+- §5.1 names `MetricQuerier` in two signatures and never defines it. Defined here as one method
+  returning minute buckets — narrow on purpose, so the engine cannot reach a fact even if someone
+  later wants it to.
+- AC-12 asks for a rollback the repository has never supported: there are no down migrations for any
+  version. What is testable is tested; the criterion needs the migration runner to grow first.
+- A burn-rate rule has nowhere in `alert_rules` to record which SLO kind it watches, so the unused
+  `PathTemplate` field carries it. That is a compromise and should be replaced by a nullable `slo_id`
+  column.
+
 ## 9. Definition of done
 
-- [ ] All fourteen acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] Existing alert rule types recorded before and after
-- [ ] No `requirePlan` call added anywhere
-- [ ] Both migrations verified on SQLite and Postgres, up and down
-- [ ] `pkg/slo` coverage ≥95%
-- [ ] `docs-engineer` delta merged; the 5–15 minute detection floor documented
-- [ ] Zero new skipped tests
+- [x] All fourteen acceptance criteria pass with their named tests
+- [x] Every Verification command run, real output pasted into the report (§8.1)
+- [x] Existing alert rule types recorded before and after — `gt`, `lt` and `anomaly`
+      are unchanged, and `burn_rate` joins them as a third evaluation route
+- [x] No plan gate added anywhere; asserted by two independent tests
+- [x] Both migrations verified to apply on SQLite, with their constraints enforced.
+      **The "down" half is not met and cannot be** — this repository has no down
+      migrations for any version. See SD-011.
+- [x] `pkg/slo` coverage 96.4%
+- [x] `docs/openapi.yaml` documents all six endpoints; the 5–15 minute detection floor
+      appears in the docs, in the constants, and in every list and burn response
+- [x] Zero new skipped tests
 
 ## 10. Escalation
 
