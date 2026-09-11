@@ -815,3 +815,65 @@ equivalent, which is what `TestProveItConcedesDDSketch` (AC-5) already did:
 verification that greps human-formatted output should either normalise whitespace or match a fragment
 short enough to survive a wrap. The corresponding Go test had this right from the start; the shell
 command in the spec did not, and only the shell command is what a reader runs by hand.
+
+---
+
+## SD-013 — GRVX-901's `dashboard_config.js` cannot pre-configure the dashboard's API key, because nothing reads it
+
+**Severity** high — §1's stated objective is not achieved by §5.1's mandated file.
+**Status** open. Needs a product decision; the rest of GRVX-901 is implemented and verified.
+
+§1 promises a stack "whose dashboard is pre-configured with a working API key". §5.1 fixes the file
+that is supposed to deliver it:
+
+```js
+window.GRAVIX_CONFIG = {
+  ingestionApiUrl: "<IngestionURL>",
+  gatewayUrl: "<GatewayURL>",
+  apiKey: "<plainKey>"
+};
+```
+
+`dashboards/app.js:6-12` merges `window.GRAVIX_CONFIG` over five defaults, and those five are the
+only fields anything reads:
+
+```
+GRAVIX_CONFIG.cubeApiUrl
+GRAVIX_CONFIG.gatewayUrl
+GRAVIX_CONFIG.percentileApiUrl
+GRAVIX_CONFIG.refreshIntervalMs
+GRAVIX_CONFIG.staleThresholdMs
+```
+
+So of the three fields §5.1 mandates, one works and two are inert:
+
+| Field | Effect |
+|---|---|
+| `gatewayUrl` | real — consumed at `app.js:15` |
+| `ingestionApiUrl` | **none** — no consumer anywhere in `dashboards/` |
+| `apiKey` | **none** — the dashboard reads its key from `localStorage.getItem('gravix_api_key')` (`app.js:851`, `:2735`, `:2941`, `:2994`) |
+
+The dashboard's key has never come from configuration. It comes from browser storage, populated by
+the onboarding flow. Writing `apiKey` into `window.GRAVIX_CONFIG` changes nothing about what the
+dashboard sends, so a user following this spec still reaches a dashboard that cannot query.
+
+**Why this is not fixable in implementation.** The three ways out are all product decisions:
+
+1. **Teach `app.js` to read `GRAVIX_CONFIG.apiKey`**, falling back to localStorage. Cleanest, but
+   §4.3 explicitly fences `dashboards/app.js` — and the fence is right, because this changes the
+   dashboard's auth precedence for every deployment, not just bootstrap.
+2. **Have `dashboard_config.js` seed localStorage directly.** Works without touching `app.js`, but
+   the file's contract in §5.1 is "set `window.GRAVIX_CONFIG`", not "write to browser storage", and
+   it silently overwrites a key a user may have entered by hand.
+3. **Leave the dashboard unauthenticated** against Cube in bootstrap mode and drop the claim.
+
+**A security note that applies to all three.** `dashboard_config.js` is bind-mounted into the nginx
+web root, so whatever it contains is served at `GET /dashboard_config.js` to anyone who can load the
+dashboard. Today that publishes a live ingestion key — which grants *write*, so a reader could inject
+false facts, an escalation over the read access they already have by seeing the page. On a localhost
+self-host this is close to a non-issue; on a dashboard exposed to a network it is not. Option 2 makes
+this worse by design. `security-engineer` should rule before any of the three ships.
+
+**Implemented as specified meanwhile.** `provision` writes all three fields, because AC-3 requires
+the key to be in the file and deviating would improvise in the opposite direction. The field is inert
+rather than wrong, and when the decision lands only the consumer side changes.

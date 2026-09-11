@@ -28,6 +28,25 @@ networks:
     driver: bridge
 
 services:
+  # Runs to completion before anything else starts, and is why this stack needs
+  # no .env edits: it creates the single local tenant, mints one API key, and
+  # writes the dashboard's runtime config. Idempotent — on every boot after the
+  # first it finds the key file and exits 0 without touching anything.
+  bootstrap-init:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-bootstrap-init
+    entrypoint: ["./bootstrap_seed"]
+    command:
+      - "-db=/app/data/gravix.db"
+      - "-api-key-file=/app/data/api_key.txt"
+      - "-dashboard-config=/app/data/dashboard_config.js"
+    volumes:
+      - ./data:/app/data
+    networks:
+      - backend
+
   gateway:
     build:
       context: .
@@ -39,6 +58,9 @@ services:
     volumes:
       - ./data:/app/data
     command: [ "./gateway", "--tenant-db", "/app/data/gravix.db" ]
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     environment:
       - JWT_SECRET=supersecretjwtkey12345!
       - TENANT_DB_PATH=/app/data/gravix.db
@@ -66,6 +88,9 @@ services:
     volumes:
       - ./data:/app/data
     command: [ "./ingestion-service", "--base-dir", "/app/data" ]
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     environment:
       - TENANT_DB_PATH=/app/data/gravix.db
       # No S3_ENDPOINT → ingestion auto-falls back to LocalStore (local disk)
@@ -87,7 +112,9 @@ services:
       - "4000:4000"
     environment:
       - CUBEJS_DB_TYPE=duckdb
-      - CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:
+      # Quoted: the value ends in a colon, so unquoted YAML reads the whole
+      # entry as a mapping key and Compose rejects the file. See F-010.
+      - "CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:"
       - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
       - TENANT_DB_PATH=/cube/data/gravix.db
@@ -118,6 +145,10 @@ services:
       - "8000:8000"
     volumes:
       - ./dashboards:/usr/share/nginx/html:ro
+      # One file, not the ./data directory: mounting the directory would serve
+      # api_key.txt over HTTP. bootstrap-init writes this before the dashboard
+      # container is created, which is what depends_on above guarantees.
+      - ./data/dashboard_config.js:/usr/share/nginx/html/dashboard_config.js:ro
       - ./storage/dashboard/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8000/healthz"]
@@ -127,6 +158,8 @@ services:
     depends_on:
       cube:
         condition: service_healthy
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 64m
     cpus: 0.25
     networks:
@@ -205,6 +238,38 @@ services:
       - ./data:/app/data
     # No S3 env vars → purge operates on local disk only
     mem_limit: 128m
+    cpus: 0.25
+    networks:
+      - backend
+
+  # Synthetic traffic so the dashboard has something to show in the first
+  # minute rather than an empty chart. Visible and stoppable:
+  #   docker compose -f docker-compose.bootstrap.yml stop synthetic-traffic
+  synthetic-traffic:
+    build:
+      context: .
+      dockerfile: services/load_generator/Dockerfile
+    container_name: gravix-synthetic-traffic
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -r /app/data/api_key.txt ]; then
+          echo "synthetic-traffic: cannot read /app/data/api_key.txt." >&2
+          echo "  The key is written 0600 by bootstrap-init and read here as the" >&2
+          echo "  same user. Check that bootstrap-init completed:" >&2
+          echo "    docker compose -f docker-compose.bootstrap.yml logs bootstrap-init" >&2
+          exit 1
+        fi
+        API_KEY="$$(cat /app/data/api_key.txt)" exec ./load-generator \
+          --target http://ingestion:8080/api/v1/facts \
+          --qps 5 --concurrency 2
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      ingestion:
+        condition: service_healthy
+    mem_limit: 64m
     cpus: 0.25
     networks:
       - backend

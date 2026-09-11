@@ -387,3 +387,77 @@ and each was reported by name before the probe was removed.
 while it was indistinguishable from the real thing. It diverged the moment a file needed to mention
 Docker in order not to use it — and at that point the proxy was actively fighting the property. When
 a guard blocks a change that strengthens what it guards, the guard is wrong, not the change.
+
+---
+
+## F-010 — `docker-compose.bootstrap.yml` has never parsed, and the README told people to run it
+
+**Found by** running `docker compose config` for GRVX-901's AC-7.
+**Severity** high — the documented low-cost deployment path was unusable, and silently so.
+**Status** fixed.
+
+```
+$ docker compose -f docker-compose.bootstrap.yml config
+services.cube.environment.[1]: unexpected type map[string]interface {}
+```
+
+Confirmed pre-existing by stashing every change from this spec and re-running: same error, exit 1.
+The file has never been valid for Compose v2.
+
+The line:
+
+```yaml
+      - CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:
+```
+
+DuckDB's in-memory database is spelled `:memory:`, so the value ends in a colon. A colon at the end
+of an unquoted YAML scalar makes the whole entry a **mapping key** — the parser reads
+`{"CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory": null}` where Compose wants a string, and rejects the file
+before starting anything.
+
+**Fixed** by quoting the entry. One character of syntax, and the only reason it went unnoticed is
+that nothing ever ran `docker compose config` against this file in CI — the `docker-lint` job builds
+Dockerfiles, and `docker-compose.yml` (the full stack) is the one covered elsewhere.
+
+**What made it invisible.** The failure is total and instant: no service starts, so there is no
+partial stack to debug and no log to read. A user following the README's bootstrap instructions saw
+one line of YAML arcana and nothing else. The whole point of the `$20/month` path is that it is the
+easy one, and it was the only one that did not work.
+
+GRVX-910's timed onboarding gate is the durable fix — a CI check that actually boots this file would
+have caught it on the commit that introduced it. Until then, `docker compose config` is asserted by
+GRVX-901's AC-7.
+
+---
+
+## F-011 — `docker-compose.yml` defines `gateway` twice, so the full stack does not start either
+
+**Found by** extending GRVX-901's compose validation to the second file.
+**Severity** high — the other documented deployment path is also unusable.
+**Status** open. Not fixed here: GRVX-901 §3 forbids touching `docker-compose.yml`, and the fix is a
+choice between two service definitions, which is not this spec's to make.
+
+```
+$ docker compose -f docker-compose.yml config
+failed to parse /home/user/gravix-dashboards/docker-compose.yml: yaml: construct errors:
+  line 1: line 69: mapping key "gateway" already defined at line 10
+```
+
+Two `gateway` blocks, and they do not agree on how the gateway finds its database:
+
+| | line 10 | line 69 |
+|---|---|---|
+| tenant db | `command: ["./gateway", "--tenant-db", "/app/data/gravix.db"]` | `environment: TENANT_DB_PATH=/app/data/gravix.db` |
+
+This reads as a rewrite where the replacement was added and the original never removed. YAML makes
+duplicate keys an error, so Compose rejects the file before reading either — which at least means
+nobody has been running a stack silently assembled from the wrong half.
+
+**Together with F-010, every documented Docker path in this repository was broken**: the bootstrap
+stack on a quoting bug, the full stack on a duplicate key. Both fail instantly and totally, which is
+why neither produced a bug report — there is no partial stack to complain about.
+
+**Fixing it needs a decision, not an edit.** The two blocks differ in more than the database flag,
+and picking one silently changes how the full stack is configured. Whoever fixes it should diff the
+two blocks in full, keep one, and add `docker-compose.yml` to the CI validation step that
+`.github/workflows/ci.yml` now runs for the bootstrap file.

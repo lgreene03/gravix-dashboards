@@ -1305,6 +1305,10 @@
     <script src="lib/utils.js"></script>
     <script src="lib/cube-client.js"></script>
     <script src="lib/chart-helpers.js"></script>
+    <!-- Generated at first boot by bootstrap-init; sets window.GRAVIX_CONFIG,
+         which app.js merges over its defaults. Absent outside the bootstrap
+         stack, where the 404 is harmless and the defaults apply unchanged. -->
+    <script src="dashboard_config.js"></script>
     <script src="app.js"></script>
     <!-- The lineage panel is an ES module, so it is deferred and runs after
          app.js. It publishes itself on window for app.js to open, which is why

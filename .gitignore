@@ -7,11 +7,14 @@
 # ---------------------------------------------------------------------------
 bin/
 /badge_server
+/bootstrap_seed
 /checkboundary
 /cli
 /compaction
+/demo_seed
 /gateway
 /gen
+/gen_facts
 /ingestion
 /ingestion-service
 /load-generator
@@ -23,6 +26,8 @@ bin/
 /service_events_daily
 /service_events_detail
 /sink-writer
+/status_page
+/trial_expiry
 gravix
 *.o
 *.a

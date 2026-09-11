@@ -215,6 +215,18 @@ jobs:
         with:
           dockerfile: services/gateway/Dockerfile
 
+      # The bootstrap stack had never parsed — one unquoted YAML value ending in
+      # a colon made Compose reject the whole file, so no service started and
+      # the error named a type rather than a line (F-010). Nothing ran this
+      # command in CI, which is why it survived. Now something does.
+      - name: Validate the bootstrap compose file
+        run: docker compose -f docker-compose.bootstrap.yml config >/dev/null
+
+      # docker-compose.yml is deliberately absent above: it defines `gateway`
+      # twice and Compose rejects it (F-011). Adding it here would land this
+      # job red for a fault GRVX-901 is not scoped to fix. Add it in the same
+      # change that fixes the duplicate.
+
   # ─── Container Image Pipeline (runs only on main branch push) ───
   docker-build:
     runs-on: ubuntu-latest

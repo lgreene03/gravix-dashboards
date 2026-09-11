@@ -179,11 +179,19 @@ This starts ingestion, MinIO, Trino, Cube.js, the dashboard, Prometheus, Grafana
 purge jobs. The load generator sends synthetic traffic automatically; metrics appear after the first
 rollup cycle, about five minutes.
 
-For a leaner stack (~800 MB rather than ~7.8 GB), use the bootstrap compose file:
+For a leaner stack (~800 MB rather than ~7.8 GB), use the bootstrap compose file. It needs no
+configuration at all — no `.env` to copy, no API key to paste:
 
 ```bash
-cp .env.bootstrap.example .env
-docker-compose -f docker-compose.bootstrap.yml up -d --build
+docker compose -f docker-compose.bootstrap.yml up -d --build
+```
+
+On first boot it creates a local tenant, generates an API key into `data/api_key.txt`, writes the
+dashboard's settings, and starts sending synthetic traffic so the charts have something to show.
+To stop the synthetic traffic:
+
+```bash
+docker compose -f docker-compose.bootstrap.yml stop synthetic-traffic
 ```
 
 ### 3. View the dashboard
