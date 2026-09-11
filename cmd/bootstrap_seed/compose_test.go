@@ -20,6 +20,7 @@ type composeService struct {
 	DependsOn   map[string]dep `yaml:"depends_on"`
 	Entrypoint  any            `yaml:"entrypoint"`
 	Command     any            `yaml:"command"`
+	User        string         `yaml:"user"`
 }
 
 type dep struct {
@@ -49,6 +50,29 @@ func loadCompose(t *testing.T) composeFileDoc {
 //
 // It parses rather than shelling out to `docker compose config`, so it holds
 // without a Docker daemon; CI runs the real command as well.
+
+// commandText flattens a service's entrypoint and command into one string,
+// whatever shape they take. The compose file legitimately moved from
+// entrypoint:[./bootstrap_seed] + command:[flags] to a shell invocation when
+// F-021 required a chown first, and a test that asserts the literal shape
+// breaks on a change that keeps every property it was meant to protect.
+func commandText(svc composeService) string {
+	var parts []string
+	for _, field := range []any{svc.Entrypoint, svc.Command} {
+		switch v := field.(type) {
+		case string:
+			parts = append(parts, v)
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func TestBootstrapComposeConfigValid(t *testing.T) {
 	doc := loadCompose(t)
 
@@ -146,10 +170,8 @@ func TestBootstrapSeedIsBuiltIntoItsImage(t *testing.T) {
 	if !ok {
 		t.Fatal("AC-7 FAILED: no bootstrap-init service")
 	}
-	entry, ok := init.Entrypoint.([]any)
-	if !ok || len(entry) == 0 || entry[0] != "./bootstrap_seed" {
-		t.Errorf("AC-7 FAILED: bootstrap-init's entrypoint is %v, want [./bootstrap_seed]",
-			init.Entrypoint)
+	if cmd := commandText(init); !strings.Contains(cmd, "./bootstrap_seed") {
+		t.Errorf("AC-7 FAILED: bootstrap-init never invokes ./bootstrap_seed; it runs: %s", cmd)
 	}
 }
 
@@ -163,21 +185,12 @@ func TestBootstrapInitIsToldWhereToWriteTheLogin(t *testing.T) {
 	if !ok {
 		t.Fatal("no bootstrap-init service")
 	}
-	args, ok := init.Command.([]any)
-	if !ok {
-		t.Fatalf("bootstrap-init command is %T, want a list of flags", init.Command)
+	cmd := commandText(init)
+	idx := strings.Index(cmd, "-login-file=")
+	if idx < 0 {
+		t.Fatalf("bootstrap-init has no -login-file flag; it runs: %s", cmd)
 	}
-
-	var found string
-	for _, a := range args {
-		s, _ := a.(string)
-		if strings.HasPrefix(s, "-login-file=") {
-			found = strings.TrimPrefix(s, "-login-file=")
-		}
-	}
-	if found == "" {
-		t.Fatalf("bootstrap-init has no -login-file flag; args are %v", args)
-	}
+	found := strings.Fields(cmd[idx+len("-login-file="):])[0]
 
 	// Must land on the mounted volume, beside the API key, or it is lost when
 	// the container exits.
@@ -199,6 +212,65 @@ func TestBootstrapInitIsToldWhereToWriteTheLogin(t *testing.T) {
 		}
 		if strings.Contains(v, "login.txt") {
 			t.Errorf("dashboard mounts the login file: %q", v)
+		}
+	}
+}
+
+// TestBootstrapInitOwnsTheDataVolume is the regression guard for F-021.
+//
+// ./data is gitignored, so on a fresh clone it does not exist and Docker creates
+// the bind-mount target as root:root. Every image in this stack runs as the
+// non-root `gravix` user, so nothing could write it: `docker compose up` died on
+// the first container with "service bootstrap-init didn't complete successfully:
+// exit 1", and SQLite reported the permission failure as "unable to open
+// database file: out of memory (14)", which sends a reader looking for a memory
+// problem that does not exist.
+//
+// The fix is one privileged one-shot container that chowns the mount and exits.
+// This test holds both halves: that it does the chown, and that it is the ONLY
+// service granted root.
+func TestBootstrapInitOwnsTheDataVolume(t *testing.T) {
+	doc := loadCompose(t)
+
+	init, ok := doc.Services["bootstrap-init"]
+	if !ok {
+		t.Fatal("no bootstrap-init service")
+	}
+	if init.User != "root" && init.User != "0" && init.User != "0:0" {
+		t.Errorf("bootstrap-init runs as %q; it needs root to chown a bind mount Docker created "+
+			"as root:root on a fresh clone", init.User)
+	}
+
+	cmd := commandText(init)
+	if !strings.Contains(cmd, "chown") || !strings.Contains(cmd, "gravix") {
+		t.Errorf("bootstrap-init does not chown /app/data to gravix; every other service "+
+			"runs non-root and cannot write it. It runs: %s", cmd)
+	}
+
+	// Twice: once before seeding so the seeder can write, once after so the
+	// files it created as root can be read by the services that are not.
+	// synthetic-traffic reads api_key.txt at mode 0600.
+	if n := strings.Count(cmd, "chown"); n < 2 {
+		t.Errorf("bootstrap-init chowns %d time(s); it must also chown AFTER seeding, or the "+
+			"0600 api_key.txt stays root-owned and synthetic-traffic cannot read it", n)
+	}
+
+	// The seeder's exit status must still reach compose, or a failed seed looks
+	// like a successful one and every dependent service starts against an
+	// unprovisioned database.
+	if !strings.Contains(cmd, "exit $$status") && !strings.Contains(cmd, "exit $status") {
+		t.Errorf("bootstrap-init does not propagate bootstrap_seed's exit status, so a failed "+
+			"seed would report success: %s", cmd)
+	}
+
+	// And root stays confined to this one container.
+	for name, svc := range doc.Services {
+		if name == "bootstrap-init" {
+			continue
+		}
+		if svc.User == "root" || svc.User == "0" || svc.User == "0:0" {
+			t.Errorf("service %q runs as root; only the one-shot bootstrap-init may, and only "+
+				"to fix the bind-mount ownership", name)
 		}
 	}
 }

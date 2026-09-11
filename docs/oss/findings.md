@@ -1040,3 +1040,68 @@ there was no harness that could have produced the real ones.
 JSONL size (measured), and the aggregation factor with an explicit note that it depends on events per
 bucket-key and is not recoverable per event. Then re-derive the plan-tier tables from the measured
 figure rather than from 300 bytes.
+
+## F-021 — the bootstrap stack's data volume arrives root-owned, and every container runs non-root
+
+**Found by** GRVX-910's `timed-onboarding` gate, on the first run where the images actually built.
+**Severity** high — `docker compose -f docker-compose.bootstrap.yml up -d --build` dies on the first
+container. Nothing starts.
+**Status** fixed in `docker-compose.bootstrap.yml`, guarded by
+`TestBootstrapInitOwnsTheDataVolume`.
+
+**The chain**, four facts that are each fine alone:
+
+| | |
+|---|---|
+| `.gitignore:51` | `data/` is ignored, so a fresh clone has no `./data` |
+| `docker-compose.bootstrap.yml` | every service binds `./data:/app/data` |
+| Docker | a bind mount whose host path does not exist is created as **root:root** |
+| `services/rollup/Dockerfile:50-51` | `chown -R gravix:gravix /app/data` then `USER gravix` — and the bind mount replaces that directory, ownership included |
+
+So the container runs as `gravix` against a root-owned directory it cannot write. From the CI log:
+
+```
+Container gravix-bootstrap-init  service "bootstrap-init" didn't complete successfully: exit 1
+```
+
+**Reproduced with a control**, running the real binary as a non-root uid:
+
+```
+$ ls -ld ./data           # as Docker creates it
+drwxr-xr-x root root data
+
+$ setpriv --reuid=65534 … ./bootstrap_seed -db=./data/gravix.db …
+bootstrap_seed: open tenant database: set WAL mode: unable to open database file: out of memory (14)
+exit=1
+
+$ chown -R 65534:65534 ./data && setpriv --reuid=65534 … ./bootstrap_seed …
+dashboard login written to …/login.txt
+exit=0
+```
+
+Ownership is the only variable between the two runs.
+
+**A detail worth knowing on its own:** SQLite reports this permission failure as **"unable to open
+database file: out of memory (14)"**. There is no memory problem. Anyone reading that line in a
+compose log will go looking for one, which is a good reason to record the real cause here.
+
+**The fix.** `bootstrap-init` — a one-shot container that already exists and already holds the most
+privilege-adjacent job in the stack, minting credentials — now runs as root, chowns `/app/data` to
+`gravix`, seeds, and chowns again. The long-running services stay non-root. This is the ordinary
+init-container pattern.
+
+The second chown is not redundant: the seeder runs as root, so `api_key.txt` and `login.txt` are
+created root-owned at mode 0600, and `synthetic-traffic` reads the key as `gravix`. Without it the
+stack fails one container later instead of one container earlier.
+
+**Why nothing caught it.** The same reason as F-015, F-016 and F-019: **nobody had ever run this
+stack.** `docker-smoke` builds the *full* stack and only on push to `main`. GRVX-901's Definition of
+Done claimed four services healthy within 60 seconds, and no Docker daemon existed in the environment
+where that box was ticked. The first time `docker compose up` ran against
+`docker-compose.bootstrap.yml` was `timed-onboarding`'s first green build — which is this finding.
+
+**Four independent breaks on one path.** F-015 (facts written where no reader looked), F-016 (no
+credential Cube would accept), F-019 (the image would not build), and this. Each would have been
+sufficient on its own to make the advertised quickstart fail, and each was invisible to every gate
+that existed. The lesson is not about any of the four: it is that a documented command nobody
+executes is a documented command that does not work, and the only fix is a gate that runs it.

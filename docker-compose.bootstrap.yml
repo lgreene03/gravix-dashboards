@@ -43,12 +43,28 @@ services:
       context: .
       dockerfile: services/rollup/Dockerfile
     container_name: gravix-bootstrap-init
-    entrypoint: ["./bootstrap_seed"]
+    # The one privileged container in the stack, and only because of the bind
+    # mount: ./data is gitignored, so on a fresh clone it does not exist, and
+    # Docker creates the mount target as root:root. Every image here runs as the
+    # non-root `gravix` user, so nothing could write it and the whole stack
+    # failed on the first container (F-021). This one-shot init container fixes
+    # the ownership once and exits; the long-running services stay non-root.
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - "-db=/app/data/gravix.db"
-      - "-api-key-file=/app/data/api_key.txt"
-      - "-dashboard-config=/app/data/dashboard_config.js"
-      - "-login-file=/app/data/login.txt"
+      - |
+        chown -R gravix:gravix /app/data
+        ./bootstrap_seed \
+          -db=/app/data/gravix.db \
+          -api-key-file=/app/data/api_key.txt \
+          -dashboard-config=/app/data/dashboard_config.js \
+          -login-file=/app/data/login.txt
+        status=$$?
+        # Again after seeding: the files were created by root and the services
+        # that read them are not. synthetic-traffic reads api_key.txt at 0600,
+        # so a root-owned key means it cannot start.
+        chown -R gravix:gravix /app/data
+        exit $$status
     volumes:
       - ./data:/app/data
     networks:
