@@ -254,19 +254,137 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All eight acceptance criteria pass, plus five more. One defect
+found and fixed (SD-017) and one finding in the README (F-014) — both the same root cause, and
+neither visible to any of the eight criteria.
+
+**Harness (§7): `node --test`**, extending `dashboards/lib/` as GRVX-903 established. §7 says to
+extend that harness rather than introduce a second, so the tests live in
+`dashboards/lib/empty-states.test.js` and run with `make test-js`.
+
+**1-3. Static checks**
+
+```
+$ grep -c 'id="onboard-curl"' dashboards/index.html        -> 1
+$ grep -c 'id="events-empty-curl"' dashboards/index.html   -> 1
+$ grep -c 'id="slo-empty-curl"' dashboards/index.html      -> 1
+$ grep -c '\$API_KEY' dashboards/index.html                -> 0
+$ grep -c 'function buildCurlCommand' dashboards/app.js     -> 1
+$ grep -c 'function renderEmptyStateCommand' dashboards/app.js -> 1
+```
+
+**4. The harness**
+
+```
+$ make test-js
+ok - TestBuildCurlCommandFact                        (AC-1)
+ok - TestBuildCurlCommandIsFreshEachRender
+ok - TestBuildCurlCommandEvent                       (AC-2)
+ok - TestBuildCurlCommandFallbackWhenNoAPIKey        (AC-3)
+ok - TestBuildCurlCommandTrimsTrailingSlash
+ok - TestRenderEmptyStateCommandOnboard              (AC-4)
+ok - TestRenderEmptyStateCommandEvents               (AC-5)
+ok - TestRenderEmptyStateCommandSLO                  (AC-6)
+ok - TestShowEmptyPopulatesOnboardCurl               (AC-7)
+ok - TestRenderEmptyStateCommandMissingElementIsNoop (AC-8)
+ok - TestEmptyStateTargetsExistInMarkup
+ok - TestEventIDsAreUUIDv7                           (SD-017 regression)
+# pass 73   # fail 0     (the whole dashboards/ + cube/ suite)
+
+dashboards/ gzipped: 62716 bytes (+2706 vs the GRVX-903 baseline, within the 8192 budget)
+```
+
+**5-6. Nothing else broke, and open-core integrity**
+
+```
+$ go build ./... && go test ./schemas/...   # ok
+$ make check-boundary                        # boundary: 0 violations
+$ make build-oss && make test-oss            # 50 packages, ee/ absent
+$ go test ./... -race -count=1               # no failures
+$ make lint                                  # clean
+```
+
+### 8.2 The manual POST, and what it caught
+
+§9 requires the rendered payloads to be confirmed against a live service with the `201` pasted here.
+That requirement is the only reason this spec did not ship broken.
+
+**First attempt — both endpoints rejected the command the spec mandates:**
+
+```
+$ # the exact command rendered by buildCurlCommand, against a live ingestion service
+{"code":400,"error":"invalid RequestFact: validation error: event_id must be UUIDv7 (got v4)"}
+{"code":400,"error":"invalid ServiceEvent: validation error: event_id must be UUIDv7 (got v4)"}
+```
+
+§5 names `crypto.randomUUID()`, which returns a **version 4** UUID, and §6.1's placeholder
+`00000000-0000-4000-8000-000000000000` is a v4 as well. Every Gravix endpoint requires **version 7**
+(`schemas/request_fact.go:71`, `schemas/service_event.go:43`). The spec whose title is "the exact,
+pre-filled curl command that fills it" specified a command that fills nothing — and a first-time user
+pasting it is told by the product that the product rejects its own example.
+
+**After replacing it with a real RFC 9562 v7 generator:**
+
+```
+$ curl -X POST http://127.0.0.1:18090/api/v1/facts \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: grvx_local_test_key" \
+    -d '{"event_id":"01a0921f-5dd1-7eb6-9970-34bae8ae3337","event_time":"2026-09-11T20:18:44.314Z","service":"my-service","method":"GET","path_template":"/api/v1/health","status_code":200,"latency_ms":42,"user_agent_family":"curl"}'
+HTTP/1.1 201 Created
+
+$ curl -X POST http://127.0.0.1:18090/api/v1/events \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: grvx_local_test_key" \
+    -d '{"event_id":"01a0921f-5ddb-7370-8059-7ce32a306245","event_time":"2026-09-11T20:18:44.315Z","service":"my-service","event_type":"deploy_completed","message":"manual test event"}'
+HTTP/1.1 201 Created
+```
+
+Both commands are the literal output of `buildCurlCommand`, with only the host and key pointed at the
+local service. Recorded as **SD-017**, with `TestEventIDsAreUUIDv7` pinning the version on every path
+that can produce an id.
+
+**All eight acceptance criteria passed against the broken command.** They assert that the output
+*contains* the right substrings, and it did — the substrings were never the problem. A criterion that
+checks the shape of a command cannot tell you the command works.
+
+### 8.3 The same bug, one file over
+
+Testing the rendered command led to running the README's, which fails for the same reason and two
+others. `uuidgen` produces a v4; it is not installed in this repository's own container image; and
+the key was read with `grep API_KEY .env`, which GRVX-901 emptied for the bootstrap stack two specs
+ago. Recorded as **F-014** and fixed: the quick-start now leads with `gravix send fact` (verified
+end to end: `✓ Fact sent successfully.`, exit 0), keeps a by-hand curl with a literal v7 id, and says
+plainly that `uuidgen` will be rejected.
+
+The rule that `event_id` must be v7 is enforced in two validators and was stated in no example.
+Every hand-written example in the repository had it wrong; the SDKs and the CLI had it right.
+
+### 8.4 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| The logic lives in `dashboards/lib/empty-states.js`; `app.js` holds thin wrappers | Same reason as GRVX-903: `app.js` is a classic script with no module boundary, and nothing under `node --test` can reach inside it. §7 requires GRVX-903's harness, and this is what makes the harness able to see the code. |
+| `crypto.randomUUID()` replaced with a UUIDv7 generator, and §6.1's placeholder corrected | SD-017. Following §5 literally produces a command that returns 400 to every user. No product decision was needed — the intent is unambiguous and only the mechanism was wrong — so this was fixed rather than escalated. |
+| `dashboards/lib/slo-cards.js` gained an `onEmpty` callback | §6.7 says to call the renderer when GRVX-903's `#slo-empty` is shown, and that branch lives in the SLO module. Injected rather than imported so `slo-cards.js` stays testable alone. |
+| `README.md` modified | The §9 docs delta, plus F-014. |
+| `dashboards/bundle-baseline.json` updated | +2706 bytes, well inside the 8192 budget. Recorded in the same commit so the growth is a reviewable number, per F-012's mechanism. |
+
 ## 9. Definition of done
 
-- [ ] All eight acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.2 modified
-- [ ] `docs-engineer` delta merged (quick-start docs no longer instruct readers to `export
-      API_KEY` manually) or `NO DOCS DELTA REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests
-- [ ] The three example payloads in §5.1/§5.2 are confirmed schema-valid against
-      `schemas.ValidateRequestFact`/`schemas.ValidateServiceEvent` by manual POST during
-      implementation, and that POST's `201` response is pasted into the report
+- [x] All eight acceptance criteria pass with their named tests — §8.1, plus five more
+- [x] Every Verification command run, real output pasted into the report — §8.1
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted — 50 packages
+- [ ] **No** — four beyond §4.2, each with its reason in §8.4. One was not optional: §7 demands
+      GRVX-903's harness, which cannot reach code inside `app.js`.
+- [x] `docs-engineer` delta merged — the quick-start now leads with `gravix send fact`, reads the
+      key correctly for both stacks, and warns that `uuidgen` produces a v4 that will be rejected
+- [x] Zero new skipped or quarantined tests
+- [x] **Confirmed by manual POST, and it failed the first time** — §8.2 has both the `400`s that
+      exposed SD-017 and the two `201 Created` responses after the fix. This line is the only reason
+      the spec did not ship a command that fails on contact.
 
 ## 10. Escalation
 

@@ -69,6 +69,21 @@
             return fetch(`${GRAVIX_CONFIG.ingestionApiUrl}${path}`, { ...options, headers });
         }
 
+        // --- EMPTY-STATE COMMANDS (GRVX-907) ---
+        // An empty state that tells you to run a command you cannot run is
+        // worse than no command. These are built from this dashboard's own
+        // config, so on the bootstrap stack they paste and run unedited.
+        // The logic lives in lib/empty-states.js so it can be tested.
+        function renderEmptyStateCommand(prefix, kind) {
+            if (!window.GravixEmptyStates) return null;
+            return window.GravixEmptyStates.renderEmptyStateCommand(prefix, kind, GRAVIX_CONFIG);
+        }
+
+        function buildCurlCommand(kind) {
+            if (!window.GravixEmptyStates) return '';
+            return window.GravixEmptyStates.buildCurlCommand(kind, GRAVIX_CONFIG);
+        }
+
         // --- THEME ---
         function initTheme() {
             const saved = localStorage.getItem('gravix_theme');
@@ -763,7 +778,8 @@
                 fetchServices: () => ingestionFetch('/api/v1/services'),
                 fetchMetrics: fetchSLOForService,
                 grid: document.getElementById('slo-grid'),
-                empty: document.getElementById('slo-empty')
+                empty: document.getElementById('slo-empty'),
+                onEmpty: () => renderEmptyStateCommand('slo-empty', 'fact')
             });
         }
 
@@ -1183,6 +1199,11 @@
                 const filtered = hasActiveFilters();
                 document.getElementById('emptyFiltered').style.display = filtered ? 'block' : 'none';
                 document.getElementById('emptyOnboard').style.display = filtered ? 'none' : 'block';
+                if (!filtered) {
+                    // Rendered on every show, not once at load: event_time must be
+                    // current, or a pasted command is rejected as too old.
+                    renderEmptyStateCommand('onboard', 'fact');
+                }
             }
         }
 
@@ -1984,6 +2005,7 @@
             if (!data || data.length === 0) {
                 wrapper.style.display = 'none';
                 empty.style.display = 'block';
+                renderEmptyStateCommand('events-empty', 'event');
                 return;
             }
             wrapper.style.display = 'block';

@@ -1035,3 +1035,53 @@ or accepting staleness, and both deserve deciding rather than assuming.
 states it, and so does the comment where the `Learner` is constructed in `services/ingestion/main.go`.
 A single-replica deployment — the default, and every self-hoster following the bootstrap path — has
 the exact bound the spec claims.
+
+---
+
+## SD-017 — GRVX-907's mandated `crypto.randomUUID()` produces a command that always fails
+
+**Severity** high when filed — the spec's one objective is a command that works, and the mandated
+implementation produces one that returns `400` for every user who pastes it.
+**Status** fixed in implementation; the spec text still needs correcting.
+
+§5 fixes the mechanism:
+
+> `event_id` is generated via `crypto.randomUUID()`
+
+and §6.1 fixes the fallback:
+
+> falls back to a fixed placeholder string `00000000-0000-4000-8000-000000000000`
+
+Both are **version 4** UUIDs. Every Gravix ingestion endpoint requires **version 7**
+(`schemas/request_fact.go:71`, `schemas/service_event.go:43`):
+
+```
+$ curl -X POST …/api/v1/facts -H "X-API-Key: …" -d '{"event_id":"4f0ceef6-bf29-4b4d-…", …}'
+{"code":400,"error":"invalid RequestFact: validation error: event_id must be UUIDv7 (got v4)"}
+
+$ curl -X POST …/api/v1/events …
+{"code":400,"error":"invalid ServiceEvent: validation error: event_id must be UUIDv7 (got v4)"}
+```
+
+So the spec whose title is *"every empty state carries the exact, pre-filled curl command that fills
+it"* mandated a command that fills nothing. A first-time user pasting it is told, by the product, that
+the product rejects its own example — which is a worse first impression than the blank `<pre>` this
+spec replaces.
+
+**Fixed** by generating a real RFC 9562 version-7 UUID (48-bit millisecond timestamp, version nibble,
+variant bits, random remainder) instead of calling `crypto.randomUUID()`, and by correcting the
+placeholder to `00000000-0000-7000-8000-000000000000`. Both rendered commands now return `201
+Created` against a live ingestion service — pasted in the spec's verification record.
+
+No product decision was needed, so this was fixed rather than escalated: the spec's intent is
+unambiguous and only the named mechanism was wrong. `TestEventIDsAreUUIDv7` pins the version across
+every path that can produce an id.
+
+**§5 and §6.1 of the spec should be amended** to say UUIDv7 and to correct the placeholder, so the
+next reader does not reintroduce it.
+
+**How it was caught is the point.** Eight acceptance criteria all passed against the broken command —
+they check that the output *contains* the right substrings, and it did. What caught it was the
+Definition of Done's insistence on a **manual POST with the 201 pasted into the report**. That line
+looked like ceremony next to eight automated checks. It was the only thing standing between this and
+a shipped empty state that fails on contact.

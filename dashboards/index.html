@@ -209,18 +209,9 @@
                     <div class="waiting-spinner"></div>
                     <h3>Waiting for your first events...</h3>
                     <p>No data received yet. Send your first event using the command below:</p>
-                    <pre>curl -X POST http://localhost:8090/api/v1/facts \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{
-    "event_id": "'$(uuidgen | tr A-F a-f)'",
-    "event_time": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-    "service": "my-service",
-    "method": "GET",
-    "path_template": "/api/v1/health",
-    "status_code": 200,
-    "latency_ms": 42
-  }'</pre>
+                    <!-- Filled at render time from the dashboard's own config, so on the
+                         bootstrap stack this pastes and runs with no edits. -->
+                    <pre id="onboard-curl"></pre>
                     <p style="margin-top: 12px;">Then wait for the rollup job to aggregate metrics (runs every 5 minutes).</p>
                 </div>
             </div>
@@ -360,6 +351,7 @@
                             <a href="https://docs.gravix.io/getting-started/service-events" target="_blank">read the docs</a>
                             to integrate your CI/CD or runtime.
                         </p>
+                        <pre id="events-empty-curl"></pre>
                     </div>
                     <!-- Timeline stacked bar chart -->
                     <div id="events-timeline-wrapper" class="chart-wrapper" style="display: none;">
@@ -477,6 +469,7 @@
         <div id="page-slo" class="page-content" style="display: none;">
             <div id="slo-empty" class="empty-state">
                 <p>No services discovered yet. Send traffic to see SLO cards appear automatically.</p>
+                <pre id="slo-empty-curl"></pre>
             </div>
             <div id="slo-grid" class="slo-grid"></div>
         </div>
@@ -1348,6 +1341,9 @@
         // publishes itself the same way the lineage panel does.
         import { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY } from './lib/slo-cards.js';
         window.GravixSLO = { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY };
+
+        import { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE } from './lib/empty-states.js';
+        window.GravixEmptyStates = { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE };
     </script>
 </body>
 

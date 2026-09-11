@@ -573,3 +573,47 @@ function look well tested; the success path's visibility gap was the thing nobod
 for keeping I/O off a hot path, and it silently introduces a window where the data exists nowhere.
 Any code in this repository that follows that shape — swap a buffer, then persist it — deserves the
 same question: what does a reader see in between?
+
+---
+
+## F-014 — the README's "Send your own data" example has never worked
+
+**Found by** running it, while doing GRVX-907's Definition-of-Done manual POST.
+**Severity** medium — it is the first command a new user runs by hand, and it fails.
+**Status** fixed.
+
+The README's quick-start told readers to send their first fact with:
+
+```bash
+curl … -d '{ "eventId": "'$(uuidgen | tr '[:upper:]' '[:lower:]')'", … }'
+```
+
+Two independent failures, both verified against a live ingestion service:
+
+1. **`uuidgen` produces a UUID version 4, and Gravix requires version 7.**
+   ```
+   $ curl … -d '{"event_id":"9b2d4f6a-1c3e-4a5b-8d7f-2e4a6c8b0d1f", …}'
+   {"code":400,"error":"invalid RequestFact: validation error: event_id must be UUIDv7 (got v4)"}
+   ```
+2. **`uuidgen` is not always installed** — it is absent from this repository's own container image,
+   where the command expands to an empty id and fails differently:
+   `{"code":400,"error":"… event_id is required"}`.
+
+So the documented first command fails on every machine: with a `v4` error where `uuidgen` exists, and
+a `required` error where it does not.
+
+There was a third problem specific to the bootstrap stack: the key was read with
+`$(grep API_KEY .env | cut -d= -f2)`, and GRVX-901 removed `API_KEY` from `.env.bootstrap.example`
+because the bootstrap stack generates its key into `data/api_key.txt` instead. That one is mine,
+introduced two specs earlier.
+
+**Fixed.** The quick-start now leads with `gravix send fact`, which builds a valid fact and needs no
+`uuidgen`; verified end to end (`✓ Fact sent successfully.`, exit 0). The by-hand curl is kept for
+people who want it, with a literal v7 id, the key read correctly for both stacks, and an explicit
+note that `uuidgen` produces a v4 and will be rejected.
+
+**This is the same root cause as SD-017**, found within an hour of it, in a different file. The rule
+that `event_id` must be v7 is enforced in two validators and stated in no example. Anything in this
+repository that shows a reader how to construct a fact by hand should be checked against a running
+ingestion service — the SDKs and the CLI get it right, and everything hand-written has so far got it
+wrong.

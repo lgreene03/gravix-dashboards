@@ -116,14 +116,14 @@ export function zeroMetrics(failed = false) {
 // Every dependency is injected so the whole flow is testable without a browser:
 // fetchServices returns a Response-like, fetchMetrics resolves per service, and
 // grid/empty are the two elements to swap between.
-export async function loadSLOPage({ fetchServices, fetchMetrics, grid, empty }) {
+export async function loadSLOPage({ fetchServices, fetchMetrics, grid, empty, onEmpty }) {
     setHTML(grid, '');
 
     let services;
     try {
         const resp = await fetchServices();
         if (!resp || !resp.ok) {
-            return showEmpty(grid, empty);
+            return showEmpty(grid, empty, onEmpty);
         }
         const body = await resp.json();
         services = Array.isArray(body?.services) ? body.services : [];
@@ -131,11 +131,11 @@ export async function loadSLOPage({ fetchServices, fetchMetrics, grid, empty }) 
         // A discovery failure shows the empty state rather than an error. The
         // user cannot act on "the request failed", and the remedy — send some
         // traffic — is the same either way.
-        return showEmpty(grid, empty);
+        return showEmpty(grid, empty, onEmpty);
     }
 
     if (services.length === 0) {
-        return showEmpty(grid, empty);
+        return showEmpty(grid, empty, onEmpty);
     }
 
     // Fetched in parallel, rendered in the order the endpoint returned (already
@@ -156,10 +156,13 @@ export async function loadSLOPage({ fetchServices, fetchMetrics, grid, empty }) 
 // class, which is the convention app.js already uses. Clearing style.display
 // instead would fall straight back to the CSS rule and the empty state would
 // never appear — and a test that only inspected style.display would not notice.
-function showEmpty(grid, empty) {
+function showEmpty(grid, empty, onEmpty) {
     setHTML(grid, '');
     if (empty) empty.classList.toggle('visible', true);
     if (grid) grid.style.display = 'none';
+    // The caller fills in the command that would populate this page. Injected
+    // rather than imported so this module stays testable on its own.
+    if (typeof onEmpty === 'function') onEmpty();
     return 0;
 }
 

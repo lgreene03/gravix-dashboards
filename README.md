@@ -214,25 +214,47 @@ dashboard just looks empty.
 
 ### 4. Send your own data
 
+The CLI is the shortest path — it builds a valid fact for you:
+
+```bash
+# bootstrap stack: the key was generated for you on first boot
+export GRAVIX_API_KEY=$(cat data/api_key.txt)
+# full stack: it is the one you set in .env
+export GRAVIX_API_KEY=$(grep API_KEY .env | cut -d= -f2)
+
+gravix send fact --service my-api --method GET --path /api/health --status 200 --latency 42
+```
+
+By hand, if you prefer:
+
 ```bash
 curl -X POST http://localhost:8090/api/v1/facts \
-  -H "X-API-Key: $(grep API_KEY .env | cut -d= -f2)" \
+  -H "X-API-Key: $GRAVIX_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "eventId": "'$(uuidgen | tr '[:upper:]' '[:lower:]')'",
-    "eventTime": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+    "event_id": "018f3a3b-3d7f-7b2e-9c5a-1a2b3c4d5e6f",
+    "event_time": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
     "service": "my-api",
     "method": "GET",
-    "pathTemplate": "/api/health",
-    "statusCode": 200,
-    "latencyMs": 42
+    "path_template": "/api/health",
+    "status_code": 200,
+    "latency_ms": 42
   }'
 ```
+
+**`event_id` must be a UUID version 7**, and must be new for each fact — v7 sorts by creation time,
+which is what makes facts deduplicable and ordered without a separate sequence. `uuidgen` produces a
+**v4** and is rejected with `event_id must be UUIDv7 (got v4)`, so replace the id above rather than
+generating one with it. `gravix send fact` and every official SDK handle this for you.
+
+The dashboard's own empty state shows this same command with your real key and a fresh id already
+filled in — open it at [http://localhost:8000/index.html](http://localhost:8000/index.html) before
+any data has arrived.
 
 Or use the built-in load generator:
 
 ```bash
-go run ./cmd/load_generator/ --api-key "$(grep API_KEY .env | cut -d= -f2)"
+go run ./cmd/load_generator/ --api-key "$GRAVIX_API_KEY"
 ```
 
 ## Local service endpoints
