@@ -997,3 +997,46 @@ the bootstrap stack, so this class of failure is now caught before merge rather 
 **Related, and not fixed here:** `docker-smoke` retains its push-to-main-only condition, so the
 *full* stack still has no pull-request build. Worth revisiting once `timed-onboarding` has a few
 green runs to show what it costs in minutes.
+
+## F-020 — capacity planning's per-event sizes are wrong, and its "compression ratio" describes the wrong mechanism
+
+**Found by** GRVX-1004 §6 step 1, which requires reconciling `docs/capacity-planning.md` against the
+measured figures before building a cost calculator on top of it.
+**Severity** medium — the storage numbers are conservative, so nobody under-provisions, but the
+mechanism is described wrongly and that misleads about what Parquet can be used for.
+**Status** open. Not fixed here: GRVX-1004 §4.2 admits `docs/capacity-planning.md` only to "link the
+calculator; remove any figure the model now supersedes", and rewriting the mechanism paragraph is a
+larger edit than that.
+
+**The three figures**, against the GRVX-1001 bench run (1,008,000 facts, committed result file):
+
+| `docs/capacity-planning.md` | Documented | Measured | |
+|---|---:|---:|---|
+| JSONL per event | ~300 B | **203.78 B** | over by 47% |
+| Parquet per event | ~30-50 B | **2.89 B** | over by 10-17× |
+| "Compression Ratio: 6-10x vs JSONL" | 6-10× | **70×** | and it is not compression |
+
+**The mechanism is the real problem.** The table is headed *Compression Ratio* and the Parquet row
+says "6-10x vs JSONL — Zstd-compressed, columnar". That frames the size difference as an encoding
+win, which invites a reader to assume Parquet holds the same information more tightly. It does not.
+The rollup **aggregates**: many facts collapse into one minute-bucket row per
+service/method/path_template. Most of the 70× is fewer rows, not smaller ones.
+
+Two things follow that the current wording hides:
+
+1. **Per-event data cannot be recovered from the warehouse.** Raw JSONL is the only per-event record,
+   which is exactly why `docs/00-system-truth.md` §4 forbids deleting it. A reader who believes
+   Parquet is a compressed copy might reasonably conclude the raw files are redundant.
+2. **The ratio does not hold at any scale.** It is a function of events per bucket-key. A deployment
+   with one service and one path gets a far better ratio than one with twenty services; the bench
+   run's 70× reflects its own fixture shape, not a property of the format.
+
+**Why the numbers are safe but still wrong.** Over-estimating storage means nobody runs out of disk,
+so this has never bitten anyone. It has also never been checked: the figures are described in the
+document itself as planning estimates ("Use 300 bytes as a planning average"), and until GRVX-1001
+there was no harness that could have produced the real ones.
+
+**The repair:** replace the compression-ratio column with two separate statements — the per-event
+JSONL size (measured), and the aggregation factor with an explicit note that it depends on events per
+bucket-key and is not recoverable per event. Then re-derive the plan-tier tables from the measured
+figure rather than from 300 bytes.

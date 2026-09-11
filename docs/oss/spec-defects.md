@@ -1202,3 +1202,46 @@ breakdown.
 name the first table's messages verbatim. §5.1's table and the first §6.1 govern; the second §6.1 and
 §6 steps 1–3 are residue from an earlier draft that measured stages. `cmd/onboarding_gate` implements
 §5.1 exactly.
+
+## SD-021 — GRVX-1004's mandatory at-scale caveat quotes a fixed "roughly 10x" that is wrong at both ends
+
+**Severity** medium — the caveat is mandatory and verbatim, and it understates the at-scale cost by
+four times at the volumes its likely reader is at.
+**Status** worked around in implementation (the computed multiple prints beside it); the spec text
+and the thesis both need correcting.
+
+§5.2 requires this sentence verbatim on every AWS single-region estimate:
+
+> This is the shape Gravix moves to at scale. It is roughly 10x the bootstrap figure and is the
+> honest number for a team past a few million events a month.
+
+Measured against the model the same spec asks for:
+
+| events/month | retention | bootstrap | aws_single | multiple |
+|---:|---:|---:|---:|---:|
+| 1,000,000 | 30 d | $5.00 | $219.91 | **44.0×** |
+| 10,000,000 | 30 d | $5.00 | $219.95 | 44.0× |
+| 50,000,000 | 30 d | $5.00 | $220.13 | 44.0× |
+| 200,000,000 | 90 d | $12.55 | $222.57 | 17.7× |
+| 1,000,000,000 | 30 d | $20.25 | $224.34 | 11.1× |
+| 1,000,000,000 | 90 d | $58.75 | $233.19 | **4.0×** |
+
+"Roughly 10x" is true in a narrow band around a billion events a month at 30-day retention. It is
+wrong everywhere else, and **wrong in the dangerous direction for the reader it is written for**: the
+sentence addresses "a team past a few million events a month", and at that volume the real multiple
+is 44×. A team budgeting from "$5, and roughly 10× at scale" would plan for $50 and meet $220.
+
+**Why the multiple is not a constant.** The at-scale baseline is dominated by fixed cost — control
+plane, nodes, load balancer — which is ~$213/month before a single event is ingested. The bootstrap
+VPS is flat at $5 until its included storage runs out. So the ratio starts high and falls as variable
+cost grows, which is the opposite shape to the one a single multiplier implies.
+
+**Worked around, not fixed.** The mandatory sentence still prints verbatim, as §5.2 requires, and a
+second caveat prints the multiple computed from the numbers actually rendered, ending "Budget from
+this figure, not from the multiple." `TestComputedMultipleAccompaniesTheCaveat` asserts the stated
+multiple matches the estimates it accompanies, so the correction cannot become its own inaccuracy,
+and `TestMultipleVariesWithVolume` fails if a future edit reintroduces a fixed multiple.
+
+**The real repair** is in the spec and in `docs/oss/01-competitive-thesis.md` §2 Axis 4: drop the
+multiplier and state the two figures, or state the multiple as a range with the volume it applies at.
+A single number here cannot be right, because the quantity it describes is a curve.
