@@ -255,3 +255,154 @@ test('storage scales with retention and with bytes per event', () => {
     assert.ok(storageGB({ ...base, retentionDays: 90 }) > storageGB({ ...base, retentionDays: 7 }));
     assert.ok(storageGB({ ...base, bytesPerEvent: 400 }) > storageGB(base));
 });
+
+// ─── AC-8 through AC-11: the page ───
+//
+// Static analysis of tco.html, not a browser. dashboards/ has no build step and
+// `make test-js` is node --test with no dependencies; adding a headless browser
+// to CI for four assertions would cost more than it catches. What follows checks
+// the properties a browser would have verified, by reading the markup and CSS —
+// and says plainly, in AC-10, which half of that criterion it cannot cover.
+
+const pageHTML = readFileSync(join(repoRoot, 'dashboards', 'tco.html'), 'utf8');
+
+test('AC-8: the page renders all three deployments together', () => {
+    // The render path maps over whatever estimateAll returns, and estimateAll
+    // returns three — so the page cannot render one in isolation without a
+    // deliberate code change. Both halves are checked.
+    assert.match(pageHTML, /estimates\.map\(/,
+        'the page does not map over the full estimate list');
+    assert.ok(!/estimates\[0\]|estimates\.find\(|\.filter\(/.test(pageHTML),
+        'the page indexes or filters the estimate list; it must render all three');
+
+    for (const d of [DEPLOYMENT_BOOTSTRAP_VPS, DEPLOYMENT_AWS_SINGLE, DEPLOYMENT_AWS_MULTI]) {
+        assert.ok(pageHTML.includes(d), `the page has no title mapping for ${d}`);
+    }
+
+    // Every caveat is rendered, not collapsed behind a disclosure. A caveat you
+    // have to click is a caveat the reader does not see.
+    assert.match(pageHTML, /caveats\.map\(/, 'caveats are not all rendered');
+    assert.ok(!/<details|<summary/i.test(pageHTML),
+        'the page hides content behind a disclosure element');
+
+    // And the basis badge travels with every line item.
+    assert.match(pageHTML, /badge-\$\{escapeHTML\(li\.basis\)\}/,
+        'line items do not carry a basis badge');
+});
+
+test('AC-9: no upsell, sales CTA, or lead capture', () => {
+    const forbidden = [
+        /contact\s+sales/i, /talk\s+to\s+sales/i, /book\s+a\s+demo/i, /request\s+a\s+demo/i,
+        /start\s+(your\s+)?free\s+trial/i, /upgrade\s+to\s+pro/i, /get\s+a\s+quote/i,
+        /enterprise\s+plan/i, /pricing\s+plans/i,
+    ];
+    for (const pattern of forbidden) {
+        assert.ok(!pattern.test(pageHTML), `the page contains an upsell matching ${pattern}`);
+    }
+
+    // No lead capture of any kind: no email or tel input, no form that posts
+    // anywhere, no mailto.
+    const inputTypes = [...pageHTML.matchAll(/<input[^>]*\btype="([^"]+)"/g)].map(m => m[1]);
+    for (const t of inputTypes) {
+        assert.ok(t === 'number', `the page has an <input type="${t}">; only numeric inputs belong here`);
+    }
+    assert.ok(!/<form[^>]*\baction=/i.test(pageHTML), 'a form posts somewhere');
+    assert.ok(!/mailto:/i.test(pageHTML), 'the page contains a mailto: link');
+    assert.ok(!/<input[^>]*\bname="email"/i.test(pageHTML), 'the page has an email field');
+});
+
+test('AC-10 (responsive): nothing forces a horizontal scroll at 400px', () => {
+    const css = pageHTML.slice(pageHTML.indexOf('<style>'), pageHTML.indexOf('</style>'));
+
+    // A min-width wider than the narrowest target viewport is the usual cause.
+    for (const m of css.matchAll(/min-width:\s*(\d+)px/g)) {
+        const px = Number(m[1]);
+        const inMediaQuery = css.slice(0, m.index).lastIndexOf('@media') >
+            css.slice(0, m.index).lastIndexOf('}');
+        assert.ok(inMediaQuery || px <= 400,
+            `a min-width of ${px}px outside a media query would overflow a 400px viewport`);
+    }
+    // Fixed widths are the other cause.
+    for (const m of css.matchAll(/[^-]width:\s*(\d+)px/g)) {
+        assert.ok(Number(m[1]) <= 400, `a fixed width of ${m[1]}px would overflow`);
+    }
+
+    // The side gutter is set once, and vertical padding must not zero it.
+    assert.match(css, /padding-inline:/, 'body has no explicit side padding');
+    assert.match(css, /padding-block:/,
+        'body uses a padding shorthand for vertical space, which would reset the side gutter');
+
+    // The one element allowed to be wider than the page is the line-item table,
+    // and only inside its own scroll container.
+    assert.match(css, /\.table-scroll\s*\{[^}]*overflow-x:\s*auto/,
+        'the line-item table has no horizontal scroll container');
+    assert.match(pageHTML, /<div class="table-scroll">/, 'the table is not wrapped in one');
+
+    // The three-column layout must be a media query, not the default.
+    const defaultGrid = css.match(/\.deployments\s*\{[^}]*grid-template-columns:\s*([^;]+);/);
+    assert.ok(defaultGrid, 'no .deployments grid');
+    assert.equal(defaultGrid[1].trim(), '1fr',
+        'the default layout is multi-column; it must stack on a narrow screen');
+});
+
+test('AC-10 (themes): every token is defined in all three theme states', () => {
+    const css = pageHTML.slice(pageHTML.indexOf('<style>'), pageHTML.indexOf('</style>'));
+
+    const block = (re) => {
+        const m = css.match(re);
+        assert.ok(m, `no theme block matching ${re}`);
+        return new Set([...m[1].matchAll(/(--[a-z-]+):/g)].map(t => t[1]));
+    };
+
+    // Light is the base, on bare :root — a token defined only inside a media
+    // query or a [data-theme] block has no value in the other states.
+    const light = block(/:root\s*\{([^}]*)\}/);
+    const systemDark = block(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme="light"\]\)\s*\{([^}]*)\}/);
+    const explicitDark = block(/:root\[data-theme="dark"\]\s*\{([^}]*)\}/);
+
+    assert.ok(light.size > 0, 'no tokens on bare :root');
+    for (const token of light) {
+        assert.ok(systemDark.has(token),
+            `${token} has no dark value under prefers-color-scheme; it would keep its light value`);
+        assert.ok(explicitDark.has(token),
+            `${token} has no value under [data-theme="dark"]; the explicit toggle would not reach it`);
+    }
+    for (const token of systemDark) {
+        assert.ok(light.has(token), `${token} is defined only in dark; it has no light value`);
+    }
+
+    // body must paint its own background, or it borrows the host's.
+    assert.match(css, /body\s*\{[^}]*background:\s*var\(--bg\)/,
+        'body does not set an explicit background');
+
+    // NOTE: this asserts the tokens exist in all three states. It does not
+    // render the page, so it cannot catch a contrast failure or a token whose
+    // dark value is simply wrong. A browser-based check would; adding one to
+    // `make test-js` is deliberately out of scope for this spec.
+});
+
+test('AC-11: capacity planning is reconciled against the measurement', () => {
+    const doc = readFileSync(join(repoRoot, 'docs', 'capacity-planning.md'), 'utf8');
+
+    // It must link the calculator.
+    assert.ok(doc.includes('dashboards/tco.html'),
+        'capacity-planning.md does not link the cost calculator');
+
+    // Every figure the measurement supersedes must be marked, not silently left
+    // standing beside the new one.
+    assert.ok(/203\.78/.test(doc), 'the measured raw bytes/event does not appear');
+    assert.ok(/2\.89/.test(doc), 'the measured Parquet bytes/event does not appear');
+    assert.ok(/206\.68/.test(doc), 'the measured total does not appear');
+
+    // The old estimates are retained deliberately, so a reader who sized from
+    // them can see what changed — but they must be labelled as estimates.
+    assert.ok(/planning estimate/i.test(doc),
+        'the superseded figures are not labelled as estimates');
+
+    // And the mechanism correction must be present: the old table called
+    // aggregation a compression ratio, which is the part that misleads.
+    assert.ok(/not\s+compression/i.test(doc) || /aggregates/i.test(doc),
+        'capacity-planning.md still presents the Parquet reduction as compression');
+    assert.ok(/cannot be recovered from the warehouse/i.test(doc),
+        'it does not say per-event data cannot be recovered from Parquet');
+});

@@ -233,3 +233,115 @@ make check-boundary && make build-oss && make test-oss
 | Pressure to show only the bootstrap figure | Refuse, citing thesis §2 Axis 4. The API makes it impossible by design; keep it that way. |
 | An AWS price that cannot be sourced | Mark the line item `estimate`, say so on the page, and report it. Never present an estimate as a list price. |
 | The at-scale figure being embarrassing | Publish it. Axis 4's counter-argument is already conceded in the thesis; hiding the number would prove the critic right. |
+
+---
+
+## 11. Implementation report
+
+All eleven acceptance criteria pass. One spec defect returned (**SD-021**) and worked around rather
+than fixed, because the spec mandates the text it contradicts.
+
+### 11.1 §6 step 1 — reconciling `docs/capacity-planning.md`
+
+**It contains no dollar figures at all.** Nothing to supersede on the cost side. What it does contain
+is the per-event storage assumption the whole model turns on, and that was wrong:
+
+| Figure | Documented | Measured | Verdict |
+|---|---:|---:|---|
+| JSONL per event | ~300 B | **203.78 B** | **reconciled** — both retained, the estimate labelled |
+| Parquet per event | ~30-50 B | **2.89 B** | **reconciled** — same |
+| "Compression Ratio: 6-10x vs JSONL" | 6-10× | 70× | **superseded** — and it is not compression |
+
+The last row is the one that mattered. The table was headed *Compression Ratio*, which frames the
+size difference as an encoding win. It is not: the rollup **aggregates**, so most of the reduction is
+fewer rows, not smaller ones. Two things that wording hid — that per-event data cannot be recovered
+from the warehouse (raw JSONL is the only per-event record, which is why
+`docs/00-system-truth.md` §4 forbids deleting it), and that the ratio is a function of events per
+bucket-key rather than a property of the format. Recorded as **F-020**; `docs/capacity-planning.md`
+now carries the measured figures, the correction, and a link to the calculator, with the old
+estimates retained and labelled so anyone who sized a deployment from them can see what changed.
+
+### 11.2 SD-021 — the mandatory caveat contradicts the model
+
+§5.2 requires, verbatim: *"It is roughly 10x the bootstrap figure and is the honest number for a team
+past a few million events a month."* Running the model this spec asks for:
+
+| events/month | bootstrap | aws_single | multiple |
+|---:|---:|---:|---:|
+| 1,000,000 | $5.00 | $215.59 | **43.1×** |
+| 50,000,000 | $5.00 | $215.77 | 43.2× |
+| 1,000,000,000 (90 d) | $58.75 | $228.83 | **3.9×** |
+
+"Roughly 10x" holds in a narrow band near a billion events a month, and is wrong in the dangerous
+direction for the reader the sentence addresses: a team "past a few million events a month" budgets
+$50 and meets $216. The multiple is not a constant because the at-scale baseline is ~$213 of fixed
+cost before a single event is ingested, while the bootstrap VPS is flat until its storage allowance
+runs out.
+
+The mandatory sentence still prints verbatim. A second caveat prints the multiple computed from the
+numbers actually on screen, ending *"Budget from this figure, not from the multiple."* Tests on both
+sides assert the stated multiple matches the estimates it accompanies, so the correction cannot
+become its own inaccuracy.
+
+### 11.3 Every infrastructure price is an `estimate`, not a `list_price`
+
+§5.1's basis vocabulary is `measured | list_price | estimate`. None of the AWS or VPS rates has been
+read off a vendor's pricing page and dated — they are recalled, which is what `estimate` means. They
+are labelled accordingly, and an extra caveat says so outright, because the provenance caveat alone
+would imply the rates had been read. Promoting one to `list_price` means opening the vendor's page,
+reading the number, and setting `retrieved` to that day.
+
+### 11.4 Verification
+
+```
+$ go test ./pkg/costmodel/... -cover
+ok  github.com/lgreene/gravix-dashboards/pkg/costmodel   coverage: 91.2% of statements
+AC-1 TestEstimateAllReturnsEveryDeployment   AC-4 TestLineItemProvenance
+AC-2 TestNoSingleDeploymentAPI               AC-5 TestStalePricesRefused
+AC-3 TestMandatoryCaveatsPresent             AC-6 TestMeasuredInputRequired
+AC-7 TestGoJSParityFixturesAreCurrent (Go half)
+
+$ make test-js
+# pass 106   # fail 0
+AC-7 parity (JS half) · AC-8 all three rendered · AC-9 no sales CTA
+AC-10 responsive + themed · AC-11 capacity planning reconciled
+
+$ make lint && make check-boundary && make build-oss && make test-oss
+clean; boundary: 0 violations; both succeed with ee/ absent
+```
+
+**Mutation-tested, all three guards.** Parity: a 5% drift in one JS line item, a dropped caveat, and
+a **one-word** change to a caveat's text each fail. The page: rendering only the cheapest deployment,
+hiding caveats behind `<details>`, adding a "Contact sales" link, adding an `<input type="email">`,
+making the default layout three columns, and defining a CSS token only in the dark block each fail.
+
+One note on method. My first pass reported the three-column mutation as *not* caught. It was caught —
+my mutation harness grepped for `error: '` and that failure rendered as `error: |-`. The tool gave a
+false negative about the guard. Re-run directly, it fails as intended. Worth recording because a
+verification harness that under-reports is the same failure mode as a guard that passes while what it
+guards is broken, one level up.
+
+### 11.5 What AC-10 does not cover, stated
+
+The theme and responsiveness checks are static analysis of the markup and CSS, not a rendered page.
+They assert every token defined on bare `:root` also has a value under `prefers-color-scheme: dark`
+and under `[data-theme="dark"]`, that no fixed width or out-of-media-query `min-width` exceeds 400px,
+that the only wide element is inside its own `overflow-x` container, and that the default layout is
+single-column.
+
+They cannot catch a contrast failure, or a dark value that exists and is simply wrong. A headless
+browser would; `make test-js` is `node --test` with no dependencies, and adding one to CI for those
+two assertions is out of this spec's scope. The limitation is in a comment in the test file as well
+as here, so nobody reads a green AC-10 as more than it is.
+
+### 11.6 Definition of done
+
+- [x] All eleven acceptance criteria pass with their named tests
+- [x] Every Verification command run, real output above
+- [x] Go and JS agree within $0.01 on every fixture, enforced from a shared file
+- [x] No upsell, sales CTA or lead capture — asserted, and mutation-tested
+- [x] `docs/capacity-planning.md` reconciled, every figure marked (§11.1)
+- [x] `docs-engineer` delta merged — capacity-planning carries the measured figures and links the page
+- [x] Zero new skipped tests
+- [ ] **Infrastructure prices promoted from `estimate` to `list_price`** — open, and deliberately so.
+      Requires reading each vendor's own pricing page and recording the date.
