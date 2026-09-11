@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/lineage"
-	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 )
 
 // Exit codes for `gravix explain`, per spec GRVX-807 §5.3.
@@ -300,6 +299,3 @@ func formatValue(v any) string {
 }
 
 func collapse(v string) string { return strings.Join(strings.Fields(v), " ") }
-
-// explainMetricDefault is the rollup explain assumes when none is named.
-var explainMetricDefault = recompute.MetricRequestMinute

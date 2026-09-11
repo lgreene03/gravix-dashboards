@@ -1,3 +1,5 @@
+GOBIN := $(shell go env GOPATH)/bin
+
 .PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check
 
 build:
@@ -36,12 +38,18 @@ clean:
 	rm -rf bin/ coverage.out
 	docker-compose down -v
 
+# `lint` runs exactly what CI's lint job runs. It used to be go vet alone, which
+# meant a change could pass `make lint` and still fail the check called `lint` —
+# staticcheck finds things vet does not (unused package-level identifiers, for one).
+# A local target weaker than the check it is named after is worse than no target.
 lint:
 	go vet ./...
+	@command -v staticcheck > /dev/null 2>&1 || test -x "$(GOBIN)/staticcheck" || \
+		(echo "Installing staticcheck..." && go install honnef.co/go/tools/cmd/staticcheck@latest)
+	@# GOPATH/bin is not always on PATH, so call it by path when it is not.
+	$$(command -v staticcheck || echo "$(GOBIN)/staticcheck") ./...
 
 lint-all: lint
-	@which staticcheck > /dev/null 2>&1 || (echo "Installing staticcheck..." && go install honnef.co/go/tools/cmd/staticcheck@latest)
-	staticcheck ./...
 
 helm-lint:
 	helm lint deploy/gravix \
