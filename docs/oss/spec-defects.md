@@ -226,3 +226,59 @@ closes the partial-failure window as a side effect. No scope changed; only the j
 **What the register is for:** the claim "every recompute double-counts" would have gone into the
 competitive thesis as evidence of a bug this project had fixed. It was never true as stated, and
 `01-competitive-thesis.md` must not carry it.
+
+---
+
+## SD-005 — GRVX-802 does not say what `Revision` does when content changes
+
+**Found by:** `senior-engineer` executing GRVX-802
+**Affects:** GRVX-802 §6 step 3; consumed by GRVX-805 and GRVX-807
+**Severity:** medium — the field is the input to GRVX-805's whole purpose
+**Status:** decided and implemented; GRVX-805 must confirm or correct
+
+### What the spec says
+
+> set `MetricVersion` to `"v1"`, `Revision` to `0` for a first write or the existing manifest's
+> `Revision` when the digest is unchanged
+
+That covers two of the three cases a rebuild can be in:
+
+| Case | Spec says |
+|---|---|
+| No manifest exists yet | `0` |
+| A manifest exists, digest unchanged | the existing revision |
+| **A manifest exists, digest changed** | **nothing** |
+
+The third is the case the field exists for. A partition's digest changes exactly when late facts,
+a corrected fact stream, or a metric-definition change have altered its rows — which is what
+GRVX-805 ("late-data revisions") is built to detect.
+
+### What was implemented
+
+`Revision = existing.Revision + 1` when the digest changes.
+
+The alternatives were considered and rejected:
+
+- **Leave it at the existing value.** Then `Revision` never advances, and a consumer cannot tell a
+  partition that was rebuilt once from one rebuilt forty times. The field becomes decoration.
+- **Reset to 0.** Same outcome, and it actively lies: a revised partition would claim to be a first
+  write.
+
+Monotonic increment is the only reading under which the field's name is true.
+
+### A second, smaller gap in the same step
+
+§6 step 3 assumes a partition either has a manifest or is being written for the first time. A third
+state exists in any warehouse written before this spec: **correct data, no manifest.** §10 says not
+to backfill those "silently".
+
+The implementation writes the manifest — it is computed from facts actually read during that run,
+so it is derived, not inferred — and counts it in `Result.ManifestsAdded`, which the run reports.
+That is not silent, and it leaves the warehouse consistent. A bulk backfill pass over untouched
+partitions is still out of scope and still belongs to GRVX-810.
+
+### What GRVX-805 must do
+
+Confirm this reading or correct it **before** building revision detection on top. If GRVX-805 needs
+different semantics — a revision counter per late-arrival batch, say — it changes here, not there,
+and `SchemaVersion` bumps with it.

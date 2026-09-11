@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
+	"github.com/lgreene/gravix-dashboards/pkg/manifest"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"github.com/montanaflynn/stats"
@@ -26,6 +27,11 @@ import (
 
 // MetricRequestMinute is the only metric this engine can currently rebuild.
 const MetricRequestMinute = "request_metrics_minute"
+
+// MetricVersion is the version of the metric definitions this engine computes.
+// It is part of a partition's idempotency key, so changing a formula must change
+// this: two files with the same key are claimed to describe the same thing.
+const MetricVersion = "v1"
 
 // CompressionLevel pins the zstd level used for every Parquet file this package
 // writes. It is an explicit constant rather than zstd.SpeedDefault because a
@@ -89,6 +95,18 @@ type Aggregator struct {
 	Errors    int64
 }
 
+// AggregateResult is what reading a day of facts produced.
+type AggregateResult struct {
+	// Aggregators holds one accumulator per output row.
+	Aggregators map[AggregationKey]*Aggregator
+	// FactsRead counts the facts accepted into the aggregation: duplicates and
+	// facts belonging to another day are not counted.
+	FactsRead int64
+	// SourceKeys lists, sorted, every fact object actually read. It is the
+	// partition's lineage and goes into its manifest.
+	SourceKeys []string
+}
+
 // Options configures one recompute run.
 type Options struct {
 	Store     storage.ObjectStore
@@ -115,7 +133,10 @@ type Result struct {
 	FactsRead    int64
 	RowsWritten  int64
 	ReplacedKeys []string // object keys replaced, sorted
-	Duration     time.Duration
+	// ManifestsAdded counts partitions whose data was already correct but had no
+	// manifest beside it. They are reported rather than backfilled quietly.
+	ManifestsAdded int
+	Duration       time.Duration
 }
 
 // PartitionOptions configures the rebuild of a single tenant-day. Unlike
@@ -145,6 +166,12 @@ type PartitionResult struct {
 	Written      bool
 	Unchanged    bool
 	ReplacedKeys []string
+	// Manifest is the manifest written beside the data file, or nil when the
+	// partition held no facts and was cleared.
+	Manifest *manifest.Manifest
+	// ManifestAdded is true when the data file was already correct but carried no
+	// manifest, so one was written for it.
+	ManifestAdded bool
 }
 
 // DeterministicKey returns the output object key for a partition. The same
@@ -267,6 +294,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		case pr.Written:
 			result.Rebuilt++
 		}
+		if pr.ManifestAdded {
+			result.ManifestsAdded++
+		}
 		result.ReplacedKeys = append(result.ReplacedKeys, pr.ReplacedKeys...)
 	}
 	sort.Strings(result.ReplacedKeys)
@@ -310,7 +340,9 @@ func acquire(ctx context.Context, opts Options) (func(), error) {
 
 // ProcessPartition rebuilds one tenant-day: it reads the day's facts, aggregates
 // them, encodes the Parquet file, and writes it at the deterministic key only if
-// the bytes differ from what is already there.
+// the bytes differ from what is already there. A manifest describing the result
+// is written beside the data file — always after it, never before, so a manifest
+// without its data file stays a detectable inconsistency.
 func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult, error) {
 	if o.Metric == "" {
 		o.Metric = MetricRequestMinute
@@ -320,32 +352,31 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 	partitionDir := PartitionDir(o.MetricDir, o.Day)
 	destKey := DeterministicKey(partitionDir, o.Metric, o.Day)
 
-	aggs, factsRead, err := Aggregate(ctx, o.Store, o.FactsDir, o.Day, o.OnFact)
+	agg, err := Aggregate(ctx, o.Store, o.FactsDir, o.Day, o.OnFact)
 	if err != nil {
 		return nil, err
 	}
 
-	res := &PartitionResult{Key: destKey, FactsRead: factsRead}
+	res := &PartitionResult{Key: destKey, FactsRead: agg.FactsRead}
 
-	if len(aggs) == 0 {
+	if len(agg.Aggregators) == 0 {
 		// No facts for this day: the partition must end up empty rather than
-		// keeping a stale file that would be read as current.
+		// keeping a stale file that would be read as current. The manifest goes
+		// with its data file.
 		stale, err := staleKeys(ctx, o.Store, metricPrefix, partitionDir, dayStr, "")
 		if err != nil {
 			return nil, err
 		}
 		res.ReplacedKeys = stale
 		if !o.DryRun {
-			for _, k := range stale {
-				if err := o.Store.Delete(ctx, k); err != nil {
-					return nil, fmt.Errorf("deleting stale object %s: %w", k, err)
-				}
+			if err := deleteWithManifests(ctx, o.Store, stale); err != nil {
+				return nil, err
 			}
 		}
 		return res, nil
 	}
 
-	rows := BuildRows(aggs, o.TenantID, dayStr)
+	rows := BuildRows(agg.Aggregators, o.TenantID, dayStr)
 	data, err := EncodeParquet(rows)
 	if err != nil {
 		return nil, err
@@ -363,10 +394,12 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 	}
 	res.ReplacedKeys = stale
 
-	if identical && len(stale) == 0 {
-		res.Unchanged = true
-		return res, nil
+	m, hadManifest, err := buildManifest(ctx, o, rows, agg, destKey, dayStr, identical)
+	if err != nil {
+		return nil, err
 	}
+	res.Manifest = m
+	res.ManifestAdded = identical && !hadManifest
 
 	if o.DryRun {
 		res.Written = !identical
@@ -382,15 +415,90 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 		}
 		res.Written = true
 	}
-	for _, k := range stale {
-		if err := o.Store.Delete(ctx, k); err != nil {
-			return nil, fmt.Errorf("deleting stale object %s: %w", k, err)
-		}
+	// The manifest follows the data file, on both paths: an unchanged partition
+	// whose lineage moved — a new fact file that added no rows — still needs its
+	// manifest brought up to date.
+	if err := manifest.Write(ctx, o.Store, m); err != nil {
+		return nil, err
+	}
+	if err := deleteWithManifests(ctx, o.Store, stale); err != nil {
+		return nil, err
 	}
 	if identical {
 		res.Unchanged = true
 	}
 	return res, nil
+}
+
+// buildManifest assembles the manifest for a partition, carrying the revision
+// forward from whatever is already stored. It reports whether a manifest was
+// already there, which is how a partition that predates manifests is told apart
+// from one being written for the first time.
+func buildManifest(ctx context.Context, o PartitionOptions, rows []MetricRow, agg *AggregateResult, destKey, dayStr string, identical bool) (*manifest.Manifest, bool, error) {
+	digest, err := manifest.ContentDigest(rows)
+	if err != nil {
+		return nil, false, err
+	}
+
+	revision := 0
+	hadManifest := false
+	switch existing, err := manifest.Read(ctx, o.Store, destKey); {
+	case err == nil:
+		hadManifest = true
+		if existing.ContentDigest == digest {
+			// Same rows as before: this is the same revision, not a new one.
+			revision = existing.Revision
+		} else {
+			// The rows changed, so the partition has been revised. Restarting at
+			// zero would make the field unable to say what it is named for.
+			revision = existing.Revision + 1
+		}
+	case errors.Is(err, manifest.ErrNoManifest):
+		// First manifest for this partition.
+	default:
+		return nil, false, err
+	}
+
+	day := o.Day.UTC()
+	return &manifest.Manifest{
+		SchemaVersion:  manifest.SchemaVersion,
+		Metric:         o.Metric,
+		MetricVersion:  MetricVersion,
+		IdempotencyKey: manifest.IdempotencyKey(o.Metric, MetricVersion, o.TenantID, day),
+		ContentDigest:  digest,
+		TenantID:       o.TenantID,
+		EventDay:       dayStr,
+		WindowFrom:     day.Format(time.RFC3339),
+		WindowTo:       day.AddDate(0, 0, 1).Format(time.RFC3339),
+		RowCount:       int64(len(rows)),
+		FactCount:      agg.FactsRead,
+		SourceFactKeys: agg.SourceKeys,
+		Revision:       revision,
+		DataFile:       destKey,
+	}, hadManifest, nil
+}
+
+// deleteWithManifests removes data files and the manifests beside them, data
+// file first. A manifest left without its data file is detectable; a data file
+// left without its manifest is not.
+func deleteWithManifests(ctx context.Context, store storage.ObjectStore, keys []string) error {
+	for _, k := range keys {
+		if err := store.Delete(ctx, k); err != nil {
+			return fmt.Errorf("deleting stale object %s: %w", k, err)
+		}
+		manifestKey := manifest.Path(k)
+		exists, err := store.Exists(ctx, manifestKey)
+		if err != nil {
+			return fmt.Errorf("checking %s: %w", manifestKey, err)
+		}
+		if !exists {
+			continue
+		}
+		if err := store.Delete(ctx, manifestKey); err != nil {
+			return fmt.Errorf("deleting stale manifest %s: %w", manifestKey, err)
+		}
+	}
+	return nil
 }
 
 // staleKeys lists every object in the partition that is not keepKey, plus any
@@ -404,9 +512,11 @@ func staleKeys(ctx context.Context, store storage.ObjectStore, metricPrefix, par
 		return nil, fmt.Errorf("listing partition %s: %w", partitionDir, err)
 	}
 	for _, k := range existing {
-		if k != keepKey {
-			stale = append(stale, k)
+		if k == keepKey || strings.HasSuffix(k, manifest.Extension) {
+			// A manifest is removed with its data file, never on its own.
+			continue
 		}
+		stale = append(stale, k)
 	}
 
 	legacy, err := store.List(ctx, metricPrefix)
@@ -414,6 +524,9 @@ func staleKeys(ctx context.Context, store storage.ObjectStore, metricPrefix, par
 		return nil, fmt.Errorf("listing metric prefix %s: %w", metricPrefix, err)
 	}
 	for _, k := range legacy {
+		if strings.HasSuffix(k, manifest.Extension) {
+			continue
+		}
 		if strings.Contains(k, dayStr) && !strings.Contains(k, "event_day=") {
 			stale = append(stale, k)
 		}
@@ -449,17 +562,17 @@ func objectMatches(ctx context.Context, store storage.ObjectStore, key string, d
 // day, and facts whose event time falls on another day are discarded.
 //
 // onFact, when non-nil, is called once per accepted fact.
-func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, day time.Time, onFact func(service, day string)) (map[AggregationKey]*Aggregator, int64, error) {
+func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, day time.Time, onFact func(service, day string)) (*AggregateResult, error) {
 	dayStr := day.UTC().Format("2006-01-02")
 	inputPrefix := fmt.Sprintf("%s/%s", KeyPrefix(factsDir), dayStr)
 
-	aggs := make(map[AggregationKey]*Aggregator)
+	res := &AggregateResult{Aggregators: make(map[AggregationKey]*Aggregator)}
+	aggs := res.Aggregators
 	seen := make(map[string]struct{})
-	var factsRead int64
 
 	keys, err := store.List(ctx, inputPrefix)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list error: %w", err)
+		return nil, fmt.Errorf("list error: %w", err)
 	}
 	// The object store gives no ordering guarantee; read in a fixed order so a
 	// rebuild sees the same facts in the same sequence every time.
@@ -470,13 +583,14 @@ func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, 
 			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		rc, err := store.Get(ctx, key)
 		if err != nil {
-			return nil, 0, fmt.Errorf("reading %s: %w", key, err)
+			return nil, fmt.Errorf("reading %s: %w", key, err)
 		}
+		res.SourceKeys = append(res.SourceKeys, key)
 
 		scanner := bufio.NewScanner(rc)
 		buf := make([]byte, 0, 64*1024)
@@ -520,7 +634,7 @@ func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, 
 				agg.Errors++
 			}
 			agg.Latencies = append(agg.Latencies, float64(fact.LatencyMs))
-			factsRead++
+			res.FactsRead++
 
 			if onFact != nil {
 				onFact(fact.Service, dayStr)
@@ -529,11 +643,12 @@ func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, 
 		scanErr := scanner.Err()
 		rc.Close()
 		if scanErr != nil {
-			return nil, 0, fmt.Errorf("scanning %s: %w", key, scanErr)
+			return nil, fmt.Errorf("scanning %s: %w", key, scanErr)
 		}
 	}
 
-	return aggs, factsRead, nil
+	// keys came back sorted, so SourceKeys is already in a stable order.
+	return res, nil
 }
 
 // BuildRows turns aggregators into output rows, sorted into a total order.

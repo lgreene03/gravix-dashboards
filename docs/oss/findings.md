@@ -60,3 +60,56 @@ easy to verify by eye, ideally followed by a CI check so it cannot recur.
 **Why this was not fixed here:** GRVX-701 §4.2 limited that spec to prepending headers. A
 formatting pass touching 29 files inside a licensing change would have been a scope violation and
 would have made the licence diff unreadable.
+
+---
+
+## F-003 — compaction cannot see Hive-partitioned warehouse output
+
+**Found by:** `senior-engineer` executing GRVX-802
+**Owner:** `senior-engineering-lead`
+**Severity:** medium — a scheduled job that silently does nothing
+
+`transforms/compaction/main.go` finds files to merge with `parseWarehouseKey`, which accepts only
+the **flat** warehouse layout:
+
+| Key | Parsed? |
+|---|---|
+| `warehouse/request_metrics_minute/metrics_abc_2026-05-21.parquet` | yes |
+| `warehouse/t1/request_metrics_minute/metrics_abc_2026-05-21.parquet` | yes |
+| `warehouse/request_metrics_minute/event_day=2026-05-21/request_metrics_minute_20260521.parquet` | **no** |
+| `warehouse/t1/request_metrics_minute/event_day=2026-05-21/request_metrics_minute_20260521.parquet` | **no** |
+
+The four-segment Hive key is read as multi-tenant, giving `tenantID="request_metrics_minute"` and
+`topic="event_day=2026-05-21"`. The topic then fails the allow-list and the key is skipped. The
+five-segment multi-tenant Hive key has no branch at all.
+
+The rollup has written Hive-partitioned output since Phase 5, and `storage/trino/init.sql:32` and
+`cube/model/schema/RequestMetricsMinute.js` both read that layout. So **compaction currently
+processes none of the metric files the system actually produces.** It runs, logs
+"Found 0 Parquet compaction groups", and reports success.
+
+This was verified directly against `parseWarehouseKey`, and the behaviour is now pinned by
+`TestWarehouseKeysAreFlatLayoutOnly` so it cannot regress unnoticed while someone believes it is
+fixed.
+
+### Why it was not fixed here
+
+GRVX-802 is a manifest spec. Teaching compaction a new key layout changes which files get merged,
+deleted and renamed in a live warehouse — that is a data-movement change and needs its own spec,
+its own dry-run evidence and its own rollback story. GRVX-802 §5.4's manifest rules **are**
+implemented in `compactParquetGroup`, and tested directly, so they are correct the moment
+compaction can reach these files.
+
+### What this means for the manifest work
+
+Merged-manifest handling is implemented and proven at the function level, not end to end, because
+no production path reaches it. GRVX-810's correctness suite should treat "compaction merges a real
+Hive partition and its manifest survives" as an open, unproven criterion until a spec fixes
+`parseWarehouseKey`.
+
+### Related
+
+The same function is why GRVX-801's deterministic key is safe from compaction today: compaction
+would otherwise rename merged output to `metrics_<uuid>_<date>.parquet`, reintroducing a
+non-deterministic key. A spec that fixes `parseWarehouseKey` must fix that naming in the same
+change, or it will undo GRVX-801.

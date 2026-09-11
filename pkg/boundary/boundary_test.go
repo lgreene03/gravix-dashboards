@@ -29,12 +29,12 @@ func TestBoundaryMapHasExpectedCapabilityCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	// 24 total: 21 core, 3 ee. Expanded from 18 by SD-002, then by one for the
-	// recompute engine GRVX-801 split out of the rollup job.
-	if got, want := len(m.Capabilities), 24; got != want {
+	// 25 total: 22 core, 3 ee. Expanded from 18 by SD-002, then by the recompute
+	// engine (GRVX-801) and metric manifests (GRVX-802).
+	if got, want := len(m.Capabilities), 25; got != want {
 		t.Errorf("capabilities = %d, want %d", got, want)
 	}
-	if got, want := len(m.CoreCapabilities()), 21; got != want {
+	if got, want := len(m.CoreCapabilities()), 22; got != want {
 		t.Errorf("core capabilities = %d, want %d", got, want)
 	}
 	if got, want := len(m.EECapabilities()), 3; got != want {

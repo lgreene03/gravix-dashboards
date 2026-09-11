@@ -13,14 +13,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
+	"github.com/lgreene/gravix-dashboards/pkg/manifest"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/parquet-go/parquet-go"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -29,6 +33,22 @@ const (
 	testInputDir  = "./data/raw"
 	testOutputDir = "./data/warehouse"
 )
+
+// packageDir is this package's directory, captured at init — before any test
+// chdirs into a temporary tree — so tests that read repository sources can still
+// find them.
+var packageDir = func() string {
+	d, err := os.Getwd()
+	if err != nil {
+		panic("recompute test: cannot determine package directory: " + err.Error())
+	}
+	return d
+}()
+
+// repoFile resolves a path relative to the repository root.
+func repoFile(parts ...string) string {
+	return filepath.Join(append([]string{packageDir, "..", ".."}, parts...)...)
+}
 
 // newTestEnv moves the test into its own directory and returns a local store
 // rooted at ./data, so both the object keys and the lock files land inside the
@@ -115,15 +135,34 @@ func baseOptions(store storage.ObjectStore, d time.Time) Options {
 	}
 }
 
+// partitionKeys lists the data files in a partition. Manifests sit beside the
+// data and are listed separately, so "the partition holds exactly one file"
+// keeps meaning one Parquet file.
 func partitionKeys(t *testing.T, store storage.ObjectStore, d time.Time) []string {
+	t.Helper()
+	return listPartition(t, store, d, ".parquet")
+}
+
+func partitionManifests(t *testing.T, store storage.ObjectStore, d time.Time) []string {
+	t.Helper()
+	return listPartition(t, store, d, manifest.Extension)
+}
+
+func listPartition(t *testing.T, store storage.ObjectStore, d time.Time, suffix string) []string {
 	t.Helper()
 	prefix := PartitionDir(filepath.Join(testOutputDir, MetricRequestMinute), d)
 	keys, err := store.List(context.Background(), prefix)
 	if err != nil {
 		t.Fatalf("list %s: %v", prefix, err)
 	}
-	sort.Strings(keys)
-	return keys
+	var out []string
+	for _, k := range keys {
+		if strings.HasSuffix(k, suffix) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func readObject(t *testing.T, store storage.ObjectStore, key string) []byte {
@@ -271,7 +310,7 @@ func TestDeterministicOutputKey(t *testing.T) {
 	}
 
 	// And the cron job must no longer mint one per run.
-	src, err := os.ReadFile(filepath.Join("..", "..", "transforms", "request_metrics_minute", "main.go"))
+	src, err := os.ReadFile(repoFile("transforms", "request_metrics_minute", "main.go"))
 	if err != nil {
 		t.Fatalf("read rollup source: %v", err)
 	}
@@ -509,7 +548,7 @@ func TestRecomputeReleasesLockOnCompletion(t *testing.T) {
 const frozenRollupTestDigest = "21657185b1823de2ba5592306d99e538fcbe53115a632d82fead5ad9ac3e0749"
 
 func TestExistingRollupTestsUnmodified(t *testing.T) {
-	path := filepath.Join("..", "..", "transforms", "request_metrics_minute", "main_test.go")
+	path := repoFile("transforms", "request_metrics_minute", "main_test.go")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
@@ -844,20 +883,31 @@ func TestAggregateDeduplicatesAndFiltersByDay(t *testing.T) {
 	}
 
 	var observed []string
-	aggs, factsRead, err := Aggregate(ctx, store, testInputDir+"/request_facts", d, func(service, dd string) {
+	agg, err := Aggregate(ctx, store, testInputDir+"/request_facts", d, func(service, dd string) {
 		observed = append(observed, service+"@"+dd)
 	})
 	if err != nil {
 		t.Fatalf("Aggregate: %v", err)
 	}
-	if factsRead != 1 {
-		t.Errorf("FactsRead = %d, want 1 (duplicate and wrong-day facts dropped)", factsRead)
+	if agg.FactsRead != 1 {
+		t.Errorf("FactsRead = %d, want 1 (duplicate and wrong-day facts dropped)", agg.FactsRead)
 	}
-	if len(aggs) != 1 {
-		t.Errorf("aggregators = %d, want 1", len(aggs))
+	if len(agg.Aggregators) != 1 {
+		t.Errorf("aggregators = %d, want 1", len(agg.Aggregators))
 	}
 	if len(observed) != 1 || observed[0] != "api@"+dayStr {
 		t.Errorf("observer saw %v, want one api@%s", observed, dayStr)
+	}
+
+	// SourceKeys is the partition's lineage: every JSONL object read, sorted, and
+	// nothing else. The README in the same prefix was never opened.
+	wantKeys := []string{
+		fmt.Sprintf("raw/request_facts/%s/10/a.jsonl", dayStr),
+		fmt.Sprintf("raw/request_facts/%s/10/b.jsonl", dayStr),
+		fmt.Sprintf("raw/request_facts/%s/10/c.jsonl", dayStr),
+	}
+	if !reflect.DeepEqual(agg.SourceKeys, wantKeys) {
+		t.Errorf("SourceKeys = %v, want %v", agg.SourceKeys, wantKeys)
 	}
 }
 
@@ -1004,4 +1054,436 @@ func treeDiff(before, after map[string]string) string {
 	}
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+// ─── GRVX-802: manifests ───
+
+// recordingStore records the order of Put calls, so write ordering can be
+// asserted rather than assumed.
+type recordingStore struct {
+	storage.ObjectStore
+	mu   sync.Mutex
+	puts []string
+}
+
+func (r *recordingStore) Put(ctx context.Context, key string, reader io.Reader) error {
+	r.mu.Lock()
+	r.puts = append(r.puts, key)
+	r.mu.Unlock()
+	return r.ObjectStore.Put(ctx, key, reader)
+}
+
+func (r *recordingStore) order() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.puts))
+	copy(out, r.puts)
+	return out
+}
+
+// AC-10: recompute writes a manifest beside every data file.
+func TestRecomputeWritesManifest(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+	d := day("2026-09-09")
+	seedDay(t, store, d)
+
+	res, err := Run(ctx, baseOptions(store, d))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	dataKeys := partitionKeys(t, store, d)
+	if len(dataKeys) != 1 {
+		t.Fatalf("data files = %v, want exactly one", dataKeys)
+	}
+	manifests := partitionManifests(t, store, d)
+	if len(manifests) != 1 {
+		t.Fatalf("manifests = %v, want exactly one", manifests)
+	}
+	if manifests[0] != manifest.Path(dataKeys[0]) {
+		t.Errorf("manifest at %q, want %q", manifests[0], manifest.Path(dataKeys[0]))
+	}
+
+	m, err := manifest.Read(ctx, store, dataKeys[0])
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+
+	if want := "request_metrics_minute:v1:_single:20260909"; m.IdempotencyKey != want {
+		t.Errorf("IdempotencyKey = %q, want %q", m.IdempotencyKey, want)
+	}
+	if m.MetricVersion != MetricVersion {
+		t.Errorf("MetricVersion = %q, want %q", m.MetricVersion, MetricVersion)
+	}
+	if m.EventDay != "2026-09-09" {
+		t.Errorf("EventDay = %q, want 2026-09-09", m.EventDay)
+	}
+	if m.WindowFrom != "2026-09-09T00:00:00Z" || m.WindowTo != "2026-09-10T00:00:00Z" {
+		t.Errorf("window = %s .. %s, want the UTC day", m.WindowFrom, m.WindowTo)
+	}
+	if m.RowCount != res.RowsWritten {
+		t.Errorf("RowCount = %d, want %d", m.RowCount, res.RowsWritten)
+	}
+	if m.FactCount != res.FactsRead {
+		t.Errorf("FactCount = %d, want %d", m.FactCount, res.FactsRead)
+	}
+	if m.Revision != 0 {
+		t.Errorf("Revision = %d, want 0 on a first write", m.Revision)
+	}
+	if m.DataFile != dataKeys[0] {
+		t.Errorf("DataFile = %q, want %q", m.DataFile, dataKeys[0])
+	}
+	if len(m.SourceFactKeys) != 3 {
+		t.Errorf("SourceFactKeys = %v, want the three seeded batches", m.SourceFactKeys)
+	}
+	for _, k := range m.SourceFactKeys {
+		if !strings.HasPrefix(k, "raw/request_facts/2026-09-09/") {
+			t.Errorf("SourceFactKeys contains %q, which is not a fact object for this day", k)
+		}
+	}
+
+	// The digest must describe the rows actually stored.
+	if err := manifest.Verify(ctx, store, dataKeys[0], readRows(t, store, dataKeys[0])); err != nil {
+		t.Errorf("manifest does not describe its data file: %v", err)
+	}
+}
+
+// AC-14: the data file is written before the manifest.
+func TestWriteOrderDataThenManifest(t *testing.T) {
+	backing := newTestEnv(t)
+	d := day("2026-09-09")
+	seedDay(t, backing, d)
+
+	rec := &recordingStore{ObjectStore: backing}
+	opts := baseOptions(backing, d)
+	opts.Store = rec
+
+	if _, err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	order := rec.order()
+	dataAt, manifestAt := -1, -1
+	for i, k := range order {
+		switch {
+		case strings.HasSuffix(k, manifest.Extension):
+			manifestAt = i
+		case strings.HasSuffix(k, ".parquet"):
+			dataAt = i
+		}
+	}
+	if dataAt < 0 || manifestAt < 0 {
+		t.Fatalf("puts = %v, want both a data file and a manifest", order)
+	}
+	if dataAt > manifestAt {
+		t.Errorf("manifest written before its data file: %v\n"+
+			"A manifest without its data file is a detectable inconsistency; "+
+			"a data file without a manifest is not.", order)
+	}
+}
+
+// AC-11: the cron path and recompute produce the same manifest for the same
+// inputs. They share ProcessPartition, and this is the check that they keep
+// sharing it.
+func TestCronAndRecomputeManifestsMatch(t *testing.T) {
+	ctx := context.Background()
+	d := day("2026-09-09")
+
+	// The cron job's call shape: one partition, resolved directories, a
+	// Prometheus observer attached.
+	cronStore := newTestEnv(t)
+	seedDay(t, cronStore, d)
+	var counted int
+	if _, err := ProcessPartition(ctx, PartitionOptions{
+		Store:     cronStore,
+		FactsDir:  "./data/raw/request_facts",
+		MetricDir: "./data/warehouse/request_metrics_minute",
+		Metric:    MetricRequestMinute,
+		Day:       d,
+		OnFact:    func(service, dd string) { counted++ },
+	}); err != nil {
+		t.Fatalf("cron-path partition: %v", err)
+	}
+	if counted == 0 {
+		t.Error("the cron path's fact observer was never called")
+	}
+	cronKeys := partitionKeys(t, cronStore, d)
+	cronManifest, err := manifest.Read(ctx, cronStore, cronKeys[0])
+	if err != nil {
+		t.Fatalf("read cron manifest: %v", err)
+	}
+
+	// Recompute's call shape: a window, through Run.
+	recomputeStore := newTestEnv(t)
+	seedDay(t, recomputeStore, d)
+	if _, err := Run(ctx, baseOptions(recomputeStore, d)); err != nil {
+		t.Fatalf("recompute run: %v", err)
+	}
+	recomputeKeys := partitionKeys(t, recomputeStore, d)
+	recomputeManifest, err := manifest.Read(ctx, recomputeStore, recomputeKeys[0])
+	if err != nil {
+		t.Fatalf("read recompute manifest: %v", err)
+	}
+
+	cronEncoded, err := manifest.Encode(cronManifest)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	recomputeEncoded, err := manifest.Encode(recomputeManifest)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !bytes.Equal(cronEncoded, recomputeEncoded) {
+		t.Fatalf("the two write paths disagree:\n--- cron ---\n%s\n--- recompute ---\n%s",
+			cronEncoded, recomputeEncoded)
+	}
+
+	// And the cron entry point must still be delegating, not re-implementing.
+	src, err := os.ReadFile(repoFile("transforms", "request_metrics_minute", "main.go"))
+	if err != nil {
+		t.Fatalf("read rollup source: %v", err)
+	}
+	if !strings.Contains(string(src), "recompute.ProcessPartition") {
+		t.Error("the cron rollup no longer calls recompute.ProcessPartition; the two paths can now drift")
+	}
+	if strings.Contains(string(src), "manifest.Manifest{") {
+		t.Error("the cron rollup builds its own manifest; it must use the shared one")
+	}
+}
+
+func TestManifestRevisionAdvancesOnlyWhenContentChanges(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+	d := day("2026-09-09")
+	dayStr := d.Format("2006-01-02")
+	seedDay(t, store, d)
+
+	readRevision := func() (int, string) {
+		t.Helper()
+		keys := partitionKeys(t, store, d)
+		m, err := manifest.Read(ctx, store, keys[0])
+		if err != nil {
+			t.Fatalf("read manifest: %v", err)
+		}
+		return m.Revision, m.ContentDigest
+	}
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	rev, digest := readRevision()
+	if rev != 0 {
+		t.Fatalf("Revision = %d after the first write, want 0", rev)
+	}
+
+	// Re-running over unchanged facts is the same revision, not a new one.
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if rev2, digest2 := readRevision(); rev2 != 0 || digest2 != digest {
+		t.Errorf("unchanged facts gave revision %d digest %s, want 0 and %s", rev2, digest2, digest)
+	}
+
+	// A late fact changes the rows, which is a revision.
+	writeFacts(t, store, fmt.Sprintf("raw/request_facts/%s/10/batch_late.jsonl", dayStr),
+		makeFact(t, "api", "GET", "/users/{id}", 200, 5, d.Add(10*time.Hour+30*time.Minute)))
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("third run: %v", err)
+	}
+	rev3, digest3 := readRevision()
+	if rev3 != 1 {
+		t.Errorf("Revision = %d after the rows changed, want 1", rev3)
+	}
+	if digest3 == digest {
+		t.Error("the digest did not change even though a fact was added")
+	}
+}
+
+func TestManifestLineageFollowsNewFactFiles(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+	d := day("2026-09-09")
+	dayStr := d.Format("2006-01-02")
+	seedDay(t, store, d)
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// A fact file that adds no rows — every fact in it is a duplicate — still
+	// changes what the partition was derived from, and the manifest must say so.
+	existing, err := manifest.Read(ctx, store, partitionKeys(t, store, d)[0])
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	firstKey := existing.SourceFactKeys[0]
+	rc, err := store.Get(ctx, firstKey)
+	if err != nil {
+		t.Fatalf("get %s: %v", firstKey, err)
+	}
+	dup, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("read %s: %v", firstKey, err)
+	}
+	copyKey := fmt.Sprintf("raw/request_facts/%s/10/batch_replay.jsonl", dayStr)
+	if err := store.Put(ctx, copyKey, bytes.NewReader(dup)); err != nil {
+		t.Fatalf("put replay: %v", err)
+	}
+
+	res, err := Run(ctx, baseOptions(store, d))
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if res.Rebuilt != 0 {
+		t.Errorf("Rebuilt = %d, want 0 — duplicate facts add no rows", res.Rebuilt)
+	}
+
+	updated, err := manifest.Read(ctx, store, partitionKeys(t, store, d)[0])
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	found := false
+	for _, k := range updated.SourceFactKeys {
+		if k == copyKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("SourceFactKeys = %v, want it to include the replayed file %q", updated.SourceFactKeys, copyKey)
+	}
+	if updated.Revision != existing.Revision {
+		t.Errorf("Revision = %d, want %d — the rows did not change", updated.Revision, existing.Revision)
+	}
+	if updated.ContentDigest != existing.ContentDigest {
+		t.Error("the digest changed even though no row changed")
+	}
+}
+
+func TestRecomputeReportsManifestAddedForPreExistingData(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+	d := day("2026-09-09")
+	seedDay(t, store, d)
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Simulate a warehouse written before manifests existed: correct data, no
+	// manifest beside it.
+	dataKey := partitionKeys(t, store, d)[0]
+	if err := store.Delete(ctx, manifest.Path(dataKey)); err != nil {
+		t.Fatalf("delete manifest: %v", err)
+	}
+
+	res, err := Run(ctx, baseOptions(store, d))
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if res.ManifestsAdded != 1 {
+		t.Errorf("ManifestsAdded = %d, want 1 — a manifest written for correct data must be reported, not silent", res.ManifestsAdded)
+	}
+	if res.Rebuilt != 0 {
+		t.Errorf("Rebuilt = %d, want 0 — the data was already correct", res.Rebuilt)
+	}
+	if _, err := manifest.Read(ctx, store, dataKey); err != nil {
+		t.Errorf("manifest was not written: %v", err)
+	}
+}
+
+func TestStaleDataFileAndManifestAreBothRemoved(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+	d := day("2026-09-09")
+	seedDay(t, store, d)
+
+	partitionDir := PartitionDir(filepath.Join(testOutputDir, MetricRequestMinute), d)
+	legacyKey := partitionDir + "/metrics_0f0b6d2e.parquet"
+	if err := store.Put(ctx, legacyKey, strings.NewReader("stale")); err != nil {
+		t.Fatalf("seed legacy data: %v", err)
+	}
+	if err := store.Put(ctx, manifest.Path(legacyKey), strings.NewReader("{}")); err != nil {
+		t.Fatalf("seed legacy manifest: %v", err)
+	}
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for _, k := range []string{legacyKey, manifest.Path(legacyKey)} {
+		exists, err := store.Exists(ctx, k)
+		if err != nil {
+			t.Fatalf("exists %s: %v", k, err)
+		}
+		if exists {
+			t.Errorf("%s survived the rebuild", k)
+		}
+	}
+	if manifests := partitionManifests(t, store, d); len(manifests) != 1 {
+		t.Errorf("manifests = %v, want exactly the current one", manifests)
+	}
+}
+
+func TestClearedPartitionRemovesItsManifest(t *testing.T) {
+	store := newTestEnv(t)
+	ctx := context.Background()
+	d := day("2026-09-09")
+	seedDay(t, store, d)
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	factKeys, err := store.List(ctx, "raw/request_facts/"+d.Format("2006-01-02"))
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	for _, k := range factKeys {
+		if err := store.Delete(ctx, k); err != nil {
+			t.Fatalf("delete fact: %v", err)
+		}
+	}
+
+	if _, err := Run(ctx, baseOptions(store, d)); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got := partitionManifests(t, store, d); len(got) != 0 {
+		t.Errorf("manifests = %v, want none — the data file is gone", got)
+	}
+}
+
+func TestDryRunWritesNoManifest(t *testing.T) {
+	store := newTestEnv(t)
+	d := day("2026-09-09")
+	seedDay(t, store, d)
+
+	opts := baseOptions(store, d)
+	opts.DryRun = true
+	if _, err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if got := partitionManifests(t, store, d); len(got) != 0 {
+		t.Errorf("dry run wrote manifests %v, want none", got)
+	}
+}
+
+// readRows reads a partition's Parquet file back into rows.
+func readRows(t *testing.T, store storage.ObjectStore, key string) []MetricRow {
+	t.Helper()
+	data := readObject(t, store, key)
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("open parquet %s: %v", key, err)
+	}
+	reader := parquet.NewGenericReader[MetricRow](f)
+	defer reader.Close()
+	rows := make([]MetricRow, reader.NumRows())
+	n, err := reader.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("read rows from %s: %v", key, err)
+	}
+	return rows[:n]
 }

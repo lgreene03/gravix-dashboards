@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "metric": "request_metrics_minute",
+  "metric_version": "v1",
+  "idempotency_key": "request_metrics_minute:v1:_single:20260909",
+  "content_digest": "sha256:8bd94b288a49e69be50f1f694e5675a6dda89f05cce620e970fb73e8a829b9f3",
+  "tenant_id": "",
+  "event_day": "2026-09-09",
+  "window_from": "2026-09-09T00:00:00Z",
+  "window_to": "2026-09-10T00:00:00Z",
+  "row_count": 2,
+  "fact_count": 4,
+  "source_fact_keys": [
+    "raw/request_facts/2026-09-09/10/batch_a.jsonl",
+    "raw/request_facts/2026-09-09/10/batch_b.jsonl"
+  ],
+  "revision": 0,
+  "data_file": "warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet"
+}

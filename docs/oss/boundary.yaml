@@ -47,6 +47,16 @@ capabilities:
       - transforms/service_events_daily/main.go
       - transforms/service_events_detail/main.go
 
+  - id: metric-manifests
+    name: Idempotency keys and content digests for derived metrics
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      A manifest is how a user proves two files describe the same window and whether the
+      contents changed. Gating it would make the free tier unable to check its own numbers.
+    paths:
+      - pkg/manifest/manifest.go
+
   - id: recompute-engine
     name: Deterministic recompute of derived metrics
     placement: core
