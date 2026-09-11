@@ -1211,3 +1211,56 @@ changed: each was invisible until something actually ran `docker compose up`, an
 layer (object-store paths, credentials, image build, volume ownership, mount ordering). The gate has
 now found three of the five on its own, which is three more than every other check in the repository
 combined.
+
+## F-024 — a retroactively-added percentile can be rolled up in a pre-aggregation, and every existing guard passes
+
+**Found by** GRVX-1006 AC-3, checking whether the existing percentile protections actually hold
+before adding another.
+**Severity** medium — no such measure exists today, so nothing is wrong in the warehouse. The
+protection Phase 8 built has a gap exactly where Phase 8's own follow-on feature writes.
+**Status** fixed by two new guards in `cube/model/schema/RequestMetricsMinute.test.js`.
+
+**What Phase 8 built, and it is good.** `cube/model/schema/RequestMetricsMinute.js` keeps the
+per-bucket percentiles as `min` rather than `max`, with a comment explaining that a wrong number
+which is *visibly* wrong gets reported while a plausible one gets believed. Two tests enforce it: one
+requires any measure reading a percentile column to be annotated `meta.aggregatable: false`, and one
+refuses to put such a measure in a pre-aggregation.
+
+**The gap is the pattern.** The first test finds percentile columns with `/p\d\d_latency_ms/` —
+exactly two digits, and only that spelling. `pkg/recompute`'s `MetricRow` also carries
+`extra_quantile_label` and `extra_quantile_ms`, written by GRVX-806 when a percentile is added
+retroactively. That column does not match.
+
+**Measured.** A measure reading `extra_quantile_ms`, aggregating with `max`, placed in the
+`endpointDaily` pre-aggregation, with no `meta` annotation at all:
+
+```
+$ node --test cube/model/schema/RequestMetricsMinute.test.js
+# pass 14
+# fail 0
+```
+
+All fourteen tests pass. That is the maximum of 1,440 one-minute percentiles, stored as if it were
+the day's percentile — the precise defect the v1 model was deprecated for — reintroduced through a
+column the regex did not know about, and cached in a pre-aggregation on top of it.
+
+**The fix checks the invariant instead of the spelling.** A pre-aggregation rolls rows up to a
+coarser grain, so every measure in one must survive that roll-up. `sum` and the count family do;
+`min`, `max` and `avg` over a per-bucket scalar do not, whatever the column is called. There is no
+function of per-bucket percentiles that yields the window's percentile — which is why GRVX-804 stores
+a mergeable sketch and GRVX-808 serves percentiles from it.
+
+`TestNoPercentileInPreAggregations` enforces that. `TestNoPercentileColumnIsRolledUp` adds a second,
+independent angle on the same rule — a column pattern wide enough to cover `quantile` and
+`percentile` as well as any `p<n>_latency_ms` — because the type check alone would miss a percentile
+someone declared `sum`, and the column check alone would miss one in a blandly-named column.
+
+Mutation-tested: `max`, `min` and `avg` over `extra_quantile_ms`, and `avg` over a
+`p999_latency_ms`, all now fail with a message naming the pre-aggregation, the measure and the
+aggregation.
+
+**The general lesson, which is not about this regex.** A guard that matches on a *name* protects the
+names its author knew about. Every one of those is a hostage to the next feature that adds a column.
+Where an invariant can be stated in terms of behaviour — "this must survive a roll-up" — it covers
+the cases nobody has thought of yet, and it is the same reason `TestSuiteNeedsNoDocker` (F-009) was
+rewritten from a byte-scan to an AST check.

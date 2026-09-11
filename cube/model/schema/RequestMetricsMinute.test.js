@@ -256,3 +256,71 @@ test('the dashboard renders percentiles through the routing helpers', () => {
   assert.match(app, /CubeClient\.percentileRequest\(/, 'nothing builds a gateway percentile request');
   assert.match(app, /fetchPercentileSeries\(/, 'no gateway percentile fetch exists');
 });
+
+// ─── GRVX-1006 AC-3 ───
+
+// TestNoPercentileInPreAggregations closes a gap the existing guards leave.
+//
+// 'no measure aggregates a percentile column with max' finds percentile columns
+// with /p\d\d_latency_ms/ — exactly two digits, and only that spelling. GRVX-806's
+// evolve feature writes `extra_quantile_ms` for a retroactively added percentile,
+// which that pattern does not match. Measured: a `max` over `extra_quantile_ms`,
+// rolled up to a day inside a pre-aggregation and carrying no meta annotation,
+// passed all fourteen tests. That is the defect Phase 8 removed — the maximum of
+// 1,440 one-minute p95s stored as if it were the day's p95 — reintroduced through
+// a column the regex did not know about, and cached on top. See F-024.
+//
+// So this checks the invariant rather than the spelling. A pre-aggregation rolls
+// rows up to a coarser grain, so every measure in one must survive that roll-up.
+// `sum` and the count family do. `min`, `max` and `avg` over a per-bucket scalar
+// do not, whatever the column is called: there is no function of per-bucket
+// percentiles that yields the window's percentile, which is why GRVX-804 stores a
+// mergeable sketch and GRVX-808 serves percentiles from it instead.
+test('TestNoPercentileInPreAggregations', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+
+  // Aggregation types that genuinely survive a roll-up.
+  const rollupSafe = new Set(['sum', 'count', 'countDistinct', 'countDistinctApprox']);
+
+  let checked = 0;
+  for (const [aggName, agg] of Object.entries(def.preAggregations)) {
+    if (agg.granularity === 'minute') continue;
+    for (const measureName of agg.measures || []) {
+      const measure = def.measures[measureName];
+      assert.ok(measure, `pre-aggregation ${aggName} names ${measureName}, which does not exist`);
+      checked++;
+
+      assert.ok(rollupSafe.has(measure.type),
+        `preaggregation "${aggName}" includes a percentile measure; percentiles are served by ` +
+        `sketch merge — ${measureName} aggregates with "${measure.type}", which does not survive ` +
+        `a roll-up to ${agg.granularity}. Only ${[...rollupSafe].join('/')} do.`);
+    }
+  }
+
+  assert.ok(checked > 0,
+    'no pre-aggregation measures were checked; the model has changed shape and this guard ' +
+    'is no longer guarding anything');
+});
+
+// A second angle on the same rule: catch a percentile by what it reads, with a
+// pattern wide enough to include the columns the evolve feature adds. Two
+// independent checks, because the type check would miss a percentile someone
+// declared `sum` and the column check would miss one in a column nobody named
+// suggestively.
+test('TestNoPercentileColumnIsRolledUp', () => {
+  const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
+
+  // Every column the warehouse holds that is a per-bucket scalar percentile:
+  // the three fixed ones, and the retroactive pair pkg/evolve writes.
+  const percentileColumn = /(p\d+_latency_ms|quantile|percentile)/i;
+
+  for (const [aggName, agg] of Object.entries(def.preAggregations)) {
+    if (agg.granularity === 'minute') continue;
+    for (const measureName of agg.measures || []) {
+      const sql = def.measures[measureName]?.sql || '';
+      assert.ok(!percentileColumn.test(sql),
+        `preaggregation "${aggName}" includes a percentile measure; percentiles are served by ` +
+        `sketch merge — ${measureName} reads ${sql}`);
+    }
+  }
+});

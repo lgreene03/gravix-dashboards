@@ -197,3 +197,82 @@ make check-boundary && make build-oss && make test-oss
 | 400 ms unreachable without Redis | Publish the no-Redis number as the headline and report it. Never make the optional component's number the headline; the bootstrap stack is the free product. |
 | A pre-aggregation that would need a percentile to hit the target | Return `SPEC DEFECT: §5.1`. Speed does not buy an exception to GRVX-808. |
 | Warming measurably slowing user queries | Reduce `Interval` or `MaxDuration` and re-measure. A warmer that slows the thing it warms is a regression. |
+
+---
+
+## 11. Implementation report (partial)
+
+**AC-3 is complete. AC-1, AC-2, AC-4, AC-5 and AC-8 are blocked on a running stack, and the stack
+does not yet boot.** AC-6, AC-7, AC-9 and AC-10 are not attempted, for the reason in §11.3.
+
+### 11.1 AC-3, and the gap it closed
+
+Checking whether the existing percentile protections held before adding another found that they do
+not, in one place. `'no measure aggregates a percentile column with max'` matches percentile columns
+with `/p\d\d_latency_ms/` — exactly two digits, that spelling only. `pkg/recompute`'s `MetricRow`
+also carries `extra_quantile_ms`, written by GRVX-806 for a retroactively added percentile, and that
+does not match.
+
+Measured: a `max` over `extra_quantile_ms` in the `endpointDaily` pre-aggregation, unannotated —
+**all fourteen tests pass**. The max of 1,440 one-minute percentiles, stored as the day's percentile,
+cached. Recorded as **F-024**.
+
+`TestNoPercentileInPreAggregations` now checks the invariant rather than the spelling: a
+pre-aggregation coarser than a minute may contain only measures that survive a roll-up — `sum` and
+the count family. `min`, `max` and `avg` over a per-bucket scalar do not, whatever the column is
+named. A second test, `TestNoPercentileColumnIsRolledUp`, covers the same rule by column pattern,
+because the type check alone would miss a percentile declared `sum`.
+
+Mutation-tested: `max`, `min` and `avg` over `extra_quantile_ms`, and `avg` over `p999_latency_ms`,
+all now fail with the pre-aggregation, measure and aggregation named.
+
+```
+$ make test-js
+# pass 108   # fail 0
+```
+
+### 11.2 §6 step 1 — the four latencies are not measured
+
+§5.3 requires four figures, and none has been measured:
+
+| Field | Status |
+|---|---|
+| `query_p95_ms` | not measured through Cube |
+| `query_cold_p95_ms` | not measured through Cube |
+| `query_p95_no_preagg_ms` | not measured |
+| `query_p95_percentile_endpoint_ms` | not measured |
+
+`bench/` reports `QueryP95Ms` ≈ 155 ms and `QueryColdP95Ms` ≈ 145 ms, and **those are not these
+numbers**: GRVX-1001 §11.5 states that its query stage reads Parquet rows in Go, with no Cube, no
+semantic layer and no HTTP. It is a floor for the data access, not a dashboard query latency. Quoting
+it as if it were `query_p95_ms` would be the same class of error as F-020 and F-022.
+
+Measuring the real four needs Cube running, which needs the bootstrap stack. No Docker daemon exists
+in the implementation environment, and the stack itself has been found broken five separate ways this
+phase (**F-015**, **F-016**, **F-019**, **F-021**, **F-023**), the last fix still unverified.
+
+### 11.3 Why the pre-aggregation set was not restructured
+
+§4.1 asks for a new `cube/model/preaggregations.js` and §4.2 for `RequestMetricsMinute.js` to
+reference it. §5.1 specifies four rollups; the model currently defines two (`metricsHourly`,
+`endpointDaily`), one of which matches `serviceHourly` and one of which is not in §5.1's set at all.
+
+Restructuring them was not done, because AC-8 requires all four Cube configurations
+(DuckDB/Trino × single/multi-tenant) to still resolve afterwards, and that cannot be verified without
+running Cube. Rewriting the dashboard's entire query path against a schema nobody can execute, on the
+strength of a static test that only parses the definitions, is how a query returns a coarser answer
+than it was asked for — which §3 calls a correctness defect. The same discipline as GRVX-1003's
+`SPEC DEFECT`: the work is real and it needs the thing that is missing.
+
+**Sequencing:** `timed-onboarding` goes green → the four latencies are measurable → §5.1's rollups
+land with AC-8 verifying them → the warmer (§5.2) is built against measured numbers rather than
+guessed ones.
+
+### 11.4 Definition of done
+
+- [x] AC-3 — `TestNoPercentileInPreAggregations`, plus a second independent guard, mutation-tested
+- [ ] AC-1, AC-2, AC-4, AC-5, AC-8 — blocked: no running Cube
+- [ ] AC-6, AC-7, AC-9, AC-10 — not attempted; the warmer follows the measurements
+- [ ] All four latency figures, with and without Redis — blocked
+- [x] No percentile in any pre-aggregation — now enforced by behaviour, not by name
+- [x] Zero new skipped tests
