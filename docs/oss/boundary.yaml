@@ -47,6 +47,18 @@ capabilities:
       - transforms/service_events_daily/main.go
       - transforms/service_events_detail/main.go
 
+  - id: recompute-engine
+    name: Deterministic recompute of derived metrics
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      Recomputability is docs/00-system-truth.md §4 and the centre of the competitive
+      thesis. Gating it would leave the free tier reporting numbers it cannot prove.
+    paths:
+      - pkg/recompute/recompute.go
+      - pkg/recompute/plan.go
+      - cmd/cli/cmd_recompute.go
+
   - id: compaction-retention
     name: Parquet compaction and retention
     placement: core

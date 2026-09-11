@@ -9,6 +9,7 @@
 //	gravix send event  --service=auth --type=deploy_completed --message="v1.2.3"
 //	gravix status      [--endpoint=http://localhost:8090]
 //	gravix tail dlq    [--follow]
+//	gravix recompute   --from=2026-09-01 --to=2026-09-08
 //
 // Environment variables:
 //
@@ -60,6 +61,8 @@ func main() {
 		}
 	case "replay":
 		runReplay(os.Args[2:])
+	case "recompute":
+		runRecompute(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version":
@@ -80,6 +83,7 @@ Usage:
   gravix status       Check ingestion service health
   gravix tail dlq     Tail the dead-letter queue
   gravix replay       Replay DLQ entries back to ingestion
+  gravix recompute    Rebuild derived metrics from raw facts
   gravix version      Print version
   gravix help         Show this help
 

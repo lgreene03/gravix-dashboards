@@ -172,3 +172,57 @@ is corrected by this change rather than propagated**, and its dangling PGP-key r
 rather than left pointing at nothing. Its safe-harbour clause — the most valuable thing it
 contained, and absent from the spec's required sections — was migrated into `SECURITY.md` rather
 than dropped.
+
+---
+
+## SD-004 — GRVX-801 §2 overstates the duplication bug
+
+**Found by:** `senior-engineer` executing GRVX-801
+**Affects:** GRVX-801 §2 (the "Defect this spec must fix" note)
+**Severity:** low — the required fix is correct and unchanged; only the stated reason was wrong
+**Status:** corrected in this register; the spec text stands as written
+
+### What the spec assumed
+
+GRVX-801 §2 states:
+
+> A fresh UUID per run means a second run over the same day **adds** a file instead of replacing
+> one, so every recompute double-counts. This is why §4 of the constitution is currently
+> unenforceable.
+
+### What is actually true
+
+The rollup already performed a write-then-swap. After uploading the new file it listed the
+partition and deleted every key that was not the one it had just written, plus any legacy
+flat-layout file for that day. A second run therefore left **one** file in the partition, not two.
+Steady-state double-counting was not occurring.
+
+The duplication risk was real but narrower than stated: it needs the process to die, or the delete
+to fail, between the `Put` and the cleanup. Because each run picked a new key, a partial failure
+left two files that both looked current, and nothing later could tell which was which.
+
+### What is genuinely broken, and is what this spec fixes
+
+Independent of the duplication question, four real defects blocked `docs/00-system-truth.md` §4:
+
+1. **Unchanged output could not be detected.** With the key changing every run there was no address
+   to compare against, so every rebuild rewrote every partition. "Idempotent" meant "converges to
+   the same values", not "is a no-op" — and nothing proved even the first.
+2. **Output was not byte-identical.** Rows were sorted on two of the four key fields, so any minute
+   where one service served two methods or two paths left ties in Go map iteration order. Two runs
+   over identical facts produced different files.
+3. **The compression level was not pinned.** `zstd.SpeedDefault` is whatever the library currently
+   defines it to be; an upgrade would silently change the bytes of an unchanged rebuild.
+4. **Percentiles depended on read order** in principle. `stats.Percentile` sorts a copy internally,
+   so this was latent rather than active — but it was latent by the grace of a dependency's
+   implementation detail, not by anything this repository stated or tested.
+
+### Why the fix did not change
+
+Every change GRVX-801 §5.3 and §5.4 require is still required, for reasons 1–4 rather than for the
+reason §2 gives. The deterministic key is what makes unchanged-detection possible at all, and it
+closes the partial-failure window as a side effect. No scope changed; only the justification.
+
+**What the register is for:** the claim "every recompute double-counts" would have gone into the
+competitive thesis as evidence of a bug this project had fixed. It was never true as stated, and
+`01-competitive-thesis.md` must not carry it.
