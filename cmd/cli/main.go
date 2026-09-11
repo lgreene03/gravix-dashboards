@@ -48,6 +48,8 @@ func main() {
 		}
 	case "status":
 		runStatus(os.Args[2:])
+	case "doctor":
+		runDoctor(os.Args[2:])
 	case "tail":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: gravix tail <dlq> [flags]\n")
@@ -86,6 +88,7 @@ Usage:
   gravix send fact    Send a single request fact
   gravix send event   Send a service lifecycle event
   gravix status       Check ingestion service health
+  gravix doctor       Diagnose setup failures and print the fix for each
   gravix tail dlq     Tail the dead-letter queue
   gravix replay       Replay DLQ entries back to ingestion
   gravix recompute    Rebuild derived metrics from raw facts

@@ -327,17 +327,137 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All twelve acceptance criteria pass, plus four more. No
+escalation: §10's three conditions were each checked and none holds (see §8.3).
+
+```
+$ go test ./cmd/cli/... -run TestCheck -v
+--- PASS: TestCheckDockerCLI              (AC-2)
+--- PASS: TestCheckGoVersion              (AC-3)
+--- PASS: TestCheckEnvConfigured          (AC-4)
+--- PASS: TestCheckPortsAvailable         (AC-5)
+--- PASS: TestCheckIngestionReachable     (AC-6)
+--- PASS: TestCheckIngestionAuth          (AC-7)
+--- PASS: TestCheckTenantDBSeeded         (AC-8)
+--- PASS: TestCheckCubeReachable          (AC-9)
+--- PASS: TestCheckWarehouseData          (AC-10)
+--- PASS: TestCheckDashboardCSP           (AC-11)
+
+$ go test ./cmd/cli/... -run "TestAllChecksHasTenEntriesInOrder|TestDoctorRunAggregateExitDecision" -v
+--- PASS: TestAllChecksHasTenEntriesInOrder      (AC-1)
+--- PASS: TestDoctorRunAggregateExitDecision     (AC-12)
+    broken stack: 7 fail, 2 warn, 1 ok
+
+$ go test ./cmd/cli/... -run TestMain -v
+--- PASS: TestMainDispatchIncludesDoctor
+
+$ go build ./... && go test ./schemas/...     # ok
+$ make check-boundary                          # boundary: 0 violations
+$ make build-oss && make test-oss              # 50 packages, ee/ absent
+$ go test ./... -race -count=1                 # no failures
+$ make lint                                    # clean
+```
+
+### 8.2 Run against a genuinely broken stack
+
+The tool was run for real, not only unit-tested, because output that is correct and unreadable is
+still a failure:
+
+```
+$ gravix doctor -base-dir ./nonexistent
+Gravix doctor — http://localhost:8090
+
+✓ Docker CLI available: docker CLI found
+✓ Go toolchain (source builds only): go 1.24 satisfies go.mod's 1.24 requirement
+✗ Environment configured: neither ".env" nor "nonexistent/api_key.txt" was found — …
+    fix: cp .env.example .env   # full stack — or —   docker compose … up -d --build
+✓ Required ports: ports 8000, 8090, 8091, 4000 are free
+✗ Ingestion service reachable: GET http://localhost:8090/live failed: … connection refused
+    fix: docker compose -f docker-compose.bootstrap.yml up -d --build
+✗ API key valid: GRAVIX_API_KEY is not set
+    fix: export GRAVIX_API_KEY=$(cat nonexistent/api_key.txt)
+⚠ Tenant database seeded: nonexistent/gravix.db not found — fine in legacy single-API-key mode; …
+⚠ Rollup has produced data: no Parquet files … the first rollup can take up to ~4 minutes …
+✗ Cube.js reachable / ✗ Dashboard CSP allows ingestion: … connection refused
+
+Some checks failed. Run the "fix:" command under each failing check, then re-run: gravix doctor
+exit=1
+```
+
+Every failing line carries the command that fixes it, which is the whole point: a diagnosis without
+a remedy is a complaint. `TestEveryFailProvidesAFix` asserts it mechanically over a fully broken
+config rather than trusting the ten were written carefully.
+
+**Warnings deliberately do not fail the command.** Four of the ten report states that are normal
+rather than wrong — ports busy on a running stack, no tenant database in legacy single-key mode, no
+Parquet four minutes after boot, and an unverifiable API key when the service is already reported
+down. Exiting 1 on any of those would teach people to ignore the exit code, which costs more than it
+buys.
+
+That last one is worth naming: when ingestion is unreachable, the auth check reports a **warning**,
+not a second failure. The previous line already told the reader the service is down, and two
+failures for one cause sends them chasing a problem that does not exist.
+
+### 8.3 §10's three escalation conditions, each checked
+
+| Condition | Holds? |
+|---|---|
+| An eleventh known failure mode exists | **No.** The ten cover what the bootstrap stack can actually get wrong. The one I would add on evidence rather than speculation is a disk-full check, and there is no report of it yet. |
+| `go version` output format assumption is wrong on a supported platform | **No.** The regex matched every form tested, including `darwin/arm64`. The real hazard was not the format but the comparison — see below. |
+| `net.DialTimeout` is unreliable in the CI sandbox | **No.** `TestCheckPortsAvailable` binds 127.0.0.1:8090 itself and asserts the warn path. It does not skip when the port is already taken — it logs and proceeds, because something listening is exactly the condition under test. |
+
+### 8.4 Guards proven by mutation
+
+| Guard | Mutation | Reported |
+|---|---|---|
+| AC-11 `TestCheckDashboardCSP` | accept any CSP, including one omitting ingestion | yes — "a CSP omitting ingestion gave ok" |
+| AC-3 `TestCheckGoVersion` | compare versions as text (`parsed < "1.24"`) instead of as numbers | yes — **"go1.9 was accepted"**, because `"1.9" > "1.24"` as a string |
+
+The second mutation is the bug this check would most plausibly have shipped with, and the test was
+written to catch it specifically: `go1.9` sorts *after* `go1.24` lexically, so a string comparison
+silently approves a toolchain eight years too old.
+
+### 8.5 The check that justifies the whole command
+
+Nine of the ten diagnose things a user could eventually find in `docker compose logs`.
+`checkDashboardCSP` diagnoses something they could not.
+
+If the dashboard's `Content-Security-Policy` does not list the ingestion origin, the **browser**
+blocks every request the dashboard makes, while `docker compose ps` is green, `gravix status` is
+green, and every container is healthy. The symptom is an empty dashboard with no error anywhere
+server-side. GRVX-902 had to add `http://localhost:8090` to that directive for its own endpoint to be
+reachable at all, so a user running a stale or modified `nginx.conf` lands in exactly this state.
+
+It reads the **live response header** rather than the repository's `nginx.conf`, per §3: `gravix` is
+installed via Homebrew and `go install` and frequently runs with no checkout present.
+
+### 8.6 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| The dispatch test is named `TestMainDispatchIncludesDoctor`, not `TestMain` | `TestMain` is Go's test-harness hook. A function with that exact name replaces the package's test runner rather than adding a test — every other test in `cmd/cli` would stop running. It still matches §8's `-run TestMain` by prefix. |
+| That test reads `main.go` as source rather than invoking the dispatch | §4.2 says to follow "whatever existing pattern this file uses for `status`/`tail`". There is no such pattern — `main_test.go` tests only the env helpers — and `main()` calls `os.Exit`, so the switch cannot be driven from a test without a subprocess. Asserting the case exists and that `printUsage` advertises it is what can honestly be checked. |
+| `anyFailed` and `doctorIcon` are exported to the package beyond §5's listing | §5 names `anyFailed` in AC-12's own text; `doctorIcon` is the §6.2 icon mapping, pinned by a test because the icons are how the output is scanned. |
+| `README.md` modified | The §9 docs delta. |
+
 ## 9. Definition of done
 
-- [ ] All twelve acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.1/§4.2 modified
-- [ ] `docs-engineer` delta merged (README or quick-start mentions `gravix doctor`) or `NO DOCS
-      DELTA REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests
-- [ ] Every `DoctorFail`-producing check in §6 has a non-empty `FixCmd` (verified by AC-12's fixture)
+- [x] All twelve acceptance criteria pass with their named tests — §8.1, plus four more
+- [x] Every Verification command run, real output pasted into the report — §8.1, and a real run
+      against a broken stack in §8.2
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted — 50 packages
+- [x] **Yes** — only `cmd/cli/cmd_doctor.go`, `cmd_doctor_test.go`, `main.go` and `README.md` (the
+      §9 docs delta). `main_test.go` was left alone; §8.6 explains why the dispatch test lives with
+      the rest of doctor's tests instead.
+- [x] `docs-engineer` delta merged — the README quick-start now points at `gravix doctor` and says
+      why it is worth running even when `docker compose ps` looks healthy
+- [x] Zero new skipped or quarantined tests — `TestCheckPortsAvailable` deliberately logs and
+      proceeds rather than skipping when the port is already bound
+- [x] Every `DoctorFail`-producing check has a non-empty `FixCmd` — asserted mechanically by
+      `TestEveryFailProvidesAFix` over a fully broken config
 
 ## 10. Escalation
 

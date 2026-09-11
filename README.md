@@ -200,6 +200,18 @@ Open [http://localhost:8000/index.html](http://localhost:8000/index.html).
 
 If `CUBEJS_API_SECRET` is set, you will be prompted for a password.
 
+**If something isn't working, run `gravix doctor`.** It runs ten checks over the pieces that
+actually fail during setup and prints the exact command to fix each one:
+
+```bash
+gravix doctor
+```
+
+It is worth running even when `docker compose ps` looks healthy. One of the ten checks reads the
+dashboard's live `Content-Security-Policy` header — if that does not list the ingestion origin, the
+*browser* silently blocks every request while every server-side health check stays green and the
+dashboard just looks empty.
+
 ### 4. Send your own data
 
 ```bash
