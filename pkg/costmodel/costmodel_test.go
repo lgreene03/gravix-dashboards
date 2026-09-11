@@ -4,6 +4,7 @@
 package costmodel
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -467,4 +468,88 @@ func TestMultipleVariesWithVolume(t *testing.T) {
 		t.Errorf("the small-volume multiple is %.1fx; if it has genuinely come down near the "+
 			"\"roughly 10x\" the caveat quotes, SD-021 can be closed and this test retired", small)
 	}
+}
+
+// ─── AC-7, Go half ───
+
+// TestGoJSParityFixturesAreCurrent regenerates the expected totals from the
+// shared fixture set and fails if the committed file has drifted from what this
+// package now produces.
+//
+// dashboards/lib/tco.test.js reads the same file and asserts the JS model
+// produces the same numbers. So a change to either implementation that is not
+// mirrored in the other fails here or there, which is the only thing keeping a
+// calculator honest against the model behind it.
+func TestGoJSParityFixturesAreCurrent(t *testing.T) {
+	raw, err := os.ReadFile("fixtures.json")
+	if err != nil {
+		t.Fatalf("read fixtures.json: %v", err)
+	}
+	var fixtures struct {
+		MeasurementSource string `json:"measurement_source"`
+		Cases             []struct {
+			Name           string  `json:"name"`
+			EventsPerMonth int64   `json:"events_per_month"`
+			RetentionDays  int     `json:"retention_days"`
+			Services       int     `json:"services"`
+			DashboardUsers int     `json:"dashboard_users"`
+			BytesPerEvent  float64 `json:"bytes_per_event"`
+		} `json:"cases"`
+	}
+	if err := jsonUnmarshal(raw, &fixtures); err != nil {
+		t.Fatalf("parse fixtures.json: %v", err)
+	}
+	if len(fixtures.Cases) == 0 {
+		t.Fatal("fixtures.json has no cases; the parity test would be vacuous")
+	}
+
+	prices := testPrices(t)
+	expected := map[string]map[string]float64{}
+
+	for _, c := range fixtures.Cases {
+		in := Inputs{
+			EventsPerMonth: c.EventsPerMonth, RetentionDays: c.RetentionDays,
+			Services: c.Services, DashboardUsers: c.DashboardUsers,
+			BytesPerEvent: c.BytesPerEvent, MeasurementSource: fixtures.MeasurementSource,
+		}
+		estimates, err := EstimateAll(in, prices)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		totals := map[string]float64{}
+		for _, e := range estimates {
+			totals[string(e.Deployment)] = e.TotalUSDMonth
+		}
+		expected[c.Name] = totals
+	}
+
+	// Written for the JS side to read. Regenerated every run, so it cannot go
+	// stale silently: if this package's output changes, the file changes, and
+	// the JS test that reads it starts failing until tco.js is updated to match.
+	out, err := jsonMarshalIndent(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const path = "../../dashboards/lib/tco.fixtures.expected.json"
+	previous, readErr := os.ReadFile(path)
+	if readErr == nil && string(previous) == string(out) {
+		return
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatalf("write expected totals: %v", err)
+	}
+	if readErr == nil {
+		t.Errorf("the Go model's totals changed; %s has been regenerated. "+
+			"Update dashboards/lib/tco.js to match, then re-run.", path)
+	}
+}
+
+func jsonUnmarshal(data []byte, v any) error { return json.Unmarshal(data, v) }
+
+func jsonMarshalIndent(v any) ([]byte, error) {
+	out, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
 }

@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "retrieved": "2026-09-11",
+  "currency": "USD",
+  "bootstrap_vps": {
+    "instance_usd_month": {
+      "value": 5.0,
+      "basis": "estimate",
+      "source": "class of a 2 vCPU / 4 GB VPS; not read from a vendor page"
+    },
+    "included_storage_gb": {
+      "value": 40,
+      "basis": "estimate",
+      "source": "typical allowance at that instance class"
+    },
+    "extra_storage_usd_gb_month": {
+      "value": 0.1,
+      "basis": "estimate",
+      "source": "typical block-storage add-on rate"
+    },
+    "egress_usd_gb": {
+      "value": 0.01,
+      "basis": "estimate",
+      "source": "typical after a large included allowance"
+    },
+    "included_egress_gb": {
+      "value": 1000,
+      "basis": "estimate",
+      "source": "typical allowance at that instance class"
+    }
+  },
+  "aws_single": {
+    "eks_control_plane_usd_month": {
+      "value": 73.0,
+      "basis": "estimate",
+      "source": "EKS control plane, per cluster, recalled not read"
+    },
+    "node_usd_month": {
+      "value": 61.0,
+      "basis": "estimate",
+      "source": "one general-purpose 2 vCPU / 8 GB on-demand node, recalled not read"
+    },
+    "nodes": {
+      "value": 2,
+      "basis": "estimate",
+      "source": "deploy/gravix default replica counts"
+    },
+    "s3_storage_usd_gb_month": {
+      "value": 0.023,
+      "basis": "estimate",
+      "source": "S3 Standard first 50 TB, recalled not read"
+    },
+    "s3_put_usd_per_1000": {
+      "value": 0.005,
+      "basis": "estimate",
+      "source": "S3 PUT/COPY/POST/LIST, recalled not read"
+    },
+    "s3_get_usd_per_1000": {
+      "value": 0.0004,
+      "basis": "estimate",
+      "source": "S3 GET, recalled not read"
+    },
+    "egress_usd_gb": {
+      "value": 0.09,
+      "basis": "estimate",
+      "source": "first 10 TB/month to internet, recalled not read"
+    },
+    "load_balancer_usd_month": {
+      "value": 18.0,
+      "basis": "estimate",
+      "source": "one ALB, base hours only, recalled not read"
+    }
+  },
+  "aws_multi": {
+    "regions": {
+      "value": 3,
+      "basis": "estimate",
+      "source": "docs/oss/specs: three-region shape"
+    },
+    "cross_region_transfer_usd_gb": {
+      "value": 0.02,
+      "basis": "estimate",
+      "source": "inter-region transfer, recalled not read"
+    }
+  }
+}

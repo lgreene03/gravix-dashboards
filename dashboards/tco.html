@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravix cost calculator</title>
+    <style>
+        /* Light is the base; dark overrides only the tokens. No build step and
+           no external stylesheet, per the frontend-engineer brief. */
+        :root {
+            color-scheme: light dark;
+            --bg: #f8fafc;
+            --panel: #ffffff;
+            --border: #e2e8f0;
+            --text: #0f172a;
+            --muted: #64748b;
+            --accent: #1e293b;
+            --measured-bg: #dcfce7;
+            --measured-fg: #166534;
+            --list-bg: #dbeafe;
+            --list-fg: #1e40af;
+            --estimate-bg: #fef3c7;
+            --estimate-fg: #92400e;
+            --caveat-bg: #fffbeb;
+            --caveat-border: #fbbf24;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg: #0f172a;
+                --panel: #1e293b;
+                --border: #334155;
+                --text: #f1f5f9;
+                --muted: #94a3b8;
+                --accent: #e2e8f0;
+                --measured-bg: #14532d;
+                --measured-fg: #bbf7d0;
+                --list-bg: #1e3a8a;
+                --list-fg: #bfdbfe;
+                --estimate-bg: #78350f;
+                --estimate-fg: #fde68a;
+                --caveat-bg: #292524;
+                --caveat-border: #a16207;
+            }
+        }
+        :root[data-theme="dark"] {
+            --bg: #0f172a;
+            --panel: #1e293b;
+            --border: #334155;
+            --text: #f1f5f9;
+            --muted: #94a3b8;
+            --accent: #e2e8f0;
+            --measured-bg: #14532d;
+            --measured-fg: #bbf7d0;
+            --list-bg: #1e3a8a;
+            --list-fg: #bfdbfe;
+            --estimate-bg: #78350f;
+            --estimate-fg: #fde68a;
+            --caveat-bg: #292524;
+            --caveat-border: #a16207;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding-block: 24px;
+            padding-inline: 16px;
+            background: var(--bg);
+            color: var(--text);
+            font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        .wrap { max-width: 1100px; margin: 0 auto; }
+        h1 { font-size: 1.6rem; margin: 0 0 8px; }
+        h2 { font-size: 1.1rem; margin: 0 0 4px; }
+        .lede { color: var(--muted); margin: 0 0 24px; max-width: 70ch; }
+
+        form {
+            display: grid;
+            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+        }
+        label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+        input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text);
+            font: inherit;
+        }
+
+        .deployments { display: grid; gap: 20px; grid-template-columns: 1fr; }
+        @media (min-width: 900px) {
+            .deployments { grid-template-columns: repeat(3, 1fr); }
+        }
+        .deployment {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .total { font-size: 1.8rem; font-weight: 600; margin: 8px 0 0; }
+        .per-million { color: var(--muted); font-size: 0.9rem; margin: 0 0 12px; }
+
+        .lines { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .lines th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 0; }
+        .lines td { padding: 4px 0; border-top: 1px solid var(--border); vertical-align: top; }
+        .lines td:last-child { text-align: right; white-space: nowrap; }
+        .table-scroll { overflow-x: auto; }
+
+        .badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 1px 6px;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .badge-measured { background: var(--measured-bg); color: var(--measured-fg); }
+        .badge-list_price { background: var(--list-bg); color: var(--list-fg); }
+        .badge-estimate { background: var(--estimate-bg); color: var(--estimate-fg); }
+
+        /* Caveats are rendered in full, never behind a disclosure. A caveat you
+           have to click is a caveat the reader does not see. */
+        .caveat {
+            background: var(--caveat-bg);
+            border-left: 3px solid var(--caveat-border);
+            padding: 8px 12px;
+            margin-top: 12px;
+            font-size: 0.85rem;
+        }
+        .error { color: #b91c1c; padding: 16px; }
+        footer { margin-top: 32px; color: var(--muted); font-size: 0.85rem; max-width: 70ch; }
+        code { font-size: 0.85em; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>What Gravix costs to run</h1>
+    <p class="lede">
+        All three deployment shapes, always together. The bootstrap figure on its own would be a
+        half-truth: the at-scale number is what a team past a few million events a month actually
+        pays, and it is not a small multiple of the cheap one.
+    </p>
+
+    <form id="inputs" aria-label="Workload">
+        <div>
+            <label for="events">Events per month</label>
+            <input id="events" type="number" min="1" step="1" value="50000000">
+        </div>
+        <div>
+            <label for="retention">Retention (days)</label>
+            <input id="retention" type="number" min="1" step="1" value="30">
+        </div>
+        <div>
+            <label for="services">Services</label>
+            <input id="services" type="number" min="1" step="1" value="8">
+        </div>
+        <div>
+            <label for="users">Dashboard users</label>
+            <input id="users" type="number" min="1" step="1" value="5">
+        </div>
+    </form>
+
+    <div id="output" class="deployments"></div>
+
+    <footer id="provenance"></footer>
+</div>
+
+<script type="module">
+import { estimateAll } from './lib/tco.js';
+
+// Both files are served statically beside this page. No build step, no bundler,
+// no external dependency.
+const [prices, measurement] = await Promise.all([
+    fetch('./tco-prices.json').then(r => r.json()),
+    fetch('./tco-measurement.json').then(r => r.json()),
+]);
+
+const form = document.getElementById('inputs');
+const output = document.getElementById('output');
+
+function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
+function money(v) {
+    return '$' + v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+const TITLES = {
+    bootstrap_vps: 'Bootstrap VPS',
+    aws_single: 'AWS, one region',
+    aws_multi: 'AWS, three regions',
+};
+
+function render() {
+    const inputs = {
+        eventsPerMonth: Number(document.getElementById('events').value),
+        retentionDays: Number(document.getElementById('retention').value),
+        services: Number(document.getElementById('services').value),
+        dashboardUsers: Number(document.getElementById('users').value),
+        bytesPerEvent: measurement.bytes_per_event,
+        measurementSource: measurement.source,
+    };
+
+    let estimates;
+    try {
+        estimates = estimateAll(inputs, prices);
+    } catch (err) {
+        output.innerHTML = `<p class="error">${escapeHTML(err.message)}</p>`;
+        return;
+    }
+
+    output.innerHTML = estimates.map(e => `
+        <section class="deployment">
+            <h2>${escapeHTML(TITLES[e.deployment] || e.deployment)}</h2>
+            <p class="total">${money(e.totalUSDMonth)}<span style="font-size:1rem;color:var(--muted)">/month</span></p>
+            <p class="per-million">${money(e.usdPerMillionEvents)} per million events</p>
+            <div class="table-scroll">
+            <table class="lines">
+                <thead><tr><th>Line item</th><th>Basis</th><th>Monthly</th></tr></thead>
+                <tbody>
+                ${e.lineItems.map(li => `
+                    <tr>
+                        <td>${escapeHTML(li.name)}</td>
+                        <td><span class="badge badge-${escapeHTML(li.basis)}">${escapeHTML(li.basis.replace('_', ' '))}</span></td>
+                        <td>${money(li.usdMonth)}</td>
+                    </tr>`).join('')}
+                </tbody>
+            </table>
+            </div>
+            ${e.caveats.map(c => `<p class="caveat">${escapeHTML(c)}</p>`).join('')}
+        </section>`).join('');
+
+    document.getElementById('provenance').innerHTML =
+        `Storage is <strong>${escapeHTML(measurement.bytes_per_event.toFixed(2))} bytes per event</strong>, ` +
+        `measured by <code>./bench/run.sh</code> and read from ` +
+        `<code>${escapeHTML(measurement.source)}</code>. Infrastructure prices were recorded ` +
+        `${escapeHTML(prices.retrieved)}. Run the benchmark yourself and substitute your own figure — ` +
+        `the model refuses to run on a number that did not come from a measurement.`;
+}
+
+form.addEventListener('input', render);
+render();
+</script>
+</body>
+</html>

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -857,5 +858,58 @@ func TestRemoveStrayLockDirLeavesRealDataAlone(t *testing.T) {
 	removeStrayLockDir("warehouse", "request_metrics_minute")
 	if _, err := os.Stat("warehouse"); !os.IsNotExist(err) {
 		t.Errorf("an empty stray warehouse was not removed")
+	}
+}
+
+// TestNoCommittedResultIsFromADirtyTree is the regression guard for F-022.
+//
+// Machine.GravixCommit gains a "-dirty" suffix when the working tree has
+// uncommitted changes, precisely because such a result cannot be reproduced
+// from any commit. The first result this repository ever committed was
+// `c2f74ff-dirty`, produced by work-in-progress code that no longer exists, and
+// it reported 210.78 bytes/event where the committed code produces 203.78. The
+// harness recorded the problem in the field written for it; a human committed
+// the file regardless.
+//
+// A published benchmark figure nobody can reproduce is the one failure this
+// whole directory exists to prevent, so it is now a test rather than a habit.
+func TestNoCommittedResultIsFromADirtyTree(t *testing.T) {
+	entries, err := os.ReadDir("results")
+	if err != nil {
+		t.Fatalf("read results dir: %v", err)
+	}
+
+	checked := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join("results", e.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var result Result
+		if err := json.Unmarshal(raw, &result); err != nil {
+			t.Errorf("%s is not a valid Result: %v", path, err)
+			continue
+		}
+		checked++
+
+		if strings.HasSuffix(result.Machine.GravixCommit, "-dirty") {
+			t.Errorf("%s was produced from a dirty tree (%s). Nobody can reproduce it: the code "+
+				"that made it was never committed. Regenerate it from a clean checkout.",
+				path, result.Machine.GravixCommit)
+		}
+		if result.Machine.GravixCommit == unknown || result.Machine.GravixCommit == "" {
+			t.Errorf("%s records no commit, so there is no checkout it can be reproduced from", path)
+		}
+		if err := result.Validate(); err != nil {
+			t.Errorf("%s does not validate: %v", path, err)
+		}
+	}
+
+	if checked == 0 {
+		t.Error("no committed result files; GRVX-1001 §9 requires one --scale small result")
 	}
 }

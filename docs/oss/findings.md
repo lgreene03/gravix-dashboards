@@ -1105,3 +1105,49 @@ credential Cube would accept), F-019 (the image would not build), and this. Each
 sufficient on its own to make the advertised quickstart fail, and each was invisible to every gate
 that existed. The lesson is not about any of the four: it is that a documented command nobody
 executes is a documented command that does not work, and the only fix is a gate that runs it.
+
+## F-022 — the first committed benchmark result was produced from a dirty tree, and reported a number the code does not produce
+
+**Found by** GRVX-1004, reconciling the cost model's storage input against the bench result it is
+required to cite.
+**Severity** medium — no number had been published outside the repository yet. Had one been, it would
+have been unreproducible, which for this project is the worst kind of wrong.
+**Status** fixed: the bad file is regenerated from a clean tree, and
+`TestNoCommittedResultIsFromADirtyTree` now refuses any committed result whose commit is dirty.
+
+**What happened.** `bench/results/20260911T220715Z-small.json`, committed as GRVX-1001's §9 evidence,
+reported `bytes_per_event_raw: 210.7807132936508`. The committed code produces
+`203.7807132936508` — reproducibly, across four independent runs (two explicit work directories, a
+temporary one, and both `--runs 1` and `--runs 3`).
+
+The two differ by **exactly 7.0**, with an identical fractional part. That is not two measurements of
+different things; it is the same computation over a byte total that differed by exactly
+7 × 1,008,000 bytes. The file was produced by work-in-progress code that was never committed and no
+longer exists, so the precise cause is not recoverable — which is itself the point.
+
+**The harness had already reported it.** `Machine.GravixCommit` appends `-dirty` when the working
+tree has uncommitted changes, for exactly this reason:
+
+```json
+"gravix_commit": "c2f74fffe861f825a56aa59087c0bd7d6f67e994-dirty"
+```
+
+The mechanism worked. The person reading the file did not. That is worth recording as plainly as a
+code defect, because a provenance field nobody reads is the same as no provenance field.
+
+**Ruled out along the way**, each by measurement rather than reasoning:
+
+- *Compaction deleting raw facts* — a probe generated 1,200 facts across 4 files, ran the real
+  compaction job, and found 1 file with byte-identical content and the same 1,200 lines. No loss.
+- *Run count* — `--runs 3` gives 203.78, same as `--runs 1`.
+- *Work directory* — an explicit `--work-dir` and the default temporary directory agree.
+
+**The guard.** `TestNoCommittedResultIsFromADirtyTree` reads every file in `bench/results/` and fails
+on a dirty, unknown or empty commit, and on any result that does not validate. It caught both files
+present when it was written. The rule it encodes is narrow and total: **a result in this repository
+must be reproducible from a commit in this repository.**
+
+**Downstream corrections:** GRVX-1001's §11 summary carried 210.8 and now carries 203.8.
+`dashboards/tco-measurement.json` fed 213.68 to the cost model and now feeds 206.68 (raw 203.78 plus
+rolled-up 2.90). GRVX-1003's §11.1 decomposition was measured independently, from the directory
+rather than from the result file, and was already correct.

@@ -317,15 +317,16 @@ $ go build ./... && go test ./schemas/...
 build ok, PASS
 ```
 
-The committed run, `bench/results/20260911T220715Z-small.json`, on a 4-core container:
+The committed run is regenerated from a clean tree — see §11.7, which is why the figures below are
+not the ones this report first carried.
 
 ```
 facts:        1008000
-ingest:       55635 events/sec/core (p99 0.010 ms)
-rollup:       119807 events/sec
-bytes/event:  210.8 raw -> 2.90 rolled up -> 2.90 compacted
-query warm:   p50 144.5 ms  p95 155.4 ms  p99 155.4 ms
-query cold:   p95 145.0 ms
+ingest:       ~55,000 events/sec/core (p99 ~0.010 ms)
+rollup:       ~120,000 events/sec
+bytes/event:  203.8 raw -> 2.90 rolled up -> 2.90 compacted
+query warm:   p50 ~145 ms  p95 ~155 ms
+query cold:   p95 ~145 ms
 ```
 
 **Nothing here is publishable yet, and the notes say why.** Three caveats travel with the file:
@@ -372,3 +373,28 @@ what §5.4 says a published figure comes from.
 - [x] `docs-engineer` delta merged — `bench/README.md` is the deliverable doc; the `bench` target is
       in `make help`
 - [x] Zero new skipped tests
+
+### 11.7 F-022 — the first committed result was not reproducible
+
+The result file this spec originally committed reported **210.78 bytes/event raw**. The committed
+code produces **203.78**, reproducibly, across four independent runs.
+
+The harness had already said so. `Machine.GravixCommit` records `-dirty` when the working tree has
+uncommitted changes, because such a result cannot be reproduced from any commit, and the file read:
+
+```json
+"gravix_commit": "c2f74fffe861f825a56aa59087c0bd7d6f67e994-dirty"
+```
+
+It was produced by work-in-progress code that no longer exists. The provenance field written for
+exactly this purpose reported the problem, and it was committed anyway.
+
+A published benchmark figure nobody can reproduce is the single failure this directory exists to
+prevent, so it is now a test rather than a habit:
+`TestNoCommittedResultIsFromADirtyTree` fails on any committed result whose commit is dirty, unknown,
+or empty. It caught both files present when it was written.
+
+**Corrected figures** propagate: `bytes_per_event_raw` is 203.78, so the total footprint per event
+(raw + rolled-up) is **206.68**, which is what `dashboards/tco-measurement.json` feeds the cost
+model. GRVX-1003's §11.1 decomposition was measured independently from the directory and was already
+correct at 203.78; this report's summary was the one carrying the bad number.
