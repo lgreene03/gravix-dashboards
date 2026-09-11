@@ -1514,3 +1514,69 @@ citing a number that does not mean what it says.
 **Correction to commit `9691d51`.** Its message and `cmd/onboarding_gate/compose_tenancy_test.go`
 both cite "F-028" for the duplicate-key defect. Read F-011. The commit is pushed and its message
 cannot be amended without a force-push this environment denies; the code comment is corrected.
+
+---
+
+## F-029 — the full stack's gateway and Cube sign and verify with different secrets, so every token is rejected
+
+**Found by** `senior-engineer`, re-reading `docker-compose.yml` after making it loadable for F-011.
+**Owner** `security-engineer` for the second half; the first half is fixed here.
+**Severity** high — an empty dashboard with every container healthy, and a public signing secret.
+**Status** the mismatch is FIXED and guarded. The bootstrap stack's shared public secret is
+**open** and needs a decision.
+
+### The mismatch, and why fixing F-011 caused it
+
+`docker-compose.yml` had the two halves of one auth path disagreeing:
+
+| service | `JWT_SECRET` |
+|---|---|
+| `gateway` (line 54) | `${JWT_SECRET:?…}` — required from the environment |
+| `cube` (line 205) | `supersecretjwtkey12345!` — a literal |
+
+The gateway signs the dashboard's token with its value; `cube/cube.js` `checkAuth` verifies with its
+own and reads `securityContext.tenant_id` out of the result, which `queryRewrite` turns into a
+mandatory filter. Two different values mean Cube rejects **every** token the gateway issues, unless
+the operator sets `JWT_SECRET` to the one value they must never use.
+
+This was unreachable while F-011 stood: the duplicate `gateway:` key stopped Compose loading the file
+at all, so neither half ran. **Fixing the duplicate is what made the mismatch reachable.** Worth
+stating plainly — a fix that makes a file load without checking that it then *works* has moved the
+failure, not removed it. The removed `gateway` block carried the same literal as `cube`, so the two
+agreed in the half of the file that was discarded, and disagreed in the half that was kept. That is
+exactly the kind of thing F-011 meant when it said the choice "silently changes how the full stack is
+configured", and it is why that entry now records the diff in full.
+
+**Fixed** by giving `cube` the same expression the gateway uses. Guarded by
+`TestOneStackResolvesOneSigningSecret`, which compares the *expression* rather than the resolved
+value: two services reading the same variable agree whatever the operator sets it to, while two
+literals that match today drift the moment one is edited. Mutation-tested — reverting `cube` to the
+literal, and pointing it at a differently-named variable, each fail; control green either side.
+
+### Still open: the secret itself is public
+
+`supersecretjwtkey12345!` remains in `docker-compose.bootstrap.yml` twice, on `gateway` and `cube`.
+There the two agree, so the stack works — with a signing key that is published in this repository.
+Anyone can mint a token for any `tenant_id` and read that tenant's metrics through Cube, because
+`checkAuth` trusts the `tenant_id` in the token and `queryRewrite` filters on exactly that.
+
+**This is not fixed here because the fix is a decision, not an edit.** The bootstrap stack's whole
+premise is that `docker compose up` works with no `.env` editing, so `${JWT_SECRET:?…}` — the fix
+applied to the full stack — would break the property GRVX-909 exists to provide. The options:
+
+1. `bootstrap_seed` generates a random secret and writes it where both services read it, the way it
+   already does for the API key and the dashboard password. Keeps zero-config; one more file to
+   thread through two services.
+2. `${JWT_SECRET:-<generated at first boot>}`, with the generation done by the init container.
+3. Require it in `.env.bootstrap.example` and accept that the bootstrap stack no longer starts
+   unedited.
+
+Option 1 matches what `bootstrap_seed` already does for two other secrets and is the obvious
+candidate, but it changes the file layout the init container owns and is worth someone's deliberate
+yes. Recorded rather than improvised, per the register's own rule.
+
+**A note on how this was found.** I nearly filed it as a new finding without checking, having made
+exactly that mistake an hour earlier with F-028. Searching first showed the literal is *cited* in
+F-016 and in `spec-defects.md` as context for the credential chain — but no entry owns it, and the
+gateway/cube mismatch appears nowhere. So the number is new and the search is recorded here so the
+next person does not have to repeat it.

@@ -464,3 +464,68 @@ func TestComposeValidationStepSuppliesEveryRequiredVariable(t *testing.T) {
 			"CI loaded the full-stack file for four months, which is how F-011 survived.", validated)
 	}
 }
+
+// ─── One stack, one signing secret ─────────────────────────────────────────
+
+// The gateway signs the dashboard's token with JWT_SECRET; cube/cube.js
+// checkAuth verifies it with JWT_SECRET and reads securityContext.tenant_id out
+// of the result, which queryRewrite then turns into a mandatory filter. The two
+// services must therefore resolve that variable to the same value.
+//
+// docker-compose.yml had them disagreeing — the gateway taking ${JWT_SECRET:?…}
+// from the environment, cube carrying a literal — so every token the gateway
+// issued would be rejected, leaving an empty dashboard with every container
+// healthy. That is F-016's failure mode, and it was invisible only because the
+// file's duplicate service key (F-011) stopped Compose loading it at all.
+// Fixing the duplicate is what made the mismatch reachable. Recorded as F-029.
+//
+// The check is on the expression, not the resolved value: two services reading
+// the same variable agree whatever the operator sets it to, while two literals
+// that happen to match today drift the moment one is edited.
+func TestOneStackResolvesOneSigningSecret(t *testing.T) {
+	const secretVar = "JWT_SECRET"
+
+	for _, composeFile := range composeFiles {
+		data, err := os.ReadFile(composeFile)
+		if err != nil {
+			t.Fatalf("read %s: %v", composeFile, err)
+		}
+		var doc tenancyDoc
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("%s is not loadable: %v", composeFile, err)
+		}
+
+		// Service name -> the expression it assigns to the variable.
+		declared := map[string]string{}
+		for name, svc := range doc.Services {
+			if v, ok := envPairs(svc.Environment)[secretVar]; ok {
+				declared[name] = v
+			}
+		}
+		if len(declared) < 2 {
+			// One declaring service cannot disagree with itself, and zero means
+			// the stack does not use JWT auth. Neither is a defect.
+			continue
+		}
+
+		names := make([]string, 0, len(declared))
+		for n := range declared {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+
+		want := declared[names[0]]
+		for _, n := range names[1:] {
+			if declared[n] != want {
+				t.Errorf("F-029 REGRESSION: in %s, %q and %q assign different expressions to %s:\n"+
+					"  %-12s %s\n"+
+					"  %-12s %s\n"+
+					"The gateway signs the dashboard's token with this secret and Cube verifies it\n"+
+					"with the same name. Two different values mean Cube rejects every token the\n"+
+					"gateway issues: an empty dashboard with every container reporting healthy.",
+					filepath.Base(composeFile), names[0], n, secretVar,
+					names[0], want, n, declared[n])
+			}
+		}
+	}
+}

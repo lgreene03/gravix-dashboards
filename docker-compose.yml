@@ -202,7 +202,12 @@ services:
       - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
       - TENANT_DB_PATH=/cube/data/gravix.db
-      - JWT_SECRET=supersecretjwtkey12345!
+      # Must be the SAME expression the gateway uses. The gateway signs the
+      # dashboard's token with JWT_SECRET and cube/cube.js checkAuth verifies it
+      # with this one; a literal here and ${JWT_SECRET} there means Cube rejects
+      # every token the gateway issues, and the dashboard stays empty with every
+      # container healthy — F-016's failure mode. See F-029.
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required - set it in .env}
     volumes:
       - ./cube/cube.js:/cube/conf/cube.js
       - ./cube/model:/cube/conf/model
