@@ -1007,6 +1007,90 @@ paths:
                 error: "metric storage is not configured"
                 code: 503
 
+  /api/v1/lineage:
+    get:
+      operationId: getLineage
+      summary: Provenance of one metric value
+      description: >
+        Returns everything behind a single metric value: the contract that defines
+        it, how exact it is, which fact files it was computed from and how many
+        facts those held, whether the partition has been revised, and the command
+        that rebuilds it.
+
+
+        This is `gravix explain` over HTTP. The response is assembled by the same
+        code the CLI uses, so the two cannot disagree about where a number came
+        from.
+
+
+        It reports aggregates and file names, never individual request records —
+        per-request querying is a stated non-goal (docs/04-non-goals.md §5) and no
+        parameter or response field here can be used to reach one. Only the three
+        declared dimensions are accepted as filters.
+      tags: [Metrics]
+      security:
+        - gravixKeyAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: metric
+          in: query
+          schema:
+            type: string
+            default: request_metrics_minute
+          description: >
+            The rollup name, or one of its contract names (for example
+            `latency_p95`). Naming a contract focuses the report on that metric's
+            definition; naming the rollup reports the weakest guarantee present,
+            because that is the one a reader most needs to know about.
+        - name: bucket
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: The `bucket_start` being explained (RFC3339). Matched exactly.
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: method
+          in: query
+          schema:
+            type: string
+        - name: path_template
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The value's full provenance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lineage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No partition covers that bucket, or no row matches the filters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/LineageUnavailable"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Metric storage is not configured, so no partition can be read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/gateway/audit-log:
     get:
       operationId: listAuditLog
@@ -1560,6 +1644,121 @@ components:
         offset:
           type: integer
 
+    Lineage:
+      type: object
+      description: >
+        The full provenance of one metric value. Every field that qualifies the
+        number travels with it — a number whose exactness you have to look up
+        somewhere else is a number nobody checks.
+      required:
+        - metric
+        - metric_version
+        - contract_ref
+        - bucket
+        - values
+        - formula
+        - grain
+        - exactness
+        - mergeability
+        - data_file
+        - idempotency_key
+        - content_digest
+        - source_fact_keys
+        - fact_count
+        - recompute_cmd
+      properties:
+        metric:
+          type: string
+          example: request_metrics_minute
+        metric_version:
+          type: string
+          example: v2
+        contract_ref:
+          type: string
+          description: >
+            The contract whose formula, exactness and mergeability are reported. It
+            differs from `metric` when a rollup was asked about: a rollup is several
+            metrics, so one of their contracts has to be the one described, and the
+            reader is entitled to know which.
+          example: latency_p95@v2
+        bucket:
+          type: string
+          format: date-time
+        filters:
+          type: object
+          additionalProperties:
+            type: string
+          description: The dimension filters that selected the row. Never more than the three declared dimensions.
+        values:
+          type: object
+          description: Every measure in the row. Aggregates only.
+          additionalProperties: true
+        formula:
+          type: string
+          example: percentile(latency_ms, 0.95) within bucket
+        grain:
+          type: string
+          example: minute
+        exactness:
+          type: string
+          enum: [exact, sketch, approximate]
+        error_bound:
+          type: string
+        mergeability:
+          type: string
+          enum: [sum, weighted_mean, sketch_merge, none]
+        merge_note:
+          type: string
+        known_defect:
+          type: string
+          description: >
+            Present when `exactness` is `approximate`. The contract registry refuses
+            to load an approximate metric that does not declare one, so an
+            undisclosed approximation cannot ship.
+        data_file:
+          type: string
+          description: The object key of the Parquet partition the row was read from.
+        idempotency_key:
+          type: string
+          example: "request_metrics_minute:v2::20260909"
+        content_digest:
+          type: string
+          description: >
+            A sha256 over the partition's canonicalised rows, not over the Parquet
+            container — so it is stable across writer versions and compression
+            settings, and changes only when a published number changes.
+          example: "sha256:9fccad8ddd3ad6ee438b5d5df40d6e2262f7f748f107ada14723ed414b63990b"
+        source_fact_keys:
+          type: array
+          description: The fact **files** the partition was built from. Never fact records.
+          items:
+            type: string
+        fact_count:
+          type: integer
+          format: int64
+          description: Facts read for the whole partition, not just the filtered row.
+        current_revision:
+          type: integer
+          description: 0 for a partition whose published numbers have never changed.
+        revision_history:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineageRevision"
+        recompute_cmd:
+          type: string
+          description: A command that rebuilds this partition from its facts.
+
+    LineageRevision:
+      type: object
+      properties:
+        number:
+          type: integer
+        digest:
+          type: string
+        revised_at:
+          type: string
+          format: date-time
+
     PercentileResponse:
       type: object
       description: >
@@ -1661,6 +1860,28 @@ components:
           example:
             error: "not found"
             code: 404
+
+    LineageUnavailable:
+      description: >
+        The partition exists and its data is fine, but its provenance was never
+        recorded — it was written before manifests existed. This is a recoverable
+        state rather than a failure, which is why it has its own status code and
+        its own body: the response carries the command that records it.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, reason, recompute_cmd]
+            properties:
+              error:
+                type: string
+                enum: [lineage_unavailable]
+              reason:
+                type: string
+                example: partition predates manifests
+              recompute_cmd:
+                type: string
+                example: "gravix recompute --metric request_metrics_minute --from 2026-09-09 --to 2026-09-10"
 
     PreSketchPartition:
       description: >

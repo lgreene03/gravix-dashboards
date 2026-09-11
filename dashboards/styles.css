@@ -124,6 +124,12 @@
             --badge-error-text: #b91c1c;
             --badge-info-bg: #dbeafe;
             --badge-info-text: #1d4ed8;
+            /* Warning text needs its own pair: --warning-color is a 2.15:1 fill
+               against --card-bg, fine for an icon and unreadable as body text.
+               These are 6.37:1 light and 10.11:1 dark. */
+            --badge-warning-bg: #fef3c7;
+            --badge-warning-text: #92400e;
+            --badge-warning-border: #d97706;
             --warning-color: #f59e0b;
             --danger-color: #ef4444;
             --bg-secondary: #f1f5f9;
@@ -151,6 +157,9 @@
             --badge-error-text: #fca5a5;
             --badge-info-bg: #1e3a5f;
             --badge-info-text: #93c5fd;
+            --badge-warning-bg: #422006;
+            --badge-warning-text: #fcd34d;
+            --badge-warning-border: #f59e0b;
             --warning-color: #fbbf24;
             --danger-color: #f87171;
             --bg-secondary: #334155;
@@ -179,6 +188,9 @@
                 --badge-error-text: #fca5a5;
                 --badge-info-bg: #1e3a5f;
                 --badge-info-text: #93c5fd;
+                --badge-warning-bg: #422006;
+                --badge-warning-text: #fcd34d;
+                --badge-warning-border: #f59e0b;
                 --warning-color: #fbbf24;
                 --danger-color: #f87171;
                 --bg-secondary: #334155;
@@ -582,9 +594,17 @@
 
         /* Responsive: Tablet */
         @media (max-width: 1024px) {
+            /* minmax(0, 1fr), not 1fr: a `1fr` track carries an implicit
+               min-width:auto, so any card whose content has a wide min-content
+               size pushes the track past its container. At 400px the single
+               column was resolving to 524px against a 368px grid, and
+               #main-content's overflow-x:auto swallowed the difference — the page
+               did not scroll, the right-hand side of every card was simply not
+               there. */
             .grid {
-                grid-template-columns: 1fr;
+                grid-template-columns: minmax(0, 1fr);
             }
+            .card { min-width: 0; }
             .card[style*="grid-column: span 2"] {
                 grid-column: span 1 !important;
             }
@@ -633,8 +653,9 @@
                 gap: 16px;
             }
             .grid {
-                grid-template-columns: 1fr;
+                grid-template-columns: minmax(0, 1fr);
             }
+            .card { min-width: 0; }
             .card[style*="grid-column: span 2"] {
                 grid-column: span 1 !important;
             }
@@ -926,3 +947,198 @@
         .feedback-success { text-align: center; padding: 32px 16px; }
         .feedback-check { font-size: 2rem; color: #22c55e; }
         .btn-outline { background: transparent; border: 1px solid var(--border-color); color: var(--text-primary); }
+
+        /* ─── Lineage panel (GRVX-809) ─────────────────────────────────────────
+           Every colour here is a token defined in all three theme states: light,
+           [data-theme="dark"], and the system default. The pairs were chosen for
+           contrast, not appearance — see the contrast note on --badge-warning-bg.
+           In particular the panel never puts --text-secondary on --bg-secondary
+           (4.34:1 light, 4.04:1 dark, both short of AA) or --brand-color on
+           --card-bg (3.68:1 light). Secondary text appears only on --card-bg. */
+
+        .lineage-panel {
+            background: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: var(--shadow-card);
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+            font-size: 0.875rem;
+            line-height: 1.5;
+            max-width: 100%;
+        }
+
+        .lineage-panel[hidden] { display: none; }
+
+        .lineage-panel__head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .lineage-panel__title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-primary);
+        }
+
+        .lineage-panel__bucket {
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .lineage-panel__close {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+            padding: 0.35rem 0.6rem;
+            min-height: 44px;
+            min-width: 44px;
+        }
+
+        .lineage-panel__section { margin-bottom: 0.9rem; }
+
+        .lineage-panel__section h3 {
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin: 0 0 0.35rem;
+        }
+
+        .lineage-panel dl {
+            display: grid;
+            grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+            gap: 0.2rem 1rem;
+            margin: 0;
+        }
+
+        .lineage-panel dt { color: var(--text-secondary); }
+
+        /* A digest is 71 unbroken characters and an idempotency key not much less.
+           Without this they push the grid wider than its container and the tail is
+           clipped — the page does not scroll, the text simply is not there. */
+        .lineage-panel dd {
+            margin: 0;
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        /* The warning must be readable as text, and must not rely on colour
+           alone — it carries an icon and the word "Approximate". */
+        .lineage-panel__warning {
+            background: var(--badge-warning-bg);
+            color: var(--badge-warning-text);
+            border: 1px solid var(--badge-warning-border);
+            border-radius: 6px;
+            padding: 0.6rem 0.75rem;
+            margin: 0 0 0.75rem;
+            display: flex;
+            gap: 0.5rem;
+            align-items: flex-start;
+        }
+
+        .lineage-panel__warning-icon { flex: 0 0 auto; font-size: 1rem; line-height: 1.4; }
+
+        /* A flex item will not shrink below its content unless told to, which at
+           400px clipped the warning's text off the right edge without the page
+           itself scrolling — invisible to a scrollWidth check on the document and
+           very visible to a reader. */
+        .lineage-panel__warning > :not(.lineage-panel__warning-icon) {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        /* Long object keys and commands scroll inside their own box rather than
+           widening the page. AC-11. */
+        .lineage-panel__keys,
+        .lineage-panel__code {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            padding: 0.5rem 0.65rem;
+            overflow-x: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.8125rem;
+        }
+
+        .lineage-panel__keys { list-style: none; margin: 0; }
+        .lineage-panel__keys li { white-space: nowrap; }
+
+        .lineage-panel__code { display: block; white-space: pre; margin: 0 0 0.5rem; }
+
+        .lineage-panel__copy {
+            background: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            padding: 0.4rem 0.8rem;
+            min-height: 44px;
+            font-size: 0.8125rem;
+        }
+
+        .lineage-panel__copy:focus-visible,
+        .lineage-panel__close:focus-visible,
+        .lineage-value:focus-visible {
+            outline: 2px solid var(--text-primary);
+            outline-offset: 2px;
+        }
+
+        .lineage-panel details summary { cursor: pointer; color: var(--text-primary); }
+
+        /* A value that can be explained. Focusable, so the panel is reachable
+           without a mouse. */
+        .lineage-value { cursor: pointer; }
+
+        @media (max-width: 480px) {
+            .lineage-panel { padding: 0.85rem; margin: 0.75rem 0; border-radius: 6px; }
+            .lineage-panel dl { grid-template-columns: 1fr; gap: 0 0; }
+            .lineage-panel dt { margin-top: 0.4rem; }
+        }
+
+        .lineage-picker {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-top: 0.75rem;
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+        }
+
+        .lineage-picker select {
+            background: var(--input-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.4rem 0.5rem;
+            min-height: 44px;
+            max-width: 100%;
+        }
+
+        .lineage-picker button {
+            background: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            padding: 0.4rem 0.9rem;
+            min-height: 44px;
+        }
+
+        .lineage-picker:has(select:empty) { display: none; }

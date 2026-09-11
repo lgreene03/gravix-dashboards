@@ -261,6 +261,18 @@
                     <div class="chart-wrapper">
                         <canvas id="latencyChart"></canvas>
                     </div>
+                    <!-- A canvas is not keyboard-reachable, so every point is also
+                         addressable from this control. Both routes open the same
+                         panel. GRVX-809 §5.3, AC-8. -->
+                    <div class="lineage-picker">
+                        <label for="lineage-bucket">Explain a point</label>
+                        <select id="lineage-bucket"></select>
+                        <button type="button" id="lineage-explain" class="lineage-value">Explain</button>
+                    </div>
+                    <!-- Provenance for the clicked point. Non-modal and below the
+                         chart, so it is read alongside the number rather than
+                         instead of it. GRVX-809 §5.3. -->
+                    <div id="lineage-panel" hidden></div>
                 </div>
             </div>
 
@@ -1168,10 +1180,7 @@
         </div>
     </div>
 
-    <script src="lib/utils.js"></script>
-    <script src="lib/cube-client.js"></script>
-    <script src="lib/chart-helpers.js"></script>
-    <script src="app.js"></script>
+
 
 
     <!-- Quick-Start Wizard -->
@@ -1287,6 +1296,40 @@
         </div>
     </div>
 
+    <!-- Scripts run last, after every element they wire up.
+         They used to sit above the quick-start wizard, the feedback panel and the
+         cookie banner, so `document.getElementById('wizardClose')` was null at
+         parse time and the resulting TypeError aborted the rest of the file.
+         A classic script blocks the parser where it sits; put it at the end and
+         the DOM it addresses exists. -->
+    <script src="lib/utils.js"></script>
+    <script src="lib/cube-client.js"></script>
+    <script src="lib/chart-helpers.js"></script>
+    <script src="app.js"></script>
+    <!-- The lineage panel is an ES module, so it is deferred and runs after
+         app.js. It publishes itself on window for app.js to open, which is why
+         app.js never imports it and needs no module of its own. -->
+    <script type="module">
+        import { LineagePanel, renderLineage, renderLoading, toBucketISO } from './lib/lineage-panel.js';
+
+        const container = document.getElementById('lineage-panel');
+        if (container) {
+            window.GravixLineage = new LineagePanel(container, {
+                endpoint: (window.GRAVIX_CONFIG && window.GRAVIX_CONFIG.percentileApiUrl
+                    || window.GRAVIX_CONFIG && window.GRAVIX_CONFIG.gatewayUrl
+                    || 'http://localhost:8091') + '/api/v1/lineage',
+                headers: () => {
+                    const h = {};
+                    const key = localStorage.getItem('gravix_api_key');
+                    if (key) h['X-Gravix-Key'] = key;
+                    return h;
+                },
+                locale: navigator.language,
+                clickedGranularity: 'hour'
+            });
+            window.GravixLineageRender = { renderLineage, renderLoading, toBucketISO };
+        }
+    </script>
 </body>
 
 </html>

@@ -14,7 +14,7 @@ FROM alpine:3.21
 LABEL org.opencontainers.image.title="gravix-ingestion" \
       org.opencontainers.image.description="Gravix ingestion service — HTTP API for fact collection" \
       org.opencontainers.image.source="https://github.com/gravix/gravix" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Gravix"
 
 RUN addgroup -S gravix && adduser -S gravix -G gravix

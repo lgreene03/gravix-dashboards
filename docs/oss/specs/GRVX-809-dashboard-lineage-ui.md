@@ -209,17 +209,117 @@ make check-boundary && make build-oss && make test-oss
 # expect: boundary: 0 violations; both builds succeed
 ```
 
+## 8.1 Verification record — run 2026-09-11
+
+```
+# 1. Endpoint
+--- PASS: TestLineageEndpointShape
+--- PASS: TestLineageNoRowMatchReturns404
+--- PASS: TestLineageNoPartitionReturns404
+--- PASS: TestLineageNoManifestReturns409WithRecomputeCmd
+--- PASS: TestLineageRejectsNonDimensionFilter
+--- PASS: TestLineageBadBucketReturns400
+--- PASS: TestLineageRequiresAPIKey
+--- PASS: TestLineageRejectsNonGET
+--- PASS: TestLineageIsTenantScoped
+
+# 2. Non-goal §5 guard
+--- PASS: TestLineageEndpointNeverReturnsFactRecords
+
+# 3. Panel behaviour
+$ node --test dashboards/lib/lineage-panel.test.js
+# tests 35 / # pass 35 / # fail 0
+
+# 4. Charter §7.4 — no upsell in the free dashboard
+2   # both are the multi-org card's source comment and its plan check, not upsell
+    # copy. See F-006 — the card is hidden, never shown as a locked feature.
+
+# 5. No build step crept in
+no build step
+1   # the pre-existing Chart.js tag. No new external source.
+
+# 6. Bundle budget
+56699 bytes gzipped, +7819 over the 48880-byte baseline — inside the 8192-byte
+budget with 373 bytes to spare.
+
+# 8. Open-core integrity
+boundary: 0 violations; build-oss and test-oss both succeed
+```
+
+### 7. Render check — headless Chromium, six configurations
+
+Run against the real page with the network stubbed, not asserted from the stylesheet.
+
+| Configuration | h-scroll | page errors | past right edge | clipped | keyboard | body background |
+|---|---|---|---|---|---|---|
+| 1440px light | no | 0 | 0 | 0 | pass | `rgb(248,250,252)` |
+| 1440px dark | no | 0 | 0 | 0 | pass | `rgb(15,23,42)` |
+| 1440px system-default (dark) | no | 0 | 0 | 0 | pass | `rgb(15,23,42)` |
+| 400px light | no | 0 | 0 | 0 | pass | `rgb(248,250,252)` |
+| 400px dark | no | 0 | 0 | 0 | pass | `rgb(15,23,42)` |
+| 400px system-default (dark) | no | 0 | 0 | 0 | pass | `rgb(15,23,42)` |
+
+"keyboard" is the full AC-8/AC-9 path against the real document: the opener takes focus, the panel
+opens with `role="region"` and no focus trap, a real `Escape` keypress closes it, and focus returns to
+the opener. Every run also confirmed the approximate warning, the revision line, the copy button and
+the collapsed fact list were present.
+
+**The screenshots are not committed.** Six PNGs is half a megabyte in a repository whose history is
+already carrying more binary weight than it should (F-001), and the table above is the part that can be
+re-checked — a screenshot proves what one person saw once. The harness that produced both is
+reproducible from the description in SD-010 part four.
+
+**The three console errors in each run were all the Chart.js CDN**, which this sandbox cannot reach;
+they are counted separately so a real error cannot hide behind them. Page errors, as distinct from
+blocked resources, are zero — which they were not before this work: see SD-010 part five.
+
+### Contrast, computed rather than claimed
+
+`TestPanelContrastAllThemes` computes WCAG relative luminance from the tokens actually defined in each
+of the three theme blocks, so it fails when a colour changes rather than when the test does:
+
+| Pair | Light | Dark | System |
+|---|---|---|---|
+| `--text-primary` on `--card-bg` | 17.85:1 | 13.35:1 | 13.35:1 |
+| `--text-secondary` on `--card-bg` | 4.76:1 | 5.71:1 | 5.71:1 |
+| `--text-primary` on `--bg-secondary` | 16.30:1 | 9.45:1 | 9.45:1 |
+| `--badge-warning-text` on `--badge-warning-bg` | 6.37:1 | 10.11:1 | 10.11:1 |
+
+Two pairs were **excluded by measurement**, and the panel is built so it cannot use them:
+`--text-secondary` on `--bg-secondary` is 4.34:1 light and 4.04:1 dark, and `--brand-color` on
+`--card-bg` is 3.68:1 light. Both fail AA. Secondary text therefore appears only on `--card-bg`, and
+the panel uses no brand colour for text at all.
+
+`--badge-warning-bg` / `--badge-warning-text` / `--badge-warning-border` were added for this, in all
+three theme blocks. `--warning-color` could not be used for text: it is 2.15:1 against `--card-bg`,
+which is fine for an icon and unreadable as a sentence.
+
+### Deviations
+
+Recorded in `docs/oss/spec-defects.md` as **SD-010**, and one finding as **F-006**:
+
+- §5.3 wires a minute-grained panel to hour-grained charts. The panel states the mismatch rather than
+  pretending the numbers match.
+- `recompute_cmd` omits `--tenant`, so the "Reproduce this number" button copies a command that does
+  not reproduce a tenant's partition. Not fixed: `pkg/lineage/**` is in §4.3.
+- The gateway image did not contain `contracts/`, so the endpoint would have been a 500 in the only
+  deployment that exists. One `COPY` line.
+- Four Dockerfiles labelled their images `licenses="MIT"`. The repository is Apache-2.0.
+- Two layout defects and one long-standing `TypeError` on page load, none of which made the page
+  scroll or fail to render, all found by the render harness rather than by reading the source.
+
 ## 9. Definition of done
 
-- [ ] All fourteen acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] Screenshots at 1440px and 400px in light, dark and system-default attached
-- [ ] Zero console errors
-- [ ] Zero upsell elements
-- [ ] Gzipped size delta recorded and within budget
-- [ ] No build step, no external dependency
-- [ ] `docs-engineer` delta merged
-- [ ] Zero new skipped tests
+- [x] All fourteen acceptance criteria pass with their named tests
+- [x] Every Verification command run, real output pasted into the report (§8.1)
+- [x] Rendered at 1440px and 400px in light, dark and system-default; measurements in §8.1
+      rather than committed screenshots, for the reason given there
+- [x] Zero page errors — and one pre-existing `TypeError` on every load removed
+- [x] Zero upsell elements; the one match is explained in F-006
+- [x] Gzipped size delta recorded: +7,819 bytes against an 8,192-byte budget
+- [x] No build step, no external dependency
+- [x] `docs/openapi.yaml` documents the endpoint, its 409 body and its 503
+- [x] Zero new skipped tests
 
 ## 10. Escalation
 

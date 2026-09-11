@@ -443,6 +443,9 @@ func main() {
 	// over many buckets cannot be computed correctly any other way. See
 	// services/gateway/percentile_handler.go.
 	mux.HandleFunc("/api/v1/percentile", gw.ipRateLimitMiddleware(gw.handleWindowPercentile))
+	// Provenance over HTTP, so the dashboard can show where a number came from.
+	// See services/gateway/lineage_handler.go.
+	mux.HandleFunc("/api/v1/lineage", gw.ipRateLimitMiddleware(gw.handleLineage))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))

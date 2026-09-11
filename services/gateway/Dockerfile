@@ -14,12 +14,16 @@ FROM alpine:3.21
 LABEL org.opencontainers.image.title="gravix-gateway" \
       org.opencontainers.image.description="Gravix gateway — tenant management, auth, and billing API" \
       org.opencontainers.image.source="https://github.com/gravix/gravix" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Gravix"
 
 RUN addgroup -S gravix && adduser -S gravix -G gravix
 WORKDIR /app
 COPY --from=builder /app/gateway .
+# Metric contracts are source, not data: GET /api/v1/lineage reads them to report
+# a metric's formula, exactness and error bound. Without them the endpoint has
+# nothing to say, so they ship inside the image alongside the binary.
+COPY --from=builder /app/contracts ./contracts
 RUN mkdir -p /app/data && chown -R gravix:gravix /app/data
 USER gravix
 

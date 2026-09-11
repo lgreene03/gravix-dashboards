@@ -1291,6 +1291,8 @@
 
                 const errorRes = processSeries(errorData, "RequestMetricsMinute.errorRate");
                 const latencyRes = processSeries(latencyData, "RequestMetricsMinute.bucketP95LatencyMs");
+                setLineageBuckets(latencyData);
+                wireLineageControls();
                 const throughputRes = processSeries(throughputData, "RequestMetricsMinute.requestCount");
 
                 updateChart('errorRate', 'errorRateChart', 'Error Rate', errorRes.labels, errorRes.values, {
@@ -1347,6 +1349,75 @@
                 document.getElementById('card-throughput').classList.add('loaded');
                 document.getElementById('card-endpoints').classList.add('loaded');
             }
+        }
+
+
+        // ─── Lineage: click a number, see the facts behind it (GRVX-809) ───
+        //
+        // The panel itself is dashboards/lib/lineage-panel.js, loaded as a module
+        // from index.html and published on window.GravixLineage. This is only the
+        // wiring: which value was clicked, and what bucket it belongs to.
+
+        // lineageBuckets holds the raw bucket timestamp behind each latency chart
+        // point, in the order the chart draws them. The chart's own labels are
+        // formatted for reading; these are what the endpoint is asked about.
+        let lineageBuckets = [];
+
+        // The canonical conversion lives in lib/lineage-panel.js, where it is
+        // tested. app.js is a classic script and cannot import, so it reads it off
+        // the window the module publishes it on — and does nothing at all if the
+        // module did not load, rather than keeping a second copy that can drift.
+        function toBucketISO(raw) {
+            const mod = window.GravixLineageRender;
+            return mod && mod.toBucketISO ? mod.toBucketISO(raw) : '';
+        }
+
+        // Derived from the data rows, never from the chart's labels: with a
+        // comparison selected the labels are trimmed to "14:00" for display, which
+        // is not a timestamp anything can be looked up by.
+        function setLineageBuckets(rows) {
+            const list = Array.isArray(rows) ? rows : [];
+            const timeKey = list.length && ("RequestMetricsMinute.bucketStart.hour" in list[0])
+                ? "RequestMetricsMinute.bucketStart.hour"
+                : "RequestMetricsMinute.bucketStart";
+            lineageBuckets = list
+                .filter(d => d._comparison !== "Previous")
+                .map(d => toBucketISO(d[timeKey]))
+                .filter(Boolean);
+            const select = document.getElementById('lineage-bucket');
+            if (!select) return;
+            select.innerHTML = lineageBuckets
+                .map((b, i) => '<option value="' + i + '">' + b + '</option>')
+                .join('');
+            const picker = select.closest('.lineage-picker');
+            if (picker) picker.style.display = lineageBuckets.length ? '' : 'none';
+        }
+
+        function currentLineageFilters() {
+            const service = document.getElementById('serviceFilter');
+            return {
+                metric: 'request_metrics_minute',
+                service: service ? service.value : '',
+                path_template: currentDrilldownPath || currentEndpointPath || '',
+                method: currentEndpointMethod || ''
+            };
+        }
+
+        function openLineageFor(index, opener) {
+            const panel = window.GravixLineage;
+            if (!panel) return;
+            const bucket = lineageBuckets[index];
+            if (!bucket) return;
+            panel.open(opener || document.getElementById('lineage-explain'), '');
+            panel.load(Object.assign(currentLineageFilters(), { bucket: bucket }));
+        }
+
+        function wireLineageControls() {
+            const button = document.getElementById('lineage-explain');
+            const select = document.getElementById('lineage-bucket');
+            if (!button || !select || button.dataset.wired) return;
+            button.dataset.wired = '1';
+            button.addEventListener('click', () => openLineageFor(Number(select.value) || 0, button));
         }
 
         function updateChart(key, canvasId, label, labels, data, options) {
@@ -1421,6 +1492,14 @@
                                     : undefined
                             }
                         },
+                        // Clicking a latency point opens its provenance. Only that
+                        // chart, because only that chart has the panel beside it.
+                        onClick: key === 'latency'
+                            ? function(evt, elements) {
+                                if (!elements || !elements.length) return;
+                                openLineageFor(elements[0].index, document.getElementById('lineage-explain'));
+                              }
+                            : undefined,
                         plugins: {
                             legend: { display: data.previous ? true : false, position: 'top', align: 'end' },
                             tooltip: options.yTickFormat

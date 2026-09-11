@@ -109,6 +109,19 @@ capabilities:
       - cube/model/schema/RequestMetricsMinute.js
       - dashboards/lib/cube-client.js
 
+  - id: lineage-ui
+    name: Dashboard lineage panel and the lineage API
+    placement: core
+    charter_ref: "§2.1, §7.4"
+    rationale: >-
+      Provenance behind a paywall is not provenance. The whole claim is that a Gravix
+      number can be checked by the person reading it, and a version of the product where
+      only paying users can check is a version where nobody can trust the free one.
+      Charter §7.4 additionally forbids upsell UI in this dashboard, which is tested.
+    paths:
+      - services/gateway/lineage_handler.go
+      - dashboards/lib/lineage-panel.js
+
   - id: metric-contracts
     name: Versioned metric contract registry
     placement: core

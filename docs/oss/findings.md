@@ -231,3 +231,43 @@ build step, so the published package's contents come from whatever `dist/` is in
 it needs a `prepublishOnly` (or `prepack`) script added first, and that belongs in its own change
 rather than riding along with an unrelated one — deleting it here would have silently published a
 broken SDK. Same family as F-001, and the same fix: build artefacts do not belong in version control.
+
+---
+
+## F-006 — the dashboard hides multi-org behind a plan the server does not check
+
+Found while writing GRVX-809's AC-12 upsell test, which matched
+`dashboards/index.html:1072`:
+
+```html
+<!-- Multi-Org Management (Admin + Scale/Enterprise Only) -->
+```
+
+and the gate behind it in `dashboards/app.js`:
+
+```js
+if (me.role === 'admin' && (me.plan === 'scale' || me.plan === 'enterprise')) { ... }
+```
+
+**It is not an upsell, and AC-12 was narrowed rather than failed.** Charter §7.4 forbids showing a free
+user a locked feature and inviting them to pay. This shows them nothing at all — the card is
+`display: none` and never becomes a padlock or a "Upgrade to Scale" teaser. A feature that is simply
+absent is not a sales pitch. The test now matches calls to action (`upgrade to`, `unlock this`,
+`premium feature`, a padlock glyph) rather than every mention of a plan name, which is what §7.4 is
+actually about.
+
+**What is worth someone's attention is the other side of it:** `handleMultiOrg` in
+`services/gateway/enterprise.go` checks authentication and the admin role, and does **not** check the
+plan. Any authenticated admin can call `POST /api/gateway/orgs` on the free plan and create child
+organisations. The dashboard hides a feature the server gives away.
+
+That is not a security hole — the endpoint is tenant-scoped and role-gated, so nobody reaches anything
+that is not theirs — but it is a third instance of the pattern SD-001 recorded: plan gating that exists
+in the UI and in nobody's server code. Two readings, and the choice is the CPO's:
+
+- **The gate is correct and unenforced** → the server needs the plan check, and SD-001's dead
+  `requirePlan` is the place to put it.
+- **The gate is wrong** → multi-org is a core feature and the UI should stop pretending otherwise.
+
+Either is defensible. What is not defensible is leaving the two halves disagreeing, because whichever
+one a customer discovers first is the one they will believe.

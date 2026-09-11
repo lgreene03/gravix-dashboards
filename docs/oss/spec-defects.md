@@ -591,3 +591,110 @@ be answered by one path or the other.
 
 **For the spec author:** §4.2 should have listed every consumer of a measure it removes. A spec that
 deletes a public name owes the implementer the list of things that read it.
+
+---
+
+## SD-010 — GRVX-809 wires a minute-grained panel to hour-grained charts, and its "reproduce" command omits the tenant
+
+**Spec:** GRVX-809 — Dashboard lineage UI
+**Raised by:** `frontend-engineer` during implementation
+**Severity:** one unreconciled grain mismatch; one command that does not reproduce what it claims to
+
+### Part one: the panel explains a minute, the chart draws an hour
+
+§5.3 says:
+
+> A chart point or table cell showing a metric value is focusable and activates the panel on click.
+
+But `pkg/lineage.Explain` matches a bucket **exactly**, at minute grain, and
+`fetchCubeData` in `dashboards/app.js` requests `granularity: "hour"`. So a user clicking the point
+labelled 14:00 — an aggregate over sixty minute buckets — would be shown the provenance of the single
+14:00 minute row, whose `request_count` is roughly a sixtieth of the number they clicked.
+
+The spec reconciles these nowhere. Three ways out, and why two were rejected:
+
+1. **Change the chart to minute granularity.** Forbidden by §3: *"Do NOT change any chart's data
+   source."* It would also draw 1,440 points for a day.
+2. **Aggregate lineage over a period.** That is a new capability, not a UI change: the manifest, the
+   digest and the fact list are per partition, and "the provenance of an hour" would have to be
+   defined before it could be assembled. It belongs in a spec of its own.
+3. **Say so.** Shipped. When the clicked period is wider than the grain, the panel opens with a
+   `role="status"` note: *"You clicked a value covering one hour. Provenance is recorded per minute, so
+   what follows explains the minute at the start of it — its numbers will be smaller than the one you
+   clicked."*
+
+Option 3 is the only one available that does not lie, and it is consistent with what the rest of this
+phase does: when a number cannot be given exactly, say exactly how it falls short rather than rounding
+the difference away. `renderGrainNote` implements it and two tests pin it.
+
+**What GRVX-810 or a follow-up should decide:** whether lineage over a period is a thing Gravix
+offers. If it is, the honest shape is probably a list of the constituent partitions with their digests,
+not a merged pseudo-manifest.
+
+### Part two: `recompute_cmd` cannot reproduce a tenant's partition
+
+`pkg/lineage`'s `recomputeCommand(rollup, day)` emits:
+
+```
+gravix recompute --metric request_metrics_minute --from 2026-09-09 --to 2026-09-10
+```
+
+with no `--tenant`. The CLI supports a repeatable `--tenant` flag, and `Query.TenantID` is right there
+in the call — it is simply not used. In a multi-tenant deployment the command as printed rebuilds the
+tenant-less partition, which in that deployment does not exist.
+
+So the panel's **"Reproduce this number"** button — the point of the section, and of the feature —
+copies a command that reproduces something else. The saving grace is that it fails visibly rather than
+quietly: there is nothing at the tenant-less path to rebuild, so the operator gets "nothing to do"
+rather than a different number. That is the difference between a bug and a correctness incident, and it
+is luck rather than design.
+
+**Not fixed here.** §4.3 lists `pkg/lineage/**` as do-not-touch, on the grounds that assembly is settled
+by GRVX-807. This is a one-line change inside that file and improvising into a file the spec explicitly
+fences off is how implementation drift starts. It needs a two-line spec of its own, or GRVX-810's
+correctness suite should catch it and fix it as part of that work.
+
+### Part three: the gateway image did not contain the contracts
+
+Not a spec defect — a deployment fact the spec's file list did not reach. `services/gateway/Dockerfile`
+copied only the binary into the final stage, so `lineage.Explain` would have found no contracts
+directory and every request would have been a 500 in the only deployment that exists. One `COPY` line,
+added. Contracts are source, not data: they ship with the binary.
+
+The same file labelled the image `org.opencontainers.image.licenses="MIT"`, as did the ingestion,
+rollup and load-generator images. The repository has been Apache-2.0 since GRVX-701. An image that
+misstates its own licence is a licence-boundary defect regardless of which licence it names, so all four
+were corrected.
+
+### Part four: two layout defects the CSS could not show
+
+Found by rendering the page in headless Chromium at 1440px and 400px in all three theme states, not by
+reading the stylesheet. **Neither made the page scroll horizontally**, which is what makes them worth
+recording: `document.scrollWidth > clientWidth` — the obvious test for AC-11 — returned false in both
+cases while the right-hand side of the panel was simply not on screen.
+
+1. **The dashboard grid overflowed its container, and had done before this spec.** At ≤1024px
+   `.grid` used `grid-template-columns: 1fr`, and a `1fr` track carries an implicit `min-width: auto`,
+   so it grows to its widest card's min-content size. Measured at a 400px viewport: a **524px track
+   inside a 368px grid** with the lineage panel hidden, 742px with it shown. `#main-content` has
+   `overflow-x: auto`, so the excess was absorbed there with no visible scrollbar — content lost, page
+   apparently fine. Now `minmax(0, 1fr)`, plus `min-width: 0` on `.card`. The 524px half is a
+   pre-existing bug in every card at phone width; the difference above it was this panel's.
+
+2. **Flex and grid children will not shrink below their content.** The warning region's text and the
+   definition list's values (a content digest is 71 unbroken characters) both needed `min-width: 0`,
+   and the values column needed `minmax(0, 1fr)` rather than `1fr`.
+
+Three tests now pin these, and the render harness checks two things a CSS assertion cannot: that no
+element renders past the viewport's right edge, and that nothing outside a scroll container has
+`scrollWidth > clientWidth`.
+
+### Part five: the page had been throwing on every load
+
+`<script src="app.js">` sat above the quick-start wizard, the feedback panel and the cookie banner in
+`index.html`. A classic script blocks the parser where it sits, so
+`document.getElementById('wizardClose')` was `null`, and the resulting `TypeError` aborted the rest of
+that block — roughly 1,700 lines of `app.js` that had never run. Pre-existing; found because the render
+harness records console errors, and "zero console errors" is in this spec's definition of done.
+
+Fixed by moving all five script tags to the end of `<body>`, which is where they belonged.
