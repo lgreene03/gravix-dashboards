@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 )
 
@@ -26,6 +28,7 @@ func seedIn(t *testing.T) provisionConfig {
 		DBPath:          filepath.Join(dir, "gravix.db"),
 		APIKeyFile:      filepath.Join(dir, "api_key.txt"),
 		DashboardConfig: filepath.Join(dir, "dashboard_config.js"),
+		LoginFile:       filepath.Join(dir, "login.txt"),
 		TenantName:      "local",
 		TenantEmail:     "local@gravix.invalid",
 		IngestionURL:    "http://localhost:8090",
@@ -326,4 +329,183 @@ func TestProvisionFailsWhenPathsAreUnusable(t *testing.T) {
 	if _, statErr := os.Stat(cfg.APIKeyFile); statErr == nil {
 		t.Error("§6.1 FAILED: a key file was written despite the run failing")
 	}
+}
+
+// ─── F-016: the dashboard login ───
+
+// TestProvisionedLoginAuthenticates is the regression guard for F-016.
+//
+// The bootstrap stack seeded a tenant and an API key and no user. The dashboard
+// sends Cube a JWT, which only a gateway login mints, and that login needs an
+// email and a bcrypt password — so with no user the charts could never load,
+// while every service reported healthy. The API key it did have is the wrong
+// kind of credential: it authorises writes to ingestion, not queries to Cube.
+//
+// This runs the same three checks handleLogin runs, against what was persisted:
+// the user resolves by email, the password in the login file verifies against
+// the stored bcrypt hash, and the account is usable. Asserting only that a
+// users row exists would pass with an unusable password.
+func TestProvisionedLoginAuthenticates(t *testing.T) {
+	cfg := seedIn(t)
+	if _, err := run(t, cfg); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	email, password := readLogin(t, cfg.LoginFile)
+	if email != cfg.TenantEmail {
+		t.Errorf("login file email = %q, want %q", email, cfg.TenantEmail)
+	}
+
+	db := openSeeded(t, cfg)
+	user, err := db.Users().GetByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("F-016 regression: no user for %q (%v); the dashboard cannot obtain a JWT "+
+			"and every Cube query is rejected", email, err)
+	}
+
+	// The check handleLogin makes. A password stored as plaintext, or bcrypted
+	// twice, leaves a users row that exists and cannot be logged into.
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		t.Fatalf("F-016 regression: the generated password does not verify against the stored "+
+			"hash (%v); stored hash begins %.4q", err, user.PasswordHash)
+	}
+
+	if user.Status != "active" {
+		t.Errorf("user status = %q, want active; handleLogin rejects anything else", user.Status)
+	}
+	if user.TwoFactorEnabled {
+		t.Error("2FA is enabled on the bootstrap user, so login would demand a TOTP code nobody has")
+	}
+	if user.TenantID == "" {
+		t.Error("user has no tenant, so the minted JWT would carry no tenant_id for queryRewrite")
+	}
+}
+
+func TestProvisionedLoginFileIsNotWorldReadable(t *testing.T) {
+	cfg := seedIn(t)
+	if _, err := run(t, cfg); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	info, err := os.Stat(cfg.LoginFile)
+	if err != nil {
+		t.Fatalf("stat login file: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("login file mode = %04o, want 0600; it holds the dashboard password", mode)
+	}
+}
+
+// The password is the one thing in this stack that is not derived from anything
+// else, so two installs must not share it.
+func TestProvisionedPasswordsDiffer(t *testing.T) {
+	cfgA, cfgB := seedIn(t), seedIn(t)
+	if _, err := run(t, cfgA); err != nil {
+		t.Fatalf("provision A: %v", err)
+	}
+	if _, err := run(t, cfgB); err != nil {
+		t.Fatalf("provision B: %v", err)
+	}
+	_, passwordA := readLogin(t, cfgA.LoginFile)
+	_, passwordB := readLogin(t, cfgB.LoginFile)
+	if passwordA == passwordB {
+		t.Fatalf("two independent provisions produced the same password %q", passwordA)
+	}
+	if len(passwordA) < 32 {
+		t.Errorf("generated password is %d characters, too short to be 256 bits of entropy", len(passwordA))
+	}
+}
+
+// The password is printed as well as written: the compose log is where someone
+// watching a first boot is already looking, and the file is 0600 inside a
+// container they may not have a shell in.
+func TestProvisionPrintsTheLogin(t *testing.T) {
+	cfg := seedIn(t)
+	out, err := run(t, cfg)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	_, password := readLogin(t, cfg.LoginFile)
+	for _, want := range []string{cfg.TenantEmail, password, cfg.LoginFile} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout does not mention %q; a first-time user has no way to find the login\n%s", want, out)
+		}
+	}
+}
+
+// readLogin parses the two-line credential file provision writes.
+func readLogin(t *testing.T, path string) (email, password string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read login file: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		key, value, ok := strings.Cut(line, ": ")
+		if !ok {
+			t.Fatalf("login file line %q is not \"key: value\"", line)
+		}
+		switch key {
+		case "email":
+			email = value
+		case "password":
+			password = value
+		}
+	}
+	if email == "" || password == "" {
+		t.Fatalf("login file %q did not yield both an email and a password", raw)
+	}
+	return email, password
+}
+
+// Losing api_key.txt while keeping the database re-runs provision against a
+// user that already exists, so the password is reset rather than created. That
+// path goes through UpdatePassword, which — unlike Create — stores what it is
+// given verbatim. Writing the plaintext there leaves a login file whose
+// password looks right and cannot be used.
+func TestReprovisionedLoginAuthenticates(t *testing.T) {
+	cfg := seedIn(t)
+	if _, err := run(t, cfg); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	_, firstPassword := readLogin(t, cfg.LoginFile)
+
+	if err := os.Remove(cfg.APIKeyFile); err != nil {
+		t.Fatalf("remove api key file: %v", err)
+	}
+	if _, err := run(t, cfg); err != nil {
+		t.Fatalf("re-provision: %v", err)
+	}
+
+	email, password := readLogin(t, cfg.LoginFile)
+	if password == firstPassword {
+		t.Error("re-provision reused the previous password; the login file should reflect a reset")
+	}
+
+	db := openSeeded(t, cfg)
+	users, err := db.Users().ListByTenant(context.Background(), tenantIDOf(t, db))
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	if len(users) != 1 {
+		t.Fatalf("re-provision left %d users, want exactly 1", len(users))
+	}
+
+	user, err := db.Users().GetByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		t.Fatalf("the password written on re-provision does not authenticate (%v); stored value "+
+			"begins %.4q — UpdatePassword stores verbatim, so it must be hashed first",
+			err, user.PasswordHash)
+	}
+}
+
+func tenantIDOf(t *testing.T, db *tenantdb.SQLiteDB) string {
+	t.Helper()
+	tenants, err := db.Tenants().List(context.Background())
+	if err != nil || len(tenants) == 0 {
+		t.Fatalf("list tenants: %v", err)
+	}
+	return tenants[0].ID
 }

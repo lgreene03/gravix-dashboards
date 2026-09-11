@@ -29,9 +29,15 @@ networks:
 
 services:
   # Runs to completion before anything else starts, and is why this stack needs
-  # no .env edits: it creates the single local tenant, mints one API key, and
-  # writes the dashboard's runtime config. Idempotent — on every boot after the
-  # first it finds the key file and exits 0 without touching anything.
+  # no .env edits: it creates the single local tenant, mints one API key,
+  # generates the dashboard login, and writes the dashboard's runtime config.
+  # Idempotent — on every boot after the first it finds the key file and exits 0
+  # without touching anything.
+  #
+  # The generated password is printed to this container's log and written to
+  # data/login.txt. It is needed: the dashboard authenticates to Cube with a JWT
+  # that only a gateway login mints, so a stack seeded without a user shows
+  # empty charts forever (F-016).
   bootstrap-init:
     build:
       context: .
@@ -42,6 +48,7 @@ services:
       - "-db=/app/data/gravix.db"
       - "-api-key-file=/app/data/api_key.txt"
       - "-dashboard-config=/app/data/dashboard_config.js"
+      - "-login-file=/app/data/login.txt"
     volumes:
       - ./data:/app/data
     networks:

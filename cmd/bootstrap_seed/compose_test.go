@@ -19,6 +19,7 @@ type composeService struct {
 	Volumes     []string       `yaml:"volumes"`
 	DependsOn   map[string]dep `yaml:"depends_on"`
 	Entrypoint  any            `yaml:"entrypoint"`
+	Command     any            `yaml:"command"`
 }
 
 type dep struct {
@@ -149,5 +150,55 @@ func TestBootstrapSeedIsBuiltIntoItsImage(t *testing.T) {
 	if !ok || len(entry) == 0 || entry[0] != "./bootstrap_seed" {
 		t.Errorf("AC-7 FAILED: bootstrap-init's entrypoint is %v, want [./bootstrap_seed]",
 			init.Entrypoint)
+	}
+}
+
+// The login file has no useful default inside the container: the sibling flags
+// are absolute /app/data paths, so an unset -login-file would write the
+// dashboard password relative to the image's working directory instead of the
+// mounted volume, where nobody would find it. See F-016.
+func TestBootstrapInitIsToldWhereToWriteTheLogin(t *testing.T) {
+	doc := loadCompose(t)
+	init, ok := doc.Services["bootstrap-init"]
+	if !ok {
+		t.Fatal("no bootstrap-init service")
+	}
+	args, ok := init.Command.([]any)
+	if !ok {
+		t.Fatalf("bootstrap-init command is %T, want a list of flags", init.Command)
+	}
+
+	var found string
+	for _, a := range args {
+		s, _ := a.(string)
+		if strings.HasPrefix(s, "-login-file=") {
+			found = strings.TrimPrefix(s, "-login-file=")
+		}
+	}
+	if found == "" {
+		t.Fatalf("bootstrap-init has no -login-file flag; args are %v", args)
+	}
+
+	// Must land on the mounted volume, beside the API key, or it is lost when
+	// the container exits.
+	if !strings.HasPrefix(found, "/app/data/") {
+		t.Errorf("-login-file=%q is not under the /app/data mount, so it would not survive the container", found)
+	}
+
+	// And it must not be reachable over HTTP. The dashboard deliberately mounts
+	// the single config file rather than the data directory; a login file
+	// served on port 8000 would be worse than the empty dashboard it fixes.
+	dashboard, ok := doc.Services["dashboard"]
+	if !ok {
+		t.Fatal("no dashboard service")
+	}
+	for _, v := range dashboard.Volumes {
+		source := strings.SplitN(v, ":", 2)[0]
+		if source == "./data" || source == "./data/" {
+			t.Errorf("dashboard mounts %q, which would serve the login file over HTTP", v)
+		}
+		if strings.Contains(v, "login.txt") {
+			t.Errorf("dashboard mounts the login file: %q", v)
+		}
 	}
 }

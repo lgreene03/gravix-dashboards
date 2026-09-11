@@ -1,8 +1,9 @@
 // Copyright 2026 The Gravix Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command bootstrap_seed idempotently provisions the single local tenant and
-// API key needed for zero-config self-hosted boot of docker-compose.bootstrap.yml.
+// Command bootstrap_seed idempotently provisions the single local tenant, API
+// key and login needed for zero-config self-hosted boot of
+// docker-compose.bootstrap.yml.
 //
 // It exists because ingestion and gateway both run in multi-tenant auth mode in
 // the bootstrap stack — TENANT_DB_PATH takes precedence over API_KEY — so
@@ -15,11 +16,14 @@
 //	go run ./cmd/bootstrap_seed/ \
 //	  -db ./data/gravix.db \
 //	  -api-key-file ./data/api_key.txt \
-//	  -dashboard-config ./data/dashboard_config.js
+//	  -dashboard-config ./data/dashboard_config.js \
+//	  -login-file ./data/login.txt
 package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +31,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 )
@@ -44,6 +50,7 @@ type provisionConfig struct {
 	TenantEmail     string
 	IngestionURL    string
 	GatewayURL      string
+	LoginFile       string
 }
 
 func main() {
@@ -55,6 +62,7 @@ func main() {
 	flag.StringVar(&cfg.TenantEmail, "tenant-email", "local@gravix.invalid", "Email of the single bootstrap tenant")
 	flag.StringVar(&cfg.IngestionURL, "ingestion-url", "http://localhost:8090", "Value written into dashboard_config.js as ingestionApiUrl")
 	flag.StringVar(&cfg.GatewayURL, "gateway-url", "http://localhost:8091", "Value written into dashboard_config.js as gatewayUrl")
+	flag.StringVar(&cfg.LoginFile, "login-file", "./data/login.txt", "Path to write the generated dashboard login (mode 0600)")
 	flag.Parse()
 
 	if err := provision(context.Background(), cfg, os.Stdout); err != nil {
@@ -81,7 +89,7 @@ func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error
 		return fmt.Errorf("bootstrap_seed: %w", err)
 	}
 
-	for _, path := range []string{cfg.DBPath, cfg.APIKeyFile, cfg.DashboardConfig} {
+	for _, path := range []string{cfg.DBPath, cfg.APIKeyFile, cfg.DashboardConfig, cfg.LoginFile} {
 		if dir := filepath.Dir(path); dir != "" {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return fmt.Errorf("bootstrap_seed: %w", err)
@@ -122,6 +130,54 @@ func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error
 		return fmt.Errorf("bootstrap_seed: %w", err)
 	}
 
+	// The dashboard sends Cube a JWT, not this API key, and the only thing that
+	// mints one is a gateway login against a user with a bcrypt password. A
+	// tenant with no user therefore boots a stack whose charts can never load,
+	// with every service reporting healthy — see F-016. The user is created
+	// here so the zero-config path stays authenticated rather than reaching the
+	// dashboard by switching authentication off.
+	password, err := generatePassword()
+	if err != nil {
+		return fmt.Errorf("bootstrap_seed: %w", err)
+	}
+	//
+	// The recovery path matters as much as the first boot: losing api_key.txt
+	// while keeping the database re-runs this function against a tenant, and a
+	// user, that already exist. Creating blindly fails the UNIQUE constraint on
+	// users.email and leaves the stack unprovisioned.
+	if existing, err := db.Users().GetByEmail(ctx, cfg.TenantEmail); err == nil && existing != nil {
+		// UpdatePassword stores what it is given verbatim — unlike Create,
+		// which bcrypts anything that is not already a hash. Hashing here is
+		// not belt and braces; skipping it writes the password in plaintext.
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("bootstrap_seed: hash password: %w", err)
+		}
+		if err := db.Users().UpdatePassword(ctx, existing.ID, string(hash)); err != nil {
+			return fmt.Errorf("bootstrap_seed: reset user password: %w", err)
+		}
+	} else {
+		user := &tenantdb.User{
+			TenantID: tenant.ID,
+			Email:    cfg.TenantEmail,
+			// Plaintext here: Create bcrypts anything that is not already a
+			// bcrypt hash, so passing a hash would store it double-hashed.
+			PasswordHash:  password,
+			Role:          "admin",
+			EmailVerified: true,
+			Status:        "active",
+		}
+		if err := db.Users().Create(ctx, user); err != nil {
+			return fmt.Errorf("bootstrap_seed: create user: %w", err)
+		}
+	}
+
+	// 0600, like the API key: this is the credential to the dashboard.
+	login := fmt.Sprintf("email: %s\npassword: %s\n", cfg.TenantEmail, password)
+	if err := os.WriteFile(cfg.LoginFile, []byte(login), 0o600); err != nil {
+		return fmt.Errorf("bootstrap_seed: %w", err)
+	}
+
 	config, err := dashboardConfig(cfg.IngestionURL, cfg.GatewayURL, plainKey)
 	if err != nil {
 		return fmt.Errorf("bootstrap_seed: %w", err)
@@ -132,7 +188,23 @@ func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error
 
 	fmt.Fprintf(stdout, "provisioned tenant %q (id=%s)\n", tenant.Name, tenant.ID)
 	fmt.Fprintf(stdout, "api key written to %s\n", cfg.APIKeyFile)
+	// Printed as well as written, because this is the one moment the password
+	// exists in plaintext anywhere other than that file, and the log is where a
+	// first-time user is already looking.
+	fmt.Fprintf(stdout, "dashboard login written to %s\n", cfg.LoginFile)
+	fmt.Fprintf(stdout, "  email:    %s\n", cfg.TenantEmail)
+	fmt.Fprintf(stdout, "  password: %s\n", password)
 	return nil
+}
+
+// generatePassword returns a 256-bit random password, URL-safe so it survives
+// being copied out of a terminal or a compose log without escaping.
+func generatePassword() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate password: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 // dashboardConfig renders the script the dashboard loads before app.js, whose

@@ -715,7 +715,9 @@ problem rather than the user's.
 **Found by** trying to write GRVX-910's poll request and asking what it should authenticate as.
 **Severity** high — with F-015 fixed, metrics are now produced correctly and still cannot reach a
 chart. Every service reports healthy. This is the second independent break on the same path.
-**Status** open. Needs a product decision, not a patch — see the options below.
+**Status** fixed by option 1, chosen by the repository owner. `cmd/bootstrap_seed` now creates the
+user and generates its password; guarded by `TestProvisionedLoginAuthenticates` and four sibling
+tests in `cmd/bootstrap_seed/main_test.go`.
 
 **The chain.** Four facts, each fine alone:
 
@@ -780,7 +782,43 @@ user, and only the bootstrap stack is the one a new reader is told to run first.
 Option 1 is the recommendation. Options 2 and 3 both make the zero-config path faster by removing
 authentication from it, which is the trade the charter's data-ownership axis exists to refuse.
 
-**This blocks GRVX-910.** Its §5.2 step 4 polls Cube's `load` endpoint and needs a credential; there
-is no correct one to use until this is decided. Recorded as **SD-019**, returned as
-`SPEC DEFECT: §2` under that spec's own §10. `cmd/onboarding_gate` — the pass/fail half, which does
-not touch Cube — is complete and tested regardless.
+**Resolution — option 1.** `bootstrap_seed` creates an admin user for the bootstrap tenant with a
+256-bit random password, writes `email`/`password` to `data/login.txt` at mode 0600 beside the API
+key, and prints both to stdout — the compose log being where someone watching a first boot is already
+looking, and the file being inside a container they may not have a shell in. No default password
+ships anywhere, and no credential is added to `dashboard_config.js`, so **SD-013** is untouched.
+
+Verified end to end against the real `checkAuth`, not by inspection:
+
+```
+$ go run ./cmd/bootstrap_seed -db …/gravix.db -api-key-file …/api_key.txt \
+    -dashboard-config …/dashboard_config.js -login-file …/login.txt
+provisioned tenant "local" (id=02448c61-…)
+dashboard login written to …/login.txt
+  email:    local@gravix.invalid
+  password: YzfMVpURU8hXIn1XPLezfklOIkwXZxGDgMDBYbqoCFU
+
+$ stat -c '%a' …/login.txt          → 600
+$ sqlite3 …/gravix.db               → users: 1
+
+$ JWT_SECRET=supersecretjwtkey12345!  node -e '…checkAuth("Bearer " + jwt.sign({tenant_id}, secret))…'
+Cube checkAuth => ALLOWED {"securityContext":{"tenant_id":"02448c61-…"}}
+queryRewrite    => [{"member":"RequestMetricsMinute.tenantId","operator":"equals","values":["02448c61-…"]}]
+```
+
+**Two traps the guards exist for.** The first surfaced immediately: an existing test,
+`TestProvisionReusesExistingTenantWhenKeyFileMissing`, went red on a `UNIQUE constraint failed:
+users.email`. Losing `api_key.txt` while keeping the database re-runs `provision` against a user that
+already exists, so the password is reset rather than created.
+
+The second is the reason `TestReprovisionedLoginAuthenticates` verifies the password rather than the
+row: that reset goes through `UserRepo.UpdatePassword`, which stores **verbatim**, while
+`UserRepo.Create` bcrypts anything that is not already a hash. Passing the plaintext to the former
+writes a real password into the database in the clear and leaves a login file that looks correct and
+cannot be used. Reinstating that mistake fails the test with `hashedSecret too short to be a bcrypted
+password` and the first four characters of what was stored. The asymmetry between the two methods is
+worth knowing about anywhere else it is used.
+
+**This blocked GRVX-910**, whose §5.2 step 4 polls Cube's `load` endpoint and needs a credential.
+Recorded as **SD-019** and returned as `SPEC DEFECT: §2` under that spec's own §10; the poll can now
+inherit this login.

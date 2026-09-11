@@ -186,8 +186,20 @@ configuration at all — no `.env` to copy, no API key to paste:
 docker compose -f docker-compose.bootstrap.yml up -d --build
 ```
 
-On first boot it creates a local tenant, generates an API key into `data/api_key.txt`, writes the
-dashboard's settings, and starts sending synthetic traffic so the charts have something to show.
+On first boot it creates a local tenant, generates an API key into `data/api_key.txt`, generates a
+dashboard login, writes the dashboard's settings, and starts sending synthetic traffic so the charts
+have something to show.
+
+The dashboard needs that login. Sign in with the email and password from `data/login.txt`:
+
+```bash
+cat data/login.txt
+# or, if you have not got a shell where the volume is:
+docker compose -f docker-compose.bootstrap.yml logs bootstrap-init
+```
+
+Both are printed on first boot only, and the password is random per install — it is never committed
+and never the same twice. Nothing in the stack ships with a default password.
 
 Charts do not appear instantly. Gravix rolls facts up in batches, so there is a gap of about four
 minutes between the first event arriving and the first chart being drawn. The dashboard says so: once
