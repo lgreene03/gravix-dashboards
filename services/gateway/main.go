@@ -941,38 +941,6 @@ func (gw *gateway) requireRole(roles ...string) func(http.HandlerFunc) http.Hand
 	}
 }
 
-// planRank maps plan names to a numeric rank for comparison.
-var planRank = map[string]int{
-	"free":    0,
-	"starter": 1,
-	"pro":     2,
-}
-
-// requirePlan returns middleware that checks if the tenant's plan meets the minimum.
-// Must be used inside requireAuth.
-func (gw *gateway) requirePlan(minPlan string) func(http.HandlerFunc) http.HandlerFunc {
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			claims := auth.ClaimsFromContext(r.Context())
-			if claims == nil {
-				writeError(w, http.StatusUnauthorized, "authentication required")
-				return
-			}
-			tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
-			if err != nil {
-				writeError(w, http.StatusNotFound, "tenant not found")
-				return
-			}
-			if planRank[tenant.Plan] < planRank[minPlan] {
-				writeError(w, http.StatusForbidden,
-					fmt.Sprintf("upgrade required: %s plan needed (current: %s)", minPlan, tenant.Plan))
-				return
-			}
-			next(w, r)
-		}
-	}
-}
-
 // rateLimitMiddleware checks tenant-specific rate limits on API requests.
 // Must be used inside requireAuth (assumes claims are in context).
 // Returns 429 with standard X-RateLimit headers when exceeded.

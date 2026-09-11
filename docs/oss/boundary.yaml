@@ -156,12 +156,12 @@ capabilities:
     rationale: Reading your own data is not a premium feature. Charter §7.3 Q5 = yes.
     paths:
       - services/gateway/gateway_platform.go
-    gate: pro
     note: >-
-      The only real plan gate in the codebase (gateway_platform.go:132, HTTP 402).
-      Charter §2.3 rules this capability core, so the gate must be removed by
-      GRVX-710. The mismatch between placement: core and a non-empty gate is
-      deliberate and is the signal that work is outstanding.
+      Gate removed by GRVX-710. Charter §7.3 Q4 makes this permanent: a
+      capability released under Apache-2.0 can never be re-gated. This was the
+      only real plan gate in the codebase, and its removal also made planRank
+      and requirePlan dead, so both were deleted from the core — plan tiers are
+      a billing concept and belong in ee/ (charter §2.2).
 
   - id: custom-dashboards
     name: Custom saved dashboards

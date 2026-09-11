@@ -128,11 +128,6 @@ func (gw *gateway) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or revoked API key")
 		return
 	}
-	if planRank[info.Plan] < planRank["pro"] {
-		writeError(w, http.StatusPaymentRequired, "Public Metrics API requires Pro plan or above")
-		return
-	}
-
 	q := r.URL.Query()
 	metric := q.Get("metric")
 	fromStr := q.Get("from")

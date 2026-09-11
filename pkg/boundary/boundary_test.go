@@ -209,22 +209,25 @@ func TestGet(t *testing.T) {
 	}
 }
 
-// TestOnlyPublicMetricsAPIIsGated pins the SD-001 finding: exactly one
-// capability carries a gate today, and charter §2.3 rules it core, so the
-// mismatch is the outstanding work GRVX-710 must clear.
-func TestOnlyPublicMetricsAPIIsGated(t *testing.T) {
+// TestNoCoreCapabilityIsGated is the charter's §7.3 Q4 guarantee expressed as a
+// test: no capability placed in the Apache-2.0 core may carry a plan gate.
+//
+// SD-001 found exactly one — the public metrics API — and GRVX-710 removed it.
+// If this ever fails, a free capability has been put behind a paywall, which
+// charter §7.3 Q4 forbids permanently.
+func TestNoCoreCapabilityIsGated(t *testing.T) {
 	m, err := Load(realMapPath)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	var gated []string
-	for _, c := range m.Capabilities {
+	for _, c := range m.CoreCapabilities() {
 		if c.Gate != "" {
 			gated = append(gated, c.ID)
 		}
 	}
-	if len(gated) != 1 || gated[0] != "public-metrics-api" {
-		t.Errorf("gated capabilities = %v, want exactly [public-metrics-api] (see SD-001)", gated)
+	if len(gated) != 0 {
+		t.Errorf("core capabilities carrying a plan gate: %v; charter §7.3 Q4 forbids re-gating", gated)
 	}
 }
 
