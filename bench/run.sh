@@ -8,6 +8,7 @@
 #
 # Also accepted, and documented in bench/README.md rather than in the usage
 # line, because they exist for testing rather than for producing a figure:
+#   --cardinality    run the cardinality-immunity demonstration instead
 #   --runs <n>       measurements per metric before the median (default 3)
 #   --work-dir <p>   scratch directory to keep instead of a temporary one
 #
@@ -32,6 +33,7 @@ SCALE="small"
 OUT=""
 RUNS="3"
 WORK_DIR=""
+CARDINALITY=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -47,6 +49,8 @@ while [ $# -gt 0 ]; do
         --work-dir)
             [ $# -ge 2 ] || { echo "$USAGE" >&2; exit 2; }
             WORK_DIR="$2"; shift 2 ;;
+        --cardinality)
+            CARDINALITY=true; shift ;;
         -h|--help)
             echo "$USAGE"; exit 0 ;;
         *)
@@ -62,6 +66,12 @@ esac
 # The driver owns every exit code from here on: 1 for a failed measurement,
 # 3 for insufficient disk. `exec` hands it the process so nothing between here
 # and the caller can reinterpret them.
+# The demonstration reads competitor_units.yaml by a repo-relative path, and the
+# script has already cd'd to the root, so it needs no directory of its own.
+if [ "$CARDINALITY" = true ]; then
+    exec go run ./bench -cardinality
+fi
+
 ARGS=(-scale "$SCALE" -runs "$RUNS")
 [ -n "$OUT" ] && ARGS+=(-out "$OUT")
 [ -n "$WORK_DIR" ] && ARGS+=(-work-dir "$WORK_DIR")

@@ -202,3 +202,107 @@ make check-boundary && make build-oss && make test-oss
 | Cardinality enforcement is not actually working | STOP. `CORRECTNESS DEFECT` against GRVX-905. The claim is false until enforcement holds. |
 | Pressure to publish an unverified competitor price | Refuse, citing thesis §0. Route to `market-analyst`. |
 | A vendor pricing page that cannot be reached | Leave `verified: false` and report it. An unreachable source is not a verified one. |
+
+---
+
+## 11. Implementation report
+
+All nine acceptance criteria pass. Coverage 91.8%.
+
+**One Definition-of-Done item is open and cannot be closed by the implementer:** no `market-analyst`
+CLAIM AUDIT has been performed, so every entry in `competitor_units.yaml` is `verified: false` and
+the demo withholds the comparison. §9 requires "no entry self-verified", and the implementer
+verifying their own competitor figures is exactly what the gate exists to prevent. Dispatching Loop
+L11 is the remaining work.
+
+### 11.1 Verification
+
+```
+$ go test ./bench/cardinality/... -v -cover
+--- PASS: TestBoundedDimensionCostReported     (AC-1)
+--- PASS: TestUnboundedDimensionRejected       (AC-2)  7 subtests, one per denied field
+--- PASS: TestHighCardinalityPathHandled       (AC-3)  3 subtests
+--- PASS: TestUnverifiedCompetitorWithheld     (AC-4)
+--- PASS: TestThirdPartySourceRejected         (AC-5)  5 subtests
+--- PASS: TestStaleVerificationRejected        (AC-6)
+--- PASS: TestConcessionAlwaysPrinted          (AC-7)
+--- PASS: TestDatadogConcessionComplete        (AC-8)
+--- PASS: TestDemoFailsIfEnforcementBroken     (AC-9)
+coverage: 91.8% of statements
+
+$ ./bench/run.sh --cardinality ; echo "exit=$?"
+five steps, the withheld notice, the concession block, exit=0
+
+$ ./bench/run.sh --cardinality | grep -c "a control you must remember to configure"
+1
+
+$ ./bench/run.sh --cardinality | grep -cE '\$[0-9]+\.[0-9]+ per'
+0
+
+$ make check-boundary && make build-oss && make test-oss
+boundary: 0 violations; both succeed with ee/ absent
+```
+
+### 11.2 A step that passed while proving nothing
+
+Step 4's first version built a `RequestFact` with no `event_time`. The schema duly rejected it — for
+the missing timestamp:
+
+```
+schema rejected it: event_time is required; pathlearn normalised it to "/users/{id}"
+```
+
+The step reported a rejection, the demo printed a flat cost line, and the whole thing would have kept
+passing with the UUID check deleted from `schemas/`. It was visible only by reading the output.
+
+Two changes, both in AC-3 now:
+
+1. Every other field on the fact is valid, so the schema error names the actual constraint:
+   `path_template appears to contain a raw UUID; use {id} placeholders`.
+2. The step validates a **control** fact, identical but with `/users/{id}`. If the control is also
+   rejected, the fact was invalid for some unrelated reason and the step returns `DEMO INVALID`
+   rather than claiming a result. AC-3 additionally asserts the rejection text does *not* mention
+   `event_time`, `event_id`, `status_code`, `latency_ms` or a missing service.
+
+This is the fifth guard this session that passed while the thing it guarded was broken.
+
+### 11.3 The verification gate, and where it is stricter than §5.2
+
+§6.1 row 2 requires rejecting a third-party `source_url`. A blocklist of known trackers is not
+enough — the next tracker nobody listed walks straight through. So the loader also requires the host
+to be on the vendor's **own** domain allowlist (`datadoghq.com`, `grafana.com` and subdomains), and
+AC-5 includes `https://some-new-cost-blog.example/datadog`, which is on no blocklist and still fails.
+
+Staleness binds only `verified: true` entries. An unverified entry of any age is already withheld,
+and dating it is not what makes it unpublishable — rejecting old unverified entries would have meant
+the file could not be committed at all with provisional figures in it.
+
+`Metrics-without-Limits` is matched after case-folding, hyphen-flattening and whitespace collapse, so
+"metrics without limits" and a line-wrapped "Metrics\nwithout\nLimits" both count, while "there are
+no limits on spending" does not. The requirement is that the argument is present, not that one exact
+string is.
+
+### 11.4 What the demo concedes, in the demo
+
+Printed unconditionally, verified or not — AC-7 checks it with a verified entry too, which is where
+the temptation to drop it would be:
+
+- a bounded dimension **is** accepted and **does** cost money, with the row-count multiplier shown;
+- Datadog's Metrics-without-Limits and ingest-versus-index controls address the same problem;
+- the difference claimed is only that theirs is manual and after the fact while ours is structural
+  and pre-ingestion.
+
+`competitor_units.yaml` also records Datadog log management with `cardinality_driven: false`, which
+does not support the claim, because leaving it out would have made the file read as though every
+competitor unit were cardinality-driven.
+
+### 11.5 Definition of done
+
+- [x] All nine acceptance criteria pass with their named tests
+- [x] Every Verification command run, real output above
+- [ ] **`market-analyst` CLAIM AUDIT verdict recorded** — not done. Requires dispatching Loop L11;
+      the implementer must not self-verify, so this stays open.
+- [x] Every competitor entry `verified: false` — all four, since no audit has said otherwise
+- [x] The concession block prints unconditionally
+- [x] `docs-engineer` delta merged — `bench/cardinality/README.md`
+- [x] Zero new skipped tests

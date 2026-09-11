@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/lgreene/gravix-dashboards/bench/cardinality"
 	"github.com/lgreene/gravix-dashboards/tests/correctness/fixtures"
 )
 
@@ -42,12 +43,23 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		out       = fs.String("out", "", "result file path (default bench/results/<timestamp>-<scale>.json)")
 		workDir   = fs.String("work-dir", "", "scratch directory (default a temporary one, removed afterwards)")
 		runs      = fs.Int("runs", 3, "measurements per metric; the median is reported")
+		cardinal  = fs.Bool("cardinality", false, "run the cardinality-immunity demonstration instead of the benchmark")
 	)
 	fs.Usage = func() { fmt.Fprintln(stderr, usageLine) }
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, usageLine)
 		return exitBadArgument
+	}
+
+	// The cardinality demonstration measures what reaches storage, not how fast
+	// anything runs, so it shares the entry point and nothing else.
+	if *cardinal {
+		if err := cardinality.Run(stdout, cardinality.DefaultDemo()); err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return exitMeasureFail
+		}
+		return exitOK
 	}
 
 	scale, ok := LookupScale(*scaleName)
