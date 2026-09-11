@@ -234,7 +234,7 @@ competitive thesis as evidence of a bug this project had fixed. It was never tru
 **Found by:** `senior-engineer` executing GRVX-802
 **Affects:** GRVX-802 §6 step 3; consumed by GRVX-805 and GRVX-807
 **Severity:** medium — the field is the input to GRVX-805's whole purpose
-**Status:** decided and implemented; GRVX-805 must confirm or correct
+**Status:** **confirmed by GRVX-805** — closed
 
 ### What the spec says
 
@@ -277,11 +277,19 @@ so it is derived, not inferred — and counts it in `Result.ManifestsAdded`, whi
 That is not silent, and it leaves the warehouse consistent. A bulk backfill pass over untouched
 partitions is still out of scope and still belongs to GRVX-810.
 
-### What GRVX-805 must do
+### Resolution
 
-Confirm this reading or correct it **before** building revision detection on top. If GRVX-805 needs
-different semantics — a revision counter per late-arrival batch, say — it changes here, not there,
-and `SchemaVersion` bumps with it.
+GRVX-805 §5.3 states the decision table independently, and it matches:
+
+> | Existing manifest | New digest vs existing | Action |
+> | present | different | write, `Revision = old.Revision + 1`, `PreviousDigest = old.ContentDigest`, … |
+
+The reading was right. GRVX-805 additionally supplies the two fields the gap made conspicuous —
+`PreviousDigest` and `RevisedAt` — so a consumer can now see not only *that* a partition was revised
+but *what* it superseded and *when*. `SchemaVersion` went to 2 for them.
+
+The ambiguity is closed. It is worth noting that the correct answer was derivable from the field's own
+name, and that implementing the alternative would have quietly produced a counter that never counted.
 
 ---
 

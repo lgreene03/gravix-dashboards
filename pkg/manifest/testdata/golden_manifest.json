@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "metric": "request_metrics_minute",
   "metric_version": "v1",
   "idempotency_key": "request_metrics_minute:v1:_single:20260909",
@@ -15,5 +15,7 @@
     "raw/request_facts/2026-09-09/10/batch_b.jsonl"
   ],
   "revision": 0,
-  "data_file": "warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet"
+  "data_file": "warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet",
+  "previous_digest": "",
+  "revised_at": ""
 }

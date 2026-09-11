@@ -25,7 +25,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 	"github.com/lgreene/gravix-dashboards/pkg/circuitbreaker"
+	"github.com/lgreene/gravix-dashboards/pkg/lateness"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
@@ -130,6 +132,87 @@ func topicForTenant(tenantID, baseTopic string) string {
 	return tenantID + "/" + baseTopic
 }
 
+// unprocessableNote is returned to a caller whose fact can be stored but can
+// never appear in a metric, because its event_time predates the retention window.
+// Accepting such a fact silently would be the worst option available: the sender
+// would have no way to know its data vanished.
+const unprocessableNote = "event_time precedes the retention window; stored but not aggregated"
+
+// latenessConfig bounds the lateness classification. It is a variable so a test
+// can narrow the windows without waiting thirty days.
+var latenessConfig = lateness.DefaultConfig()
+
+// futureClockWarn rate-limits the wrong-clock warning to once per minute, so a
+// sender with a badly set clock cannot flood the log.
+var futureClockWarn struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+// classifyFact records how late an accepted fact was and returns its class.
+// It never changes whether the fact is accepted — lateness is a property of the
+// delivery, not of the fact's validity.
+func classifyFact(fact *gravixv1.RequestFact, at time.Time) lateness.Class {
+	eventTime := fact.EventTime.AsTime()
+	class := lateness.Classify(latenessConfig, eventTime, at)
+	factsByLatenessTotal.WithLabelValues(string(class), fact.Service).Inc()
+
+	if ahead := lateness.FutureBy(latenessConfig, eventTime, at); ahead > 0 {
+		warnFutureClock(fact.Service, ahead, at)
+	}
+	return class
+}
+
+// warnFutureClock logs at most once per minute that a sender's clock looks wrong.
+func warnFutureClock(service string, ahead time.Duration, at time.Time) {
+	futureClockWarn.mu.Lock()
+	defer futureClockWarn.mu.Unlock()
+	if at.Sub(futureClockWarn.last) < time.Minute {
+		return
+	}
+	futureClockWarn.last = at
+	slog.Warn(fmt.Sprintf("fact event_time is %s in the future; check the sender's clock", ahead),
+		"service", service, "ahead", ahead.String())
+}
+
+// writeUnprocessableEntries copies facts that can never be aggregated into their
+// own DLQ prefix, so an operator can find them. They are also written to the raw
+// path as normal: they are valid, immutable facts.
+func writeUnprocessableEntries(sink *DurableSink, tenantID string, entries []DLQEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	records := make([][]byte, 0, len(entries))
+	for _, e := range entries {
+		data, err := json.Marshal(e)
+		if err != nil {
+			slog.Error("unprocessable dlq marshal error", "error", err)
+			continue
+		}
+		records = append(records, data)
+	}
+	if len(records) == 0 {
+		return
+	}
+	topic := topicForTenant(tenantID, "dlq/unprocessable")
+	if err := sink.WriteBatch(topic, records); err != nil {
+		slog.Error("unprocessable dlq write error", "error", err)
+		ingestionDLQWriteErrorsTotal.Inc()
+	}
+}
+
+// unprocessableEntry builds the DLQ record for a fact that cannot be aggregated.
+func unprocessableEntry(tenantID, reqID string, at time.Time, raw []byte) DLQEntry {
+	return DLQEntry{
+		Timestamp: at,
+		TenantID:  tenantID,
+		RequestID: reqID,
+		FactType:  "request_fact",
+		Error:     unprocessableNote,
+		RawJSON:   json.RawMessage(raw),
+	}
+}
+
 // writeErrorJSON writes a structured JSON error response.
 func writeErrorJSON(w http.ResponseWriter, code int, errMsg string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -190,6 +273,20 @@ var (
 		},
 		[]string{"tenant_id"},
 	)
+	// factsByLatenessTotal counts accepted facts by how late they were relative to
+	// their own event_time. Both labels are bounded: class has exactly the four
+	// values lateness.Classes() defines, and service is already a bounded
+	// dimension. Nothing per-fact — no path_template, no request id — may be added
+	// here; docs/04-non-goals.md forbids high cardinality in our own telemetry as
+	// much as in the product.
+	factsByLatenessTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gravix_facts_received_by_lateness_total",
+			Help: "Accepted facts by lateness class and service.",
+		},
+		[]string{"class", "service"},
+	)
+
 	ingestionTraceSamplesTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ingestion_trace_samples_total",
@@ -225,6 +322,7 @@ func init() {
 	prometheus.MustRegister(ingestionUploadErrorsTotal)
 	prometheus.MustRegister(ingestionOverageEventsTotal)
 	prometheus.MustRegister(ingestionQuotaRejectedTotal)
+	prometheus.MustRegister(factsByLatenessTotal)
 	prometheus.MustRegister(ingestionTraceSamplesTotal)
 	prometheus.MustRegister(circuitBreakerState)
 	prometheus.MustRegister(circuitBreakerTripsTotal)
@@ -972,8 +1070,27 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		// Increment event counter for billing (best-effort, non-blocking)
 		incrementEventCounter(tdb, tenantID, 1)
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201", tenantID).Inc()
+		// The fact is stored either way. Classification decides only what we report
+		// back and what we count, never whether it was accepted.
+		class := classifyFact(fact, time.Now().UTC())
+
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
+
+		if class == lateness.ClassUnprocessable {
+			go writeUnprocessableEntries(sink, tenantID,
+				[]DLQEntry{unprocessableEntry(tenantID, reqID, time.Now().UTC(), body)})
+
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "202", tenantID).Inc()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"accepted": 1,
+				"note":     unprocessableNote,
+			})
+			return
+		}
+
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201", tenantID).Inc()
 		w.WriteHeader(http.StatusCreated)
 	}
 }
@@ -1017,6 +1134,7 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		var validRecords [][]byte
 		var errors []string
 		var dlqEntries []DLQEntry
+		var unprocessable []DLQEntry
 		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
 
 		for i, line := range lines {
@@ -1055,6 +1173,11 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			}
 
 			validRecords = append(validRecords, cleanData)
+
+			if classifyFact(fact, now) == lateness.ClassUnprocessable {
+				unprocessable = append(unprocessable,
+					unprocessableEntry(tenantID, reqID, now, line))
+			}
 		}
 
 		// Write all valid records in a single batch (one fsync)
@@ -1072,6 +1195,13 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			go writeDLQEntries(sink, tenantID, "request_fact", dlqEntries)
 		}
 
+		// Unprocessable facts were accepted and stored above. They are copied into
+		// their own DLQ prefix as well, so an operator can find data that will
+		// never reach a metric.
+		if len(unprocessable) > 0 {
+			go writeUnprocessableEntries(sink, tenantID, unprocessable)
+		}
+
 		accepted := len(validRecords)
 
 		// Increment event counter for billing (best-effort, non-blocking)
@@ -1079,17 +1209,29 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			incrementEventCounter(tdb, tenantID, int64(accepted))
 		}
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(body)))
 
+		// 202 rather than 200 when some facts can never be aggregated: every fact
+		// was accepted, but not all of them will appear in a metric, and the caller
+		// is entitled to know that from the status line.
+		status := http.StatusOK
+		if len(unprocessable) > 0 {
+			status = http.StatusAccepted
+		}
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", strconv.Itoa(status), tenantID).Inc()
+
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(status)
 		resp := map[string]interface{}{
 			"accepted": accepted,
 			"rejected": len(errors),
 		}
 		if len(errors) > 0 {
 			resp["errors"] = errors
+		}
+		if len(unprocessable) > 0 {
+			resp["unprocessable"] = len(unprocessable)
+			resp["note"] = unprocessableNote
 		}
 		json.NewEncoder(w).Encode(resp)
 	}

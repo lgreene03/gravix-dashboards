@@ -30,7 +30,12 @@ import (
 )
 
 // SchemaVersion is the manifest format version. Bump on any field change.
-const SchemaVersion = 1
+//
+// v2 added PreviousDigest and RevisedAt (GRVX-805). A v1 manifest is still
+// readable: the two fields decode as empty, which is exactly what Revision 0
+// means, so an unrevised v1 partition and an unrevised v2 partition say the same
+// thing.
+const SchemaVersion = 2
 
 // Extension is the manifest file suffix. It deliberately does not end in
 // ".parquet", so a manifest is never matched by the warehouse's read_parquet
@@ -74,6 +79,19 @@ type Manifest struct {
 	SourceFactKeys []string `json:"source_fact_keys"`
 	Revision       int      `json:"revision"`
 	DataFile       string   `json:"data_file"`
+
+	// PreviousDigest is the ContentDigest this partition held before the most
+	// recent revision. Empty at Revision 0. It is what lets a consumer prove a
+	// number changed rather than merely suspect it.
+	PreviousDigest string `json:"previous_digest"`
+
+	// RevisedAt is the RFC3339 UTC time of the most recent revision. Empty at
+	// Revision 0.
+	//
+	// This is the only wall-clock value in a manifest, and it is deliberately
+	// excluded from ContentDigest — which covers row content only — so recording
+	// when a revision happened cannot make the output non-reproducible.
+	RevisedAt string `json:"revised_at"`
 }
 
 // schemaTooNewError carries the versions involved while still matching
@@ -260,6 +278,38 @@ func Merge(merged Manifest, sources []*Manifest) *Manifest {
 	merged.FactCount = factCount
 	merged.Revision = revision
 	return &merged
+}
+
+// Revise returns the manifest a partition should carry after its rows changed.
+//
+// The revision counter is a factual statement that a published window's value
+// changed after first publication. It is not an error: late facts are the system
+// working as designed (docs/00-system-truth.md §5), and a counter that never
+// advanced would leave a consumer unable to tell a corrected number from an
+// original one.
+func Revise(next Manifest, previous *Manifest, revisedAt time.Time) *Manifest {
+	if previous == nil {
+		// First publication. Nothing was superseded, so there is nothing to record.
+		next.Revision = 0
+		next.PreviousDigest = ""
+		next.RevisedAt = ""
+		return &next
+	}
+
+	if next.ContentDigest == previous.ContentDigest {
+		// The rows are the same, so this is the same revision as before. Carrying
+		// the previous values forward keeps a rebuild that changes nothing from
+		// looking like a change.
+		next.Revision = previous.Revision
+		next.PreviousDigest = previous.PreviousDigest
+		next.RevisedAt = previous.RevisedAt
+		return &next
+	}
+
+	next.Revision = previous.Revision + 1
+	next.PreviousDigest = previous.ContentDigest
+	next.RevisedAt = revisedAt.UTC().Format(time.RFC3339)
+	return &next
 }
 
 func sortedKeys(set map[string]struct{}) []string {

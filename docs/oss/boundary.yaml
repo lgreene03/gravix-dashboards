@@ -47,6 +47,18 @@ capabilities:
       - transforms/service_events_daily/main.go
       - transforms/service_events_detail/main.go
 
+  - id: late-data-revisions
+    name: Late-arrival classification and partition revisions
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      A bucket whose value changes without saying so is a correctness defect. Telling a
+      user their number was revised is not a premium service, and a free tier that hid it
+      would be reporting numbers it cannot stand behind.
+    paths:
+      - pkg/lateness/lateness.go
+      - pkg/recompute/revision.go
+
   - id: quantile-sketches
     name: Mergeable quantile sketches for correct percentiles
     placement: core

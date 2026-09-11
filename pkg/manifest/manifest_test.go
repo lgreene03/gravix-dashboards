@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -81,6 +82,10 @@ func goldenManifest() *Manifest {
 		},
 		Revision: 0,
 		DataFile: goldenDataFile,
+		// Revision 0 means nothing has been superseded, so both stay empty. A
+		// revised manifest is covered by TestReviseRecordsSupersededDigest.
+		PreviousDigest: "",
+		RevisedAt:      "",
 	}
 }
 
@@ -383,7 +388,8 @@ func TestManifestRejectsNewerSchema(t *testing.T) {
 	if !errors.Is(err, ErrSchemaTooNew) {
 		t.Fatalf("err = %v, want ErrSchemaTooNew", err)
 	}
-	want := "manifest: schema version 8 is newer than this binary supports (1)"
+	want := fmt.Sprintf("manifest: schema version %d is newer than this binary supports (%d)",
+		SchemaVersion+7, SchemaVersion)
 	if err.Error() != want {
 		t.Errorf("err = %q, want %q", err.Error(), want)
 	}
@@ -637,5 +643,173 @@ func TestMergeToleratesUnparseableEventDay(t *testing.T) {
 	}, nil)
 	if !strings.HasSuffix(got.IdempotencyKey, ":00010101") {
 		t.Errorf("IdempotencyKey = %q, want it to end in the zero day", got.IdempotencyKey)
+	}
+}
+
+// ─── GRVX-805: revisions ───
+
+// AC-12: a version-1 manifest is readable by this binary.
+func TestManifestForwardCompatible(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+
+	// A manifest exactly as v1 wrote it: no previous_digest, no revised_at.
+	v1 := `{
+  "schema_version": 1,
+  "metric": "request_metrics_minute",
+  "metric_version": "v1",
+  "idempotency_key": "request_metrics_minute:v1:_single:20260909",
+  "content_digest": "` + goldenRowsDigest + `",
+  "tenant_id": "",
+  "event_day": "2026-09-09",
+  "window_from": "2026-09-09T00:00:00Z",
+  "window_to": "2026-09-10T00:00:00Z",
+  "row_count": 2,
+  "fact_count": 4,
+  "source_fact_keys": ["raw/request_facts/2026-09-09/10/batch_a.jsonl"],
+  "revision": 3,
+  "data_file": "` + goldenDataFile + `"
+}
+`
+	if err := store.Put(ctx, Path(goldenDataFile), strings.NewReader(v1)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := Read(ctx, store, goldenDataFile)
+	if err != nil {
+		t.Fatalf("a v1 manifest must still read: %v", err)
+	}
+	if got.SchemaVersion != 1 {
+		t.Errorf("SchemaVersion = %d, want 1 preserved as written", got.SchemaVersion)
+	}
+	if got.Revision != 3 {
+		t.Errorf("Revision = %d, want 3", got.Revision)
+	}
+	// The fields v1 never had decode as empty, which is what Revision 0 would also
+	// say. That is the right answer: v1 recorded no supersession history.
+	if got.PreviousDigest != "" || got.RevisedAt != "" {
+		t.Errorf("v1 manifest produced PreviousDigest=%q RevisedAt=%q, want both empty",
+			got.PreviousDigest, got.RevisedAt)
+	}
+	if got.ContentDigest != goldenRowsDigest {
+		t.Errorf("ContentDigest = %q, want the v1 value preserved", got.ContentDigest)
+	}
+}
+
+func TestReviseFirstPublication(t *testing.T) {
+	next := *goldenManifest()
+	got := Revise(next, nil, time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
+
+	if got.Revision != 0 {
+		t.Errorf("Revision = %d, want 0 on a first publication", got.Revision)
+	}
+	if got.PreviousDigest != "" {
+		t.Errorf("PreviousDigest = %q, want empty — nothing was superseded", got.PreviousDigest)
+	}
+	if got.RevisedAt != "" {
+		t.Errorf("RevisedAt = %q, want empty — nothing was revised", got.RevisedAt)
+	}
+}
+
+func TestReviseRecordsSupersededDigest(t *testing.T) {
+	previous := goldenManifest()
+	previous.Revision = 2
+	previous.ContentDigest = "sha256:old"
+	previous.PreviousDigest = "sha256:older"
+	previous.RevisedAt = "2026-09-10T00:00:00Z"
+
+	next := *goldenManifest()
+	next.ContentDigest = "sha256:new"
+
+	at := time.Date(2026, 9, 11, 12, 30, 15, 0, time.UTC)
+	got := Revise(next, previous, at)
+
+	if got.Revision != 3 {
+		t.Errorf("Revision = %d, want 3 — one past the previous", got.Revision)
+	}
+	if got.PreviousDigest != "sha256:old" {
+		t.Errorf("PreviousDigest = %q, want the digest this revision superseded", got.PreviousDigest)
+	}
+	if got.RevisedAt != "2026-09-11T12:30:15Z" {
+		t.Errorf("RevisedAt = %q, want the revision time in RFC3339 UTC", got.RevisedAt)
+	}
+}
+
+func TestReviseUnchangedDigestCarriesHistoryForward(t *testing.T) {
+	previous := goldenManifest()
+	previous.Revision = 4
+	previous.PreviousDigest = "sha256:older"
+	previous.RevisedAt = "2026-09-10T00:00:00Z"
+
+	next := *goldenManifest() // same ContentDigest as previous
+
+	got := Revise(next, previous, time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
+
+	if got.Revision != 4 {
+		t.Errorf("Revision = %d, want 4 — the rows did not change", got.Revision)
+	}
+	if got.PreviousDigest != "sha256:older" {
+		t.Errorf("PreviousDigest = %q, want it carried forward unchanged", got.PreviousDigest)
+	}
+	if got.RevisedAt != "2026-09-10T00:00:00Z" {
+		t.Errorf("RevisedAt = %q, want the original revision time, not now", got.RevisedAt)
+	}
+}
+
+func TestReviseNormalisesTimeToUTC(t *testing.T) {
+	previous := goldenManifest()
+	previous.ContentDigest = "sha256:old"
+	next := *goldenManifest()
+	next.ContentDigest = "sha256:new"
+
+	zone := time.FixedZone("UTC+3", 3*60*60)
+	got := Revise(next, previous, time.Date(2026, 9, 11, 15, 0, 0, 0, zone))
+
+	if got.RevisedAt != "2026-09-11T12:00:00Z" {
+		t.Errorf("RevisedAt = %q, want it converted to UTC", got.RevisedAt)
+	}
+}
+
+// AC-6: RevisedAt must never reach the content digest.
+func TestRevisedAtNotInDigest(t *testing.T) {
+	rows := goldenRows()
+
+	base, err := ContentDigest(rows)
+	if err != nil {
+		t.Fatalf("ContentDigest: %v", err)
+	}
+
+	// The digest is taken over rows. Manifest fields — RevisedAt included — are
+	// not inputs to it, so a partition revised at any time digests identically.
+	for _, at := range []string{"2026-09-11T12:00:00Z", "2020-01-01T00:00:00Z", ""} {
+		m := goldenManifest()
+		m.RevisedAt = at
+		m.PreviousDigest = "sha256:whatever"
+
+		again, err := ContentDigest(rows)
+		if err != nil {
+			t.Fatalf("ContentDigest: %v", err)
+		}
+		if again != base {
+			t.Fatalf("digest changed with RevisedAt=%q: %s vs %s", at, again, base)
+		}
+		if m.ContentDigest != goldenRowsDigest {
+			t.Errorf("the manifest's recorded digest moved with RevisedAt=%q", at)
+		}
+	}
+
+	// And the encoded manifest must carry RevisedAt without it being part of what
+	// the digest field describes.
+	m := goldenManifest()
+	m.RevisedAt = "2026-09-11T12:00:00Z"
+	encoded, err := Encode(m)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"revised_at": "2026-09-11T12:00:00Z"`) {
+		t.Error("RevisedAt was not serialised")
+	}
+	if !strings.Contains(string(encoded), goldenRowsDigest) {
+		t.Error("the content digest changed when RevisedAt was set")
 	}
 }

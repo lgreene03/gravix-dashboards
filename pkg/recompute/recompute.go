@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lgreene/gravix-dashboards/pkg/lateness"
 	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
 	"github.com/lgreene/gravix-dashboards/pkg/manifest"
 	"github.com/lgreene/gravix-dashboards/pkg/sketch"
@@ -124,6 +125,13 @@ type AggregateResult struct {
 	// SourceKeys lists, sorted, every fact object actually read. It is the
 	// partition's lineage and goes into its manifest.
 	SourceKeys []string
+
+	// CrossDayDays lists, sorted and de-duplicated, the other UTC days whose facts
+	// were found filed under this day's prefix. A late batch delivered after
+	// midnight lands in the arrival day's directory while its facts belong to the
+	// previous day; those facts are not dropped and not mis-bucketed — the
+	// partitions they belong to are rebuilt as well.
+	CrossDayDays []time.Time
 }
 
 // Options configures one recompute run.
@@ -155,7 +163,14 @@ type Result struct {
 	// ManifestsAdded counts partitions whose data was already correct but had no
 	// manifest beside it. They are reported rather than backfilled quietly.
 	ManifestsAdded int
-	Duration       time.Duration
+	// Revised counts partitions whose published rows changed in this run. A
+	// non-zero value means numbers someone may have already read have moved.
+	Revised int
+	// ExtraPartitions counts partitions rebuilt because a late fact belonging to
+	// them was found filed under a different day. They were not in the plan; they
+	// are rebuilt anyway, because otherwise that fact would never reach a metric.
+	ExtraPartitions int
+	Duration        time.Duration
 }
 
 // PartitionOptions configures the rebuild of a single tenant-day. Unlike
@@ -175,6 +190,10 @@ type PartitionOptions struct {
 	// OnFact, when set, is called once per accepted fact. The cron rollup uses
 	// it to drive its Prometheus counters without this package importing them.
 	OnFact func(service, day string)
+	// ExtraFactDays names other day prefixes to scan for facts belonging to this
+	// partition. It exists for late batches filed under the day they arrived
+	// rather than the day they describe.
+	ExtraFactDays []time.Time
 }
 
 // PartitionResult reports the rebuild of a single tenant-day.
@@ -191,6 +210,12 @@ type PartitionResult struct {
 	// ManifestAdded is true when the data file was already correct but carried no
 	// manifest, so one was written for it.
 	ManifestAdded bool
+	// Revised is true when this rebuild changed rows that had already been
+	// published — a late fact landing in a closed bucket, most often.
+	Revised bool
+	// CrossDayDays names other days whose facts were found under this partition's
+	// prefix. Those partitions need rebuilding too.
+	CrossDayDays []time.Time
 }
 
 // DeterministicKey returns the output object key for a partition. The same
@@ -316,8 +341,19 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		if pr.ManifestAdded {
 			result.ManifestsAdded++
 		}
+		if pr.Revised {
+			result.Revised++
+		}
 		result.ReplacedKeys = append(result.ReplacedKeys, pr.ReplacedKeys...)
 	}
+	// Facts belonging to another day, found filed under one of the planned days,
+	// name partitions that also need rebuilding. Doing this after the planned pass
+	// keeps the plan deterministic while still letting a late batch reach the
+	// bucket its event_time demands.
+	extra, extraErrs := runCrossDayPartitions(ctx, opts, partitions, results, result)
+	failures = append(failures, extraErrs...)
+	result.ExtraPartitions = extra
+
 	sort.Strings(result.ReplacedKeys)
 	result.Duration = time.Since(started)
 
@@ -325,6 +361,84 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return result, errors.Join(failures...)
 	}
 	return result, nil
+}
+
+// runCrossDayPartitions rebuilds the partitions named by cross-day facts that the
+// planned pass turned up, skipping any the plan already covered. It runs one pass
+// only: a rebuild of day X can itself surface facts for day Y, but chasing that
+// indefinitely would let one badly-filed batch expand a run without bound. Any
+// remaining days are picked up by the next run, which is what a batch system is
+// allowed to do.
+func runCrossDayPartitions(ctx context.Context, opts Options, planned []Partition, results []*PartitionResult, result *Result) (int, []error) {
+	inPlan := make(map[string]struct{}, len(planned))
+	for _, p := range planned {
+		inPlan[p.String()] = struct{}{}
+	}
+
+	// Collect the extra partitions, remembering which prefixes their facts were
+	// found under — without that, rebuilding the affected day would read only its
+	// own directory and miss the very facts that prompted the rebuild.
+	extraSet := make(map[string]Partition)
+	foundUnder := make(map[string][]time.Time)
+	for i, pr := range results {
+		if pr == nil {
+			continue
+		}
+		for _, d := range pr.CrossDayDays {
+			p := Partition{TenantID: planned[i].TenantID, Day: d}
+			if _, ok := inPlan[p.String()]; ok {
+				continue
+			}
+			extraSet[p.String()] = p
+			foundUnder[p.String()] = append(foundUnder[p.String()], planned[i].Day)
+		}
+	}
+	if len(extraSet) == 0 {
+		return 0, nil
+	}
+
+	keys := make([]string, 0, len(extraSet))
+	for k := range extraSet {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var failures []error
+	rebuilt := 0
+	for _, k := range keys {
+		p := extraSet[k]
+		pr, err := ProcessPartition(ctx, PartitionOptions{
+			Store:         opts.Store,
+			FactsDir:      FactsDirFor(opts.InputDir, p.TenantID),
+			MetricDir:     MetricDirFor(opts.OutputDir, p.TenantID, opts.Metric),
+			Metric:        opts.Metric,
+			TenantID:      p.TenantID,
+			Day:           p.Day,
+			DryRun:        opts.DryRun,
+			ExtraFactDays: foundUnder[k],
+		})
+		if err != nil {
+			failures = append(failures, fmt.Errorf("recompute: partition %s failed: %w", p, err))
+			continue
+		}
+		rebuilt++
+		result.FactsRead += pr.FactsRead
+		result.RowsWritten += pr.RowsWritten
+		switch {
+		case pr.Unchanged:
+			result.Unchanged++
+		case pr.Written:
+			result.Rebuilt++
+		}
+		if pr.Revised {
+			result.Revised++
+		}
+		if pr.ManifestAdded {
+			result.ManifestsAdded++
+		}
+		result.ReplacedKeys = append(result.ReplacedKeys, pr.ReplacedKeys...)
+	}
+	return rebuilt, failures
 }
 
 // acquire takes the shared rollup lock for every tenant in the run and returns a
@@ -371,12 +485,12 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 	partitionDir := PartitionDir(o.MetricDir, o.Day)
 	destKey := DeterministicKey(partitionDir, o.Metric, o.Day)
 
-	agg, err := Aggregate(ctx, o.Store, o.FactsDir, o.Day, o.OnFact)
+	agg, err := Aggregate(ctx, o.Store, o.FactsDir, o.Day, o.OnFact, o.ExtraFactDays...)
 	if err != nil {
 		return nil, err
 	}
 
-	res := &PartitionResult{Key: destKey, FactsRead: agg.FactsRead}
+	res := &PartitionResult{Key: destKey, FactsRead: agg.FactsRead, CrossDayDays: agg.CrossDayDays}
 
 	if len(agg.Aggregators) == 0 {
 		// No facts for this day: the partition must end up empty rather than
@@ -413,12 +527,13 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 	}
 	res.ReplacedKeys = stale
 
-	m, hadManifest, err := buildManifest(ctx, o, rows, agg, destKey, dayStr, identical)
+	m, hadManifest, revised, err := buildManifest(ctx, o, rows, agg, destKey, dayStr, identical)
 	if err != nil {
 		return nil, err
 	}
 	res.Manifest = m
 	res.ManifestAdded = identical && !hadManifest
+	res.Revised = revised
 
 	if o.DryRun {
 		res.Written = !identical
@@ -453,33 +568,14 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 // forward from whatever is already stored. It reports whether a manifest was
 // already there, which is how a partition that predates manifests is told apart
 // from one being written for the first time.
-func buildManifest(ctx context.Context, o PartitionOptions, rows []MetricRow, agg *AggregateResult, destKey, dayStr string, identical bool) (*manifest.Manifest, bool, error) {
+func buildManifest(ctx context.Context, o PartitionOptions, rows []MetricRow, agg *AggregateResult, destKey, dayStr string, identical bool) (*manifest.Manifest, bool, bool, error) {
 	digest, err := manifest.ContentDigest(rows)
 	if err != nil {
-		return nil, false, err
-	}
-
-	revision := 0
-	hadManifest := false
-	switch existing, err := manifest.Read(ctx, o.Store, destKey); {
-	case err == nil:
-		hadManifest = true
-		if existing.ContentDigest == digest {
-			// Same rows as before: this is the same revision, not a new one.
-			revision = existing.Revision
-		} else {
-			// The rows changed, so the partition has been revised. Restarting at
-			// zero would make the field unable to say what it is named for.
-			revision = existing.Revision + 1
-		}
-	case errors.Is(err, manifest.ErrNoManifest):
-		// First manifest for this partition.
-	default:
-		return nil, false, err
+		return nil, false, false, err
 	}
 
 	day := o.Day.UTC()
-	return &manifest.Manifest{
+	next := manifest.Manifest{
 		SchemaVersion:  manifest.SchemaVersion,
 		Metric:         o.Metric,
 		MetricVersion:  MetricVersion,
@@ -492,9 +588,14 @@ func buildManifest(ctx context.Context, o PartitionOptions, rows []MetricRow, ag
 		RowCount:       int64(len(rows)),
 		FactCount:      agg.FactsRead,
 		SourceFactKeys: agg.SourceKeys,
-		Revision:       revision,
 		DataFile:       destKey,
-	}, hadManifest, nil
+	}
+
+	outcome, err := decideRevision(ctx, o.Store, destKey, next)
+	if err != nil {
+		return nil, false, false, err
+	}
+	return outcome.Manifest, outcome.HadManifest, outcome.Revised, nil
 }
 
 // deleteWithManifests removes data files and the manifests beside them, data
@@ -581,17 +682,34 @@ func objectMatches(ctx context.Context, store storage.ObjectStore, key string, d
 // day, and facts whose event time falls on another day are discarded.
 //
 // onFact, when non-nil, is called once per accepted fact.
-func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, day time.Time, onFact func(service, day string)) (*AggregateResult, error) {
+func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, day time.Time, onFact func(service, day string), extraDays ...time.Time) (*AggregateResult, error) {
 	dayStr := day.UTC().Format("2006-01-02")
-	inputPrefix := fmt.Sprintf("%s/%s", KeyPrefix(factsDir), dayStr)
 
 	res := &AggregateResult{Aggregators: make(map[AggregationKey]*Aggregator)}
 	aggs := res.Aggregators
 	seen := make(map[string]struct{})
+	crossDay := make(map[time.Time]struct{})
 
-	keys, err := store.List(ctx, inputPrefix)
-	if err != nil {
-		return nil, fmt.Errorf("list error: %w", err)
+	// This day's own prefix, plus any prefix a caller knows holds facts belonging
+	// to this day. A batch delivered after midnight is filed under the day it
+	// arrived, not the day it describes, so rebuilding this partition from its own
+	// directory alone would silently miss those facts.
+	prefixes := []string{fmt.Sprintf("%s/%s", KeyPrefix(factsDir), dayStr)}
+	for _, d := range extraDays {
+		extra := fmt.Sprintf("%s/%s", KeyPrefix(factsDir), d.UTC().Format("2006-01-02"))
+		if extra != prefixes[0] {
+			prefixes = append(prefixes, extra)
+		}
+	}
+	sort.Strings(prefixes)
+
+	var keys []string
+	for _, prefix := range prefixes {
+		found, err := store.List(ctx, prefix)
+		if err != nil {
+			return nil, fmt.Errorf("list error: %w", err)
+		}
+		keys = append(keys, found...)
 	}
 	// The object store gives no ordering guarantee; read in a fixed order so a
 	// rebuild sees the same facts in the same sequence every time.
@@ -633,6 +751,12 @@ func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, 
 
 			eventTime := fact.EventTime.AsTime()
 			if eventTime.UTC().Format("2006-01-02") != dayStr {
+				// The fact belongs to another day. docs/00-system-truth.md §5 makes
+				// event_time the only source of truth for ordering, so it must not
+				// be folded into this partition. Record the day it does belong to
+				// so the caller can rebuild that partition rather than lose the
+				// fact to a directory it was merely filed under.
+				crossDay[lateness.AffectedDay(eventTime)] = struct{}{}
 				continue
 			}
 
@@ -666,8 +790,24 @@ func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, 
 		}
 	}
 
+	res.CrossDayDays = sortedDays(crossDay)
+
 	// keys came back sorted, so SourceKeys is already in a stable order.
 	return res, nil
+}
+
+// sortedDays flattens a day set into ascending order, so a run's report and any
+// follow-up rebuilds are deterministic.
+func sortedDays(set map[time.Time]struct{}) []time.Time {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]time.Time, 0, len(set))
+	for d := range set {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out
 }
 
 // BuildRows turns aggregators into output rows, sorted into a total order.
