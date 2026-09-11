@@ -625,8 +625,9 @@ wrong.
 **Found by** trying to observe GRVX-908's countdown end to end.
 **Severity** high — the low-cost deployment path ingests facts successfully and produces no metrics
 at all. Every service reports healthy; the dashboard is simply empty forever.
-**Status** open. Not fixed here: GRVX-908 §4.3 fences both files the fix must touch, and choosing
-between the two candidate fixes changes an on-disk layout.
+**Status** fixed in `services/ingestion/main.go` by option 1 below, guarded by
+`TestUploadedFactsLandWhereTheRollupReads` (`services/ingestion/main_test.go`). Fixed as its own
+change rather than inside a spec: GRVX-908 §4.3 fenced both files, and GRVX-910 §4 fences them too.
 
 **The mismatch.** Two facts in the same process:
 
@@ -684,6 +685,24 @@ services healthy within 60 seconds, and they would all have been healthy.
 
 Option 1 is the better repair and the one with a migration cost; that trade is why this is a finding
 rather than a drive-by fix.
+
+**Resolution — option 1, and the migration cost turned out to be zero.** The local store is now
+rooted at the data root via `localStoreRoot`, so the key's existing `raw/` prefix lands at
+`<base>/raw/<topic>/` — the layout every reader in the repository already resolves: the rollup jobs'
+`-input-dir` default, `cmd/purge`, `cmd/cli recompute`, and the gateway's DLQ endpoints, which list
+`dlq/request_facts/` under `./data/raw` and were reading the wrong directory for the same reason.
+One fix repairs both.
+
+No deployment needs migrating. The doubling only ever occurred on the local-disk path, and the only
+stack that uses it is the bootstrap one, which by this finding never produced a readable metric —
+there is no correct history under `data/raw/raw/` to preserve. The full stack writes through
+`S3Store` to MinIO and was never affected.
+
+The guard asserts the round trip, not the constant: it wires the store exactly as `main()` does,
+runs a real `uploadFile`, and requires the bytes to be readable at the rollup's own default
+`-input-dir` path. It also asserts `<base>/raw/raw` does not exist, because "the file is somewhere
+under the base directory" is satisfied by the bug. Reinstating the old rooting fails it with the
+actual written path in the message.
 
 **One thing in the product's favour:** GRVX-908's countdown turns this from a silent failure into an
 observable one. Before it, the dashboard showed "send your first event" forever, which reads as "you

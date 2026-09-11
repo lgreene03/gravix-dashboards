@@ -584,6 +584,24 @@ func (ds *DurableSink) rotateTopic(topic string) {
 	}()
 }
 
+// localStoreRoot is the directory the local object store is rooted at for a
+// given --base-dir.
+//
+// It is the data root itself, NOT <base-dir>/raw. uploadFile's destination
+// keys already begin with "raw/", and every reader in the repository resolves
+// that same "raw/<topic>/" layout beneath the data root: the rollup jobs
+// default to ./data/raw/request_facts, cmd/purge and cmd/cli recompute root
+// their stores at ./data, and the gateway's DLQ endpoints list
+// "dlq/request_facts/" under ./data/raw.
+//
+// Rooting the store at <base-dir>/raw instead put the "raw/" from the key on
+// top of it, so facts landed in <base-dir>/raw/raw/<topic>/ — a directory no
+// reader ever looks in. The rollup found no input, produced no metrics, and
+// the dashboard stayed empty with every service reporting healthy. See F-015.
+func localStoreRoot(baseDir string) string {
+	return baseDir
+}
+
 // uploadFile uploads the local batch to the object store, wrapped in a circuit breaker.
 func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 	// Destination Key: raw/<topic>/YYYY-MM-DD/HH/<uuid>.jsonl
@@ -819,7 +837,6 @@ func main() {
 	}
 
 	bufferDir := filepath.Join(*baseDir, "buffer")
-	rawDir := filepath.Join(*baseDir, "raw")
 
 	var store storage.ObjectStore
 	if os.Getenv("S3_ENDPOINT") != "" {
@@ -838,9 +855,9 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		slog.Info("initializing local storage", "dir", rawDir)
+		slog.Info("initializing local storage", "dir", localStoreRoot(*baseDir))
 		var err error
-		store, err = storage.NewLocalStore(rawDir)
+		store, err = storage.NewLocalStore(localStoreRoot(*baseDir))
 		if err != nil {
 			slog.Error("failed to initialize local store", "error", err)
 			os.Exit(1)

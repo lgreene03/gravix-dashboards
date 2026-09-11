@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1093,5 +1094,99 @@ func TestShouldSampleTrace_Distribution(t *testing.T) {
 	ratio := float64(sampled) / float64(total)
 	if ratio < 0.3 || ratio > 0.7 {
 		t.Errorf("expected ~50%% sampling, got %.1f%% (%d/%d)", ratio*100, sampled, total)
+	}
+}
+
+// TestUploadedFactsLandWhereTheRollupReads is the regression guard for F-015.
+//
+// The bootstrap stack ran ingestion with --base-dir /app/data and the rollup
+// with -input-dir ./data/raw/request_facts, and produced no metrics at all,
+// because the local object store was rooted at <base-dir>/raw while the
+// destination key already began with "raw/". Facts went to
+// <base-dir>/raw/raw/request_facts/ and nothing read that path. Every service
+// reported healthy throughout.
+//
+// This test wires the store exactly as main() does and asserts the uploaded
+// bytes are readable at the path the rollup's own default flag points at, so
+// the two halves cannot drift apart again without a failure here.
+func TestUploadedFactsLandWhereTheRollupReads(t *testing.T) {
+	baseDir := t.TempDir()
+
+	store, err := storage.NewLocalStore(localStoreRoot(baseDir))
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bufferDir := filepath.Join(baseDir, "buffer")
+	ds := &DurableSink{
+		bufferDir:   bufferDir,
+		store:       store,
+		activeFiles: make(map[string]*os.File),
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+
+	topicDir := filepath.Join(bufferDir, "request_facts")
+	if err := os.MkdirAll(topicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	batchPath := filepath.Join(topicDir, "batch_f015.jsonl")
+	payload := []byte(`{"event_id":"0192f9a0-0000-7000-8000-000000000000"}` + "\n")
+	if err := os.WriteFile(batchPath, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadedAt := time.Date(2026, 9, 11, 14, 0, 0, 0, time.UTC)
+	ds.uploadFile("request_facts", batchPath, uploadedAt)
+
+	// The rollup's -input-dir default, resolved against this base directory.
+	rollupInputDir := filepath.Join(baseDir, "raw", "request_facts")
+
+	var found []string
+	err = filepath.WalkDir(rollupInputDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			found = append(found, path)
+		}
+		return nil
+	})
+	if err != nil {
+		// Report where the bytes actually went, so a failure names the bug
+		// instead of only saying the directory is missing.
+		var elsewhere []string
+		_ = filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+				rel, _ := filepath.Rel(baseDir, path)
+				elsewhere = append(elsewhere, rel)
+			}
+			return nil
+		})
+		t.Fatalf("rollup input dir %s unreadable: %v\n.jsonl files actually written under base dir: %v",
+			rollupInputDir, err, elsewhere)
+	}
+
+	if len(found) != 1 {
+		t.Fatalf("want exactly 1 uploaded fact file under %s, got %d: %v", rollupInputDir, len(found), found)
+	}
+
+	got, err := os.ReadFile(found[0])
+	if err != nil {
+		t.Fatalf("read uploaded file: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("uploaded content = %q, want %q", got, payload)
+	}
+
+	// The double-nested path is the specific shape of F-015. Assert it is gone
+	// rather than only asserting the correct path is present: a store rooted
+	// one level too deep still satisfies a "file exists somewhere" check.
+	doubled := filepath.Join(baseDir, "raw", "raw")
+	if _, err := os.Stat(doubled); err == nil {
+		t.Errorf("F-015 regression: %s exists; the object store is rooted one level too deep", doubled)
 	}
 }
