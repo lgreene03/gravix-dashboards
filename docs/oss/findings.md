@@ -461,3 +461,49 @@ why neither produced a bug report — there is no partial stack to complain abou
 and picking one silently changes how the full stack is configured. Whoever fixes it should diff the
 two blocks in full, keep one, and add `docker-compose.yml` to the CI validation step that
 `.github/workflows/ci.yml` now runs for the bootstrap file.
+
+---
+
+## F-012 — the dashboard bundle budget is framed as one feature's allowance but enforces a permanent ceiling, and nothing could run it locally
+
+**Found by** CI going red on GRVX-902 after the JS suite passed on the previous head.
+**Severity** medium — as written it will fail every future dashboard spec, and the obvious reaction
+is to raise the number, which retires the guard.
+**Status** the local-runner half is fixed; the framing needs a decision by whoever owns GRVX-910.
+
+GRVX-809's AC-13 guard says what it is for:
+
+> The budget is what the panel may add on top, not a total, so it keeps meaning as the dashboard
+> grows for other reasons.
+
+But the measurement is `gzip(app.js + styles.css + lib/*.js) - 48880`, where `48880` is a constant
+captured at the commit before GRVX-809. So it does not measure the panel at all. It measures **total
+dashboard growth since a fixed point in the past**, and every subsequent feature spends the panel's
+allowance. GRVX-902 added twenty-two lines to `app.js` and the suite went red at 8223 bytes against
+an 8192-byte budget — **over by 31 bytes**, for a feature that has nothing to do with the panel.
+
+Trimming two over-written comments brought it to 8098, so it is green with **94 bytes of headroom**.
+That is not a fix. GRVX-903, 907 and 908 all touch the dashboard, and the first of them will fail.
+
+**The decision to make is which guard is wanted**, and both are defensible:
+
+1. **Per-feature budget**, matching the stated intent — rebaseline `BASELINE_GZIP` at each merge so
+   the number always means "what the change in front of you adds". Catches a single bloated feature;
+   never catches slow accumulation.
+2. **Total budget**, matching the current behaviour — rename it, drop the "not a total" comment, and
+   set the ceiling from what the dashboard should cost to load rather than from where it happened to
+   be before GRVX-809. Catches accumulation, which for a zero-config product that is judged in the
+   first ten minutes is arguably the one worth catching.
+
+What must not happen is bumping `BUDGET` by a few hundred bytes each time it fires, which is the
+path of least resistance and ends with a guard that only ever passes.
+
+**The local-runner half is fixed.** CI ran `node --test cube/model/schema/*.test.js
+dashboards/lib/*.test.js` and nothing else did: no Makefile target, no mention in `CONTRIBUTING.md`.
+There is now `make test-js`.
+
+**This is the third time the same shape of problem has bitten in this work** — `make lint` was weaker
+than CI's `lint` job, `go test -race` was never run locally, and now the JavaScript suite had no
+local entry point at all. Each was found by breaking the build. The pattern is worth stating plainly:
+**a gate that exists only in CI is a gate you discover by tripping it**, and the cost is a red build
+on someone else's branch rather than a failing command on your own machine.

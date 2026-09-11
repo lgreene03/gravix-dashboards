@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli test test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check
+.PHONY: build build-cli test test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -20,6 +20,13 @@ test:
 
 test-race:
 	go test ./... -v -race -count=1
+
+# The Cube model, the dashboard's query routing and the lineage panel are
+# JavaScript, so `go test` proves nothing about them. CI has always run these;
+# until now there was no way to run them locally short of copying the command
+# out of the workflow, and a gate you can only trip in CI is one you trip in CI.
+test-js:
+	node --test cube/model/schema/*.test.js dashboards/lib/*.test.js
 
 coverage:
 	go test ./... -coverprofile=coverage.out -covermode=atomic

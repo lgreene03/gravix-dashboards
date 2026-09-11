@@ -7,10 +7,8 @@
             cubeApiUrl: "http://localhost:4000/cubejs-api/v1/load",
             gatewayUrl: "",  // e.g. "http://localhost:8091" for multi-tenant mode
             percentileApiUrl: "", // gateway base URL for GET /api/v1/percentile
-            // Ingestion answers "is my data arriving?" without waiting for a
-            // rollup. The bootstrap stack generates both of these into
-            // dashboard_config.js; elsewhere the key stays empty and the
-            // request goes out unauthenticated, which legacy mode accepts.
+            // Answers "is my data arriving?" before any rollup has run.
+            // dashboard_config.js supplies both in the bootstrap stack.
             ingestionApiUrl: "http://localhost:8090",
             apiKey: "",
             refreshIntervalMs: 60000,
@@ -60,13 +58,9 @@
         }
 
         // --- INGESTION API ---
-        // Talks to the ingestion service rather than Cube, for the questions
-        // Cube cannot answer until the first rollup has run — chiefly which
-        // services exist at all.
-        //
-        // Returns the response whatever its status; callers check response.ok.
-        // A failed discovery call must degrade to "no services listed yet",
-        // never take the dashboard down with it.
+        // For what Cube cannot answer until the first rollup runs: which
+        // services exist. Returns the response whatever its status, so a
+        // failed call degrades to "nothing listed yet" rather than throwing.
         async function ingestionFetch(path, options = {}) {
             const headers = { ...(options.headers || {}) };
             if (GRAVIX_CONFIG.apiKey) {
