@@ -12,10 +12,12 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 	"github.com/lgreene/gravix-dashboards/pkg/lateness"
 	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
 	"github.com/lgreene/gravix-dashboards/pkg/manifest"
@@ -97,6 +99,16 @@ type MetricRow struct {
 	// format it does not understand rather than misreading it.
 	SketchVersion string `json:"sketch_version" parquet:"sketch_version"`
 
+	// UserAgentFamily is populated only when an Evolution adds it as a dimension.
+	// Empty otherwise, which is how a row written before the dimension existed and
+	// a row written without it read the same.
+	UserAgentFamily string `json:"user_agent_family" parquet:"user_agent_family"`
+
+	// ExtraQuantileLabel and ExtraQuantileMs carry a percentile added
+	// retroactively — the label is like "p99.9". Empty and zero when none was added.
+	ExtraQuantileLabel string  `json:"extra_quantile_label" parquet:"extra_quantile_label"`
+	ExtraQuantileMs    float64 `json:"extra_quantile_ms" parquet:"extra_quantile_ms"`
+
 	EventDay string `json:"event_day" parquet:"event_day"`
 }
 
@@ -106,6 +118,11 @@ type AggregationKey struct {
 	Service      string
 	Method       string
 	PathTemplate string
+	// Extra carries the values of any dimensions added by an Evolution, joined in
+	// the order the Evolution declares them. It is empty in the default
+	// configuration, which is what keeps pre-evolution output byte-identical: an
+	// empty string sorts and compares exactly as the four-field key always did.
+	Extra string
 }
 
 // Aggregator accumulates the facts belonging to one AggregationKey.
@@ -134,6 +151,58 @@ type AggregateResult struct {
 	CrossDayDays []time.Time
 }
 
+// Evolution describes percentiles and dimensions added to a metric after the fact.
+//
+// The zero value means "compute the metric as defined", and every code path below
+// must behave identically to the pre-evolution code under it. That is not a
+// nicety: GRVX-801 requires a rebuilt partition to be byte-identical, so a
+// configurable aggregation key that shifted the default output by one byte would
+// break recomputability to add a feature.
+type Evolution struct {
+	// Dimensions are extra grouping keys, by RequestFact field name.
+	Dimensions []string
+	// ExtraQuantiles are additional quantiles in (0,1), derived from the stored
+	// sketch rather than from a fact re-read.
+	ExtraQuantiles []float64
+}
+
+// IsZero reports whether this Evolution changes anything.
+func (e Evolution) IsZero() bool {
+	return len(e.Dimensions) == 0 && len(e.ExtraQuantiles) == 0
+}
+
+// dimensionAccessor reads a dimension's value from a fact and writes it to a row.
+type dimensionAccessor struct {
+	value func(fact *gravixv1.RequestFact) string
+	set   func(row *MetricRow, v string)
+}
+
+// supportedDimensions maps a RequestFact field to the metric column that carries
+// it. A field with no column here cannot yet be a dimension — the Parquet row is a
+// fixed struct, so a new dimension needs a new column. See SD-008.
+var supportedDimensions = map[string]dimensionAccessor{
+	"user_agent_family": {
+		value: func(f *gravixv1.RequestFact) string { return f.UserAgentFamily },
+		set:   func(r *MetricRow, v string) { r.UserAgentFamily = v },
+	},
+}
+
+// SupportsDimension reports whether a field can currently be added as a dimension.
+func SupportsDimension(field string) bool {
+	_, ok := supportedDimensions[field]
+	return ok
+}
+
+// SupportedDimensions lists the fields that can be added as dimensions, sorted.
+func SupportedDimensions() []string {
+	out := make([]string, 0, len(supportedDimensions))
+	for k := range supportedDimensions {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Options configures one recompute run.
 type Options struct {
 	Store     storage.ObjectStore
@@ -150,6 +219,9 @@ type Options struct {
 	DryRun bool
 	// Concurrency is the number of partitions rebuilt in parallel. 0 means 1.
 	Concurrency int
+	// Evolution adds percentiles or dimensions to the metric. The zero value
+	// computes the metric exactly as defined.
+	Evolution Evolution
 }
 
 // Result reports what a run did.
@@ -194,6 +266,8 @@ type PartitionOptions struct {
 	// partition. It exists for late batches filed under the day they arrived
 	// rather than the day they describe.
 	ExtraFactDays []time.Time
+	// Evolution adds percentiles or dimensions. Zero means the metric as defined.
+	Evolution Evolution
 }
 
 // PartitionResult reports the rebuild of a single tenant-day.
@@ -317,6 +391,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 				TenantID:  p.TenantID,
 				Day:       p.Day,
 				DryRun:    opts.DryRun,
+				Evolution: opts.Evolution,
 			})
 			results[i], errs[i] = pr, perr
 		}(i, p)
@@ -416,6 +491,7 @@ func runCrossDayPartitions(ctx context.Context, opts Options, planned []Partitio
 			Day:           p.Day,
 			DryRun:        opts.DryRun,
 			ExtraFactDays: foundUnder[k],
+			Evolution:     opts.Evolution,
 		})
 		if err != nil {
 			failures = append(failures, fmt.Errorf("recompute: partition %s failed: %w", p, err))
@@ -485,7 +561,7 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 	partitionDir := PartitionDir(o.MetricDir, o.Day)
 	destKey := DeterministicKey(partitionDir, o.Metric, o.Day)
 
-	agg, err := Aggregate(ctx, o.Store, o.FactsDir, o.Day, o.OnFact, o.ExtraFactDays...)
+	agg, err := AggregateWith(ctx, o.Store, o.FactsDir, o.Day, o.OnFact, o.Evolution, o.ExtraFactDays...)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +585,7 @@ func ProcessPartition(ctx context.Context, o PartitionOptions) (*PartitionResult
 		return res, nil
 	}
 
-	rows := BuildRows(agg.Aggregators, o.TenantID, dayStr)
+	rows := BuildRowsWith(agg.Aggregators, o.TenantID, dayStr, o.Evolution)
 	data, err := EncodeParquet(rows)
 	if err != nil {
 		return nil, err
@@ -683,6 +759,13 @@ func objectMatches(ctx context.Context, store storage.ObjectStore, key string, d
 //
 // onFact, when non-nil, is called once per accepted fact.
 func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, day time.Time, onFact func(service, day string), extraDays ...time.Time) (*AggregateResult, error) {
+	return AggregateWith(ctx, store, factsDir, day, onFact, Evolution{}, extraDays...)
+}
+
+// AggregateWith is Aggregate with an Evolution applied. With the zero Evolution it
+// is Aggregate exactly: the extra dimension values resolve to the empty string and
+// the aggregation key is the one it always was.
+func AggregateWith(ctx context.Context, store storage.ObjectStore, factsDir string, day time.Time, onFact func(service, day string), evo Evolution, extraDays ...time.Time) (*AggregateResult, error) {
 	dayStr := day.UTC().Format("2006-01-02")
 
 	res := &AggregateResult{Aggregators: make(map[AggregationKey]*Aggregator)}
@@ -766,6 +849,7 @@ func Aggregate(ctx context.Context, store storage.ObjectStore, factsDir string, 
 				Service:      fact.Service,
 				Method:       fact.Method,
 				PathTemplate: fact.PathTemplate,
+				Extra:        extraKey(fact, evo),
 			}
 			agg, exists := aggs[keyAgg]
 			if !exists {
@@ -810,6 +894,26 @@ func sortedDays(set map[time.Time]struct{}) []time.Time {
 	return out
 }
 
+// extraKey joins the values of an Evolution's added dimensions. With no added
+// dimensions it returns the empty string, which is what keeps the default
+// aggregation key identical to the one that existed before evolutions did.
+func extraKey(fact *gravixv1.RequestFact, evo Evolution) string {
+	if len(evo.Dimensions) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(evo.Dimensions))
+	for _, d := range evo.Dimensions {
+		acc, ok := supportedDimensions[d]
+		if !ok {
+			continue
+		}
+		parts = append(parts, acc.value(fact))
+	}
+	// The separator is a unit separator rather than a printable character, so a
+	// dimension value containing the separator cannot forge a different key.
+	return strings.Join(parts, "\x1f")
+}
+
 // BuildRows turns aggregators into output rows, sorted into a total order.
 //
 // Each aggregator's latencies are sorted before the percentiles are taken. The
@@ -817,6 +921,12 @@ func sortedDays(set map[time.Time]struct{}) []time.Time {
 // unsorted input would let two rebuilds of the same day differ in the last bits
 // of a float64. Sorting first removes read order from the result.
 func BuildRows(aggs map[AggregationKey]*Aggregator, tenantID, dayStr string) []MetricRow {
+	return BuildRowsWith(aggs, tenantID, dayStr, Evolution{})
+}
+
+// BuildRowsWith is BuildRows with an Evolution applied. Under the zero Evolution
+// it produces exactly the rows BuildRows always did.
+func BuildRowsWith(aggs map[AggregationKey]*Aggregator, tenantID, dayStr string, evo Evolution) []MetricRow {
 	rows := make([]MetricRow, 0, len(aggs))
 	var sketchVersion string
 	for key, agg := range aggs {
@@ -844,7 +954,7 @@ func BuildRows(aggs map[AggregationKey]*Aggregator, tenantID, dayStr string) []M
 			sketchVersion = sketch.Version
 		}
 
-		rows = append(rows, MetricRow{
+		row := MetricRow{
 			TenantID:      tenantID,
 			BucketStart:   key.BucketStart.Format("2006-01-02 15:04:05"),
 			Service:       key.Service,
@@ -859,11 +969,49 @@ func BuildRows(aggs map[AggregationKey]*Aggregator, tenantID, dayStr string) []M
 			P99LatencyMs:  p99,
 			LatencySketch: sketchBytes,
 			SketchVersion: sketchVersion,
-		})
+		}
+		applyEvolution(&row, key, agg, evo)
+		rows = append(rows, row)
 	}
 
 	SortRows(rows)
 	return rows
+}
+
+// applyEvolution writes an Evolution's added dimension values and extra quantile
+// onto a row. With the zero Evolution it does nothing at all.
+func applyEvolution(row *MetricRow, key AggregationKey, agg *Aggregator, evo Evolution) {
+	if evo.IsZero() {
+		return
+	}
+
+	if len(evo.Dimensions) > 0 {
+		values := strings.Split(key.Extra, "\x1f")
+		for i, d := range evo.Dimensions {
+			acc, ok := supportedDimensions[d]
+			if !ok || i >= len(values) {
+				continue
+			}
+			acc.set(row, values[i])
+		}
+	}
+
+	// The extra quantile comes from the sketch, not from a second pass over the
+	// latencies: it is the same information, and reading it from the sketch is what
+	// proves a retroactive percentile needs no fact re-read.
+	if len(evo.ExtraQuantiles) > 0 {
+		q := evo.ExtraQuantiles[0]
+		s := sketch.FromSorted(agg.Latencies)
+		if v, err := s.Quantile(q); err == nil {
+			row.ExtraQuantileLabel = quantileLabel(q)
+			row.ExtraQuantileMs = v
+		}
+	}
+}
+
+// quantileLabel renders 0.999 as "p99.9".
+func quantileLabel(q float64) string {
+	return "p" + strconv.FormatFloat(q*100, 'f', -1, 64)
 }
 
 // SortRows orders rows by the full aggregation key: bucket, service, method,
@@ -883,6 +1031,11 @@ func SortRows(rows []MetricRow) {
 		}
 		if a.PathTemplate != b.PathTemplate {
 			return a.PathTemplate < b.PathTemplate
+		}
+		// An added dimension splits what was one row into several; they must order
+		// deterministically or the output stops being byte-identical.
+		if a.UserAgentFamily != b.UserAgentFamily {
+			return a.UserAgentFamily < b.UserAgentFamily
 		}
 		// Two rows that agree on the whole aggregation key cannot occur from one
 		// aggregation, but comparing the sketch bytes last keeps the order total

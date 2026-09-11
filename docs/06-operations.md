@@ -252,3 +252,51 @@ is only worth something if a rebuild is provably the same as the original — ot
 "recomputable" means "will produce some other number, later". The determinism rules
 above are what make the promise checkable, and `pkg/recompute` tests each of them by
 name.
+
+## 6. Adding a metric to history (`gravix evolve`)
+
+Gravix kept the facts, so a metric that never existed can be computed for last month.
+
+```bash
+# Add p99.9 across the last 30 days. No fact read: the sketch already knows.
+gravix evolve add-percentile --quantile 0.999 --from 2026-08-12 --to 2026-09-11
+
+# Add a dimension. This does re-read facts — the rows were never separated.
+gravix evolve add-dimension --field user_agent_family --from 2026-08-12 --to 2026-09-11
+
+# See the plan without writing anything.
+gravix evolve add-dimension --field user_agent_family --from 2026-08-12 --to 2026-09-11 --dry-run
+```
+
+Without `--yes` the command prints the plan and waits for you to type `yes`. Backfilling rewrites
+every partition in the window; that should not be one keystroke away.
+
+Exit codes: `0` success, `1` partial failure, `2` invalid flags or a refused change, `3` you declined.
+
+### 6.1 Why the two kinds cost different things
+
+| | Percentile | Dimension |
+|---|---|---|
+| Reads raw facts | **no** | **yes** |
+| Why | each bucket stores a mergeable sketch; a quantile is a question it already answers | the dimension was never in the aggregation key, so the rows that would carry it were never separated |
+| Rows after | same count | more — one per distinct value |
+
+### 6.2 What is refused, and why
+
+- **Unbounded dimensions.** `user_id`, `request_id`, `session_id`, `ip_address`, `trace_id`, `span_id`
+  and `event_id` are permanently denied. The list is not configurable: a config option would turn a
+  constraint into a suggestion, and an unbounded dimension admitted once is unrecoverable — the
+  partitions are written by the time anyone sees the bill. See
+  [`04-non-goals.md`](04-non-goals.md) §5.
+- **Anything above 1,000 distinct values per day.** Sampling reads the first, middle and last day of
+  the window in full. The refusal reports the observed count, so you learn why and not only that.
+- **A percentile over partitions written before sketches existed.** Those files genuinely lack the
+  information. The refusal names the days so you can rebuild them first.
+- **A window reaching past fact retention.** Days whose facts are gone are reported and **not**
+  backfilled. Partial success is reported as partial, never as success.
+
+### 6.3 What it does not do
+
+It never edits or deletes a fact. An evolution is a rebuild of derivatives, and every partition it
+rewrites gets a revision bump and a manifest recording what it superseded, exactly as a late-arriving
+fact would.

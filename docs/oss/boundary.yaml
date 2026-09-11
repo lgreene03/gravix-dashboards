@@ -47,6 +47,19 @@ capabilities:
       - transforms/service_events_daily/main.go
       - transforms/service_events_detail/main.go
 
+  - id: retroactive-evolution
+    name: Retroactive percentiles and dimensions with historical backfill
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      This is the capability the competitive thesis is built on — the thing Prometheus
+      and hosted platforms cannot do because they discarded the raw observation. Gating
+      it would sell the one advantage the architecture actually buys.
+    paths:
+      - pkg/evolve/evolve.go
+      - pkg/evolve/cardinality.go
+      - cmd/cli/cmd_evolve.go
+
   - id: late-data-revisions
     name: Late-arrival classification and partition revisions
     placement: core

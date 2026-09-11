@@ -10,6 +10,7 @@
 //	gravix status      [--endpoint=http://localhost:8090]
 //	gravix tail dlq    [--follow]
 //	gravix recompute   --from=2026-09-01 --to=2026-09-08
+//	gravix evolve      add-percentile --quantile=0.999 --from=2026-08-12 --to=2026-09-11
 //
 // Environment variables:
 //
@@ -63,6 +64,8 @@ func main() {
 		runReplay(os.Args[2:])
 	case "recompute":
 		runRecompute(os.Args[2:])
+	case "evolve":
+		runEvolve(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version":
@@ -84,6 +87,7 @@ Usage:
   gravix tail dlq     Tail the dead-letter queue
   gravix replay       Replay DLQ entries back to ingestion
   gravix recompute    Rebuild derived metrics from raw facts
+  gravix evolve       Add a percentile or dimension and backfill history
   gravix version      Print version
   gravix help         Show this help
 

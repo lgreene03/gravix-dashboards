@@ -420,3 +420,70 @@ loosened assertion.
 
 Option 2 is the only one that changes the order of magnitude. It is a modelling decision, not an
 implementation detail, so it belongs to `semantic-modeler` and `perf-cost-engineer`, not here.
+
+---
+
+## SD-008 — GRVX-806 implies arbitrary dimensions, and its byte-identity criterion is narrower than it reads
+
+**Found by:** `senior-engineer` executing GRVX-806
+**Affects:** GRVX-806 §5.4, AC-13
+**Severity:** medium — one is a real capability limit, the other is a claim that needs narrowing
+**Status:** implemented within the limits; both recorded rather than glossed
+
+### Part one: which fields can actually become dimensions
+
+§5.4 reads as though any bounded `RequestFact` field can be added as a dimension. The cardinality
+admission check is indeed general — it works on any field, via the protobuf descriptor — but a
+dimension also needs a **column in the metric row**, and `MetricRow` is a fixed Go struct that the
+Parquet schema is derived from.
+
+So the honest position is:
+
+| Layer | General? |
+|---|---|
+| Deny list and cardinality budget | **Yes** — any field, checked by sampling |
+| Dimension value extraction | **Yes** — protobuf reflection, any scalar field |
+| Metric row column | **No** — one column per supported dimension, added by hand |
+
+`user_agent_family` is supported, which is the field GRVX-806 §2 names as the demonstration case and
+the one the acceptance criteria exercise. Any other field is refused by `ErrUnsupportedDimension`,
+which names what *is* supported rather than failing vaguely.
+
+Making this fully general needs a dynamic Parquet schema rather than a struct, which changes how every
+reader in the system opens a file — Trino, Cube, the compaction job and `pkg/recompute` itself. That is
+a storage-layer change with its own blast radius, not a detail of this spec.
+
+**It does not weaken the headline claim.** "Add a dimension that was never in a rollup and backfill 30
+days" is demonstrated end to end, against a from-scratch ingestion, on the field the spec chose. What
+is limited is the menu, not the mechanism.
+
+### Part two: what AC-13 actually proves
+
+> AC-13 | The default `AggregationKey` is unchanged, so pre-evolution output is byte-identical
+
+The first half is true and tested: the key gained an `Extra` field that is the empty string in the
+default configuration, so it sorts and compares exactly as the four-field key always did, and every
+pre-existing rollup test passes unchanged.
+
+The second half needs narrowing. `MetricRow` gained three columns — `user_agent_family`,
+`extra_quantile_label`, `extra_quantile_ms` — so a partition written by this binary is **not** byte-
+identical to one written before GRVX-806, even though every value in it is the same. The columns are
+present and empty.
+
+That distinction matters, so state it precisely:
+
+- **Byte-identical across runs of a given binary** — yes, and this is what GRVX-801's recomputability
+  requires. Rebuild a partition twice, in any read order, and the bytes match.
+- **Byte-identical across a schema change** — no, and no versioned system can promise it. GRVX-804
+  already broke it the same way when it added the sketch columns.
+
+`TestDefaultAggregationKeyUnchanged` tests the first, which is the one that carries weight. The second
+reading would forbid ever adding a column, which is the opposite of what this phase exists to enable.
+
+### Left for the semantic modeller
+
+The engine still stamps `MetricVersion` `v2` on default partitions, while an evolution's plan reports
+`v3` as the version it produces. That is consistent — the metric *definitions* are unchanged by three
+empty reserved columns — but it means a v3 contract file does not yet exist on disk for an evolved
+partition to point at. GRVX-807's lineage work is where that becomes visible, and it should either
+write the contract or say why an evolution does not need one.
