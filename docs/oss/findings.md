@@ -1264,3 +1264,52 @@ names its author knew about. Every one of those is a hostage to the next feature
 Where an invariant can be stated in terms of behaviour — "this must survive a roll-up" — it covers
 the cases nobody has thought of yet, and it is the same reason `TestSuiteNeedsNoDocker` (F-009) was
 rewritten from a byte-scan to an AST check.
+
+## F-025 — the full stack has F-021 too, and nothing there fixes it
+
+**Found by** checking whether the two mount defects just fixed in the bootstrap stack also apply to
+`docker-compose.yml`, rather than waiting to be told.
+**Severity** high — `docker compose up -d --build` on the full stack, from a fresh clone, should fail
+the same way the bootstrap stack did.
+**Status** open, deliberately unfixed. See "Why this is recorded and not patched" below.
+
+**F-021 applies.** Verified, not inferred:
+
+| | |
+|---|---|
+| `.gitignore:51` | `data/` is ignored, so a fresh clone has no `./data` |
+| `docker-compose.yml` | six services bind `./data:/app/data` — `gateway`, `ingestion`, `request-metrics-rollup`, `service-events-rollup`, `service-events-detail-rollup`, `purge` |
+| `services/{gateway,ingestion,rollup}/Dockerfile` | each declares `USER gravix` |
+| `docker-compose.yml` | no `user:` override anywhere, and the only `mkdir` is trino's, for its own catalog directory. **Nothing creates or chowns `./data`.** |
+
+Docker creates a missing bind-mount source as `root:root`, so six non-root containers share a
+directory none of them can write, and unlike the bootstrap stack there is no `bootstrap-init` to
+repair it.
+
+**F-023 does not apply.** The full stack's dashboard mounts `./dashboards:/usr/share/nginx/html:ro`
+and `./storage/dashboard/nginx.conf:/etc/nginx/conf.d/default.conf:ro` — the second target is outside
+the first mount, so no mountpoint has to be created inside a read-only one. It also does not mount
+`dashboard_config.js` at all, so the placeholder committed for F-023 changes nothing here: the file
+is served as `{}` where it previously 404'd, and `app.js` merges both to the same built-in defaults.
+
+**Why nothing caught it.** `docker-smoke` is the only job that builds the full stack, and it is
+`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`. It would have caught this — and
+it has had no chance to, because F-019 broke the image build for everyone, including on `main`, and
+nobody had pushed there since Alpine moved tzdata. Two defects hiding behind a third.
+
+**Why this is recorded and not patched.** The fix that works in the bootstrap stack is a one-shot
+privileged init container that chowns the volume — and **that fix has not yet been observed working**.
+`timed-onboarding` has not returned a verdict from any head containing it. Porting an unverified
+repair into the production compose file, from an environment with no Docker daemon to test it in,
+would be guessing twice: once about whether the pattern works, once about whether it works here.
+
+The evidence above is complete enough to act on the moment the bootstrap verdict lands. If the chown
+init container works there, the same three lines belong in `docker-compose.yml`. If it does not, this
+finding wants a different fix and porting the broken one would have cost a cycle.
+
+**The broader point.** Five bootstrap breaks, and now the full stack carries one of them too. The
+common cause is unchanged and is not about any individual defect: `docker-smoke` runs on push to
+`main` only, so the full stack has no pull-request build, exactly as the bootstrap stack had none
+before GRVX-910. The argument that produced `timed-onboarding` — *a gate that only runs after merge
+gates nothing* — applies unchanged to `docker-smoke`, and the evidence for it is now four findings
+deep.
