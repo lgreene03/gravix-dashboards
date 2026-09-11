@@ -43,10 +43,10 @@ func TestOverageCostCents(t *testing.T) {
 	}{
 		{0, 0},
 		{-100, 0},
-		{100_000, 1},      // exactly 1 unit
-		{150_000, 2},      // rounds up
-		{1_000_000, 10},   // 10 units
-		{1, 1},            // minimum 1 cent
+		{100_000, 1},    // exactly 1 unit
+		{150_000, 2},    // rounds up
+		{1_000_000, 10}, // 10 units
+		{1, 1},          // minimum 1 cent
 	}
 	for _, tt := range tests {
 		if got := OverageCostCents(tt.overage); got != tt.want {

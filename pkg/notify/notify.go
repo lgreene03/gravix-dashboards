@@ -19,16 +19,16 @@ import (
 
 // AlertPayload contains the information about a triggered alert.
 type AlertPayload struct {
-	RuleName       string
-	Metric         string
-	Operator       string
-	Threshold      float64
-	ActualValue    float64
-	WindowMinutes  int
-	Service        string
-	PathTemplate   string
-	FiredAt        time.Time
-	DashboardURL   string // deep-link to dashboard filtered to this alert's scope
+	RuleName      string
+	Metric        string
+	Operator      string
+	Threshold     float64
+	ActualValue   float64
+	WindowMinutes int
+	Service       string
+	PathTemplate  string
+	FiredAt       time.Time
+	DashboardURL  string // deep-link to dashboard filtered to this alert's scope
 	// Anomaly-specific fields (only set when Operator == "anomaly")
 	Mean           float64
 	Stddev         float64

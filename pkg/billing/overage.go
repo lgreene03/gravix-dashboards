@@ -8,7 +8,7 @@ type OverageResult struct {
 	Plan       string
 	EventLimit int64
 	EventCount int64
-	Overage    int64 // events above the limit (0 if within)
+	Overage    int64   // events above the limit (0 if within)
 	OverageGB  float64 // overage in GB (assuming 1KB per event)
 }
 

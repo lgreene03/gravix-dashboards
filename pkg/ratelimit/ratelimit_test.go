@@ -56,12 +56,12 @@ func TestPlanRateLimit(t *testing.T) {
 		{"enterprise", 1000, 2000},
 		{"scale", 500, 1000},
 		{"business", 200, 400},
-		{"pro", 200, 400},       // legacy → business tier
+		{"pro", 200, 400}, // legacy → business tier
 		{"team", 50, 100},
-		{"starter", 50, 100},    // legacy → team tier
+		{"starter", 50, 100}, // legacy → team tier
 		{"free", 10, 20},
-		{"", 10, 20},            // default → free
-		{"unknown", 10, 20},     // unknown → free
+		{"", 10, 20},        // default → free
+		{"unknown", 10, 20}, // unknown → free
 	}
 
 	for _, tt := range tests {

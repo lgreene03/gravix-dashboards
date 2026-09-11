@@ -89,7 +89,10 @@ func TestDefaultPlans(t *testing.T) {
 }
 
 func TestPlanSeatLimit(t *testing.T) {
-	tests := []struct{ plan string; want int }{
+	tests := []struct {
+		plan string
+		want int
+	}{
 		{"free", 1}, {"team", 5}, {"business", 20}, {"scale", 0}, {"enterprise", 0},
 		{"starter", 5}, {"pro", 20}, // legacy
 	}
@@ -113,7 +116,10 @@ func TestPlanEventLimit(t *testing.T) {
 }
 
 func TestPlanRetentionDays(t *testing.T) {
-	tests := []struct{ plan string; want int }{
+	tests := []struct {
+		plan string
+		want int
+	}{
 		{"free", 7}, {"team", 30}, {"business", 90}, {"scale", 365}, {"enterprise", 365},
 		{"starter", 30}, {"pro", 90}, // legacy
 	}

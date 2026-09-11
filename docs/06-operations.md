@@ -1,5 +1,8 @@
 # Local Operations Runbook (Docker Compose)
 
+> For a **Kubernetes production** deployment, see [`operations.md`](operations.md) instead.
+> This runbook covers a local `docker-compose` stack.
+
 This guide covers common operational tasks, maintenance procedures, and troubleshooting steps for running Gravix locally with Docker Compose.
 
 > **Kubernetes operations**: For production Kubernetes operations, see [operations.md](operations.md).

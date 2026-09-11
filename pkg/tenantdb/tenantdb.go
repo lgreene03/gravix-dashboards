@@ -23,8 +23,8 @@ type Tenant struct {
 	Plan                 string // free, team, business, scale, enterprise
 	StripeCustomerID     string
 	StripeSubscriptionID string
-	Status               string // active, suspended, churned
-	OverageAllowed       bool   // false=reject over limit (free), true=allow+flag (paid)
+	Status               string     // active, suspended, churned
+	OverageAllowed       bool       // false=reject over limit (free), true=allow+flag (paid)
 	ParentTenantID       string     // non-empty for child orgs in multi-org setup
 	TrialStartedAt       *time.Time // nil if never on trial
 	TrialEndsAt          *time.Time // nil if no trial or trial expired
@@ -265,8 +265,8 @@ type AlertRule struct {
 	ID              string
 	TenantID        string
 	Name            string
-	Metric          string  // error_rate, p50_latency, p95_latency, p99_latency, throughput
-	Operator        string  // gt, lt
+	Metric          string // error_rate, p50_latency, p95_latency, p99_latency, throughput
+	Operator        string // gt, lt
 	Threshold       float64
 	WindowMinutes   int
 	Service         string // empty = all services
@@ -344,11 +344,11 @@ type AuditRepo interface {
 // RetentionPolicy represents per-tenant data retention configuration.
 // When set, overrides the plan-based default retention for that tenant.
 type RetentionPolicy struct {
-	TenantID       string
-	FactsDays      int  // retention for request facts (0 = use plan default)
-	MetricsDays    int  // retention for aggregated metrics (0 = use plan default)
-	TracesDays     int  // retention for trace samples (0 = use 7-day default)
-	UpdatedAt      time.Time
+	TenantID    string
+	FactsDays   int // retention for request facts (0 = use plan default)
+	MetricsDays int // retention for aggregated metrics (0 = use plan default)
+	TracesDays  int // retention for trace samples (0 = use 7-day default)
+	UpdatedAt   time.Time
 }
 
 // RetentionPolicyRepo manages per-tenant retention policies.
@@ -455,10 +455,10 @@ type CustomDashboard struct {
 	TenantID    string
 	Name        string
 	Description string
-	Config      string    // JSON array of panel configurations
+	Config      string // JSON array of panel configurations
 	IsDefault   bool
-	SharedWith  string    // private, team
-	CreatedBy   string    // user ID
+	SharedWith  string // private, team
+	CreatedBy   string // user ID
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

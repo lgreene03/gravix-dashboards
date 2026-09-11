@@ -573,8 +573,8 @@ func TestSecurityHeadersPresent(t *testing.T) {
 
 	checks := map[string]string{
 		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":       "DENY",
-		"Cache-Control":         "no-store",
+		"X-Frame-Options":        "DENY",
+		"Cache-Control":          "no-store",
 	}
 	for header, want := range checks {
 		if got := rr.Header().Get(header); got != want {

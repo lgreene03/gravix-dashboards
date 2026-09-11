@@ -35,8 +35,8 @@ var (
 	eventTypes = []string{"deploy_started", "deploy_completed", "restart", "scale_up", "scale_down", "health_check_failed"}
 
 	// Throughput counters (atomic for concurrent access)
-	successCount  atomic.Int64
-	failureCount  atomic.Int64
+	successCount   atomic.Int64
+	failureCount   atomic.Int64
 	totalLatencyNs atomic.Int64
 )
 

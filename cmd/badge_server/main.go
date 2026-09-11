@@ -138,9 +138,9 @@ func renderBadge(label, value, color string) string {
 
 // cubeQuery represents a Cube.js query payload.
 type cubeQuery struct {
-	Measures       []string          `json:"measures"`
-	Filters        []cubeFilter      `json:"filters,omitempty"`
-	TimeDimensions []cubeTimeDim     `json:"timeDimensions,omitempty"`
+	Measures       []string      `json:"measures"`
+	Filters        []cubeFilter  `json:"filters,omitempty"`
+	TimeDimensions []cubeTimeDim `json:"timeDimensions,omitempty"`
 }
 
 type cubeFilter struct {

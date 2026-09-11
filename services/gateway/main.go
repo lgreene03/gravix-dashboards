@@ -591,8 +591,8 @@ type gateway struct {
 	cubeAPIURL      string
 	cubeAPISecret   string // sent as Bearer token to Cube.js (CUBE_API_SECRET)
 	jwtSecret       string
-	baseURL         string // for email links (e.g., https://app.gravix.io)
-	totpKey         []byte   // separate encryption key for TOTP secrets
+	baseURL         string          // for email links (e.g., https://app.gravix.io)
+	totpKey         []byte          // separate encryption key for TOTP secrets
 	activeExports   map[string]bool // tracks in-progress exports per tenant
 	activeExportsMu sync.Mutex
 }
@@ -1117,9 +1117,9 @@ func (gw *gateway) handleRetention(w http.ResponseWriter, r *http.Request) {
 		}
 
 		resp := map[string]interface{}{
-			"plan":        tenant.Plan,
-			"min_days":    planMinRetentionDays(tenant.Plan),
-			"max_days":    planMaxRetentionDays(tenant.Plan),
+			"plan":                    tenant.Plan,
+			"min_days":                planMinRetentionDays(tenant.Plan),
+			"max_days":                planMaxRetentionDays(tenant.Plan),
 			"plan_default_facts_days": planDefaultFactsDays(tenant.Plan),
 		}
 		if policy != nil {
@@ -1506,8 +1506,6 @@ func (gw *gateway) handleAPIKeysExpiring(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"keys": keys})
 }
-
-
 
 // --- Dead Letter Queue API ---
 

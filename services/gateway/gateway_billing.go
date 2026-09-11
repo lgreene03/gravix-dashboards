@@ -416,6 +416,7 @@ func (gw *gateway) usageMeteringLoop(ctx context.Context) {
 		}
 	}
 }
+
 // reportUsageToStripe reads event counters, calculates overage, and reports to Stripe.
 func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 	if gw.billing == nil {

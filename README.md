@@ -2,10 +2,20 @@
 
 [![CI](https://github.com/lgreene03/gravix-dashboards/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/gravix-dashboards/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)](go.mod)
+[![DCO](https://img.shields.io/badge/DCO-signed--off-success)](CONTRIBUTING.md#sign-your-commits-dco)
 
-Gravix is a low-cost, data-first observability system for HTTP service health monitoring. It ingests
-raw request events (facts), aggregates them into minute-level metrics, and visualises them on a
-dashboard.
+**Self-hosted HTTP service monitoring that can prove its own numbers.**
+
+Gravix stores immutable request facts, derives metrics from them, and can rebuild any historical
+window byte-for-byte from the facts it came from. Every metric it reports carries a published
+contract saying how it was computed, how exact it is, and how it may be aggregated.
+
+That last part is the point. Most monitoring tools will happily show you a "p95 over the last hour"
+that is not a p95 — and will not tell you. Gravix either computes it correctly or says in writing
+that it cannot.
+
+![The Gravix dashboard](docs/images/dashboard.png)
 
 ## What Gravix is
 
@@ -30,6 +40,47 @@ be recomputed from them.
 
 If you need one of them, we will point you at a tool that does it well. See
 [`docs/04-non-goals.md`](docs/04-non-goals.md).
+
+## How it proves its numbers
+
+Four mechanisms, each enforced by a test rather than a promise:
+
+**Recomputability.** `gravix recompute --from 2026-09-01 --to 2026-09-08` rebuilds any window from
+raw facts. Output is byte-identical to the original for the same facts, so re-running is a verifiable
+no-op rather than a hopeful one. Rows are sorted on the full aggregation key, the compression level is
+pinned rather than inherited, and nothing run-scoped — no timestamp, hostname or run id — reaches the
+file.
+
+**Provenance.** Every derived file has a manifest beside it recording its idempotency key, a content
+digest over its rows, and every raw fact object it was built from. You can tell whether two files
+describe the same window, and whether the contents changed, without reading either.
+
+**Published metric contracts.** [`contracts/`](contracts/) defines each metric's formula, inputs,
+grain, exactness, error bound and mergeability. A metric that is approximate **must** name its
+defect, and a sketch **must** state its error bound, or the registry fails to load. That is the
+mechanical definition of "no undisclosed approximations".
+[`docs/02-derived-metrics.md`](docs/02-derived-metrics.md) is generated from those contracts, so the
+published definition cannot drift from the code.
+
+**Correct percentiles across time.** Combining per-bucket percentiles is the standard shortcut and it
+is wrong. Taking the maximum of sixty one-minute p95s is not the hour's p95; on a heavy-tailed latency
+distribution it is off by **62%**. Gravix stores a mergeable t-digest per bucket, so a window's
+percentile is computed by merging sketches — measured worst case **0.92%** across five distributions.
+
+| Latency distribution | max of per-minute p95 | merged sketch |
+|---|---|---|
+| pareto | **62.4%** off | 0.295% |
+| lognormal | **31.0%** off | 0.150% |
+| normal | 3.4% off | 0.003% |
+| uniform | 2.4% off | 0.007% |
+| bimodal | 1.5% off | 0.001% |
+
+Measured over 1,000,000 observations split into 1,440 one-minute buckets, by
+`pkg/sketch.TestSketchBeatsMaxOfPercentiles`. Run it yourself:
+
+```bash
+go test ./pkg/sketch/ -run TestSketchBeatsMaxOfPercentiles -v
+```
 
 ## Everything below is free forever, under Apache-2.0
 
@@ -166,6 +217,18 @@ Load Generator → Ingestion (HTTP/JSONL) → Local Disk / S3 (MinIO)
 Facts are immutable and append-only. Metrics are derived and disposable — if the definition changes,
 they are recomputed from the facts. See [`docs/00-system-truth.md`](docs/00-system-truth.md).
 
+Two deliberate choices worth naming, because both look like omissions:
+
+- **The dashboard is plain HTML, CSS and JavaScript with no build step.** For a tool whose argument is
+  that you can verify what it shows you, putting a 200-dependency build pipeline in front of the UI
+  would undercut the product. Three static files can be served by anything and audited by anyone.
+- **No HTTP framework.** Since Go 1.22 the standard library router handles method and path patterns,
+  so the services use `net/http` directly. Zero web-framework dependencies in the request path.
+
+Where the stack is *not* currently the right choice — and it is not, in places — that is written down
+honestly in [`docs/oss/30-technology-review.md`](docs/oss/30-technology-review.md) rather than left
+for you to discover.
+
 ## Development
 
 ```bash
@@ -182,7 +245,14 @@ make check-boundary    # Enforce the open-core boundary
 make build-oss         # Build the core with ee/ deleted
 make test-oss          # Build and test the core with ee/ deleted
 make verify-reproducible  # Build every binary twice, compare digests
+
+make contracts         # Regenerate docs/02-derived-metrics.md from contracts/
+make contracts-check   # Fail if that generated doc is stale
 ```
+
+Binaries build into `bin/`. Note that `go build ./cmd/foo` with no `-o` writes the binary into the
+working directory — `.gitignore` covers every command by name, because that is how three compiled
+binaries once ended up committed to this repository.
 
 ### Running tests
 
@@ -235,10 +305,15 @@ Full instructions: [`docs/verifying-releases.md`](docs/verifying-releases.md).
 | Architecture | [`docs/architecture.md`](docs/architecture.md) |
 | Deployment | [`docs/deployment-guide.md`](docs/deployment-guide.md) |
 | API reference | [`docs/07-api-reference.md`](docs/07-api-reference.md) |
-| Operations | [`docs/operations.md`](docs/operations.md) |
+| Operations — local (Docker Compose) | [`docs/06-operations.md`](docs/06-operations.md) |
+| Operations — production (Kubernetes) | [`docs/operations.md`](docs/operations.md) |
 | Upgrading | [`docs/upgrade-guide.md`](docs/upgrade-guide.md) |
+| Metric definitions (generated) | [`docs/02-derived-metrics.md`](docs/02-derived-metrics.md) |
+| Storage layout and manifests | [`docs/03-storage-layout.md`](docs/03-storage-layout.md) |
 | Open-core charter | [`docs/oss/00-open-core-charter.md`](docs/oss/00-open-core-charter.md) |
 | Current roadmap | [`docs/oss/20-roadmap-horizon-2.md`](docs/oss/20-roadmap-horizon-2.md) |
+| Technology review — what to replace and why | [`docs/oss/30-technology-review.md`](docs/oss/30-technology-review.md) |
+| Known spec defects | [`docs/oss/spec-defects.md`](docs/oss/spec-defects.md) |
 
 ## Contributing
 

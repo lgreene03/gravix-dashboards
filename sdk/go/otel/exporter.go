@@ -29,7 +29,7 @@ const (
 	attrHTTPMethod         = "http.method"
 	attrHTTPRoute          = "http.route"
 	attrHTTPStatusCode     = "http.status_code"
-	attrHTTPRequestMethod  = "http.request.method"  // newer semconv
+	attrHTTPRequestMethod  = "http.request.method"       // newer semconv
 	attrHTTPResponseStatus = "http.response.status_code" // newer semconv
 	attrHTTPTarget         = "http.target"
 	attrUserAgentOriginal  = "user_agent.original"

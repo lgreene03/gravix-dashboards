@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lgreene/gravix-dashboards/pkg/referral"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/lgreene/gravix-dashboards/pkg/referral"
 )
 
 //go:embed schema_postgres.sql
@@ -25,31 +25,31 @@ var postgresSchema string
 
 // PostgresDB implements the DB interface using PostgreSQL.
 type PostgresDB struct {
-	db                    *sql.DB
-	tenants               *pgTenantRepo
-	apiKeys               *pgAPIKeyRepo
-	users                 *pgUserRepo
-	eventCounters         *pgEventCounterRepo
-	monthlyUsage          *pgMonthlyUsageRepo
-	notificationChannels  *pgNotificationChannelRepo
-	alertRules            *pgAlertRuleRepo
-	alertHistory          *pgAlertHistoryRepo
-	auditLog              *pgAuditRepo
-	retentionPolicies     *pgRetentionPolicyRepo
-	passwordResets        *pgPasswordResetRepo
-	emailVerifications    *pgEmailVerificationRepo
-	invitations           *pgInvitationRepo
-	consentRecords        *pgConsentRecordRepo
-	deletionRequests      *pgDeletionRequestRepo
-	ssoConfigs            *pgSSOConfigRepo
-	sessions              *pgSessionRepo
-	recoveryCodes         *pgRecoveryCodeRepo
-	revokedTokens         *pgRevokedTokenRepo
-	ssoStates             *pgSSOStateRepo
-	referrals             *pgReferralRepo
-	customDashboards      *pgCustomDashboardRepo
-	tenantBranding        *pgTenantBrandingRepo
-	scheduledExports      *pgScheduledExportRepo
+	db                   *sql.DB
+	tenants              *pgTenantRepo
+	apiKeys              *pgAPIKeyRepo
+	users                *pgUserRepo
+	eventCounters        *pgEventCounterRepo
+	monthlyUsage         *pgMonthlyUsageRepo
+	notificationChannels *pgNotificationChannelRepo
+	alertRules           *pgAlertRuleRepo
+	alertHistory         *pgAlertHistoryRepo
+	auditLog             *pgAuditRepo
+	retentionPolicies    *pgRetentionPolicyRepo
+	passwordResets       *pgPasswordResetRepo
+	emailVerifications   *pgEmailVerificationRepo
+	invitations          *pgInvitationRepo
+	consentRecords       *pgConsentRecordRepo
+	deletionRequests     *pgDeletionRequestRepo
+	ssoConfigs           *pgSSOConfigRepo
+	sessions             *pgSessionRepo
+	recoveryCodes        *pgRecoveryCodeRepo
+	revokedTokens        *pgRevokedTokenRepo
+	ssoStates            *pgSSOStateRepo
+	referrals            *pgReferralRepo
+	customDashboards     *pgCustomDashboardRepo
+	tenantBranding       *pgTenantBrandingRepo
+	scheduledExports     *pgScheduledExportRepo
 }
 
 // OpenPostgres opens a PostgreSQL database and initializes the schema.
@@ -103,31 +103,31 @@ func OpenPostgres(connStr string) (*PostgresDB, error) {
 	return pdb, nil
 }
 
-func (p *PostgresDB) Tenants() TenantRepo                       { return p.tenants }
-func (p *PostgresDB) APIKeys() APIKeyRepo                       { return p.apiKeys }
-func (p *PostgresDB) Users() UserRepo                           { return p.users }
-func (p *PostgresDB) EventCounters() EventCounterRepo           { return p.eventCounters }
-func (p *PostgresDB) MonthlyUsage() MonthlyUsageRepo            { return p.monthlyUsage }
+func (p *PostgresDB) Tenants() TenantRepo                           { return p.tenants }
+func (p *PostgresDB) APIKeys() APIKeyRepo                           { return p.apiKeys }
+func (p *PostgresDB) Users() UserRepo                               { return p.users }
+func (p *PostgresDB) EventCounters() EventCounterRepo               { return p.eventCounters }
+func (p *PostgresDB) MonthlyUsage() MonthlyUsageRepo                { return p.monthlyUsage }
 func (p *PostgresDB) NotificationChannels() NotificationChannelRepo { return p.notificationChannels }
-func (p *PostgresDB) AlertRules() AlertRuleRepo                 { return p.alertRules }
-func (p *PostgresDB) AlertHistory() AlertHistoryRepo             { return p.alertHistory }
-func (p *PostgresDB) AuditLog() AuditRepo                       { return p.auditLog }
-func (p *PostgresDB) RetentionPolicies() RetentionPolicyRepo     { return p.retentionPolicies }
-func (p *PostgresDB) PasswordResets() PasswordResetRepo          { return p.passwordResets }
-func (p *PostgresDB) EmailVerifications() EmailVerificationRepo  { return p.emailVerifications }
-func (p *PostgresDB) Invitations() InvitationRepo               { return p.invitations }
-func (p *PostgresDB) ConsentRecords() ConsentRecordRepo         { return p.consentRecords }
-func (p *PostgresDB) DeletionRequests() DeletionRequestRepo     { return p.deletionRequests }
-func (p *PostgresDB) SSOConfigs() SSOConfigRepo                 { return p.ssoConfigs }
-func (p *PostgresDB) Sessions() SessionRepo                     { return p.sessions }
-func (p *PostgresDB) RecoveryCodes() RecoveryCodeRepo            { return p.recoveryCodes }
-func (p *PostgresDB) RevokedTokens() RevokedTokenRepo            { return p.revokedTokens }
-func (p *PostgresDB) SSOStates() SSOStateRepo                    { return p.ssoStates }
-func (p *PostgresDB) Referrals() referral.ReferralRepo            { return p.referrals }
-func (p *PostgresDB) CustomDashboards() CustomDashboardRepo      { return p.customDashboards }
-func (p *PostgresDB) TenantBranding() TenantBrandingRepo         { return p.tenantBranding }
-func (p *PostgresDB) ScheduledExports() ScheduledExportRepo      { return p.scheduledExports }
-func (p *PostgresDB) Close() error                              { return p.db.Close() }
+func (p *PostgresDB) AlertRules() AlertRuleRepo                     { return p.alertRules }
+func (p *PostgresDB) AlertHistory() AlertHistoryRepo                { return p.alertHistory }
+func (p *PostgresDB) AuditLog() AuditRepo                           { return p.auditLog }
+func (p *PostgresDB) RetentionPolicies() RetentionPolicyRepo        { return p.retentionPolicies }
+func (p *PostgresDB) PasswordResets() PasswordResetRepo             { return p.passwordResets }
+func (p *PostgresDB) EmailVerifications() EmailVerificationRepo     { return p.emailVerifications }
+func (p *PostgresDB) Invitations() InvitationRepo                   { return p.invitations }
+func (p *PostgresDB) ConsentRecords() ConsentRecordRepo             { return p.consentRecords }
+func (p *PostgresDB) DeletionRequests() DeletionRequestRepo         { return p.deletionRequests }
+func (p *PostgresDB) SSOConfigs() SSOConfigRepo                     { return p.ssoConfigs }
+func (p *PostgresDB) Sessions() SessionRepo                         { return p.sessions }
+func (p *PostgresDB) RecoveryCodes() RecoveryCodeRepo               { return p.recoveryCodes }
+func (p *PostgresDB) RevokedTokens() RevokedTokenRepo               { return p.revokedTokens }
+func (p *PostgresDB) SSOStates() SSOStateRepo                       { return p.ssoStates }
+func (p *PostgresDB) Referrals() referral.ReferralRepo              { return p.referrals }
+func (p *PostgresDB) CustomDashboards() CustomDashboardRepo         { return p.customDashboards }
+func (p *PostgresDB) TenantBranding() TenantBrandingRepo            { return p.tenantBranding }
+func (p *PostgresDB) ScheduledExports() ScheduledExportRepo         { return p.scheduledExports }
+func (p *PostgresDB) Close() error                                  { return p.db.Close() }
 
 // --- Tenant Repo ---
 

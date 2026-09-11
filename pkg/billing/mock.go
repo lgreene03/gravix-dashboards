@@ -12,17 +12,17 @@ import (
 // Use this in gateway tests to exercise billing code paths without Stripe API.
 type MockService struct {
 	// Configurable return values.
-	CustomerID     string
-	CustomerErr    error
-	SubscriptionID string
+	CustomerID      string
+	CustomerErr     error
+	SubscriptionID  string
 	SubscriptionErr error
-	UsageErr       error
-	PortalURL      string
-	PortalErr      error
-	WebhookEvent   *WebhookEvent
-	WebhookErr     error
-	PlanName       string
-	FreePriceIDVal string
+	UsageErr        error
+	PortalURL       string
+	PortalErr       error
+	WebhookEvent    *WebhookEvent
+	WebhookErr      error
+	PlanName        string
+	FreePriceIDVal  string
 
 	// Call tracking.
 	CreateCustomerCalls     int

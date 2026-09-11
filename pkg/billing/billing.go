@@ -74,10 +74,10 @@ type Service interface {
 // Invoice represents a billing invoice summary.
 type Invoice struct {
 	ID        string `json:"id"`
-	Date      string `json:"date"`       // YYYY-MM-DD
-	Amount    int64  `json:"amount"`      // cents
+	Date      string `json:"date"`   // YYYY-MM-DD
+	Amount    int64  `json:"amount"` // cents
 	Currency  string `json:"currency"`
-	Status    string `json:"status"`      // paid, open, void, draft
+	Status    string `json:"status"` // paid, open, void, draft
 	PDFUrl    string `json:"pdf_url"`
 	HostedUrl string `json:"hosted_url"`
 }

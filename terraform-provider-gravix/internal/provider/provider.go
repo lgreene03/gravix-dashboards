@@ -33,9 +33,9 @@ func New() *schema.Provider {
 			},
 		},
 		ResourcesMap: map[string]*schema.Resource{
-			"gravix_api_key":   resources.ResourceAPIKey(),
+			"gravix_api_key":    resources.ResourceAPIKey(),
 			"gravix_alert_rule": resources.ResourceAlertRule(),
-			"gravix_tenant":    resources.ResourceTenant(),
+			"gravix_tenant":     resources.ResourceTenant(),
 		},
 		ConfigureContextFunc: configure,
 	}

@@ -958,4 +958,3 @@ func (gw *gateway) queryCubeMetric(ctx context.Context, token string, rule *tena
 		return 0, fmt.Errorf("unexpected value type for %s: %T", measure, val)
 	}
 }
-
