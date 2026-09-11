@@ -434,8 +434,9 @@ GRVX-901's AC-7.
 
 **Found by** extending GRVX-901's compose validation to the second file.
 **Severity** high — the other documented deployment path is also unusable.
-**Status** open. Not fixed here: GRVX-901 §3 forbids touching `docker-compose.yml`, and the fix is a
-choice between two service definitions, which is not this spec's to make.
+**Status** FIXED in `9691d51`, four months after it was found. See the resolution at the end of this
+entry. It was recorded open because GRVX-901 §3 forbids touching `docker-compose.yml`, and because
+the fix is a choice between two service definitions rather than an edit.
 
 ```
 $ docker compose -f docker-compose.yml config
@@ -461,6 +462,34 @@ why neither produced a bug report — there is no partial stack to complain abou
 and picking one silently changes how the full stack is configured. Whoever fixes it should diff the
 two blocks in full, keep one, and add `docker-compose.yml` to the CI validation step that
 `.github/workflows/ci.yml` now runs for the bootstrap file.
+
+### Resolution
+
+Both instructions above are now carried out: the blocks were diffed in full, one was kept, and
+`docker-compose.yml` joined the CI validation step in the same change.
+
+The decision turned out not to be finely balanced. Diffed in full:
+
+| | line 10 (removed) | line 69 (kept) |
+|---|---|---|
+| `JWT_SECRET` | `supersecretjwtkey12345!` hardcoded | `${JWT_SECRET:?…}` — required from the environment |
+| `RAW_DATA_DIR`, `INGESTION_URL` | absent | set |
+| `depends_on` | none | `cube: service_healthy` |
+| tenant db | `--tenant-db` flag | `TENANT_DB_PATH` env |
+
+The kept block is a superset on configuration and the only one that does not commit a signing secret
+to a file users are told to copy. Both reach the same database — `services/gateway/main.go` falls
+back to `TENANT_DB_PATH` when `--tenant-db` is empty — so keeping the environment form loses nothing.
+Recording this in full because the finding said the choice was not the original spec's to make: it is
+recorded here so the reasoning is reviewable rather than implied by a deletion.
+
+**Why it survived four months.** Nothing in CI loaded the file. `timed-onboarding` runs the bootstrap
+stack, `docker-smoke` is the only job that builds the full one and its result is discarded (F-026),
+and the compose-validation step in `docker-lint` covered only the bootstrap file — excluded
+deliberately, with a comment pointing here. The exclusion was the correct call at the time and it is
+also why the fault could not surface on its own. It is now in that step, and
+`cmd/onboarding_gate/compose_tenancy_test.go` decodes both files into a Go map, which rejects a
+duplicate key where parsing into a `yaml.Node` accepts it silently.
 
 ---
 
@@ -1467,41 +1496,21 @@ of them itself, including this one, which is the argument for the gate existing.
 
 ---
 
-## F-028 — `docker-compose.yml` defines `gateway` twice, so the full stack does not load at all
+## F-028 — WITHDRAWN: a re-discovery of F-011
 
-**Found by:** `senior-engineer`, while adding the F-027 guard across both compose files
-**Owner:** `sre-release-manager`
-**Severity:** high — `docker-compose up` on the documented full stack fails before starting anything
-**Status:** FIXED in this commit
+I recorded the duplicate `gateway:` key in `docker-compose.yml` as a new finding while adding the
+F-027 guard across both compose files. It is not new. **F-011 recorded the same defect, in the same
+file, at the same two line numbers**, and `.github/workflows/ci.yml` carried a comment naming F-011
+as the reason `docker-compose.yml` was excluded from the compose-validation step.
 
-`docker-compose.yml` contained two `gateway:` service blocks, at lines 10 and 69. YAML forbids a
-duplicate mapping key and both `gopkg.in/yaml.v3` and Compose v2's loader reject it:
+I did not read either before assigning a number. The evidence was in the file I was editing.
 
-```
-line 69: mapping key "gateway" already defined at line 10
-```
+The fix and its reasoning are real and stand; they belong to F-011, which is updated above rather
+than duplicated here. This entry is left in place rather than deleted because the register is
+append-only, and because a withdrawn number is itself worth seeing: it is what re-deriving a known
+finding from scratch looks like, and the cost was a duplicate register entry plus a commit message
+citing a number that does not mean what it says.
 
-So the full stack's compose file could not be loaded by anything, which is consistent with F-026:
-`docker-smoke` has failed on `main` since 2026-05-24, its step completing in the same second it
-started — the shape of a failure that happens before a stack boots.
-
-The two blocks were not identical, and the difference decided which one to keep:
-
-| | line 10 (removed) | line 69 (kept) |
-|---|---|---|
-| `JWT_SECRET` | `supersecretjwtkey12345!` hardcoded | `${JWT_SECRET:?…}` — required from the environment |
-| `RAW_DATA_DIR`, `INGESTION_URL` | absent | set |
-| `depends_on` | none | `cube: service_healthy` |
-
-The removed block also committed a hardcoded signing secret to a file users are told to copy, which
-is a second defect inside the first.
-
-**Why this went unnoticed.** Nothing in CI loaded `docker-compose.yml`. `timed-onboarding` runs
-`docker-compose.bootstrap.yml`, and `docker-smoke`'s result is discarded (F-026). The F-027 guard now
-decodes both files into a Go map, which is what surfaced this: decoding into a map rejects duplicate
-keys, where parsing into a `yaml.Node` accepts them silently. That distinction is the whole reason the
-guard loads the file the way it does.
-
-**Still outstanding.** This makes the full stack loadable; it does not prove it boots. F-026's
-sequencing stands: get `timed-onboarding` green, then reproduce `docker-smoke` against a Docker
-daemon, then add `docker-smoke` and `docker-build` to `ci-summary`'s `needs`.
+**Correction to commit `9691d51`.** Its message and `cmd/onboarding_gate/compose_tenancy_test.go`
+both cite "F-028" for the duplicate-key defect. Read F-011. The commit is pushed and its message
+cannot be amended without a force-push this environment denies; the code comment is corrected.

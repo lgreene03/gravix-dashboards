@@ -225,7 +225,7 @@ func TestEveryTenancyAwareServiceIsToldWhichMode(t *testing.T) {
 		}
 		var doc tenancyDoc
 		// Decoding into a map is also what rejects a duplicate service key. The
-		// full-stack file carried two `gateway:` blocks (F-028), which made it
+		// full-stack file carried two `gateway:` blocks (F-011), which made it
 		// unloadable by Compose as well; parsing into a yaml.Node would not have
 		// noticed.
 		if err := yaml.Unmarshal(data, &doc); err != nil {

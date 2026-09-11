@@ -222,10 +222,19 @@ jobs:
       - name: Validate the bootstrap compose file
         run: docker compose -f docker-compose.bootstrap.yml config >/dev/null
 
-      # docker-compose.yml is deliberately absent above: it defines `gateway`
-      # twice and Compose rejects it (F-011). Adding it here would land this
-      # job red for a fault GRVX-901 is not scoped to fix. Add it in the same
-      # change that fixes the duplicate.
+      # The full stack, added here now that the duplicate `gateway:` key is gone
+      # (F-011). It was left out deliberately while that fault stood, with the
+      # note that it should join in the same change that fixes it — this is that
+      # change. Nothing in CI had ever loaded this file, which is how a file that
+      # Compose rejects outright survived from May to September.
+      - name: Validate the full-stack compose file
+        run: docker compose -f docker-compose.yml config >/dev/null
+        env:
+          # config resolves ${VAR:?msg} interpolation, so the two required
+          # secrets need values for the parse to complete. They are parse-time
+          # placeholders in a lint job that starts no container, not credentials.
+          JWT_SECRET: ci-compose-validation-placeholder
+          CUBEJS_API_SECRET: ci-compose-validation-placeholder
 
   # ─── Container Image Pipeline (runs only on main branch push) ───
   docker-build:
