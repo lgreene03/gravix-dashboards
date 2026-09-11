@@ -1245,3 +1245,81 @@ and `TestMultipleVariesWithVolume` fails if a future edit reintroduces a fixed m
 **The real repair** is in the spec and in `docs/oss/01-competitive-thesis.md` §2 Axis 4: drop the
 multiplier and state the two figures, or state the multiple as a range with the volume it applies at.
 A single number here cannot be right, because the quantity it describes is a curve.
+
+## SD-022 — GRVX-1005 §5.3 claims the SIGKILL test is the only one that proves §6. It proves less than the unit tests do.
+
+**Severity** medium — the claim is wrong in a way that would let a real durability regression ship.
+**Status** measured; both kinds of test are implemented, and the spec's ranking of them should be
+inverted.
+
+§5.3 states:
+
+> `TestDurabilityUnderKill` must: start the service, send N facts, `SIGKILL` the process the moment
+> the last acknowledgement is received, restart, and assert every acknowledged fact is present on
+> disk. **This is the only test that actually proves §6; a unit test asserting `fsync` was called
+> does not.**
+
+The test was written as specified and it passes. So does a batcher that deliberately violates §6.
+
+**Measured.** The commit path was mutated to acknowledge callers *before* fsyncing — the exact
+failure §6 exists to forbid — and the suite run:
+
+| Test | Against a batcher that acknowledges before fsync |
+|---|---|
+| `TestDurabilityUnderKill` | **PASS** (three runs) |
+| `TestAppendBlocksUntilDurable` | FAIL — "Append returned before the fsync completed" |
+| `TestAppendReportsSyncFailure` | FAIL — "caller 0 got nil after a failed fsync" |
+
+The two unit tests §5.3 dismisses caught the violation. The kill test did not.
+
+**Why.** `SIGKILL` terminates a *process*. It does not discard the kernel's page cache, and the file
+outlives the process on the same kernel. Bytes that were `write(2)`-ten but never `fsync`-ed are
+still there to be read back. The test therefore proves something narrower but real — that no
+userspace buffering strands an acknowledged fact — and cannot prove fsync ordering at all.
+
+Proving §6 properly needs the storage to lose its cache: a VM or container killed at the hypervisor,
+a `dm-flakey` device, or real power loss. None of those belongs in `go test`.
+
+**What is implemented.** All three tests, with their actual strengths documented in
+`batch_test.go`. `TestDurabilityUnderKill` keeps its name and its value — it is a real end-to-end
+check that acknowledged bytes reach a file — and the comment above it no longer claims it proves the
+ordering. The two unit tests are what enforce §6, and a mutation of the commit path is what verifies
+they do.
+
+**The correction to the spec:** §5.3's last sentence should read the other way round. A unit test
+that observes when `Append` returns relative to when `Sync` completes is the strongest check
+available in-process; the kill test complements it and does not replace it.
+
+## SD-023 — GRVX-1005 §5.1's Batcher takes one writer, but ingestion writes per tenant and per topic
+
+**Severity** medium — affects how much the batcher can actually amortise, and the spec's interface
+does not express it.
+**Status** open; the Batcher is implemented to §5.1's signature and is not yet wired into the
+handlers, which is where the mismatch bites.
+
+§5.1 specifies:
+
+```go
+func NewBatcher(sink io.Writer, syncer Syncer, cfg BatcherConfig) *Batcher
+```
+
+One writer, one syncer. But `DurableSink` keeps a file **per topic**, and `topicForTenant` makes the
+topic tenant-specific, so a running ingestion service holds many open files. §6 step 3 says to route
+both HTTP and OTLP writes "through it", singular, which cannot be done against a single `io.Writer`
+without either merging every tenant's facts into one file — changing the on-disk layout that §3
+forbids — or something the interface does not describe.
+
+**The two resolutions, and why the choice is not the implementer's:**
+
+1. **One Batcher per (tenant, topic).** Preserves the layout exactly. But the amortisation falls with
+   the number of peers per file: a single-tenant deployment gets the full benefit, and a
+   hundred-tenant one gets almost none, because each tenant's callers only batch with each other.
+   The measured curve makes that concrete — 1 fact per fsync is ~4,500/sec/core, 8 is ~43,000, 512 is
+   ~500,000 — so a busy multi-tenant node could sit near the bottom of it.
+2. **One Batcher fronting all files**, grouping a batch by target file and fsyncing each file it
+   touched. One queue, several syncs per batch, still far fewer than one per request. More code, and
+   the fsync count is then a function of how many distinct files a batch spans.
+
+Option 2 is the one that delivers the spec's own throughput goal on a multi-tenant node, and it is
+not what §5.1 describes. Which to build is a design decision with a measurable cost either way, so it
+is recorded rather than guessed.
