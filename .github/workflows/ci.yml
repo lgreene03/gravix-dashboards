@@ -446,6 +446,36 @@ jobs:
           name: docker-compose-logs
           path: /tmp/docker-compose-logs.txt
 
+  # ─── Timed onboarding budget (GRVX-910) ───
+  # G3.1: the time from `docker compose up` to a dashboard showing real, rolled-up
+  # data must stay under ten minutes. This runs on pull_request as well as push,
+  # because a budget that only gates main gates nothing — by the time it fails there
+  # the regression is already merged. Never continue-on-error: a budget that can
+  # silently pass is not a gate.
+  timed-onboarding:
+    runs-on: ubuntu-latest
+    needs: [build]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      # No .env is created on purpose. The whole claim under test is that this
+      # stack needs no configuration, so supplying any would measure a path no
+      # first-time user takes.
+      - name: Measure time to a populated dashboard
+        run: bash scripts/timed_onboarding_test.sh
+
+      - name: Upload stack logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-logs
+          path: /tmp/gravix-onboarding-logs.txt
+
   # ─── CI Summary Gate ───
   # ─── Framework recipe examples ───
   # Every recipe is executed for real against a stub ingestion server, and the
@@ -487,7 +517,7 @@ jobs:
 
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples]
+    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding]
     if: always()
     steps:
       - name: Check job results
@@ -502,9 +532,11 @@ jobs:
           echo "Docker Lint:   ${{ needs.docker-lint.result }}"
           echo "Correctness:   ${{ needs.correctness.result }}"
           echo "Recipes:       ${{ needs.recipe-examples.result }}"
+          echo "Onboarding:    ${{ needs.timed-onboarding.result }}"
 
           # Fail if any required job failed
-          if [[ "${{ needs.recipe-examples.result }}" == "failure" ]] || \
+          if [[ "${{ needs.timed-onboarding.result }}" == "failure" ]] || \
+             [[ "${{ needs.recipe-examples.result }}" == "failure" ]] || \
              [[ "${{ needs.lint.result }}" == "failure" ]] || \
              [[ "${{ needs.test.result }}" == "failure" ]] || \
              [[ "${{ needs.build.result }}" == "failure" ]] || \

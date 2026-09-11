@@ -92,7 +92,7 @@ kept the raw observation.
 
 | KR | Target | Source | Owner |
 |---|---|---|---|
-| G3.1 | Median time from `git clone` to a populated dashboard | ≤10 min | timed onboarding test | `product-designer` |
+| G3.1 | Time from `docker compose up` to a populated dashboard | ≤10 min | `timed-onboarding` CI job (`scripts/timed_onboarding_test.sh` → `cmd/onboarding_gate`) | `product-designer` |
 | G3.2 | Required manual config steps before first data | **0** | `TestZeroConfigBoot` | `senior-engineer` |
 | G3.3 | Services auto-discovered from arriving facts | 100% | `TestServiceAutoDiscovery` | `senior-engineer` |
 | G3.4 | Default SLO dashboard generated per service, no YAML | 100% | `TestDefaultSLOGeneration` | `semantic-modeler` |
@@ -102,6 +102,15 @@ kept the raw observation.
 
 **Exit:** a stranger with Docker and ten minutes ends with a dashboard showing their own traffic
 and one alert rule armed — having edited nothing.
+
+**G3.1's scope, stated rather than assumed.** The measured window starts at `docker compose up`, not
+at `git clone`, per GRVX-910 §3: CI's checkout is not representative of a real user's clone
+bandwidth, and image build plus first rollup exceeds any plausible clone time by an order of
+magnitude. The narrowing is deliberate, and it makes the number *easier* to hit than the KR's
+original wording — so anyone citing G3.1 externally must cite this window, not "clone to dashboard".
+The gate's condition is a single Cube query returning a non-zero `requestCount`, chosen over a
+service-health checklist because **F-015** and **F-016** were both stacks where every service was
+healthy and no number ever reached a chart.
 
 ---
 
