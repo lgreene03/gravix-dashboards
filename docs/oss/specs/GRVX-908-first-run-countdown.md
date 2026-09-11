@@ -273,21 +273,146 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All ten acceptance criteria pass, plus seven more. The
+Definition of Done's end-to-end observation could not be performed (no Docker daemon) — and the
+attempt to perform it uncovered **F-015**, which is the most consequential thing in this report.
+
+**Harness (§7): `node --test`**, extending `dashboards/lib/` as GRVX-903 established.
+
+**1-2. Static checks**
+
+```
+$ grep -c 'id="onboard-waiting"' dashboards/index.html       -> 1
+$ grep -c 'id="onboard-countdown"' dashboards/index.html     -> 1
+$ grep -c 'id="onboard-countdown-text"' dashboards/index.html -> 1
+$ grep -c 'function formatCountdown' dashboards/app.js        -> 1
+$ grep -c 'function computeCountdownText' dashboards/app.js   -> 1
+$ grep -c 'function checkFirstRunState' dashboards/app.js     -> 1
+$ grep -c 'function startCountdown' dashboards/app.js         -> 1
+```
+
+**3. The harness**
+
+```
+$ make test-js
+ok - TestFormatCountdownTypical                     (AC-1)
+ok - TestFormatCountdownZero                        (AC-2)
+ok - TestFormatCountdownClampsNegative              (AC-3)
+ok - TestComputeCountdownTextAtStart                (AC-4)
+ok - TestComputeCountdownTextNearEnd                (AC-5)
+ok - TestComputeCountdownTextAfterEstimateElapsed   (AC-6)
+ok - TestComputeCountdownTextHandlesClockSkew
+ok - TestEstimateMatchesItsDerivation
+ok - TestCheckFirstRunStateNoServices               (AC-7)
+ok - TestCheckFirstRunStateFallsBackToWaitingOnFailure
+ok - TestCheckFirstRunStateFirstService             (AC-8)
+ok - TestCheckFirstRunStateMonotonicFirstSeen       (AC-9)
+ok - TestCheckFirstRunStateSurvivesUnusableStorage
+ok - TestStartCountdownReplacesPriorInterval        (AC-10)
+ok - TestCountdownStopsItself
+ok - TestStartCountdownAfterEstimateStartsNoTimer
+ok - TestCountdownTargetsExistInMarkup
+# pass 90   # fail 0     (the whole dashboards/ + cube/ suite)
+
+dashboards/ gzipped: 65404 bytes (+2688 vs the GRVX-907 baseline, within the 8192 budget)
+```
+
+**4-5. Nothing else broke, and open-core integrity**
+
+```
+$ go build ./... && go test ./schemas/...   # ok
+$ make check-boundary                        # boundary: 0 violations
+$ make build-oss && make test-oss            # 50 packages, ee/ absent
+$ make lint                                  # clean
+```
+
+### 8.2 §10's second escalation, checked rather than assumed
+
+§10 says to escalate if the observed wait does not match `FIRST_ROLLUP_ESTIMATE_SECONDS`. The
+derivation is 30s (half the rotation interval) + 150s (half the rollup interval) + 60s startup, and
+**both source cadences were re-read against the code**:
+
+```
+$ grep -n "NewTicker(60 \* time.Second)" services/ingestion/main.go
+516:	ticker := time.NewTicker(60 * time.Second)      # backgroundRotationLoop
+$ grep -n "sleep 300" docker-compose.bootstrap.yml
+183:          sleep 300                                  # request-metrics-rollup
+```
+
+Both match §2 exactly, so the derivation holds and no escalation is filed on that row.
+`TestEstimateMatchesItsDerivation` asserts `30 + 150 + 60 === 240`, so a future edit to the constant
+that does not also edit the derivation fails.
+
+### 8.3 A bug my own test found
+
+`computeCountdownText` first clamped the *remaining* seconds at zero rather than the *elapsed* ones.
+With a start time 30 seconds in the future — ordinary clock skew — elapsed was `-30`, remaining
+became `270`, and a four-minute countdown displayed **"4:30"**: a number larger than its own maximum,
+which reads as a bug rather than as a clock problem.
+
+§6.1's failure table is explicit that this case should show `~4:00`. The spec was right and the
+implementation was wrong; the clamp moved to before the subtraction.
+
+### 8.4 Guards proven by mutation
+
+| Guard | Mutation | Reported |
+|---|---|---|
+| AC-9 `TestCheckFirstRunStateMonotonicFirstSeen` | record the first-seen time on every poll | yes — and the countdown would have sat at 4:00 forever, never reaching zero |
+| AC-10 `TestStartCountdownReplacesPriorInterval` | never clear the prior interval | yes — "two intervals are running … one of them is never cleared" |
+
+### 8.5 The end-to-end observation, and what it found instead
+
+**Not performed: this environment has the Docker CLI but no daemon**, the same limitation recorded
+in GRVX-901 §8.2. That Definition-of-Done line is left unticked rather than claimed.
+
+What was done instead was to run the real binaries in the exact layout the compose file uses — and
+that is how **F-015** was found: **in the bootstrap stack, ingestion writes facts to a path the rollup
+never reads, so no metric is ever produced.**
+
+`services/ingestion/main.go:592` builds keys beginning `raw/`, and `:822-843` roots the local store at
+`<base>/raw`, so a fact lands at `<base>/raw/raw/request_facts/…`. The rollup is told
+`-input-dir ./data/raw/request_facts`, one level up. Reproduced, then confirmed decisively by moving
+the file and running the identical command: `"no data found, partition cleared"` becomes
+`"uploaded metrics" row_count:1`.
+
+Not fixed here — §4.3 fences both files the fix must touch, and the better of the two candidate
+repairs changes an on-disk layout. F-015 records both options and why they are not equivalent.
+
+**This spec makes that failure visible for the first time.** Before it, the dashboard showed "send
+your first event" forever, which reads as *you did it wrong*. With it, the dashboard confirms traffic
+was received, counts down, and then sits at "Almost there — checking for data…" indefinitely —
+unmistakably the product's problem rather than the user's. The countdown did not cause the bug and
+does not fix it; it is what made four minutes of silence legible enough to notice.
+
+### 8.6 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| The logic lives in `dashboards/lib/first-run.js`; `app.js` holds thin wrappers | Same as GRVX-903 and GRVX-907: §7 requires that harness, and nothing under `node --test` can reach inside `app.js`. |
+| `activeCountdownId` and `stopCountdown` added beyond §5 | AC-10 asserts that exactly one interval is active, which is unobservable without an accessor; `stopCountdown` lets tests leave no timer behind. |
+| `startCountdown` starts no interval when the estimate has already elapsed | §5 has it start one that would clear itself on the first tick. Reopening a tab hours later would otherwise schedule a timer with nothing to count. The painted text is identical. |
+| `README.md` modified | The §9 docs delta. |
+| `dashboards/bundle-baseline.json` updated | +2688 bytes, inside the 8192 budget, recorded so the growth is visible in the diff. |
+
 ## 9. Definition of done
 
-- [ ] All ten acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.2 modified
-- [ ] `docs-engineer` delta merged (quick-start docs mention the countdown replaces the old static
-      wait message) or `NO DOCS DELTA REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests
-- [ ] Manually observed once end-to-end against a real `docker compose -f
-      docker-compose.bootstrap.yml up -d --build` run: the countdown appears within one poll cycle
-      of the first synthetic-traffic event landing, and is replaced by real chart data before or
-      shortly after it reaches `ALMOST_THERE_TEXT`; the observed wall-clock time is pasted into the
-      report
+- [x] All ten acceptance criteria pass with their named tests — §8.1, plus seven more
+- [x] Every Verification command run, real output pasted into the report — §8.1
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted — 50 packages
+- [ ] **No** — three beyond §4.2, each with its reason in §8.6. One is not optional: §7 demands
+      GRVX-903's harness, which cannot reach code inside `app.js`.
+- [x] `docs-engineer` delta merged — the quick-start now explains the four-minute gap and that the
+      dashboard counts it down, because a blank chart and a chart being built look the same
+- [x] Zero new skipped or quarantined tests
+- [ ] **Not performed: no Docker daemon in this environment** (as in GRVX-901 §8.2), so the
+      countdown was never watched against a live stack. Running the same binaries in the compose
+      layout by hand instead found **F-015** — the bootstrap rollup never reads the path ingestion
+      writes to, so that observation would have ended at "Almost there" and stayed there. §8.5 has
+      the reproduction. **This item must be redone by a reviewer with Docker, after F-015 is
+      fixed.**
 
 ## 10. Escalation
 

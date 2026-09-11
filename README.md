@@ -188,6 +188,13 @@ docker compose -f docker-compose.bootstrap.yml up -d --build
 
 On first boot it creates a local tenant, generates an API key into `data/api_key.txt`, writes the
 dashboard's settings, and starts sending synthetic traffic so the charts have something to show.
+
+Charts do not appear instantly. Gravix rolls facts up in batches, so there is a gap of about four
+minutes between the first event arriving and the first chart being drawn. The dashboard says so: once
+it sees traffic, the empty state switches from "send your first event" to a live countdown reading
+**"First rollup completes in ~4:00"**. A blank chart and a chart that is still being built look the
+same, so it tells you which one you are looking at.
+
 To stop the synthetic traffic:
 
 ```bash

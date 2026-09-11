@@ -84,6 +84,33 @@
             return window.GravixEmptyStates.buildCurlCommand(kind, GRAVIX_CONFIG);
         }
 
+        // --- FIRST-RUN COUNTDOWN (GRVX-908) ---
+        // Between the first accepted event and the first rolled-up chart there
+        // are two batch cadences to wait out. The wait is not reducible, so the
+        // job is to say what is happening: a dashboard that looks broken for
+        // four minutes is indistinguishable from one that is broken.
+        function checkFirstRunState() {
+            if (!window.GravixFirstRun) return Promise.resolve('waiting');
+            return window.GravixFirstRun.checkFirstRunState({
+                fetchServices: () => ingestionFetch('/api/v1/services')
+            });
+        }
+
+        function formatCountdown(totalSeconds) {
+            if (!window.GravixFirstRun) return '0:00';
+            return window.GravixFirstRun.formatCountdown(totalSeconds);
+        }
+
+        function computeCountdownText(firstSeenAt, now) {
+            if (!window.GravixFirstRun) return '';
+            return window.GravixFirstRun.computeCountdownText(firstSeenAt, now);
+        }
+
+        function startCountdown(firstSeenAt) {
+            if (!window.GravixFirstRun) return null;
+            return window.GravixFirstRun.startCountdown(firstSeenAt);
+        }
+
         // --- THEME ---
         function initTheme() {
             const saved = localStorage.getItem('gravix_theme');
@@ -1203,6 +1230,10 @@
                     // Rendered on every show, not once at load: event_time must be
                     // current, or a pasted command is rejected as too old.
                     renderEmptyStateCommand('onboard', 'fact');
+                    // Decides which onboarding sub-state to show. Asynchronous
+                    // and unawaited: the empty state is already correct for the
+                    // "nothing sent yet" case, and this only ever upgrades it.
+                    checkFirstRunState();
                 }
             }
         }

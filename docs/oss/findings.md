@@ -617,3 +617,76 @@ that `event_id` must be v7 is enforced in two validators and stated in no exampl
 repository that shows a reader how to construct a fact by hand should be checked against a running
 ingestion service — the SDKs and the CLI get it right, and everything hand-written has so far got it
 wrong.
+
+---
+
+## F-015 — in the bootstrap stack, ingestion writes facts where the rollup never looks, so no metric is ever produced
+
+**Found by** trying to observe GRVX-908's countdown end to end.
+**Severity** high — the low-cost deployment path ingests facts successfully and produces no metrics
+at all. Every service reports healthy; the dashboard is simply empty forever.
+**Status** open. Not fixed here: GRVX-908 §4.3 fences both files the fix must touch, and choosing
+between the two candidate fixes changes an on-disk layout.
+
+**The mismatch.** Two facts in the same process:
+
+| | |
+|---|---|
+| `services/ingestion/main.go:592` | `destKey := fmt.Sprintf("raw/%s/%s/%s/%s", topic, …)` — the object key already begins with `raw/` |
+| `services/ingestion/main.go:822-843` | `rawDir := filepath.Join(*baseDir, "raw")`, then `storage.NewLocalStore(rawDir)` — the store is rooted at `<base>/raw` |
+
+`LocalStore` joins its root to the key, so a fact written with `--base-dir /app/data` lands at
+`/app/data/raw/**raw**/request_facts/…`. The rollup is told
+`-input-dir ./data/raw/request_facts` (`docker-compose.bootstrap.yml`), one level up from where the
+file actually is.
+
+**Reproduced with the compose layout exactly**, using the real binaries:
+
+```
+$ ingestion --base-dir ./data &            # as docker-compose.bootstrap.yml runs it
+$ curl -X POST …/api/v1/facts …            # ingest=201
+$ find ./data -name '*.jsonl'
+./data/raw/raw/request_facts/2026-09-11/20/batch_…jsonl      ← doubled
+
+$ rollup -input-dir ./data/raw/request_facts -output-dir ./data/warehouse/request_metrics_minute
+"msg":"no data found, partition cleared"
+$ find ./data/warehouse -name '*.parquet'                     ← nothing
+```
+
+Then, changing **only the path** and running the identical command:
+
+```
+$ mv ./data/raw/raw/request_facts ./data/raw/request_facts
+$ rollup -input-dir ./data/raw/request_facts -output-dir ./data/warehouse/request_metrics_minute
+"msg":"uploaded metrics"   "row_count":1
+$ find ./data/warehouse -name '*.parquet'
+./data/warehouse/request_metrics_minute/event_day=2026-09-11/request_metrics_minute_20260911.parquet
+```
+
+**Why only the bootstrap stack.** With S3/MinIO the store's root is a bucket, so a key beginning
+`raw/` is correct and nothing is doubled. The doubling exists only where the "bucket" is a directory
+that has already been named `raw`. The full stack uses MinIO; the bootstrap stack is the local-disk
+one. That is the third finding in a row (**F-010**, **F-011**, this) whose common cause is that the
+cheap path is the one nobody runs.
+
+**Why nothing caught it.** Every service is healthy, ingestion returns `201`, facts are on disk, and
+`GET /api/v1/services` lists the service correctly — GRVX-902's discovery reads the registry, not the
+warehouse. The only symptom is a chart that never fills. GRVX-901's Definition of Done asks for four
+services healthy within 60 seconds, and they would all have been healthy.
+
+**Two candidate fixes, and they are not equivalent:**
+
+1. **Root the store at `<base>` instead of `<base>/raw`.** One line, and the key's existing `raw/`
+   prefix then lands where every consumer already expects. Changes the on-disk layout, so an existing
+   deployment's `data/raw/raw/…` becomes unreadable without a move.
+2. **Point the rollup at `./data/raw/raw/request_facts`** in the compose file. Zero migration, and it
+   enshrines a path nobody can read as intentional.
+
+Option 1 is the better repair and the one with a migration cost; that trade is why this is a finding
+rather than a drive-by fix.
+
+**One thing in the product's favour:** GRVX-908's countdown turns this from a silent failure into an
+observable one. Before it, the dashboard showed "send your first event" forever, which reads as "you
+did it wrong". With it, the dashboard says traffic was received and the first chart is coming — and
+then sits at *"Almost there — checking for data…"* indefinitely, which is unmistakably the product's
+problem rather than the user's.

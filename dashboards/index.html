@@ -205,7 +205,9 @@
                 <button id="resetFiltersBtn" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border-color);border-radius:8px;background:var(--card-bg);color:var(--text-primary);cursor:pointer;font-size:0.9rem;">Reset Filters</button>
             </div>
             <div id="emptyOnboard" style="display:none;">
-                <div id="waiting-for-data" class="waiting-for-data">
+                <!-- Two mutually exclusive sub-states. Showing "send your first event"
+                     to someone who has already sent one is why this split exists. -->
+                <div id="onboard-waiting" class="waiting-for-data">
                     <div class="waiting-spinner"></div>
                     <h3>Waiting for your first events...</h3>
                     <p>No data received yet. Send your first event using the command below:</p>
@@ -213,6 +215,11 @@
                          bootstrap stack this pastes and runs with no edits. -->
                     <pre id="onboard-curl"></pre>
                     <p style="margin-top: 12px;">Then wait for the rollup job to aggregate metrics (runs every 5 minutes).</p>
+                </div>
+                <div id="onboard-countdown" class="waiting-for-data" style="display:none;">
+                    <div class="waiting-spinner"></div>
+                    <h3>Traffic received — building your first chart</h3>
+                    <p id="onboard-countdown-text">First rollup completes in ~4:00</p>
                 </div>
             </div>
         </div>
@@ -1344,6 +1351,15 @@
 
         import { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE } from './lib/empty-states.js';
         window.GravixEmptyStates = { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE };
+
+        import {
+            checkFirstRunState, startCountdown, computeCountdownText, formatCountdown,
+            FIRST_ROLLUP_ESTIMATE_SECONDS, ALMOST_THERE_TEXT
+        } from './lib/first-run.js';
+        window.GravixFirstRun = {
+            checkFirstRunState, startCountdown, computeCountdownText, formatCountdown,
+            FIRST_ROLLUP_ESTIMATE_SECONDS, ALMOST_THERE_TEXT
+        };
     </script>
 </body>
 
