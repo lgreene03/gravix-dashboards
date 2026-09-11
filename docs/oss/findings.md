@@ -113,3 +113,54 @@ The same function is why GRVX-801's deterministic key is safe from compaction to
 would otherwise rename merged output to `metrics_<uuid>_<date>.parquet`, reintroducing a
 non-deterministic key. A spec that fixes `parseWarehouseKey` must fix that naming in the same
 change, or it will undo GRVX-801.
+
+---
+
+## F-004 — GO-2026-5764 was reachable from `pkg/storage/s3.go` and CI had been red on it
+
+**Found by:** `senior-engineer` executing GRVX-804, via the `vuln` CI job on pull request #20
+**Owner:** `security-engineer`
+**Severity:** high — a known-exploitable vulnerability in a reachable code path
+**Status:** fixed
+
+### What it was
+
+`govulncheck` reported **GO-2026-5764**, a denial of service via a panic in the AWS SDK for Go v2
+EventStream decoder, as *reachable* — not merely present in the dependency tree:
+
+| Module | Found | Fixed in |
+|---|---|---|
+| `github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream` | v1.7.4 | **v1.7.8** |
+| `github.com/aws/aws-sdk-go-v2/service/s3` | v1.96.0 | **v1.97.3** |
+
+`govulncheck` distinguishes "your code is affected" from "present in a module you require", and this
+was the former: 130 call traces, entering through `pkg/storage/s3.go` at `NewS3Store`,
+`Put`, `Get`, `Delete`, `Exists` and `List` — every S3 operation Gravix performs.
+
+### Why it matters more than the usual version bump
+
+`CLAUDE.md` gives `security-engineer` a veto the CPO cannot overrule on **releasing a known-exploitable
+vulnerability**. This was one, in the storage layer, on a branch being prepared for a public release.
+
+### How it was missed
+
+The `vuln` job was already failing, on every head of the branch, and had been treated as part of the
+background noise of a red pull request. It was only isolated after a CI event named it separately from
+the DCO failure that was the known blocker.
+
+**The lesson is about attention, not tooling: the job did its job.** A red check that someone has
+decided is "the known one" stops being read, and a second failure hiding behind the first is exactly
+what that habit costs. Two checks were red; only one had been diagnosed.
+
+### The fix
+
+Bumped both modules. `go mod tidy` pulled six transitive AWS modules and `smithy-go` forward with
+them. All 41 packages pass, `pkg/storage`'s own 19 tests included; boundary, `build-oss` and
+`test-oss` unaffected.
+
+### Worth doing next
+
+The scan also reports 18 vulnerabilities in required modules that current code does not call. Those are
+not urgent by definition, but they are a reason to keep dependencies moving rather than letting them
+settle — and `docs/oss/30-technology-review.md` §3 already records the infrastructure images sitting one
+to three major versions behind for the same reason.
