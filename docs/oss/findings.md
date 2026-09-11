@@ -1293,9 +1293,12 @@ the first mount, so no mountpoint has to be created inside a read-only one. It a
 is served as `{}` where it previously 404'd, and `app.js` merges both to the same built-in defaults.
 
 **Why nothing caught it.** `docker-smoke` is the only job that builds the full stack, and it is
-`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`. It would have caught this — and
-it has had no chance to, because F-019 broke the image build for everyone, including on `main`, and
-nobody had pushed there since Alpine moved tzdata. Two defects hiding behind a third.
+`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`.
+
+*An earlier version of this finding said it "would have caught this". That was wrong, and checking it
+produced **F-026**: `docker-smoke` is not in `ci-summary`'s `needs` and appears in no failure
+condition, so it gates nothing at all. It has been failing on `main` since at least 2026-05-24 — the
+last push to that branch — with `ci-summary` reporting success on the same run.*
 
 **Why this is recorded and not patched.** The fix that works in the bootstrap stack is a one-shot
 privileged init container that chowns the volume — and **that fix has not yet been observed working**.
@@ -1313,3 +1316,73 @@ common cause is unchanged and is not about any individual defect: `docker-smoke`
 before GRVX-910. The argument that produced `timed-onboarding` — *a gate that only runs after merge
 gates nothing* — applies unchanged to `docker-smoke`, and the evidence for it is now four findings
 deep.
+
+## F-026 — `ci-summary` reports success while `docker-smoke` and `docker-build` fail, and both have been failing on `main` for months
+
+**Found by** verifying a claim made in F-025 — that `docker-smoke` "would have caught" the full
+stack's volume-ownership defect — instead of leaving it standing.
+**Severity** high. The full-stack smoke test and every container image build have been red on `main`
+since at least 2026-05-24, and the check that is supposed to summarise CI has been green throughout.
+**Status** open. Not fixed here: see below.
+
+**The gate does not include them.** `ci-summary`'s `needs`, verbatim from
+`.github/workflows/ci.yml`:
+
+```
+lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint,
+correctness, recipe-examples, timed-onboarding
+```
+
+`docker-smoke`, `docker-build` and `image-scan` are absent, and `docker-smoke` appears exactly once
+in the whole workflow — in its own job definition. It is in no `needs` list and no failure condition.
+A red `docker-smoke` therefore blocks nothing, reports to nothing, and is visible only to someone who
+opens the run and scrolls.
+
+**Observed, on the last push to `main`** (run 26356622161, commit 5854204, 2026-05-24):
+
+| Job | Conclusion |
+|---|---|
+| `docker-smoke` | **failure** |
+| `docker-build (rollup, services/rollup/Dockerfile)` | **failure** |
+| `docker-build (gateway)`, `(ingestion)`, `(load-generator)` | cancelled — fail-fast from the rollup build |
+| `image-scan` | skipped |
+| **`ci-summary`** | **success** |
+
+Every other job passed. The summary said so, and it was not wrong by its own definition — it never
+looked.
+
+**How long.** `main` has 26 CI runs and its most recent push is 2026-05-24, roughly three and a half
+months ago. The five most recent `main` runs all conclude `failure`. So the full stack's smoke test
+and the rollup image build have been broken for that entire period, through every subsequent piece of
+work, with no signal anywhere that said so.
+
+**Two consequences worth separating:**
+
+1. **No full-stack verification has run since May.** F-025's defect could not have been caught by
+   `docker-smoke` in any sense — not because of F-019, which came later, but because the job's result
+   is discarded.
+2. **The published container images are stale.** `docker-build (rollup)` has failed since May, and
+   the three other image builds were cancelled by its fail-fast, so `ghcr.io` has had no successful
+   publish from `main` in that window.
+
+**Why the 0-second failure cannot be diagnosed.** `docker-smoke`'s "Run full-stack smoke test" step
+started and completed within the same second, so the script failed almost immediately rather than
+after a stack boot. The logs are past GitHub's 90-day retention and return `410 Gone`, so the cause
+is not recoverable from that run. `scripts/smoke_test.sh` is executable and has a correct shebang, so
+it is not that. Reproducing it needs a Docker daemon, which the implementation environment does not
+have.
+
+**Why this is recorded and not fixed.** Adding `docker-smoke` to `ci-summary`'s `needs` is one line,
+and it would immediately turn a green summary red on every pull request — correctly, but for a
+failure nobody has diagnosed, on a branch whose own last run predates all current work. Doing that
+without first knowing *why* it fails converts an invisible problem into a blocking one with no fix
+attached, which is a decision about how to sequence the repair rather than an implementation detail.
+
+**The order that makes sense:** `timed-onboarding` goes green, proving the bootstrap stack boots →
+reproduce `docker-smoke`'s failure with a Docker daemon → fix it → *then* add it to `ci-summary`'s
+`needs`, along with `docker-build`, so neither can rot again.
+
+**The pattern, for the fifth time this phase.** F-015, F-016, F-019, F-021, F-023 and F-025 were all
+invisible because nothing executed the thing they broke. This one is worse in kind: the check *did*
+execute, it *did* fail, and the gate that aggregates CI simply did not ask. A job whose result is not
+in a required check is a job that does not exist.
