@@ -7,33 +7,6 @@ networks:
     driver: bridge
 
 services:
-  gateway:
-    build:
-      context: .
-      dockerfile: services/gateway/Dockerfile
-    container_name: gravix-gateway
-    restart: always
-    ports:
-      - "8091:8091"
-    volumes:
-      - ./data:/app/data
-    command: [ "./gateway", "--tenant-db", "/app/data/gravix.db" ]
-    environment:
-      - JWT_SECRET=supersecretjwtkey12345!
-      - TENANT_DB_PATH=/app/data/gravix.db
-      - CUBE_API_URL=http://cube:4000/cubejs-api/v1/load
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8091/live"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
-    mem_limit: 256m
-    cpus: 0.5
-    networks:
-      - frontend
-      - backend
-
   ingestion:
     build:
       context: .
@@ -306,6 +279,14 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      # Ingestion authenticates against this database, so it files facts under
+      # raw/<tenant-id>/... and Cube's model reads warehouse/*/<metric>/. Without
+      # this variable the job takes its single-tenant branch, reads a prefix
+      # nothing writes, and writes one nothing reads — a stack where every
+      # container is healthy and no number ever reaches a chart (F-027). It also
+      # makes the -input-dir/-output-dir flags above inert: multi-tenant mode
+      # derives both per tenant.
+      - TENANT_DB_PATH=/app/data/gravix.db
       - S3_ENDPOINT=http://minio:9000
       - S3_REGION=${S3_REGION:-us-east-1}
       - S3_BUCKET=${S3_BUCKET:-gravix}
@@ -339,6 +320,14 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      # Ingestion authenticates against this database, so it files facts under
+      # raw/<tenant-id>/... and Cube's model reads warehouse/*/<metric>/. Without
+      # this variable the job takes its single-tenant branch, reads a prefix
+      # nothing writes, and writes one nothing reads — a stack where every
+      # container is healthy and no number ever reaches a chart (F-027). It also
+      # makes the -input-dir/-output-dir flags above inert: multi-tenant mode
+      # derives both per tenant.
+      - TENANT_DB_PATH=/app/data/gravix.db
       - S3_ENDPOINT=http://minio:9000
       - S3_REGION=${S3_REGION:-us-east-1}
       - S3_BUCKET=${S3_BUCKET:-gravix}
@@ -372,6 +361,14 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      # Ingestion authenticates against this database, so it files facts under
+      # raw/<tenant-id>/... and Cube's model reads warehouse/*/<metric>/. Without
+      # this variable the job takes its single-tenant branch, reads a prefix
+      # nothing writes, and writes one nothing reads — a stack where every
+      # container is healthy and no number ever reaches a chart (F-027). It also
+      # makes the -input-dir/-output-dir flags above inert: multi-tenant mode
+      # derives both per tenant.
+      - TENANT_DB_PATH=/app/data/gravix.db
       - S3_ENDPOINT=http://minio:9000
       - S3_REGION=${S3_REGION:-us-east-1}
       - S3_BUCKET=${S3_BUCKET:-gravix}
@@ -407,6 +404,10 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      # Ingestion files facts under raw/<tenant-id>/..., so without this variable
+      # purge walks the non-tenant prefixes, finds nothing to delete, and reports
+      # success while the disk grows past the 30-day retention promise (F-027).
+      - TENANT_DB_PATH=/app/data/gravix.db
       - S3_ENDPOINT=http://minio:9000
       - S3_REGION=${S3_REGION:-us-east-1}
       - S3_BUCKET=${S3_BUCKET:-gravix}

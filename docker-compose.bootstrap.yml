@@ -207,7 +207,22 @@ services:
         done
     volumes:
       - ./data:/app/data
-    # No S3 env vars → rollup uses local disk only
+    # TENANT_DB_PATH is what makes this job agree with the rest of the stack about
+    # where data lives. Ingestion authenticates against this same database, so it
+    # files facts under raw/<tenant-id>/request_facts/, and Cube globs
+    # warehouse/*/request_metrics_minute/. Without the variable this job takes its
+    # single-tenant branch: it reads raw/request_facts/, which nothing writes, and
+    # would write warehouse/request_metrics_minute/, which Cube does not read. Two
+    # severances in one pipeline, and every container still reports healthy (F-027).
+    #
+    # It also makes the -input-dir/-output-dir flags above inert — multi-tenant mode
+    # derives both per tenant. They are kept as the single-tenant defaults.
+    # Still no S3 variables: local disk only.
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 256m
     cpus: 0.5
     networks:
@@ -232,7 +247,16 @@ services:
         done
     volumes:
       - ./data:/app/data
-    # No S3 env vars → rollup uses local disk only
+    # Same reason as the request-metrics rollup above: ingestion files events under
+    # raw/<tenant-id>/service_events/, and without TENANT_DB_PATH this job reads
+    # raw/service_events/ instead and finds nothing, forever (F-027). The
+    # -input-dir/-output-dir flags above are inert in this mode.
+    # Still no S3 variables: local disk only.
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 256m
     cpus: 0.5
     networks:
@@ -259,7 +283,19 @@ services:
         done
     volumes:
       - ./data:/app/data
-    # No S3 env vars → purge operates on local disk only
+    # Retention depends on tenancy mode too, and fails quietly rather than loudly.
+    # Ingestion writes under raw/<tenant-id>/, so without TENANT_DB_PATH purge walks
+    # the non-tenant prefixes, finds nothing to delete, and reports success. The disk
+    # then grows past the 30-day retention this project promises, with no error
+    # anywhere (F-027). With the database it also honours any per-tenant custom
+    # retention policy; the plan-derived retention needs --mode auto, which this
+    # single-tenant stack deliberately does not pass.
+    # Still no S3 variables: local disk only.
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 128m
     cpus: 0.25
     networks:

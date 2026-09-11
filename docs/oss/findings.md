@@ -1386,3 +1386,122 @@ reproduce `docker-smoke`'s failure with a Docker daemon → fix it → *then* ad
 invisible because nothing executed the thing they broke. This one is worse in kind: the check *did*
 execute, it *did* fail, and the gate that aggregates CI simply did not ask. A job whose result is not
 in a required check is a job that does not exist.
+
+---
+
+## F-027 — the rollup jobs and ingestion disagree about where data lives, so no metric is ever produced
+
+**Found by:** `senior-engineer` diagnosing the `timed-onboarding` timeout on commit `2fab4f6`
+**Owner:** `sre-release-manager`
+**Severity:** critical — the bootstrap stack boots completely and shows an empty dashboard forever
+**Status:** FIXED in this commit, with a derived regression guard
+
+`timed-onboarding` on `2fab4f6` — the first head carrying all five earlier bootstrap fixes — got the
+whole stack up and then still failed:
+
+```
+23:08:28  gravix-bootstrap-init  Exited        ← seeded, exit 0
+23:08:33  gravix-cube            Healthy
+23:08:33  gravix-dashboard       Started       ← F-023 fixed
+23:15:53  FAIL: no populated dashboard within 600s
+```
+
+Boot was no longer the problem. The poll was. Rotation is every 60s and the rollup every 300s, so a
+number should have reached Cube around t=305 with 295s of budget to spare.
+
+**The cause, in one line each:**
+
+| Service | `TENANT_DB_PATH` | Consequence |
+|---|---|---|
+| `ingestion` | set | multi-tenant auth → `topicForTenant` → writes `raw/<tenant-id>/request_facts/…` |
+| `request-metrics-rollup` | **unset** | single-tenant branch → reads `raw/request_facts/`, writes `warehouse/request_metrics_minute/` |
+| `cube` | set | `isMultiTenant` → globs `warehouse/*/request_metrics_minute/**/*.parquet` |
+
+Two independent severances in one pipeline. The rollup read a prefix nothing writes, so it produced
+nothing; and had it produced anything, it would have written to a prefix Cube's glob does not match.
+Each of the three services is individually correct. The stack is wired to two different layouts.
+
+`service-events-rollup` and `purge` had the same omission. For `purge` the consequence is quieter and
+worse: it walks the non-tenant prefixes, finds nothing to delete, and the disk grows past the 30-day
+retention the README promises, with no error anywhere.
+
+**The fix.** `TENANT_DB_PATH=/app/data/gravix.db` on all three jobs, plus
+`depends_on: bootstrap-init: service_completed_successfully` so no job can open the SQLite file while
+`bootstrap_seed` is still creating it. `docker-compose.yml` carried the identical defect on all four
+of its data-plane jobs, and is fixed the same way. Note that this makes the `-input-dir`/`-output-dir`
+flags in both files inert: multi-tenant mode derives both paths per tenant and ignores them. The flags
+are left in place, commented, because they remain the documented single-tenant defaults.
+
+**The guard, and why it names no service.** `cmd/onboarding_gate/compose_tenancy_test.go` holds two
+tests. Neither contains a list of services that need the variable — a check that matches on a name
+protects only the names its author knew about, and the next rollup job added to this stack would be
+unprotected on the day it lands. The requirement is derived instead, in three hops:
+
+1. the compose file says which Dockerfile builds each service,
+2. the Dockerfile's `go build -o <binary> <package>` lines say where each binary's source is,
+3. the package's own AST says whether a string literal `TENANT_DB_PATH` appears in it.
+
+Any binary that answer applies to must be told which mode it is in, by environment variable or by an
+explicit path flag. The second test states the invariant directly: within one stack, tenancy mode must
+be unanimous.
+
+Three further details are deliberate:
+
+- **AST, not grep.** The first version searched file text and reported `cmd/bootstrap_seed` as
+  tenancy-aware, because a *comment* there names the variable. That would have forced a meaningless
+  environment variable onto a service that takes its database path as an explicit flag. A guard whose
+  false positives are silenced by editing production code is worse than no guard.
+- **A declared path must be inside a mount.** `TENANT_DB_PATH=/var/lib/gravix.db` on a service that
+  mounts only `/app/data` fails exactly as if the variable were absent, and looks correct in review.
+- **Finding nothing is a failure, not a pass.** Both tests fail if the derivation resolves zero
+  tenancy-aware binaries. Seven guards in this phase passed while the thing they guarded was broken;
+  a guard that silently finds nothing to check is the purest form of that.
+
+**Mutation-tested, all three red then green on revert:** dropping the variable from one rollup fails
+both tests; pointing it outside every mount fails the reachability assertion; restoring a duplicate
+service key fails the load.
+
+**The pattern, for the seventh time this phase.** F-015, F-016, F-019, F-021, F-023, F-025 and now
+F-027 were all invisible because nothing executed the thing they broke. `timed-onboarding` found three
+of them itself, including this one, which is the argument for the gate existing.
+
+---
+
+## F-028 — `docker-compose.yml` defines `gateway` twice, so the full stack does not load at all
+
+**Found by:** `senior-engineer`, while adding the F-027 guard across both compose files
+**Owner:** `sre-release-manager`
+**Severity:** high — `docker-compose up` on the documented full stack fails before starting anything
+**Status:** FIXED in this commit
+
+`docker-compose.yml` contained two `gateway:` service blocks, at lines 10 and 69. YAML forbids a
+duplicate mapping key and both `gopkg.in/yaml.v3` and Compose v2's loader reject it:
+
+```
+line 69: mapping key "gateway" already defined at line 10
+```
+
+So the full stack's compose file could not be loaded by anything, which is consistent with F-026:
+`docker-smoke` has failed on `main` since 2026-05-24, its step completing in the same second it
+started — the shape of a failure that happens before a stack boots.
+
+The two blocks were not identical, and the difference decided which one to keep:
+
+| | line 10 (removed) | line 69 (kept) |
+|---|---|---|
+| `JWT_SECRET` | `supersecretjwtkey12345!` hardcoded | `${JWT_SECRET:?…}` — required from the environment |
+| `RAW_DATA_DIR`, `INGESTION_URL` | absent | set |
+| `depends_on` | none | `cube: service_healthy` |
+
+The removed block also committed a hardcoded signing secret to a file users are told to copy, which
+is a second defect inside the first.
+
+**Why this went unnoticed.** Nothing in CI loaded `docker-compose.yml`. `timed-onboarding` runs
+`docker-compose.bootstrap.yml`, and `docker-smoke`'s result is discarded (F-026). The F-027 guard now
+decodes both files into a Go map, which is what surfaced this: decoding into a map rejects duplicate
+keys, where parsing into a `yaml.Node` accepts them silently. That distinction is the whole reason the
+guard loads the file the way it does.
+
+**Still outstanding.** This makes the full stack loadable; it does not prove it boots. F-026's
+sequencing stands: get `timed-onboarding` green, then reproduce `docker-smoke` against a Docker
+daemon, then add `docker-smoke` and `docker-build` to `ci-summary`'s `needs`.
