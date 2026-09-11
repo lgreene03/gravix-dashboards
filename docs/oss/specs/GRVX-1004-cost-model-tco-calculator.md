@@ -302,7 +302,7 @@ AC-3 TestMandatoryCaveatsPresent             AC-6 TestMeasuredInputRequired
 AC-7 TestGoJSParityFixturesAreCurrent (Go half)
 
 $ make test-js
-# pass 106   # fail 0
+# pass 109   # fail 0
 AC-7 parity (JS half) · AC-8 all three rendered · AC-9 no sales CTA
 AC-10 responsive + themed · AC-11 capacity planning reconciled
 
@@ -320,6 +320,34 @@ my mutation harness grepped for `error: '` and that failure rendered as `error: 
 false negative about the guard. Re-run directly, it fails as intended. Worth recording because a
 verification harness that under-reports is the same failure mode as a guard that passes while what it
 guards is broken, one level up.
+
+**A later sweep found a hole in AC-8, and it is now closed.** Re-running the mutations against the
+finished page turned up one that passed every test:
+
+```css
+.deployment:nth-child(n+2) { display: none; }
+```
+
+That renders the bootstrap figure alone — the exact thing §3's first rule forbids, and the reason
+`EstimateAll` has no single-deployment API — without touching a line of JavaScript. Every AC-8
+assertion is about the render path (`estimates.map`, no `[0]`, no `.filter`), so all of them held
+while the property they exist to protect was gone. A guard on the render path protects the render
+path, not the property.
+
+The added test, `AC-8: no rule can hide a deployment card once rendered`, checks the property
+instead: no CSS rule whose selector reaches a deployment card may set `display: none`,
+`visibility: hidden`, `content-visibility: hidden`, `opacity: 0` or a zero height, and no card may
+carry a `hidden` attribute or an inline `display: none`. It fails if the `.deployment` selector is
+renamed out from under it rather than silently finding nothing to check.
+
+Mutation-tested five ways — `nth-child(n+2) { display: none }`, `last-child { visibility: hidden }`,
+`+ .deployment { opacity: 0 }`, `:not(:first-child) { max-height: 0 }`, and the `hidden` attribute in
+markup — each red, control green either side.
+
+This is the eighth guard this phase that passed while what it guarded was broken. The pattern is
+consistent enough to state as a rule: **a guard written against the mechanism that produces a
+property will pass for every route to breaking the property that does not go through that
+mechanism.** Checking the rendered outcome, not the code that renders it, is what closes it.
 
 ### 11.5 What AC-10 does not cover, stated
 

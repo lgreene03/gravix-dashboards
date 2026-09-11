@@ -290,6 +290,44 @@ test('AC-8: the page renders all three deployments together', () => {
         'line items do not carry a basis badge');
 });
 
+test('AC-8: no rule can hide a deployment card once rendered', () => {
+    // Mutation testing found the hole this closes. Every AC-8 assertion above is
+    // about the JS render path, and all of them passed against a page carrying
+    //
+    //     .deployment:nth-child(n+2) { display: none; }
+    //
+    // which shows the bootstrap figure alone — the precise thing §3's first rule
+    // forbids — without touching a line of JavaScript. A guard on the render path
+    // protects the render path, not the property.
+    const css = pageHTML.slice(pageHTML.indexOf('<style>'), pageHTML.indexOf('</style>'));
+
+    // Any rule whose selector reaches a deployment card or their container.
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+        .filter(m => /deployment/.test(m[1]));
+    assert.ok(rules.length > 0, 'no .deployment rules found; the selector was renamed');
+
+    const hiding = [
+        /display:\s*none/i,
+        /visibility:\s*hidden/i,
+        /content-visibility:\s*hidden/i,
+        /opacity:\s*0(?![.\d])/i,
+        /(?:max-)?height:\s*0(?![.\d])/i,
+    ];
+    for (const [, selector, body] of rules) {
+        for (const pattern of hiding) {
+            assert.ok(!pattern.test(body),
+                `the rule "${selector.trim()}" hides a deployment card (${pattern}). ` +
+                'All three deployments render together or not at all — GRVX-1004 §3.');
+        }
+    }
+
+    // The same thing done in markup rather than CSS.
+    assert.ok(!/<section class="deployment"[^>]*\bhidden\b/.test(pageHTML),
+        'a deployment card carries the hidden attribute');
+    assert.ok(!/<section class="deployment"[^>]*style="[^"]*display:\s*none/i.test(pageHTML),
+        'a deployment card is hidden by an inline style');
+});
+
 test('AC-9: no upsell, sales CTA, or lead capture', () => {
     const forbidden = [
         /contact\s+sales/i, /talk\s+to\s+sales/i, /book\s+a\s+demo/i, /request\s+a\s+demo/i,
