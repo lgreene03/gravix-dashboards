@@ -13,5 +13,17 @@
     "max_p95_latency_ms": 500,
     "max_error_rate": 0.02,
     "min_qps_ratio": 0.85
+  },
+  "_comment": "The three *qps profiles above gate scripts/perf_test.sh and are unchanged. Their latency threshold is compared against an AVERAGE, not a percentile, because cmd/load_generator emits no percentiles -- see F-017 in docs/oss/findings.md. The bench_standard bounds below come from bench/run.sh, which measures real percentiles from every observation.",
+  "bench_standard": {
+    "_comment": "Regression bounds for ./bench/run.sh --scale standard. Empty until a standard-scale run has been performed on a named reference machine; GRVX-1001 measures, and a threshold set from a single unreviewed run is not a baseline.",
+    "min_ingest_events_per_sec_per_core": null,
+    "max_ingest_p99_latency_ms": null,
+    "min_rollup_events_per_sec": null,
+    "max_bytes_per_event_raw": null,
+    "max_bytes_per_event_rolled_up": null,
+    "max_bytes_per_event_compacted": null,
+    "max_query_p95_ms": null,
+    "max_query_cold_p95_ms": null
   }
 }

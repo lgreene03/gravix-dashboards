@@ -822,3 +822,126 @@ worth knowing about anywhere else it is used.
 **This blocked GRVX-910**, whose §5.2 step 4 polls Cube's `load` endpoint and needs a credential.
 Recorded as **SD-019** and returned as `SPEC DEFECT: §2` under that spec's own §10; the poll can now
 inherit this login.
+
+## F-017 — the performance gate compares an average against a threshold named `max_p95_latency_ms`
+
+**Found by** GRVX-1001 §6 step 1, which requires listing every metric the existing performance
+scripts already produce before writing a new harness.
+**Severity** medium — no public number depends on it today, but it is a gate that reports PASS on
+runs it was written to fail, and Phase 10 is about to build published figures in this area.
+**Status** open. Not fixed here: GRVX-1001 §3 and §4.2 both forbid removing or rewriting any
+existing `scripts/perf_baseline.json` field, and the threshold's *name* is the defect.
+
+**The mismatch.** `scripts/perf_baseline.json` declares, for each profile:
+
+```json
+"baseline_50qps": { "max_p95_latency_ms": 200, … }
+```
+
+`scripts/perf_test.sh:170` compares that threshold against `avg_latency`, and says so:
+
+```bash
+# Note: the load generator outputs avg_latency_ms, not p95. We use avg as a
+# proxy here since the generator doesn't track percentiles.
+# Check latency (avg as proxy for p95)
+if awk "BEGIN { exit !( $avg_latency > $max_p95_lat ) }"; then
+```
+
+The generator has no percentile to give: `cmd/load_generator/main.go:49` emits `avg_latency_ms` and
+nothing else.
+
+**Why "proxy" understates it.** The comment's own justification — "if avg exceeds the threshold it is
+definitely a breach" — is sound but describes the direction the gate is *not* for. A gate exists to
+catch breaches, and this one passes every run whose mean is under the threshold no matter how heavy
+the tail is. For a latency distribution with any meaningful tail, the p95 is several times the mean,
+so a `max_p95_latency_ms: 200` gate does not fail until the real p95 is far past 200 ms. The
+thresholds being "set generously enough to accommodate this approximation" makes it looser still.
+
+**A second defect in the same number.** `computeSummary` (`cmd/load_generator/main.go:60-62`) divides
+total latency by the count of **successful** requests only:
+
+```go
+if s > 0 {
+    avgLatMs = float64(lat) / float64(s) / 1e6
+}
+```
+
+Failed requests contribute no latency and are not in the denominator, so a run that degrades until
+its slowest requests time out reports a *lower* average than one that degrades slightly less. The
+error-rate check is a separate gate and does not compensate: the latency figure itself improves as
+the system gets worse.
+
+**Why this is not fixed in GRVX-1001.** The spec fences it twice — §3 "Do NOT delete or rewrite
+`scripts/perf_baseline.json`'s existing fields" and §4.2 "Remove no field" — and the honest repair is
+to rename the field, which is the thing forbidden. GRVX-1001's new `Result` schema measures
+`QueryP50Ms`/`QueryP95Ms`/`QueryP99Ms` and `IngestP99LatencyMs` as real percentiles, so the new
+harness is correct by construction; this finding is about the old gate that keeps running beside it.
+
+**The repair, when someone owns it:** teach `cmd/load_generator` to keep a latency sketch (the
+repository already has one in `pkg/sketch`, used by the rollup), emit real percentiles, include
+failed requests in the latency population or state explicitly that it does not, and then rename the
+baseline fields to match what is actually compared. Until then `perf_test.sh`'s PASS means "the mean
+of successful requests is under a number labelled p95".
+
+## F-018 — `recompute` takes its lock on the local filesystem at a path relative to the working directory, while writing its data through the object store
+
+**Found by** GRVX-1001. The benchmark harness kept creating an empty
+`bench/warehouse/request_metrics_minute/` inside the repository, and every test that called the
+driver reproduced it.
+**Severity** medium-high. The stray directory is cosmetic; what it exposes is not. The lock exists to
+stop the cron rollup and a `gravix recompute` writing the same partition at the same time, and in the
+two deployments where that can actually happen it does not.
+**Status** open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
+a change to locking semantics that wants its own spec.
+
+**The mismatch**, in one place — `pkg/recompute/recompute.go:534`:
+
+```go
+dir := MetricDirFor(opts.OutputDir, tenant, opts.Metric)   // e.g. "warehouse/request_metrics_minute"
+elector := leaderelect.NewFileElector(dir, LockName)
+```
+
+`opts.OutputDir` is an **object-store key prefix**. Everywhere else in `Run` it is resolved through
+`opts.Store`, so with `NewLocalStore("/app/data")` it means `/app/data/warehouse/…` and with an S3
+store it means a key in a bucket. Here it is handed straight to `leaderelect.NewFileElector`, whose
+`Acquire` does `os.MkdirAll(e.dir, 0755)` (`pkg/leaderelect/leaderelect.go:65`) against the **local
+filesystem, relative to the process working directory**.
+
+**Reproduced**, with the store rooted in a temporary directory well away from the repository:
+
+```
+$ generate(tmpdir, …)                      # writes under $TMPDIR
+$ rollupOnce(tmpdir, …)                    # store rooted at $TMPDIR
+rollupOnce created ./warehouse in the working directory
+```
+
+The data went where it was told. The lock did not.
+
+**Why the stray directory is the small half:**
+
+1. **Two processes sharing a data root but not a working directory do not share a lock.** The
+   bootstrap stack's rollup container runs from `/app`; a `gravix recompute` run by a human from
+   anywhere else takes a lock at a different absolute path. Both acquire, both proceed, and they are
+   writing the same partitions. The lock reports success in exactly the case it exists to refuse.
+2. **With S3 the lock is meaningless across machines.** The store is a bucket every replica shares;
+   the lock is a file on whichever local disk each replica happens to have. Two replicas never
+   contend, whatever their working directories.
+3. **A read-only working directory breaks recompute for a reason unrelated to its data.** `MkdirAll`
+   fails, `Acquire` returns an error, and `Run` aborts with "acquiring lock in
+   warehouse/request_metrics_minute" — while the output store it was asked to write is perfectly
+   writable.
+
+**Why nothing caught it.** Every existing test runs with the working directory at the package
+directory and a store rooted in a `t.TempDir()`, so the lock lands beside the test binary and works
+by accident. It is the same shape as **F-015**: a path that resolves correctly through the store and
+incorrectly outside it, with nothing comparing the two.
+
+**The repair, when someone owns it:** the lock belongs in the same namespace as the data it guards —
+an object in the store, taken through `opts.Store` with a conditional write, so that two processes
+sharing a bucket contend and two sharing nothing do not. Failing that, it must at minimum be resolved
+to an absolute path derived from the store rather than from `os.Getwd()`, and the fact that it only
+guards a single machine has to be documented rather than implied.
+
+**Worked around in the benchmark** by passing an absolute `OutputDir`, which makes the lock path
+absolute too. That is a workaround in one caller, not a fix: every other caller — the cron rollup and
+`cmd/cli`'s `recompute`, both of which pass relative defaults — still takes a working-directory lock.

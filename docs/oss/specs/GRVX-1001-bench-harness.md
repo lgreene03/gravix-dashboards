@@ -247,3 +247,128 @@ make check-boundary && make build-oss && make test-oss
 | A metric that cannot be measured without a cloud account | Return `SPEC DEFECT: §3 — <metric> needs <service>`. A benchmark a stranger cannot run is not a benchmark. |
 | Results varying more than 20% across three runs | Record it in `Notes` and report it. Do not discard outliers to tighten the number. |
 | An existing script producing a metric this schema omits | Return `SPEC DEFECT: §5.3 — <metric> would be lost` |
+
+---
+
+## 11. Implementation report
+
+All eleven acceptance criteria pass. Coverage 85.4%, above the 85% §8 requires.
+
+### 11.1 §6 step 1 — what the existing scripts already produce
+
+| Source | Metric | Kept? |
+|---|---|---|
+| `cmd/load_generator` | `total_requests`, `successful`, `failed`, `actual_qps`, `error_rate`, `duration_secs` | Not in `Result`. These describe a *load generator's* view of a server under HTTP load, which is a different measurement from this harness's per-fact pipeline cost. `scripts/perf_test.sh` still produces them. |
+| `cmd/load_generator` | `avg_latency_ms` | Superseded, not lost — see §11.2. |
+| `scripts/perf_baseline.json` | `max_p95_latency_ms`, `max_error_rate`, `min_qps_ratio`, per profile | All three profiles and all nine fields preserved verbatim, asserted by `TestBaselineFieldsPreserved`. |
+
+No metric is lost, so §10 row 3 does not apply.
+
+### 11.2 F-017 — found by doing §6 step 1
+
+`scripts/perf_baseline.json` declares `max_p95_latency_ms`, and `scripts/perf_test.sh:170` compares
+it against `avg_latency`, because `cmd/load_generator` emits no percentiles. Its comment says so and
+calls it a proxy. It is looser than that: the gate passes every run whose *mean* is under the
+threshold however heavy the tail is, and `computeSummary` divides by successful requests only, so a
+system degrading until requests time out reports a *lower* average. Recorded as **F-017** and left in
+place, because §3 and §4.2 both forbid touching those fields and the honest repair is to rename one.
+
+This harness measures `ingest_p99_latency_ms` and `query_p{50,95,99}_ms` as real percentiles over
+every observation — no sketch, no mean, no proxy.
+
+### 11.3 F-018 — found by the harness scribbling in the repository
+
+Every test that called the driver left an empty `bench/warehouse/request_metrics_minute/` behind.
+The cause is not in `bench/`: `pkg/recompute/recompute.go:534` hands `opts.OutputDir` — an
+*object-store key prefix* — straight to `leaderelect.NewFileElector`, which `MkdirAll`s it on the
+**local filesystem relative to the process working directory**. The data goes through the store; the
+lock does not.
+
+The stray directory is the small half. The lock exists to stop the cron rollup and a
+`gravix recompute` writing the same partition at once, and two processes sharing a data root but not
+a working directory take different locks and both proceed — with S3 they never contend at all.
+Recorded as **F-018**.
+
+Worked around here by removing the empty directory after each rollup, guarded by
+`TestHarnessLeavesNoStrayDirectories` and `TestRemoveStrayLockDirLeavesRealDataAlone` (which proves
+the cleanup never deletes a warehouse with anything in it). That is housekeeping for this caller, not
+a repair; the fix wants its own spec.
+
+### 11.4 Verification
+
+```
+$ go test ./bench/... -cover
+ok  github.com/lgreene/gravix-dashboards/bench   32.386s   coverage: 85.4% of statements
+
+AC-1  TestBenchSmallScaleRuns            AC-7   TestNoZeroMeasurementRecorded
+AC-2  TestResultSchemaValid              AC-8   TestDiskCheckPrecedesGeneration
+AC-3  TestDatasetReproducible            AC-9   TestBenchNeedsNoNetwork
+AC-4  TestMachineDetectionHonest         AC-10  TestBaselineFieldsPreserved
+AC-5  TestMedianOfThreeRuns              AC-11  TestBenchReadmeComplete
+AC-6  TestColdAndWarmQueryRecorded
+
+$ make check-boundary
+boundary: 0 violations
+
+$ make build-oss && make test-oss
+both succeed with ee/ absent
+
+$ go build ./... && go test ./schemas/...
+build ok, PASS
+```
+
+The committed run, `bench/results/20260911T220715Z-small.json`, on a 4-core container:
+
+```
+facts:        1008000
+ingest:       55635 events/sec/core (p99 0.010 ms)
+rollup:       119807 events/sec
+bytes/event:  210.8 raw -> 2.90 rolled up -> 2.90 compacted
+query warm:   p50 144.5 ms  p95 155.4 ms  p99 155.4 ms
+query cold:   p95 145.0 ms
+```
+
+**Nothing here is publishable yet, and the notes say why.** Three caveats travel with the file:
+
+1. **The ingest spread was 21.2%**, above §10's 20% threshold. Recorded, median reported, no run
+   discarded — which is what §10 requires. The first run is consistently the fastest, so the page
+   cache is still warm from generation.
+2. **Compaction reduced nothing** — 100.0% of the rolled-up size. Expected at this scale: one parquet
+   file per partition leaves nothing to merge. Reported rather than omitted, and
+   `TestCompactionReportsWhenItChangesNothing` fails if two identical figures are ever published
+   without that note.
+3. **`disk_type` is `unknown`** and `container` detection governs the per-core figure. On a container
+   `runtime.NumCPU` can exceed the CPU quota, which makes the per-core number optimistic by an amount
+   not knowable from inside.
+
+GRVX-1007 publishes; this run is a `small`-scale measurement on an unnamed container, which is not
+what §5.4 says a published figure comes from.
+
+### 11.5 Deviations, stated
+
+- **`run.sh` accepts two flags beyond §5.1's usage line:** `--runs` and `--work-dir`. The usage
+  string itself is exactly §6.1's, and an unknown flag still exits 2. Both are documented in
+  `bench/README.md` under "Run it", with a warning that `--runs 1` is not comparable to a published
+  figure.
+- **`bench/driver.go`, `bench/measure.go` and `bench/units_test.go` are not in §4.1.** The spec lists
+  `bench.go`, `machine.go` and `bench_test.go`; splitting the driver and the measurements out of a
+  single file, and the unit tests out of the acceptance tests, is an organisational choice within the
+  same package, not new surface.
+- **`ingest_events_per_sec_per_core` excludes HTTP framing.** The ingestion handler is `package main`
+  under `services/ingestion` and §4.3 forbids restructuring it to be importable. What is measured is
+  decode, schema validation and the durable-buffer append. Stated in every result's `notes` and in
+  the README's table rather than left to be assumed either way.
+- **`query_cold_p95_ms` is not a cleared page cache.** Dropping caches needs root, and a benchmark
+  that needs root is not one a stranger runs. The note on every run says the true cold figure is
+  worse.
+
+### 11.6 Definition of done
+
+- [x] All eleven acceptance criteria pass with their named tests
+- [x] Every Verification command run, real output above
+- [x] Metrics already produced by the existing scripts listed (§11.1)
+- [x] One `--scale small` result file committed
+- [x] Every pre-existing `perf_baseline.json` field intact, asserted by AC-10
+- [x] `docs-engineer` delta merged — `bench/README.md` is the deliverable doc; the `bench` target is
+      in `make help`
+- [x] Zero new skipped tests

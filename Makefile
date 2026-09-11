@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli test test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check
+.PHONY: build build-cli test test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check bench
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -95,6 +95,13 @@ test-correctness: ## Run the correctness suite (determinism, late data, mergeabi
 
 check-boundary: ## Enforce the open-core boundary (imports, gates, headers, map)
 	go run ./cmd/checkboundary -root . -map docs/oss/boundary.yaml
+
+# --- Benchmark (GRVX-1001) -------------------------------------------------
+# Every published cost and performance number comes from here, and a stranger
+# can run it: no cloud account, no network, no Docker. SCALE=standard is what
+# the published figures use; small exists for a laptop or CI.
+bench: ## Run the benchmark harness (SCALE=small|standard|large, default small)
+	./bench/run.sh --scale $(or $(SCALE),small)
 
 # --- Metric contracts (GRVX-803) ------------------------------------------
 # docs/02-derived-metrics.md is generated from contracts/. contracts-check is what
