@@ -37,7 +37,7 @@ func TestServicesEndpointReflectsIngestedFact(t *testing.T) {
 	sink := setupSink(t)
 	reg := testRegistry(t)
 
-	post := handleFacts(sink, nil, reg)
+	post := handleFacts(sink, nil, reg, testLearner())
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -92,7 +92,7 @@ func TestServicesEndpointReflectsBatchIngest(t *testing.T) {
 		strings.NewReader(strings.Join(lines, "\n")))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
-	handleBatchFacts(sink, nil, reg)(rr, req)
+	handleBatchFacts(sink, nil, reg, testLearner())(rr, req)
 	if rr.Code != http.StatusCreated && rr.Code != http.StatusAccepted && rr.Code != http.StatusOK {
 		t.Fatalf("batch ingest returned %d: %s", rr.Code, rr.Body.String())
 	}

@@ -41,6 +41,27 @@ var ErrEmptyServiceName = errors.New("discovery: service name must not be empty"
 // for keeping disk I/O off the request path.
 const defaultFlushInterval = 10 * time.Second
 
+// Template is one row of the template registry: a route that has actually been
+// seen, after path normalization.
+//
+// This is what makes the cardinality budget auditable rather than merely
+// enforced — an operator who is told a route was collapsed can look at what was
+// kept.
+type Template struct {
+	Service      string    `json:"service"`
+	Method       string    `json:"method"`
+	PathTemplate string    `json:"path_template"`
+	FirstSeenAt  time.Time `json:"first_seen_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+	RequestCount int64     `json:"request_count"`
+}
+
+type templateKey struct {
+	service  string
+	method   string
+	template string
+}
+
 // Service is one row of the registry.
 type Service struct {
 	Name         string    `json:"name"`
@@ -61,8 +82,9 @@ type pendingCount struct {
 type Registry struct {
 	db *sql.DB
 
-	mu      sync.Mutex
-	pending map[string]*pendingCount
+	mu              sync.Mutex
+	pending         map[string]*pendingCount
+	pendingTemplate map[templateKey]*pendingCount
 
 	flushInterval time.Duration
 	stopOnce      sync.Once
@@ -76,6 +98,16 @@ CREATE TABLE IF NOT EXISTS discovered_services (
 	first_seen_at  TEXT NOT NULL,
 	last_seen_at   TEXT NOT NULL,
 	request_count  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS discovered_templates (
+	service        TEXT NOT NULL,
+	method         TEXT NOT NULL,
+	path_template  TEXT NOT NULL,
+	first_seen_at  TEXT NOT NULL,
+	last_seen_at   TEXT NOT NULL,
+	request_count  INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (service, method, path_template)
 );`
 
 // Open opens (or creates) the registry database at path and starts the
@@ -115,11 +147,12 @@ func open(dsn string, flushInterval time.Duration) (*Registry, error) {
 	}
 
 	r := &Registry{
-		db:            db,
-		pending:       make(map[string]*pendingCount),
-		flushInterval: flushInterval,
-		stopCh:        make(chan struct{}),
-		doneCh:        make(chan struct{}),
+		db:              db,
+		pending:         make(map[string]*pendingCount),
+		pendingTemplate: make(map[templateKey]*pendingCount),
+		flushInterval:   flushInterval,
+		stopCh:          make(chan struct{}),
+		doneCh:          make(chan struct{}),
 	}
 	go r.loop()
 	return r, nil
@@ -173,6 +206,98 @@ func (r *Registry) RecordFact(service string, seenAt time.Time) {
 	}
 }
 
+// RecordTemplate records one accepted (service, method, path_template)
+// observation, batched exactly like RecordFact.
+//
+// Called only after normalization has accepted the path, so what lands here is
+// the bounded set the budget allows — never the raw, unbounded one.
+func (r *Registry) RecordTemplate(service, method, template string, seenAt time.Time) {
+	if service == "" || template == "" {
+		return
+	}
+	seenAt = seenAt.UTC()
+	key := templateKey{service: service, method: method, template: template}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	p, ok := r.pendingTemplate[key]
+	if !ok {
+		r.pendingTemplate[key] = &pendingCount{firstSeen: seenAt, lastSeen: seenAt, count: 1}
+		return
+	}
+	p.count++
+	if seenAt.Before(p.firstSeen) {
+		p.firstSeen = seenAt
+	}
+	if seenAt.After(p.lastSeen) {
+		p.lastSeen = seenAt
+	}
+}
+
+// ListTemplates returns every known template for service, sorted by
+// path_template ascending, merging flushed rows with still-pending counts.
+func (r *Registry) ListTemplates(ctx context.Context, service string) ([]Template, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT service, method, path_template, first_seen_at, last_seen_at, request_count
+		 FROM discovered_templates WHERE service = ?`, service)
+	if err != nil {
+		return nil, fmt.Errorf("discovery: list templates: %w", err)
+	}
+	defer rows.Close()
+
+	merged := map[templateKey]*Template{}
+	for rows.Next() {
+		var t Template
+		var firstSeen, lastSeen string
+		if err := rows.Scan(&t.Service, &t.Method, &t.PathTemplate,
+			&firstSeen, &lastSeen, &t.RequestCount); err != nil {
+			return nil, fmt.Errorf("discovery: scan template: %w", err)
+		}
+		t.FirstSeenAt = parseTime(firstSeen)
+		t.LastSeenAt = parseTime(lastSeen)
+		merged[templateKey{t.Service, t.Method, t.PathTemplate}] = &t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("discovery: template rows: %w", err)
+	}
+
+	r.mu.Lock()
+	for key, p := range r.pendingTemplate {
+		if key.service != service {
+			continue
+		}
+		t, ok := merged[key]
+		if !ok {
+			merged[key] = &Template{
+				Service: key.service, Method: key.method, PathTemplate: key.template,
+				FirstSeenAt: p.firstSeen, LastSeenAt: p.lastSeen, RequestCount: p.count,
+			}
+			continue
+		}
+		t.RequestCount += p.count
+		if p.firstSeen.Before(t.FirstSeenAt) {
+			t.FirstSeenAt = p.firstSeen
+		}
+		if p.lastSeen.After(t.LastSeenAt) {
+			t.LastSeenAt = p.lastSeen
+		}
+	}
+	r.mu.Unlock()
+
+	out := make([]Template, 0, len(merged))
+	for _, t := range merged {
+		out = append(out, *t)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PathTemplate != out[j].PathTemplate {
+			return out[i].PathTemplate < out[j].PathTemplate
+		}
+		return out[i].Method < out[j].Method
+	})
+	return out, nil
+}
+
 // Flush writes all pending in-memory counters to the database immediately.
 // Called by the background loop and by Close.
 func (r *Registry) Flush(ctx context.Context) error {
@@ -181,29 +306,26 @@ func (r *Registry) Flush(ctx context.Context) error {
 	r.mu.Lock()
 	batch := r.pending
 	r.pending = make(map[string]*pendingCount)
+	templateBatch := r.pendingTemplate
+	r.pendingTemplate = make(map[templateKey]*pendingCount)
 	r.mu.Unlock()
 
-	if len(batch) == 0 {
+	if len(batch) == 0 && len(templateBatch) == 0 {
 		return nil
 	}
 
-	if err := r.writeBatch(ctx, batch); err != nil {
+	// Both maps go in one transaction: a service and the templates observed on
+	// it are the same observation, and persisting one without the other would
+	// leave a service listed with routes that are still only in memory.
+	if err := r.writeBatch(ctx, batch, templateBatch); err != nil {
 		// Put the batch back so the next flush retries it, merging with anything
 		// recorded in the meantime rather than overwriting it.
 		r.mu.Lock()
 		for name, p := range batch {
-			existing, ok := r.pending[name]
-			if !ok {
-				r.pending[name] = p
-				continue
-			}
-			existing.count += p.count
-			if p.firstSeen.Before(existing.firstSeen) {
-				existing.firstSeen = p.firstSeen
-			}
-			if p.lastSeen.After(existing.lastSeen) {
-				existing.lastSeen = p.lastSeen
-			}
+			mergePending(r.pending, name, p)
+		}
+		for key, p := range templateBatch {
+			mergePending(r.pendingTemplate, key, p)
 		}
 		r.mu.Unlock()
 		return err
@@ -211,7 +333,25 @@ func (r *Registry) Flush(ctx context.Context) error {
 	return nil
 }
 
-func (r *Registry) writeBatch(ctx context.Context, batch map[string]*pendingCount) error {
+// mergePending adds a requeued batch entry back into a pending map, merging
+// rather than replacing so that anything recorded since the failed flush is
+// kept.
+func mergePending[K comparable](dst map[K]*pendingCount, key K, p *pendingCount) {
+	existing, ok := dst[key]
+	if !ok {
+		dst[key] = p
+		return
+	}
+	existing.count += p.count
+	if p.firstSeen.Before(existing.firstSeen) {
+		existing.firstSeen = p.firstSeen
+	}
+	if p.lastSeen.After(existing.lastSeen) {
+		existing.lastSeen = p.lastSeen
+	}
+}
+
+func (r *Registry) writeBatch(ctx context.Context, batch map[string]*pendingCount, templateBatch map[templateKey]*pendingCount) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("discovery: begin: %w", err)
@@ -241,10 +381,51 @@ func (r *Registry) writeBatch(ctx context.Context, batch map[string]*pendingCoun
 		}
 	}
 
+	if len(templateBatch) > 0 {
+		tstmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO discovered_templates
+				(service, method, path_template, first_seen_at, last_seen_at, request_count)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(service, method, path_template) DO UPDATE SET
+				last_seen_at  = excluded.last_seen_at,
+				request_count = request_count + excluded.request_count`)
+		if err != nil {
+			return fmt.Errorf("discovery: prepare template upsert: %w", err)
+		}
+		defer tstmt.Close()
+
+		for _, key := range sortedTemplateKeys(templateBatch) {
+			p := templateBatch[key]
+			if _, err := tstmt.ExecContext(ctx, key.service, key.method, key.template,
+				p.firstSeen.Format(time.RFC3339Nano),
+				p.lastSeen.Format(time.RFC3339Nano),
+				p.count); err != nil {
+				return fmt.Errorf("discovery: upsert template %q: %w", key.template, err)
+			}
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("discovery: commit: %w", err)
 	}
 	return nil
+}
+
+func sortedTemplateKeys(m map[templateKey]*pendingCount) []templateKey {
+	keys := make([]templateKey, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].service != keys[j].service {
+			return keys[i].service < keys[j].service
+		}
+		if keys[i].method != keys[j].method {
+			return keys[i].method < keys[j].method
+		}
+		return keys[i].template < keys[j].template
+	})
+	return keys
 }
 
 // ListServices returns every known service, sorted by Name ascending. It

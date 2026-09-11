@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/discovery"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
+	"github.com/lgreene/gravix-dashboards/pkg/pathlearn"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -29,6 +30,14 @@ import (
 
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 )
+
+// testLearner gives a handler a path learner with production budgets. Tests
+// that exercise a budget construct their own with smaller ones.
+func testLearner() *pathlearn.Learner {
+	return pathlearn.NewLearner(
+		pathlearn.DefaultSegmentDistinctBudget,
+		pathlearn.DefaultTemplateBudgetPerService)
+}
 
 // testRegistry gives a handler a real, isolated discovery registry. Tests that
 // assert on discovery use their own; for everyone else this is the cheapest way
@@ -145,7 +154,7 @@ func setupSink(t *testing.T) *DurableSink {
 
 func TestHandleFacts_ValidPost(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -161,7 +170,7 @@ func TestHandleFacts_ValidPost(t *testing.T) {
 
 func TestHandleFacts_InvalidJSON(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(`{"bad json`))
 	req = withMockTenant(req)
@@ -183,7 +192,7 @@ func TestHandleFacts_InvalidJSON(t *testing.T) {
 
 func TestHandleFacts_MissingContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -199,7 +208,7 @@ func TestHandleFacts_MissingContentType(t *testing.T) {
 
 func TestHandleFacts_WrongContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -215,7 +224,7 @@ func TestHandleFacts_WrongContentType(t *testing.T) {
 
 func TestHandleFacts_MethodNotAllowed(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/facts", nil)
 	req = withMockTenant(req)
@@ -400,7 +409,7 @@ func TestWriteErrorJSON(t *testing.T) {
 
 func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil, testRegistry(t))
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	line1 := validFactJSON(t)
 	line2 := validFactJSON(t)
@@ -430,7 +439,7 @@ func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 
 func TestHandleBatchFacts_MixedValid(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil, testRegistry(t))
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	validLine := validFactJSON(t)
 	body := validLine + "\n{bad json}\n"
@@ -457,7 +466,7 @@ func TestHandleBatchFacts_MixedValid(t *testing.T) {
 
 func TestHandleBatchFacts_EmptyBody(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil, testRegistry(t))
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/batch", strings.NewReader(""))
 	req = withMockTenant(req)
@@ -622,7 +631,7 @@ func TestSecurityHeadersHSTSOnHTTPS(t *testing.T) {
 
 func TestHandleFacts_BodyTooLarge(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	// Create a body >1MB
 	bigBody := strings.Repeat("x", 1<<20+100)
@@ -638,7 +647,7 @@ func TestHandleFacts_BodyTooLarge(t *testing.T) {
 
 func TestHandleBatchFacts_PartialSuccess(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil, testRegistry(t))
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	validLine := validFactJSON(t)
 	body := validLine + "\n{\"bad\":\"json\",\"missing_fields\":true}\n" + validLine + "\n"
@@ -696,7 +705,7 @@ func TestHandleFacts_DLQEntryWritten(t *testing.T) {
 	}
 	defer sink.Close()
 
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	// Send an invalid fact (missing required fields)
 	invalidJSON := `{"event_id": "not-a-uuid", "service": ""}`
@@ -740,7 +749,7 @@ func TestHandleFacts_DLQEntryWritten(t *testing.T) {
 
 func TestHandleFacts_RequestIDInResponse(t *testing.T) {
 	sink := setupSink(t)
-	handler := logging.RequestIDMiddleware(http.HandlerFunc(handleFacts(sink, nil, testRegistry(t))))
+	handler := logging.RequestIDMiddleware(http.HandlerFunc(handleFacts(sink, nil, testRegistry(t), testLearner())))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -781,7 +790,7 @@ func TestMultiTenantAuth_ExpiredKeyRejected(t *testing.T) {
 	}
 
 	sink := setupSink(t)
-	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t)))
+	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t), testLearner()))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -818,7 +827,7 @@ func TestMultiTenantAuth_ValidKeyAccepted(t *testing.T) {
 	}
 
 	sink := setupSink(t)
-	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t)))
+	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t), testLearner()))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -865,7 +874,7 @@ func BenchmarkHandleFacts(b *testing.B) {
 	}
 	defer sink.Close()
 
-	handler := handleFacts(sink, nil, testRegistry(b))
+	handler := handleFacts(sink, nil, testRegistry(b), testLearner())
 	body := benchmarkFactJSON(b)
 
 	b.ResetTimer()
@@ -905,7 +914,7 @@ func BenchmarkHandleBatchFacts(b *testing.B) {
 	}
 	defer sink.Close()
 
-	handler := handleBatchFacts(sink, nil, testRegistry(b))
+	handler := handleBatchFacts(sink, nil, testRegistry(b), testLearner())
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

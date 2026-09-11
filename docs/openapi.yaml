@@ -54,6 +54,22 @@ paths:
       operationId: ingestFact
       summary: Ingest a single request fact
       description: |
+        **Path templates are normalized on arrival.** A segment that is a UUID or a run
+        of four or more digits is rewritten to `{id}` before validation, so an
+        integration that reports the literal request path (`/users/42`) is corrected
+        rather than rejected. Anything else that proves dynamic — more than 50 distinct
+        values at one position for a given service and method — is collapsed to
+        `{param}`, permanently.
+
+        A service may register at most 200 distinct path templates. Beyond that, a
+        request carrying a *new* template is rejected with `400` and the message
+        `path_template budget exceeded for service "<name>" (budget=200); normalize
+        this route in your instrumentation`. Templates already seen keep being
+        accepted, so a full budget never stops traffic that was already flowing.
+
+        These budgets are held in memory per ingestion process. A horizontally scaled
+        deployment bounds cardinality per replica rather than in total — see SD-016.
+
         Records a single HTTP request observation. The fact is validated,
         persisted to disk (fsync'd), and later rolled up into minute-level metrics.
       tags: [Data]

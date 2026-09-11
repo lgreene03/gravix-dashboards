@@ -42,7 +42,7 @@ func factJSONAt(t *testing.T, service string, at time.Time) string {
 
 func TestUnprocessableFactStoredNotSilent(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	// Well outside the 30-day retention window: storable, but no partition exists
 	// for it and none ever will.
@@ -83,7 +83,7 @@ func TestUnprocessableFactStoredNotSilent(t *testing.T) {
 
 func TestUnprocessableBatchReportsCount(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil, testRegistry(t))
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	now := time.Now().UTC()
 	body := strings.Join([]string{
@@ -122,7 +122,7 @@ func TestUnprocessableBatchReportsCount(t *testing.T) {
 
 func TestBatchWithoutUnprocessableStaysOK(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil, testRegistry(t))
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	now := time.Now().UTC()
 	body := strings.Join([]string{
@@ -153,7 +153,7 @@ func TestBatchWithoutUnprocessableStaysOK(t *testing.T) {
 
 func TestLatenessMetricCardinalityBounded(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil, testRegistry(t))
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	now := time.Now().UTC()
 	// Facts spanning every class, across two services, with many distinct paths —
@@ -221,7 +221,7 @@ func TestLatenessMetricCardinalityBounded(t *testing.T) {
 
 func TestNoAcceptanceRegression(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil, testRegistry(t))
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	now := time.Now().UTC()
 	tests := []struct {

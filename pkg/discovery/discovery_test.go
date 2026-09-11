@@ -364,3 +364,168 @@ func TestFlushRequeuesOnFailure(t *testing.T) {
 	r.stopOnce.Do(func() { close(r.stopCh) })
 	<-r.doneCh
 }
+
+// ─── GRVX-905: the template registry ───
+
+func TestRecordTemplateThenList(t *testing.T) {
+	r := newRegistry(t)
+	seen := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	r.RecordTemplate("api", "GET", "/users/{id}", seen)
+	r.RecordTemplate("api", "GET", "/users/{id}", seen.Add(time.Minute))
+	r.RecordTemplate("api", "POST", "/orders", seen)
+
+	got, err := r.ListTemplates(context.Background(), "api")
+	if err != nil {
+		t.Fatalf("ListTemplates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d templates, want 2: %+v", len(got), got)
+	}
+	// Sorted by path_template.
+	if got[0].PathTemplate != "/orders" || got[1].PathTemplate != "/users/{id}" {
+		t.Errorf("templates are not sorted: %v, %v", got[0].PathTemplate, got[1].PathTemplate)
+	}
+	if got[1].RequestCount != 2 {
+		t.Errorf("/users/{id} count is %d, want 2", got[1].RequestCount)
+	}
+	if got[1].Method != "GET" {
+		t.Errorf("method is %q", got[1].Method)
+	}
+	if !got[1].LastSeenAt.Equal(seen.Add(time.Minute)) {
+		t.Errorf("last seen is %s, want the later observation", got[1].LastSeenAt)
+	}
+}
+
+// TestRecordTemplateSeparatesMethods: the same path under two methods is two
+// routes, and merging them would under-report cardinality.
+func TestRecordTemplateSeparatesMethods(t *testing.T) {
+	r := newRegistry(t)
+	now := time.Now().UTC()
+
+	r.RecordTemplate("api", "GET", "/thing", now)
+	r.RecordTemplate("api", "DELETE", "/thing", now)
+
+	got, err := r.ListTemplates(context.Background(), "api")
+	if err != nil {
+		t.Fatalf("ListTemplates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d rows, want 2 — GET and DELETE on one path are two routes", len(got))
+	}
+}
+
+func TestListTemplatesIsScopedToOneService(t *testing.T) {
+	r := newRegistry(t)
+	now := time.Now().UTC()
+
+	r.RecordTemplate("api", "GET", "/a", now)
+	r.RecordTemplate("other", "GET", "/b", now)
+
+	got, err := r.ListTemplates(context.Background(), "api")
+	if err != nil {
+		t.Fatalf("ListTemplates: %v", err)
+	}
+	if len(got) != 1 || got[0].PathTemplate != "/a" {
+		t.Errorf("another service's templates leaked in: %+v", got)
+	}
+
+	empty, err := r.ListTemplates(context.Background(), "nobody")
+	if err != nil {
+		t.Fatalf("ListTemplates: %v", err)
+	}
+	if empty == nil {
+		t.Error("ListTemplates returned nil; it is serialised to JSON, where nil renders as null")
+	}
+	if len(empty) != 0 {
+		t.Errorf("an unknown service returned %d templates", len(empty))
+	}
+}
+
+func TestRecordTemplateRejectsEmptyValues(t *testing.T) {
+	r := newRegistry(t)
+	now := time.Now().UTC()
+
+	r.RecordTemplate("", "GET", "/a", now)
+	r.RecordTemplate("api", "GET", "", now)
+
+	got, err := r.ListTemplates(context.Background(), "api")
+	if err != nil {
+		t.Fatalf("ListTemplates: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("an empty service or template created a row: %+v", got)
+	}
+}
+
+// TestFlushPersistsServicesAndTemplatesTogether: §6.3 requires one transaction.
+// A service listed with routes that are still only in memory would be a
+// registry that disagrees with itself after a crash.
+func TestFlushPersistsServicesAndTemplatesTogether(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "discovery.db")
+	seen := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	first, err := OpenWithFlushInterval(path, time.Hour)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	first.RecordFact("api", seen)
+	first.RecordTemplate("api", "GET", "/users/{id}", seen)
+	first.RecordTemplate("api", "GET", "/users/{id}", seen)
+	if err := first.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	second, err := OpenWithFlushInterval(path, time.Hour)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer second.Close()
+
+	services := list(t, second)
+	if len(services) != 1 {
+		t.Fatalf("services did not survive the round trip: %+v", services)
+	}
+	templates, err := second.ListTemplates(context.Background(), "api")
+	if err != nil {
+		t.Fatalf("ListTemplates: %v", err)
+	}
+	if len(templates) != 1 {
+		t.Fatalf("templates did not survive the round trip: %+v", templates)
+	}
+	if templates[0].RequestCount != 2 {
+		t.Errorf("template count is %d, want 2", templates[0].RequestCount)
+	}
+	if !templates[0].FirstSeenAt.Equal(seen) {
+		t.Errorf("first_seen_at did not survive: %s", templates[0].FirstSeenAt)
+	}
+}
+
+// TestFlushRequeuesTemplatesOnFailure is the template half of the property
+// TestFlushRequeuesOnFailure proves for services.
+func TestFlushRequeuesTemplatesOnFailure(t *testing.T) {
+	r, err := OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	seen := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	r.RecordTemplate("api", "GET", "/users/{id}", seen)
+
+	if err := r.db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if err := r.Flush(context.Background()); err == nil {
+		t.Fatal("Flush reported success against a closed database")
+	}
+
+	r.mu.Lock()
+	_, ok := r.pendingTemplate[templateKey{"api", "GET", "/users/{id}"}]
+	r.mu.Unlock()
+	if !ok {
+		t.Error("a failed flush dropped its template batch")
+	}
+
+	r.stopOnce.Do(func() { close(r.stopCh) })
+	<-r.doneCh
+}

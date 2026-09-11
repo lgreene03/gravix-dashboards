@@ -32,6 +32,7 @@ import (
 	"github.com/lgreene/gravix-dashboards/pkg/discovery"
 	"github.com/lgreene/gravix-dashboards/pkg/lateness"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
+	"github.com/lgreene/gravix-dashboards/pkg/pathlearn"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -889,6 +890,14 @@ func main() {
 		warehousePath = filepath.Join(*baseDir, "warehouse")
 	}
 
+	// Normalizes obviously-dynamic path segments so a naive framework
+	// integration does not lose every fact to the DLQ, and bounds the
+	// cardinality of everything it cannot classify. In-memory and per-process:
+	// see SD-016 for what that means under a scaled deployment.
+	learner := pathlearn.NewLearner(
+		pathlearn.DefaultSegmentDistinctBudget,
+		pathlearn.DefaultTemplateBudgetPerService)
+
 	// Per-tenant rate limiting (fallback 100/s for legacy mode)
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
@@ -910,8 +919,8 @@ func main() {
 	}
 
 	// Wrap handlers: auth first (sets tenant context), then scope check, rate limit, buffer check, handler
-	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleFacts(sink, tdb, reg))))))
-	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb, reg))))))
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleFacts(sink, tdb, reg, learner))))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb, reg, learner))))))
 	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleEvents(sink, tdb))))))
 	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleTraces(sink, tdb, traceSampleRate))))))
 	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleOTLPTraces(sink))))))
@@ -1044,7 +1053,7 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry) http.HandlerFunc {
+func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, learner *pathlearn.Learner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -1072,9 +1081,12 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry) ht
 
 		reqID := logging.GetRequestID(r.Context())
 
-		fact, err := schemas.ParseRequestFact(body)
+		// Decode first, normalize, then validate. The rules are unchanged and
+		// still run — they just run on a path_template whose dynamic segments
+		// have been collapsed, so an integration reporting /users/42 is fixed
+		// rather than silently sent to the DLQ.
+		fact, err := schemas.UnmarshalRequestFactUnvalidated(body)
 		if err != nil {
-			// Write rejected fact to DLQ (async, non-blocking)
 			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
 				Timestamp: time.Now().UTC(),
 				TenantID:  tenantID,
@@ -1084,6 +1096,36 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry) ht
 				RawJSON:   json.RawMessage(body),
 			}})
 			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid RequestFact: %v", err))
+			return
+		}
+
+		decision := learner.Learn(fact.Service, fact.Method, fact.PathTemplate)
+		if !decision.Accepted {
+			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
+				Timestamp: time.Now().UTC(),
+				TenantID:  tenantID,
+				RequestID: reqID,
+				FactType:  "request_fact",
+				Error:     decision.Reason,
+				RawJSON:   json.RawMessage(body),
+			}})
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "400", tenantID).Inc()
+			writeErrorJSON(w, http.StatusBadRequest, decision.Reason)
+			return
+		}
+		fact.PathTemplate = decision.Template
+
+		if err := schemas.ValidateRequestFact(fact); err != nil {
+			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
+				Timestamp: time.Now().UTC(),
+				TenantID:  tenantID,
+				RequestID: reqID,
+				FactType:  "request_fact",
+				Error:     err.Error(),
+				RawJSON:   json.RawMessage(body),
+			}})
+			writeErrorJSON(w, http.StatusBadRequest,
+				fmt.Sprintf("invalid RequestFact: validation error: %v", err))
 			return
 		}
 
@@ -1105,6 +1147,7 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry) ht
 		// service whose fact was not persisted. In-memory and lock-only: no disk
 		// I/O between here and the 201.
 		reg.RecordFact(fact.Service, fact.EventTime.AsTime())
+		reg.RecordTemplate(fact.Service, fact.Method, fact.PathTemplate, fact.EventTime.AsTime())
 
 		// Increment event counter for billing (best-effort, non-blocking)
 		incrementEventCounter(tdb, tenantID, 1)
@@ -1346,7 +1389,7 @@ func localAlertChannel(ctx context.Context, tdb tenantdb.DB, tenantID string) (*
 }
 
 // handleBatchFacts handles JSONL (newline-delimited JSON) payloads with multiple facts per request.
-func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry) http.HandlerFunc {
+func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, learner *pathlearn.Learner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -1392,9 +1435,42 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registr
 				continue
 			}
 
-			fact, err := schemas.ParseRequestFact(line)
+			// Same three steps as the single-fact path: decode, normalize,
+			// validate. Each failure keeps the existing per-line shape, so a
+			// budget rejection reads like any other rejected line.
+			fact, err := schemas.UnmarshalRequestFactUnvalidated(line)
 			if err != nil {
 				errMsg := fmt.Sprintf("line %d: %v", i+1, err)
+				errors = append(errors, errMsg)
+				dlqEntries = append(dlqEntries, DLQEntry{
+					Timestamp: now,
+					TenantID:  tenantID,
+					RequestID: reqID,
+					FactType:  "request_fact",
+					Error:     errMsg,
+					RawJSON:   json.RawMessage(line),
+				})
+				continue
+			}
+
+			decision := learner.Learn(fact.Service, fact.Method, fact.PathTemplate)
+			if !decision.Accepted {
+				errMsg := fmt.Sprintf("line %d: %s", i+1, decision.Reason)
+				errors = append(errors, errMsg)
+				dlqEntries = append(dlqEntries, DLQEntry{
+					Timestamp: now,
+					TenantID:  tenantID,
+					RequestID: reqID,
+					FactType:  "request_fact",
+					Error:     errMsg,
+					RawJSON:   json.RawMessage(line),
+				})
+				continue
+			}
+			fact.PathTemplate = decision.Template
+
+			if err := schemas.ValidateRequestFact(fact); err != nil {
+				errMsg := fmt.Sprintf("line %d: validation error: %v", i+1, err)
 				errors = append(errors, errMsg)
 				dlqEntries = append(dlqEntries, DLQEntry{
 					Timestamp: now,
@@ -1430,6 +1506,7 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registr
 			// counters are a "what exists" aid, not billing, so the spec's
 			// placement is followed rather than silently improved. See SD-014.
 			reg.RecordFact(fact.Service, fact.EventTime.AsTime())
+			reg.RecordTemplate(fact.Service, fact.Method, fact.PathTemplate, fact.EventTime.AsTime())
 
 			if classifyFact(fact, now) == lateness.ClassUnprocessable {
 				unprocessable = append(unprocessable,

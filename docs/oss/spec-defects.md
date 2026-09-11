@@ -977,3 +977,61 @@ is armed and inert is worse than none, which is the failure this spec's own guar
 without choosing a threshold or configuring a destination — target 100%, measured by
 `TestArmProposalCreatesRuleAndChannel` and `TestEvaluatorFiresRulesOnALogChannel`, owned by
 `senior-engineer`"*, but the number and the owner are the CPO's to set.
+
+---
+
+## SD-016 — the cardinality budget is per-process, and the shipped production chart runs ingestion at 2–10 replicas
+
+**Filed under GRVX-905 §10**, third row, which names this exact condition.
+
+`SPEC DEFECT: §3 — non-goal "in-memory only" breaks under multi-process ingestion`
+
+**Severity** medium. The feature works and is a large improvement on unbounded cardinality; what
+does not hold is the guarantee §1 states — "no amount of naive instrumentation can create unbounded
+dimension cardinality" — at the bound the spec claims.
+
+**Confirmed against the chart, not assumed.** `deploy/gravix/templates/hpa.yaml` targets the
+**ingestion** deployment, and:
+
+| values file | `autoscaling.enabled` | replicas |
+|---|---|---|
+| `values.yaml` (default) | false | 1 |
+| `values-dev.yaml` | false | 1 |
+| `values-prod.yaml` | **true** | **2–10** |
+| `values-production.yaml` | **true** | **2–10** |
+
+Each replica holds its own `pathlearn.Learner`, and nothing is shared. So under the shipped
+production configuration:
+
+- **The template budget multiplies.** 200 per service per process becomes up to **2,000** across ten
+  replicas — over the "< 1000 unique values per day" limit in `docs/04-non-goals.md` §5, which is the
+  very number §3 says the 200 was chosen to sit comfortably under.
+- **The segment budget weakens.** With traffic spread across ten replicas, each sees roughly a tenth
+  of the distinct values at a position, so a genuinely dynamic segment needs ~10× more distinct
+  values before *any* replica collapses it — and replicas disagree about whether it is collapsed, so
+  the same raw path becomes two different templates depending on which pod served it.
+
+The second effect is the more insidious: it does not merely loosen a bound, it makes the output
+non-deterministic. Two identical requests can produce `/shop/boots` and `/shop/{param}`.
+
+**Why this was not fixed here.** §3 declares in-memory-only a deliberate simplification and forbids
+persisting the counters, so the fix is outside this spec by construction. It is also a real design
+choice with costs — sharing this state means either a round trip per fact on the ingestion hot path,
+or accepting staleness, and both deserve deciding rather than assuming.
+
+**Options, none of them free:**
+
+1. **Shard by service at the load balancer**, so all facts for one service reach one replica. The
+   budget then holds exactly. Costs an ingress-level routing rule and uneven load.
+2. **Move the counters into the discovery SQLite registry**, which already persists per-service
+   state. Correct across restarts too, but puts a database write on the fact path — the thing
+   `pkg/discovery`'s batching exists to avoid.
+3. **Divide the budget by replica count** and pass it in as configuration. Cheapest, keeps the total
+   bound honest, and costs nothing at runtime — but over-collapses when replicas are idle.
+4. **Accept it and document it**, lowering the published claim from "cardinality is bounded" to
+   "cardinality is bounded per replica".
+
+**Meanwhile the limitation is visible rather than hidden**: the package doc for `pkg/pathlearn`
+states it, and so does the comment where the `Learner` is constructed in `services/ingestion/main.go`.
+A single-replica deployment — the default, and every self-hoster following the bootstrap path — has
+the exact bound the spec claims.

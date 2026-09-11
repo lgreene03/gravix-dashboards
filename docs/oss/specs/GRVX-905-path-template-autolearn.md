@@ -308,17 +308,131 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All nine acceptance criteria pass, plus twelve more. One
+escalation filed under §10 (SD-016) — it concerns a deployment-shape assumption, not the code.
+
+```
+$ go test ./pkg/pathlearn/... -v -cover
+--- PASS: TestLearnCollapsesNumericID                  (AC-1)
+--- PASS: TestLearnCollapsesUUID                       (AC-2)
+--- PASS: TestLearnCollapsesAfterSegmentBudget         (AC-3)
+--- PASS: TestLearnBudgetIsPerPosition
+--- PASS: TestLearnBudgetIsPerServiceAndMethod
+--- PASS: TestLearnCollapseIsMonotonic                 (AC-4)
+--- PASS: TestLearnRejectsAfterTemplateBudget          (AC-5)
+--- PASS: TestLearnReacceptsKnownTemplateAfterBudgetFull (AC-6)
+--- PASS: TestNormalizedTemplatesPassValidation
+--- PASS: TestPatternsAgreeWithSchemas
+--- PASS: TestLearnIsConcurrencySafe
+ok  	pkg/pathlearn	coverage: 97.8% of statements
+
+$ go test ./schemas/... -v -cover
+--- PASS: TestUnmarshalRequestFactUnvalidated          (AC-7)
+ok  	schemas	coverage: 100.0% of statements
+
+$ go test ./pkg/discovery/... -run TestRecordTemplate
+--- PASS: TestRecordTemplateThenList
+--- PASS: TestRecordTemplateSeparatesMethods
+--- PASS: TestRecordTemplateRejectsEmptyValues
+ok  	pkg/discovery	coverage: 82.0% of statements
+
+$ go test ./services/ingestion/... -run TestFactsEndpoint -v
+--- PASS: TestFactsEndpointAutoLearnsNumericID         (AC-8)
+--- PASS: TestFactsEndpointAutoLearnsUUID
+--- PASS: TestFactsEndpointRejectsAfterTemplateBudget  (AC-9)
+--- PASS: TestFactsEndpointStillRejectsNonPathViolations
+ok  	services/ingestion	0.064s
+
+$ go build ./... && go test ./schemas/...    # ok
+$ make check-boundary                         # boundary: 0 violations
+$ make build-oss && make test-oss             # 50 packages, ee/ absent
+$ go test ./... -race -count=1                # no failures, no races
+$ make lint                                   # clean
+$ make test-js                                # 61 pass, 0 fail
+```
+
+**`schemas/` coverage is 100.0%**, against the ≥90% the Definition of Done requires.
+
+### 8.2 Two tests that were checking the wrong thing
+
+**The normalized path must actually pass validation.** Asserting that `/users/42` becomes
+`/users/{id}` proves only that a string changed. `TestNormalizedTemplatesPassValidation` requires two
+things of every case: that `ValidateRequestFact` **rejects** the raw path (so the test is exercising
+the problem this spec exists to fix) and that it **accepts** the normalized one. Without the first
+half the test would keep passing if the validator's rules were relaxed, and this spec would be
+solving a problem that no longer existed.
+
+`TestPatternsAgreeWithSchemas` guards the same seam from the other side. This package deliberately
+does not import the validator's unexported regexes — §3 fences that file, and normalization should
+not be coupled to a validation rule free to change for its own reasons — so the two can drift. Drift
+means facts normalized here are still rejected there, and the user sees an empty dashboard with no
+explanation. The test asserts, for each pattern, both that the validator rejects it and that this
+package rewrites it.
+
+**AC-4 passed for the wrong reason and had to be strengthened.** Mutation testing removed the
+`l.collapsed[key]` check, and `TestLearnCollapseIsMonotonic` still passed. The reason is worth
+recording: with the check gone, the implementation re-learns from an empty set after each collapse,
+so the counter oscillates, and roughly one call in four trips the budget again and returns `{param}`
+**by coincidence**. The test made exactly one call, and that call happened to be one of them.
+
+Repeating the same literal value cannot oscillate — the distinct count stays at one — so the test now
+makes five consecutive calls and also tries a value never seen before. Both must be `{param}`. The
+mutation now fails on call 2.
+
+### 8.3 Guards proven by mutation
+
+| Guard | Mutation | Reported |
+|---|---|---|
+| AC-5 `TestLearnRejectsAfterTemplateBudget` | removed the template budget check | yes — "template 201 was accepted" |
+| AC-4 `TestLearnCollapseIsMonotonic` | removed the collapsed-position check | **no, at first** — see §8.2; now fails on call 2 |
+
+### 8.4 Escalation filed: SD-016
+
+§10's third row names the condition, and it holds. `deploy/gravix/templates/hpa.yaml` targets the
+**ingestion** deployment, and both `values-prod.yaml` and `values-production.yaml` set
+`autoscaling.enabled: true` with `minReplicas: 2, maxReplicas: 10`. Each replica holds its own
+`Learner` and nothing is shared, so in the shipped production configuration:
+
+- the 200-template budget becomes up to **2,000** across ten replicas — above the "< 1000 unique
+  values per day" limit in `docs/04-non-goals.md` §5 that §3 says the 200 was chosen to sit under;
+- a dynamic segment needs roughly 10× more distinct values before any replica collapses it, and
+  replicas **disagree** about whether it is collapsed, so the same raw path can produce
+  `/shop/boots` from one pod and `/shop/{param}` from another.
+
+The second is the worse of the two: it does not merely loosen a bound, it makes the output
+non-deterministic.
+
+§3 forbids persisting the counters, so the fix is outside this spec by construction — and it is a
+real design choice with costs (sharding at the ingress, a database write on the fact path, or
+dividing the budget by replica count). SD-016 records all four options. The limitation is stated in
+the `pkg/pathlearn` package doc, at the construction site in `services/ingestion/main.go`, and in the
+`POST /api/v1/facts` description, rather than left to be discovered. **A single-replica deployment —
+the default, and every self-hoster following the bootstrap path — has exactly the bound the spec
+claims.**
+
+### 8.5 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| `services/ingestion/lateness_test.go` and `services_endpoint_test.go` modified, beyond §4.2 | Both hold `handleFacts`/`handleBatchFacts` call sites. The package does not compile without them; §4.2's list is incomplete rather than restrictive. |
+| `services/ingestion/pathlearn_endpoint_test.go` created, beyond §4.1 | AC-8 and AC-9 are endpoint-level and need a home; `main_test.go` is already 900 lines. |
+| `docs/openapi.yaml` modified | The §9 docs delta, which asks for the behaviour and both budgets in the ingestion API docs. |
+| `Learner.TemplateCount` added beyond §5's listed API | A read-only accessor so AC-5 can assert that a *rejected* template was not counted — otherwise the budget could be spent by the traffic it refused and no test would see it. |
+
 ## 9. Definition of done
 
-- [ ] All nine acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `schemas/` coverage remains ≥90% (`scripts/golden_path_test.sh` step 5 threshold)
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.1/§4.2 modified
-- [ ] `docs-engineer` delta merged (document the auto-learn behaviour and the two budgets in the
-      ingestion API docs) or `NO DOCS DELTA REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests
+- [x] All nine acceptance criteria pass with their named tests — §8.1, plus twelve more
+- [x] Every Verification command run, real output pasted into the report — §8.1
+- [x] `schemas/` coverage remains ≥90% — **100.0%**
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted — 50 packages
+- [ ] **No** — four beyond §4.1/§4.2, each with its reason in §8.5. Two are not optional: the
+      package does not compile without the extra test call sites.
+- [x] `docs-engineer` delta merged — `POST /api/v1/facts` now documents the normalization rules,
+      both budgets, the exact rejection message, and the per-process limitation
+- [x] Zero new skipped or quarantined tests
 
 ## 10. Escalation
 
