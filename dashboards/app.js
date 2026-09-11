@@ -414,6 +414,8 @@
 
             if (pageName === 'endpoints') {
                 updateEndpointsPage();
+            } else if (pageName === 'slo') {
+                loadSLOPage();
             } else if (pageName === 'alerts') {
                 loadAlertsPage();
             } else if (pageName === 'ingestion') {
@@ -744,6 +746,43 @@
             }
 
             saveFiltersToHash();
+        }
+
+        // --- SLO PAGE (GRVX-903) ---
+        // One card per discovered service, built from live data every load.
+        // Nothing is persisted, so there is no dashboard definition to
+        // configure, share, or let drift from what is actually running.
+        //
+        // The rendering and the formulas live in lib/slo-cards.js so they can be
+        // tested without a browser; this is only the wiring.
+        async function loadSLOPage() {
+            if (currentPage !== 'slo') return;
+            if (!window.GravixSLO) return;
+
+            await window.GravixSLO.loadSLOPage({
+                fetchServices: () => ingestionFetch('/api/v1/services'),
+                fetchMetrics: fetchSLOForService,
+                grid: document.getElementById('slo-grid'),
+                empty: document.getElementById('slo-empty')
+            });
+        }
+
+        // fetchSLOForService returns the trailing window's numbers for one
+        // service. Zero rows means the service was seen on a fact but no rollup
+        // has covered it yet, which is a real state and not an error.
+        async function fetchSLOForService(service) {
+            const rows = await fetchCubeData(
+                ['RequestMetricsMinute.errorRate', 'RequestMetricsMinute.p95Latency',
+                 'RequestMetricsMinute.requestCount'],
+                [{ member: 'RequestMetricsMinute.service', operator: 'equals', values: [service] }]
+            );
+            const row = Array.isArray(rows) ? rows[0] : (rows && rows.data && rows.data[0]);
+            if (!row) return { errorRate: 0, p95LatencyMs: 0, requestCount: 0 };
+            return {
+                errorRate: row['RequestMetricsMinute.errorRate'],
+                p95LatencyMs: row['RequestMetricsMinute.p95Latency'],
+                requestCount: row['RequestMetricsMinute.requestCount']
+            };
         }
 
         async function updateEndpointsPage() {

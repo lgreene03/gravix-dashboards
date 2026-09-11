@@ -129,6 +129,7 @@
         <nav aria-label="Main navigation" role="navigation">
             <a href="#" class="nav-link active" data-page="overview" aria-current="page">Overview</a>
             <a href="#" class="nav-link" data-page="endpoints">Endpoints</a>
+            <a href="#" class="nav-link" data-page="slo">SLO</a>
             <a href="#" class="nav-link" data-page="alerts" id="nav-alerts">Alerts</a>
             <a href="#" class="nav-link" data-page="ingestion">Ingestion</a>
             <a href="#" class="nav-link" data-page="traces" id="nav-traces">Traces</a>
@@ -473,6 +474,13 @@
         </div><!-- end page-endpoints -->
 
         <!-- ===== ALERTS PAGE ===== -->
+        <div id="page-slo" class="page-content" style="display: none;">
+            <div id="slo-empty" class="empty-state">
+                <p>No services discovered yet. Send traffic to see SLO cards appear automatically.</p>
+            </div>
+            <div id="slo-grid" class="slo-grid"></div>
+        </div>
+
         <div id="page-alerts" class="page-content" style="display: none;">
             <!-- Sub-tabs -->
             <div style="display: flex; gap: 8px; margin-bottom: 24px;">
@@ -1333,6 +1341,13 @@
             });
             window.GravixLineageRender = { renderLineage, renderLoading, toBucketISO };
         }
+    </script>
+
+    <script type="module">
+        // app.js is a classic script and cannot import, so the SLO module
+        // publishes itself the same way the lineage panel does.
+        import { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY } from './lib/slo-cards.js';
+        window.GravixSLO = { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY };
     </script>
 </body>
 

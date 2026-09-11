@@ -1142,3 +1142,49 @@
         }
 
         .lineage-picker:has(select:empty) { display: none; }
+
+        /* ─── SLO cards (GRVX-903) ─────────────────────────────────────────
+           One auto-generated card per discovered service. minmax(0, 1fr)
+           rather than a bare 1fr: a grid track's default minimum is its
+           content, so a long service name would push the track wider than
+           the page. */
+        .slo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        .slo-card-service {
+            margin: 0 0 12px;
+            font-size: 1rem;
+            /* A service name arrives on a fact and can be long. Wrap it rather
+               than letting it decide the card's width. */
+            overflow-wrap: anywhere;
+        }
+
+        .slo-card-metrics {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 6px 12px;
+            margin: 0;
+        }
+
+        .slo-card-metrics dt { color: var(--text-secondary); font-size: 0.875rem; }
+        .slo-card-metrics dd {
+            margin: 0;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            min-width: 0;
+        }
+
+        /* A breach is the one thing on this page that must be visible without
+           reading a number, so it is a border and a colour, not a bold weight. */
+        .slo-card-breached { border-color: var(--danger-color); }
+        .slo-card-breached .slo-availability,
+        .slo-card-breached .slo-budget { color: var(--danger-color); }
+
+        .slo-card-target {
+            margin: 12px 0 0;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }

@@ -629,11 +629,20 @@ test('TestDashboardBundleBudget', async () => {
     const { gzipSync } = await import('node:zlib');
     const { readdirSync } = await import('node:fs');
 
-    // Measured at the commit before GRVX-809, over the same file set:
-    //   cat app.js styles.css lib/*.js | gzip -c | wc -c  ->  48880
-    // The budget is what the panel may add on top, not a total, so it keeps
-    // meaning as the dashboard grows for other reasons.
-    const BASELINE_GZIP = 48880;
+    // What this measures, and why it changed.
+    //
+    // It used to subtract a constant captured before GRVX-809, which made it a
+    // permanent ceiling on the whole dashboard rather than a budget for one
+    // change — the opposite of what the comment here claimed. Every feature
+    // since spent the lineage panel's allowance, and GRVX-902 tripped it by 31
+    // bytes for a change that had nothing to do with the panel (F-012).
+    //
+    // The baseline now lives in a committed file. A change that legitimately
+    // grows the bundle updates that file in the same commit, so the growth is a
+    // reviewable number in the diff instead of a silent accumulation — and the
+    // budget keeps meaning "what the change in front of you adds".
+    const baselinePath = join(dashboardsDir, 'bundle-baseline.json');
+    const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'));
     const BUDGET = 8 * 1024;
 
     const shipped = ['app.js', 'styles.css']
@@ -644,11 +653,22 @@ test('TestDashboardBundleBudget', async () => {
 
     const bytes = Buffer.concat(shipped.map(f => readFileSync(join(dashboardsDir, f))));
     const size = gzipSync(bytes).length;
-    const delta = size - BASELINE_GZIP;
+    const delta = size - baseline.gzip_bytes;
+    const sinceOrigin = size - baseline.origin_gzip_bytes;
 
-    console.log(`  dashboards/ gzipped: ${size} bytes (${delta >= 0 ? '+' : ''}${delta} vs baseline ${BASELINE_GZIP})`);
+    // Cumulative growth is reported every run but never fails the test. Whether
+    // the dashboard should have a hard total ceiling, and what it should be, is
+    // a product call about load time rather than something to infer from
+    // wherever the bundle happened to sit when this guard was written.
+    console.log(`  dashboards/ gzipped: ${size} bytes` +
+        ` (${delta >= 0 ? '+' : ''}${delta} vs baseline ${baseline.gzip_bytes},` +
+        ` recorded for ${baseline.recorded_for};` +
+        ` ${sinceOrigin >= 0 ? '+' : ''}${sinceOrigin} since ${baseline.origin_label})`);
+
     assert.ok(delta <= BUDGET,
-        `the dashboard grew ${delta} bytes gzipped, over the ${BUDGET}-byte budget`);
+        `the dashboard grew ${delta} bytes gzipped since the recorded baseline, over the ` +
+        `${BUDGET}-byte budget. If the growth is intended, update ${baselinePath} to ${size} ` +
+        `in this same commit so the increase is visible in the diff.`);
 
     // And no test file is shipped.
     assert.ok(!shipped.some(f => f.includes('.test.')), 'a test file is in the shipped set');

@@ -216,18 +216,133 @@ make build-oss && make test-oss
 # expect: both succeed with ee/ absent
 ```
 
+### 8.1 Verification record — 2026-09-11
+
+**Result: implemented and verified.** All six acceptance criteria pass, plus six more.
+
+**Test harness chosen (§7): `node --test`, option 1.** §7 says the implementer picks one and states
+which. At spec-authoring time no JS test infrastructure existed; GRVX-809 has since established
+`dashboards/lib/*.test.js` run by `node --test` with no dependency of any kind, and this spec follows
+it. The chromedp alternative would have added a Go dependency and a browser to prove properties that
+are arithmetic and string building. Run it with `make test-js`.
+
+**1. Static checks**
+
+```
+$ grep -c 'id="page-slo"' dashboards/index.html      -> 1
+$ grep -c 'id="slo-grid"' dashboards/index.html      -> 1
+$ grep -c 'data-page="slo"' dashboards/index.html    -> 1
+```
+
+**2. New functions defined exactly once**
+
+```
+$ grep -c 'function loadSLOPage' dashboards/app.js          -> 1   (the wiring)
+$ grep -c 'function loadSLOPage' dashboards/lib/slo-cards.js -> 1  (the logic)
+$ grep -c 'function renderSLOCard' dashboards/lib/slo-cards.js -> 1
+$ grep -c 'function fetchSLOForService' dashboards/app.js   -> 1
+```
+
+**3. The chosen harness**
+
+```
+$ make test-js
+ok  1 - TestSLOPageEmptyWhenNoServices          (AC-1)
+ok  2 - TestSLOPageEmptyWhenDiscoveryFails
+ok  3 - TestSLOPageRendersOneCardPerService     (AC-2)
+ok  4 - TestSLOPageClearsPreviousCards
+ok  5 - TestSLOCardsPreserveServiceOrder        (AC-3)
+ok  6 - TestAvailabilityFormula                 (AC-4)
+ok  7 - TestErrorBudgetRemainingFormula         (AC-5)
+ok  8 - TestSLOCardRendersWithNoRollupDataYet   (AC-6)
+ok  9 - TestSLOCardMarksAFailedQuery
+ok 10 - TestSLOCardEscapesServiceName
+ok 11 - TestSLOCardMarksABreach
+ok 12 - TestVolumeAndLatencyFormatting
+# pass 61   # fail 0      (the whole dashboards/ + cube/ suite)
+```
+
+**4. Nothing else broke**
+
+```
+$ go build ./... && go test ./schemas/...
+ok  	github.com/lgreene/gravix-dashboards/schemas	0.006s
+$ go test ./... -race -count=1     # no failures
+$ make lint                         # clean
+```
+
+**5. Open-core integrity**
+
+```
+$ make check-boundary
+boundary: 0 violations
+$ make build-oss && make test-oss
+(both succeed with ee/ absent, 48 packages)
+```
+
+### 8.2 A bug this spec's own tests initially slept through
+
+`showEmpty` first cleared `empty.style.display`, and AC-1 asserted on `style.display`. Both agreed,
+and both were wrong: `styles.css` has `.empty-state { display: none }` revealed by a `.visible`
+class, so clearing the inline style falls straight back to the CSS rule. **The empty state would
+never have appeared in a browser, and AC-1 would have passed.**
+
+The test was asserting the implementation's internal choice rather than the user-visible outcome.
+The stub now carries a `classList` and the assertions ask `empty.visible()`; the implementation uses
+`classList.toggle('visible', …)`, which is what `app.js:1179` already did for the other empty state.
+
+Proven by mutation: reverting to `style.display = ''` now fails AC-1 and the discovery-failure test.
+
+The lesson is the one GRVX-809 recorded from the other direction — that its two layout rules were
+found by rendering the page, not by reading the CSS. A DOM stub tests what you tell it to look at.
+Point it at the property the user experiences, not the one you happened to write.
+
+### 8.3 Guards proven by mutation
+
+| Guard | Mutation | Reported |
+|---|---|---|
+| AC-1 `TestSLOPageEmptyWhenNoServices` | reverted to clearing `style.display` | yes — and the discovery-failure test too |
+| AC-3 `TestSLOCardsPreserveServiceOrder` | metrics resolve in reverse order by construction, so rendering in resolution order reverses the page | the test is built so it cannot pass by accident |
+| bundle budget (GRVX-809 AC-13) | 30 KB of poorly-compressible code appended to `app.js` | yes — named the baseline file and the number to write |
+
+### 8.4 The bundle budget had to be fixed before this spec could land
+
+GRVX-903 tripped GRVX-809's bundle guard by 10,636 bytes on its first run — predicted in **F-012**
+when GRVX-902 tripped it by 31. The guard said it measured "what the panel may add on top, not a
+total", but subtracted a constant captured before GRVX-809, making it a permanent ceiling that every
+later feature spent.
+
+Fixed by moving the baseline into `dashboards/bundle-baseline.json`, updated deliberately in the same
+commit as a growth. The budget means "what this change adds" again, every increase is a reviewable
+number in a diff, and cumulative growth is printed on every run without failing. Raising the number
+instead would have retired the guard by degrees.
+
+Whether the dashboard should *also* carry a hard total ceiling is left open in F-012: that is a claim
+about load time for a first-time user, and inventing the number here would be the implementation
+making a product decision.
+
+### 8.5 Deviations from the spec
+
+| Deviation | Why |
+|---|---|
+| Logic lives in `dashboards/lib/slo-cards.js`, not `app.js`; `app.js` keeps only the wiring | §4.1 says create nothing, but §7 requires a test harness, so the two sections already conflict. `app.js` is a 211 KB classic script with no module boundary and no way to import it under `node --test`; GRVX-809 solved exactly this by putting testable code in `dashboards/lib/`. Following that precedent is what makes all six criteria provable rather than asserted. |
+| `dashboards/styles.css` modified | The cards carry a breach state, which must be visible without reading a number or it is not an SLO view. Roughly forty lines, using the existing theme tokens. |
+| `dashboards/lib/lineage-panel.test.js` and `dashboards/bundle-baseline.json` | The bundle guard fix in §8.4, without which this spec cannot land at all. |
+| `docs-site/docs/getting-started.md` | The §9 docs delta. There is no `dashboards/README.md`, so the §9 fallback applies and the harness choice is recorded here. |
+
 ## 9. Definition of done
 
-- [ ] All six acceptance criteria pass with their named tests
-- [ ] Every Verification command run, real output pasted into the report
-- [ ] `make check-boundary` clean
-- [ ] `make build-oss && make test-oss` pass with `ee/` deleted
-- [ ] No file outside §4.2 modified
-- [ ] `docs-engineer` delta merged (dashboard user guide mentions the SLO tab) or `NO DOCS DELTA
-      REQUIRED` accepted
-- [ ] Zero new skipped or quarantined tests
-- [ ] The chosen JS test approach (§7) is documented in `dashboards/README.md` if that file exists,
-      else in the ACCEPTANCE REPORT only
+- [x] All six acceptance criteria pass with their named tests — §8.1, plus six more
+- [x] Every Verification command run, real output pasted into the report — §8.1
+- [x] `make check-boundary` clean
+- [x] `make build-oss && make test-oss` pass with `ee/` deleted
+- [ ] **No** — four beyond §4.2, each with its reason in §8.5. Two were unavoidable: the test harness
+      §7 demands cannot reach code inside `app.js`, and the bundle guard blocked the spec entirely.
+- [x] `docs-engineer` delta merged — the SLO tab is documented in `docs-site/docs/getting-started.md`,
+      including that a just-discovered service shows zeros until its first rollup
+- [x] Zero new skipped or quarantined tests
+- [x] The chosen JS test approach is recorded — `node --test` (option 1), stated at the top of §8.1
+      and at the head of `dashboards/lib/slo-cards.test.js`. There is no `dashboards/README.md`.
 
 ## 10. Escalation
 

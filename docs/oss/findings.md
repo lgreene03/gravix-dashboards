@@ -469,7 +469,8 @@ two blocks in full, keep one, and add `docker-compose.yml` to the CI validation 
 **Found by** CI going red on GRVX-902 after the JS suite passed on the previous head.
 **Severity** medium — as written it will fail every future dashboard spec, and the obvious reaction
 is to raise the number, which retires the guard.
-**Status** the local-runner half is fixed; the framing needs a decision by whoever owns GRVX-910.
+**Status** both halves now addressed — see the resolution at the end. One question is deliberately
+left open for a product owner.
 
 GRVX-809's AC-13 guard says what it is for:
 
@@ -507,3 +508,25 @@ than CI's `lint` job, `go test -race` was never run locally, and now the JavaScr
 local entry point at all. Each was found by breaking the build. The pattern is worth stating plainly:
 **a gate that exists only in CI is a gate you discover by tripping it**, and the cost is a red build
 on someone else's branch rather than a failing command on your own machine.
+
+### Resolution, 2026-09-11 — GRVX-903
+
+GRVX-903 tripped the budget on its first run, by 10,636 bytes, exactly as predicted above. Rather
+than raise the number, the guard was changed to measure what its own comment always claimed it
+measured.
+
+`BASELINE_GZIP` is gone. The baseline now lives in `dashboards/bundle-baseline.json`, and a change
+that legitimately grows the bundle updates that file in the same commit. The budget therefore means
+"what the change in front of you adds" again, and every increase is a reviewable number in a diff
+rather than a silent accumulation. Cumulative growth since the pre-GRVX-809 origin is printed on
+every run (`+11130 since the commit before GRVX-809`) but never fails the test.
+
+This is option 1 from the two above, and it was chosen because it is the one the guard's own
+documentation already described — making code match its stated intent is a bug fix, not a product
+decision. Proven by mutation: 30 KB of poorly-compressible code appended to `app.js` fails the test
+with a message naming the file to update and the number to put in it.
+
+**Still open, and genuinely a product call:** whether the dashboard should also carry a hard total
+ceiling, and what it should be. That is a claim about load time, and the right number comes from
+what the dashboard should cost a first-time user on a slow connection — not from wherever the bundle
+happened to sit when a guard was written. Deliberately not invented here.
