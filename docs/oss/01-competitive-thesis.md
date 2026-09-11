@@ -309,7 +309,7 @@ Sources: [Grafana relicensing](https://grafana.com/blog/grafana-loki-tempo-relic
 | ID | Claim | Scope limit | Proof artefact | Status |
 |---|---|---|---|---|
 | C1 | Cost immune to cardinality | Concede Metrics-without-Limits exists; ours is structural not manual | `GRVX-1002` | Pending proof |
-| C2 | Exact recomputable percentiles | **Prometheus/Grafana only.** vs Datadog: only "cannot add a dimension retroactively" | `GRVX-801`, `GRVX-806` | Pending proof |
+| C2 | Exact recomputable percentiles | **Prometheus/Grafana only.** vs Datadog: only "cannot add a dimension retroactively" | `scripts/prove_it.sh` | **Proven** — run it yourself, ~10s, no Docker |
 | C3 | Open-format data, no rehydration tax | **Metrics/APM only.** Datadog log archives are customer-owned | `GRVX-1101` | Pending proof |
 | C4 | Under $20/mo hosting | **MVP-stage only.** Must publish at-scale figures alongside | `GRVX-1001` | Pending proof |
 | C5 | No query language lock-in | "Nothing to learn", **not** "more expressive" | `GRVX-1103` | Pending proof |

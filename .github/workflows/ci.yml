@@ -355,6 +355,12 @@ jobs:
       - name: Run the correctness suite
         run: make test-correctness
 
+      # The public demonstration, run for real. It is the proof artefact for
+      # claim C2 in the competitive thesis, and a demo that breaks silently is
+      # worse than no demo because the docs keep claiming it works.
+      - name: Run the prove-it demonstration
+        run: ./scripts/prove_it.sh
+
   # ─── SDK Tests (Node + Python) ───
   sdk-tests:
     runs-on: ubuntu-latest

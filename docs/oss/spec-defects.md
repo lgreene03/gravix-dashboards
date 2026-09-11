@@ -771,3 +771,47 @@ in §5.2 gives both columns, and they agree.
 That is worth a test rather than a comment because the two halves can drift: someone tuning a threshold
 down to reduce noise would leave the "budget consumed before firing" column saying something false, and
 the column is what a reader uses to decide whether the tier is reasonable.
+
+---
+
+## SD-012 — GRVX-812 §8.2 greps for a phrase that §5.1 requires to be broken across two lines
+
+**Severity** low — caught before the verification record was written, resolved without a product decision.
+**Resolution** §5.1 wins; §8.2's command is corrected in place below.
+
+§5.1 fixes the final output block, and says of the last paragraph:
+
+> The concession paragraph is mandatory and verbatim.
+
+The block it fixes wraps that paragraph like this:
+
+```
+  not do tracing, logs, or infrastructure metrics, and Datadog's distribution
+  metrics are mergeable in a way Prometheus histograms are not. See
+```
+
+§8.2 then verifies the concession with:
+
+```bash
+./scripts/prove_it.sh | grep -c "Datadog's distribution metrics are mergeable"
+# expect: >= 1
+```
+
+`grep` is line-oriented, and the spec's own wrap puts `Datadog's distribution` at the end of one line
+and `metrics are mergeable` at the start of the next. The command returns `0` against the exact output
+the same spec mandates. The two sections are not merely inconsistent — they are mutually unsatisfiable:
+reproducing the paragraph verbatim guarantees the check fails, and passing the check requires changing a
+paragraph declared verbatim.
+
+**Resolved in favour of §5.1**, because that requirement is explicit, load-bearing and labelled
+mandatory, while §8.2 is a convenience command. The verification record runs the whitespace-normalised
+equivalent, which is what `TestProveItConcedesDDSketch` (AC-5) already did:
+
+```bash
+./scripts/prove_it.sh | tr -s '[:space:]' ' ' | grep -c "Datadog's distribution metrics are mergeable"
+```
+
+**Note for future specs.** Six of the eight §8 commands in this spec are `grep` over wrapped prose. Any
+verification that greps human-formatted output should either normalise whitespace or match a fragment
+short enough to survive a wrap. The corresponding Go test had this right from the start; the shell
+command in the spec did not, and only the shell command is what a reader runs by hand.

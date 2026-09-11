@@ -149,6 +149,20 @@ capabilities:
       - pkg/slo/
       - services/gateway/slo_handler.go
 
+  - id: prove-it-demo
+    name: The public "prove it" demonstration
+    placement: core
+    charter_ref: "§2.1, §7.3 Q5"
+    rationale: >-
+      Charter §7.3 Q5 answers yes: gating this would be gating it for money and nothing else.
+      A demonstration of correctness that only paying users can run proves nothing to the people
+      deciding whether to trust us, which is the entire audience for it. It composes what the rest
+      of Phase 8 built and adds no capability of its own, so there is nothing here to sell.
+    paths:
+      - scripts/prove_it.sh
+      - cmd/gen_facts/
+      - docs-site/docs/prove-it.md
+
   - id: metric-contracts
     name: Versioned metric contract registry
     placement: core

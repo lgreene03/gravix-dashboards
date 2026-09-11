@@ -818,13 +818,55 @@ func TestExplainReadFailuresSurface(t *testing.T) {
 		}
 	})
 
-	t.Run("missing contracts directory", func(t *testing.T) {
+	t.Run("a metric with no contract still says so", func(t *testing.T) {
+		// The original intent, preserved: when the registry genuinely has nothing
+		// for a metric, the answer is "no contract", never an invented one.
+		o := opts(store)
+		q := apiQuery()
+		q.Metric = "nonexistent_metric"
+		if _, err := Explain(ctx, o, q); err == nil {
+			t.Error("Explain invented an answer for a metric with no contract")
+		}
+	})
+}
+
+// The embedded contracts are what make `gravix explain` work outside a source
+// checkout. It has its own test rather than a sub-case because the sub-cases
+// above deliberately corrupt the partition, and this one needs a readable store.
+func TestExplainFallsBackToEmbeddedContracts(t *testing.T) {
+	store := newEnv(t)
+	seed(t, store)
+
+	t.Run("missing contracts directory falls back to the embedded copy", func(t *testing.T) {
+		ctx := context.Background()
 		o := opts(store)
 		o.ContractsDir = filepath.Join(t.TempDir(), "nowhere")
-		// An empty registry cannot name a contract, and saying "no contract" is the
-		// right answer — not inventing one.
-		if _, err := Explain(ctx, o, apiQuery()); !errors.Is(err, ErrNoContract) {
-			t.Errorf("err = %v, want ErrNoContract", err)
+
+		// This used to assert ErrNoContract, on the reasoning that an empty
+		// registry cannot name a contract and saying so beats inventing one. That
+		// reasoning was right about registries and wrong about where contracts
+		// live: they are source, they ship inside the binary, and a missing
+		// DIRECTORY is not a missing registry. Before F-008, `gravix explain`
+		// answered "no contract for that metric version" for every user who ran it
+		// outside a source checkout — which is every user.
+		got, err := Explain(ctx, o, apiQuery())
+		if err != nil {
+			t.Fatalf("Explain with no contracts directory: %v — the embedded contracts "+
+				"should have answered this", err)
+		}
+		if got.Formula == "" || got.Exactness == "" {
+			t.Error("the embedded contracts loaded but carried no formula or exactness")
+		}
+	})
+
+	t.Run("an empty contracts directory falls back too", func(t *testing.T) {
+		// An existing but empty directory is the case a packaged install hits:
+		// someone made the folder and never populated it.
+		ctx := context.Background()
+		o := opts(store)
+		o.ContractsDir = t.TempDir()
+		if _, err := Explain(ctx, o, apiQuery()); err != nil {
+			t.Errorf("Explain with an empty contracts directory: %v", err)
 		}
 	})
 }

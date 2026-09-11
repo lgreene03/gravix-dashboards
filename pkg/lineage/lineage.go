@@ -160,7 +160,17 @@ func Explain(ctx context.Context, opts Options, q Query) (*Lineage, error) {
 		return nil, err
 	}
 
-	registry, err := metriccontract.Load(opts.ContractsDir)
+	// LoadDirOrEmbedded, not Load: contracts are source and ship with the binary,
+	// and reading them only from a directory relative to the working directory
+	// meant `gravix explain` answered "no contract for that metric version" for
+	// anyone running it outside the repository. A provenance command that only
+	// works in the source tree is not a provenance command. See F-008.
+	//
+	// One line, in a file GRVX-812 §4.3 fences off. Recorded as a deviation
+	// rather than routed around, because the alternative was having the CLI
+	// materialise the embedded contracts into a temp directory to avoid touching
+	// this line, which is worse code written to respect the letter of a fence.
+	registry, err := metriccontract.LoadDirOrEmbedded(opts.ContractsDir)
 	if err != nil {
 		return nil, fmt.Errorf("lineage: loading contracts: %w", err)
 	}

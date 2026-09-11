@@ -107,6 +107,11 @@ relative-error sketch, which is [already on the list](docs/oss/30-technology-rev
 go test ./tests/correctness/ -run TestSketchErrorIsAFunctionOfSampleSize -v
 ```
 
+**Or skip the reading and run the proof.** `./scripts/prove_it.sh` generates a week of data, adds
+p99.9 and a new dimension to it *after the fact*, and checks both against computing them from
+scratch. Ten seconds, no Docker, no account — and it tells you what it does not prove as plainly as
+what it does. See [docs-site/docs/prove-it.md](docs-site/docs/prove-it.md).
+
 ## Everything below is free forever, under Apache-2.0
 
 | Area | What you get |

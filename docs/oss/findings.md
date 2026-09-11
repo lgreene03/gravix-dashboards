@@ -303,3 +303,87 @@ teeth — it generates code and CI validates it — so the likely answer is to g
 or to drop the YAML and point `docs/` at the JSON. Either way it needs a spec: `docs-engineer` owns
 "no merged behaviour change ships undocumented", and that promise is unenforceable while there are two
 places to forget.
+
+---
+
+## F-008 — `gravix explain` only worked inside the source tree
+
+Found by `scripts/prove_it.sh`, which runs the CLI from a temporary directory the way a user would.
+
+```
+$ cd /tmp/my-gravix-data
+$ gravix explain request_metrics_minute "2026-09-03 00:05" --filter service=api
+lineage: no contract for that metric version: request_metrics_minute@v2
+```
+
+`cmd_explain.go` defaulted `--contracts` to the relative path `"contracts"`. Run from the repository
+root that resolves; run from anywhere else — which is everywhere a user actually runs a binary — it
+finds nothing, the registry loads empty, and the command reports that the metric has no contract.
+
+So the command whose entire purpose is showing where a number came from answered "there is no published
+definition for this" to every user outside a source checkout. It passed every test because every test
+ran with the repository as the working directory.
+
+**Fixed.** `contracts/` is now an embedded filesystem, and `metriccontract.LoadDirOrEmbedded` prefers a
+real directory when one is present — so editing a contract still works without rebuilding — and falls
+back to the copy compiled into the binary when it is not. Contracts are source: they ship with the code
+that computes the metrics they define, exactly as the SQL migrations already did.
+
+Two tests cover it, including the case a packaged install actually hits: an existing but empty
+`contracts/` directory, made by a packager and never populated.
+
+**It also makes SD-010 part three redundant.** The gateway Dockerfile's `COPY --from=builder
+/app/contracts` was added so `GET /api/v1/lineage` would have contracts to read. The binary now carries
+them. The COPY is left in place deliberately — a reader looking for the files should find them, and an
+operator who wants to edit one without rebuilding still can.
+
+**The general lesson is about where tests run.** Every test in this repository has the package directory
+as its working directory, so a path resolved relative to the working directory is resolved correctly in
+every test and incorrectly in production. Anything the CLI reads by relative path deserves the same
+look: this was the one the demo happened to walk into.
+
+---
+
+## F-009 — the no-Docker guard forbade the strongest proof that Docker is not needed
+
+**Found by** the license-boundary-auditor's own suite, while landing GRVX-812.
+**Severity** low — no user-visible defect. It is here because the failure mode is instructive.
+**Status** fixed.
+
+`TestSuiteNeedsNoDocker` (GRVX-810, AC-11) enforced "the correctness suite must run without a
+container stack" by reading every `.go` file in the package and failing on the byte sequence
+`docker`, `DOCKER_HOST`, `testcontainers` or `compose`, with a hard-coded exemption for the file
+doing the checking.
+
+GRVX-812's demo test proves the same property a stronger way: it runs `scripts/prove_it.sh` in a
+child process with
+
+```go
+"DOCKER_HOST=unix:///nonexistent/docker.sock",
+```
+
+so that any attempt to reach a daemon fails at runtime rather than passing a grep. The guard failed
+that file three times — for the sabotage itself, for the comment explaining it, and for the list of
+tokens the demo script is forbidden to contain.
+
+So the guard rejected the only change that made its property harder to violate, and would have kept
+rejecting it. The two available ways out — deleting the sabotage, or exempting a second file by name
+— both weaken the guarantee.
+
+**Fixed.** The check is now structural. It parses the package and fails on two things:
+
+- `exec.Command` / `exec.CommandContext` whose command literal has a base name starting with
+  `docker` — which catches `docker`, `docker-compose`, and `/usr/local/bin/docker-compose`;
+- `os.Getenv("DOCKER_*")` / `os.LookupEnv("DOCKER_*")` — *reading* the variable is how a process goes
+  looking for a daemon. Setting it is the opposite, and is now allowed.
+
+The dependency-tree check is unchanged. The self-exemption is gone: `suite_test.go` names docker only
+in string comparisons, so under a behavioural rule it needs no special case.
+
+Verified by mutation — a probe file containing all three violation shapes was added to the package
+and each was reported by name before the probe was removed.
+
+**The lesson is about proxies.** The grep was a cheap stand-in for "does not use Docker", and for a
+while it was indistinguishable from the real thing. It diverged the moment a file needed to mention
+Docker in order not to use it — and at that point the proxy was actively fighting the property. When
+a guard blocks a change that strengthens what it guards, the guard is wrong, not the change.

@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lgreene/gravix-dashboards/contracts"
 	"gopkg.in/yaml.v3"
 )
 
@@ -186,17 +187,77 @@ func Load(dir string) (*Registry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("metriccontract: reading %s: %w", path, err)
 		}
-		var file Registry
-		if err := yaml.Unmarshal(data, &file); err != nil {
-			return nil, fmt.Errorf("metriccontract: parsing %s: %w", path, err)
+		if err := reg.appendFile(path, data); err != nil {
+			return nil, err
 		}
-		reg.Contracts = append(reg.Contracts, file.Contracts...)
 	}
 
 	if errs := reg.Validate(); len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
 	return reg, nil
+}
+
+// LoadEmbedded loads the contracts compiled into the binary.
+//
+// It exists because contracts are source rather than data — they ship with the
+// code that computes the metrics they define — and reading them from a directory
+// relative to the working directory meant `gravix explain` answered "no contract
+// for that metric version" for anyone running it outside the repository. A
+// provenance command that only works in the source tree is not a provenance
+// command. See F-008.
+func LoadEmbedded() (*Registry, error) {
+	entries, err := contracts.FS.ReadDir(".")
+	if err != nil {
+		return nil, fmt.Errorf("metriccontract: reading embedded contracts: %w", err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	reg := &Registry{}
+	for _, name := range names {
+		data, err := contracts.FS.ReadFile(name)
+		if err != nil {
+			return nil, fmt.Errorf("metriccontract: reading embedded %s: %w", name, err)
+		}
+		if err := reg.appendFile(name, data); err != nil {
+			return nil, err
+		}
+	}
+
+	if errs := reg.Validate(); len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return reg, nil
+}
+
+// LoadDirOrEmbedded reads dir when it holds contracts, and falls back to the
+// embedded copy when it does not.
+//
+// The directory wins so that someone editing a contract sees their edit without
+// rebuilding. The fallback is what makes the binary work anywhere else.
+func LoadDirOrEmbedded(dir string) (*Registry, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	if err == nil && len(paths) > 0 {
+		return Load(dir)
+	}
+	return LoadEmbedded()
+}
+
+// appendFile parses one contract file into the registry.
+func (r *Registry) appendFile(name string, data []byte) error {
+	var file Registry
+	if err := yaml.Unmarshal(data, &file); err != nil {
+		return fmt.Errorf("metriccontract: parsing %s: %w", name, err)
+	}
+	r.Contracts = append(r.Contracts, file.Contracts...)
+	return nil
 }
 
 // Get returns the contract for "name@version", or ErrNoContract.

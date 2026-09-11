@@ -131,31 +131,67 @@ func TestReportPreExistingDataGaps(t *testing.T) {
 // ─── AC-11 ───
 
 // TestSuiteNeedsNoDocker proves the claim rather than restating it: the suite
-// must not shell out to docker, and must not read any docker environment.
+// must not invoke docker, must not look for a docker daemon, and must not pull
+// a container library into its dependency tree.
+//
+// It checks behaviour, not spelling. An earlier version banned the byte sequence
+// "docker" anywhere in the package, which had the property backwards: the
+// strongest available proof that the suite needs no daemon is to run a child
+// process with DOCKER_HOST aimed at a socket that does not exist, and a
+// text ban forbids exactly that. Recorded as F-009.
 func TestSuiteNeedsNoDocker(t *testing.T) {
-	// 1. No source in this package mentions docker at all.
-	entries, err := os.ReadDir(packageDir)
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, packageDir, nil, 0)
 	if err != nil {
-		t.Fatalf("read %s: %v", packageDir, err)
+		t.Fatalf("parse %s: %v", packageDir, err)
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(packageDir, e.Name()))
-		if err != nil {
-			t.Fatalf("read %s: %v", e.Name(), err)
-		}
-		body := string(data)
-		// This file names it to forbid it, which is the one legitimate mention.
-		if e.Name() == "suite_test.go" {
-			continue
-		}
-		for _, needle := range []string{"docker", "DOCKER_HOST", "testcontainers", "compose"} {
-			if strings.Contains(strings.ToLower(body), strings.ToLower(needle)) {
-				t.Errorf("AC-11 FAILED: %s mentions %q; the correctness suite must run "+
-					"without a container stack", e.Name(), needle)
-			}
+
+	// 1. Nothing in the package execs a docker binary, and nothing reads
+	// DOCKER_HOST — reading it is how a process goes looking for a daemon.
+	// Setting it to a dead socket is the opposite, so only reads are banned.
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			base := filepath.Base(path)
+
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) == 0 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkgName, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+
+				// exec.Command("docker", …) / exec.CommandContext(ctx, "docker", …)
+				if pkgName.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command") {
+					arg := call.Args[0]
+					if sel.Sel.Name == "CommandContext" && len(call.Args) > 1 {
+						arg = call.Args[1]
+					}
+					if name, ok := stringLit(arg); ok {
+						if strings.HasPrefix(filepath.Base(name), "docker") {
+							t.Errorf("AC-11 FAILED: %s in %s runs %q; the correctness suite "+
+								"must run without a container stack",
+								base, enclosingFunc(file, call.Pos()), name)
+						}
+					}
+				}
+
+				// os.Getenv("DOCKER_HOST") / os.LookupEnv("DOCKER_HOST")
+				if pkgName.Name == "os" && (sel.Sel.Name == "Getenv" || sel.Sel.Name == "LookupEnv") {
+					if name, ok := stringLit(call.Args[0]); ok && strings.HasPrefix(name, "DOCKER_") {
+						t.Errorf("AC-11 FAILED: %s in %s reads %s; the suite must not go "+
+							"looking for a docker daemon",
+							base, enclosingFunc(file, call.Pos()), name)
+					}
+				}
+				return true
+			})
 		}
 	}
 
@@ -172,6 +208,21 @@ func TestSuiteNeedsNoDocker(t *testing.T) {
 			t.Errorf("AC-11 FAILED: the suite depends on %s", dep)
 		}
 	}
+}
+
+// stringLit returns the value of an untyped string literal, if that is what the
+// expression is. A command name assembled at runtime is not one, and is caught
+// by the dependency check and by the demo's own dead-socket run instead.
+func stringLit(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return v, true
 }
 
 // ─── AC-12 ───

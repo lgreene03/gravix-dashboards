@@ -20,6 +20,7 @@ defect register is a project that has not looked.
 | CD-001 | GRVX-804 | The published error bound was a value bound for a rank-error sketch, false by up to 446% at realistic bucket sizes | Corrected |
 | CD-002 | GRVX-801 | `gravix recompute` rebuilds one metric of eight; the rest have no CLI reproduction path | Open |
 | CD-003 | GRVX-804 | The scalar percentile column and the sketch answer the same question with different definitions | Open |
+| CD-004 | GRVX-806 | A second evolution silently discards the first: adding a dimension erases a previously added percentile | Open |
 
 ---
 
@@ -157,3 +158,65 @@ use the same definition the sketch does, and write the rule into each contract's
 Until then `TestScalarAndSketchPercentilesDisagree` holds the divergence inside a measured envelope so
 it cannot widen unnoticed, and fails if the two ever agree — at which point the test should be deleted
 and the rule recorded.
+
+---
+
+## CD-004 — evolutions are not cumulative, and the second one erases the first silently
+
+**Owning spec:** GRVX-806 (retroactive percentiles and dimensions)
+**Found by:** `scripts/prove_it.sh`, composing the two features the demo exists to show
+**State:** open
+
+### What happens
+
+```
+$ gravix evolve add-percentile --quantile 0.999 --from … --to … --yes
+$ gravix explain request_metrics_minute "… 00:02" --filter service=svc-a
+values:  request_count=59  p50_latency_ms=15  p95_latency_ms=102.5  p99_latency_ms=156.5
+         p99.9_latency_ms=205        ← added retroactively, correct
+
+$ gravix evolve add-dimension --field user_agent_family --from … --to … --yes
+$ gravix explain request_metrics_minute "… 00:02" --filter service=svc-a
+values:  request_count=15  p50_latency_ms=14  p95_latency_ms=39  p99_latency_ms=39
+         user_agent_family=Chrome    ← the dimension arrived
+                                     ← and p99.9_latency_ms is gone
+```
+
+Each `evolve` invocation rebuilds the window with **its own** `Evolution` and nothing else. The second
+run has no `ExtraQuantiles`, so the column it would have populated is left empty, and the partition it
+overwrites had it.
+
+It fails silently. The second command reports success, the rebuild is legitimate, the digest changes as
+it should, and nothing anywhere says a previously added metric has just been removed.
+
+### Why it matters more than it looks
+
+The two features are the two halves of the same claim. "You can change a metric definition after the
+fact" is not a claim about percentiles or about dimensions; it is a claim about the definition. A user
+who adds p99.9 in March and a dimension in April loses the p99.9 and is not told.
+
+It also means the flagship demonstration could not show both against one warehouse.
+`scripts/prove_it.sh` proves each against its own copy of the week and **says so in its output**, which
+is the honest arrangement available today — but a demo that has to explain why it is running things
+twice is a demo carrying a defect.
+
+### What resolving it means
+
+An `Evolution` should be a property of the metric's current definition, not an argument to one command
+run. Two candidate shapes:
+
+1. **Read the existing partition's evolution and merge.** The manifest already records the metric
+   version; the partition's columns already say which extra quantile it carries. A rebuild could take
+   the union of what is there and what is being asked for.
+2. **Store the evolution set beside the contract.** `add-percentile` records that p99.9 is now part of
+   the metric, and every subsequent rebuild — cron, recompute, a later evolution — applies the whole
+   set. This is the better answer: it also makes the nightly rollup keep the added percentile, which
+   today it would drop the first time it ran.
+
+**Option 2 exposes a second, larger version of this bug.** A cron rollup after an `add-percentile` has
+no evolution either, so it would erase the added column on its next run over that day. The demo did not
+hit it because it runs no cron, but any real deployment would within a day.
+
+Until it is fixed, `gravix evolve` should at minimum refuse to run against a partition that already
+carries an evolution it is not preserving, rather than silently dropping it — a loud failure is a much
+smaller bug than a quiet one.
