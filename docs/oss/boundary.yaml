@@ -47,6 +47,19 @@ capabilities:
       - transforms/service_events_daily/main.go
       - transforms/service_events_detail/main.go
 
+  - id: metric-contracts
+    name: Versioned metric contract registry
+    placement: core
+    charter_ref: "§2.1"
+    rationale: >-
+      A metric whose definition is not published cannot be verified, so gating the registry
+      would gate correctness itself. It is also where undisclosed approximations are forced
+      into the open, which is the opposite of a premium feature.
+    paths:
+      - pkg/metriccontract/contract.go
+      - pkg/metriccontract/gen.go
+      - contracts/request_metrics_minute.v1.yaml
+
   - id: metric-manifests
     name: Idempotency keys and content digests for derived metrics
     placement: core

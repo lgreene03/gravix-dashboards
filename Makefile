@@ -1,4 +1,4 @@
-.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom
+.PHONY: build build-cli test test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -74,6 +74,18 @@ test-oss: ## Build and test the Apache-2.0 core with ee/ absent
 
 check-boundary: ## Enforce the open-core boundary (imports, gates, headers, map)
 	go run ./cmd/checkboundary -root . -map docs/oss/boundary.yaml
+
+# --- Metric contracts (GRVX-803) ------------------------------------------
+# docs/02-derived-metrics.md is generated from contracts/. contracts-check is what
+# stops the published definition of a metric drifting from the contract that is
+# supposed to define it.
+
+contracts: ## Regenerate docs/02-derived-metrics.md from contracts/
+	go run ./pkg/metriccontract/cmd/gen -in contracts -out docs/02-derived-metrics.md
+
+contracts-check: ## Fail if the generated doc is stale
+	go run ./pkg/metriccontract/cmd/gen -in contracts -out /tmp/derived-metrics.check.md
+	diff -u docs/02-derived-metrics.md /tmp/derived-metrics.check.md
 
 # --- Supply chain (GRVX-709) ----------------------------------------------
 # A signature says who built an artefact. Reproducibility says it matches the

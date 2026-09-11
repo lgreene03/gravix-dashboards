@@ -85,6 +85,9 @@ jobs:
           key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-${{ matrix.go-version }}-
 
+      - name: Check the generated metric docs are current
+        run: make contracts-check
+
       - name: Run tests with race detector
         run: go test ./... -v -race -count=1
 

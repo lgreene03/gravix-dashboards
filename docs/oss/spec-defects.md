@@ -282,3 +282,60 @@ partitions is still out of scope and still belongs to GRVX-810.
 Confirm this reading or correct it **before** building revision detection on top. If GRVX-805 needs
 different semantics — a revision counter per late-arrival batch, say — it changes here, not there,
 and `SchemaVersion` bumps with it.
+
+---
+
+## SD-006 — four Cube measures have no contract, and GRVX-803 takes over a file GRVX-801 wrote into
+
+**Found by:** `senior-engineer` executing GRVX-803
+**Affects:** GRVX-803 §5.3 and §4.2; GRVX-801 §9
+**Severity:** medium — the registry's promise is that every reported metric is contracted
+**Status:** both handled; the first needs GRVX-808 to finish it
+
+### Part one: uncontracted measures
+
+GRVX-803 §10 says to return a spec defect for "a metric exposed by Cube with no contract". There are
+four:
+
+| Measure | Location | What it counts |
+|---|---|---|
+| `RequestMetricsMinute.count` | `cube/model/schema/RequestMetricsMinute.js:21` | **metric rows**, i.e. minute-buckets — not requests |
+| `ServiceEvents.count` | `cube/model/schema/ServiceEvents.js:21` | service event rows |
+| `ServiceEventsDaily.count` | `cube/model/schema/ServiceEventsDaily.js:21` | daily summary rows |
+| `ServiceEventsDaily.eventCount` | `cube/model/schema/ServiceEventsDaily.js:26` | sum of `event_count` |
+
+The first is the one that can mislead. A measure named `count` sitting beside `requestCount` in the
+same cube reads as "how many requests", but it counts minute-buckets: a service handling one request
+per minute for an hour and a service handling a million both report `count = 60`.
+
+### Why the six were not made seven
+
+§5.3 says the registry contains "exactly these" six, and AC-2 asserts exactly six. Adding a seventh
+contract would fail the spec's own acceptance criterion. The conflict is not resolvable inside
+GRVX-803 as written.
+
+`contracts/request_metrics_minute.v1.yaml` is therefore the six the spec names. The four above are
+recorded here instead of being quietly contracted or quietly ignored.
+
+**GRVX-808 owns `cube/model/**` and must contract or remove all four.** `RequestMetricsMinute.count`
+should probably be removed rather than contracted: it is Cube's default row-count measure, nobody
+asked for it, and its only likely use is by accident.
+
+### Part two: the documentation target collision
+
+GRVX-801 §9 required `docs/02-derived-metrics.md` to document the `gravix recompute` command. GRVX-803
+§4.2 turns that same file into generated output, and §3 forbids deleting it. Both were followed in
+sequence, so the recompute documentation was in a file that was about to be overwritten by a
+generator that knows nothing about it.
+
+§6 step 7 is the governing rule — *anything not representable is reported, not dropped* — so the
+`gravix recompute` reference was **moved to `docs/06-operations.md` §5**, where operational commands
+belong, and `TestNoMetricLostFromPriorDoc` asserts it is still there. The per-metric rebuild command
+survives in each contract's `recompute_cmd`, which AC-14 executes for real.
+
+### A gap the prose doc had
+
+The old `docs/02-derived-metrics.md` documented `p50_latency` and `p95_latency` but **not
+`p99_latency`**, though the rollup has always computed it and the Cube model has always exposed it.
+The registry contracts all three. This is the registry doing its job on its first day: a metric that
+was shipped and never documented is exactly what it exists to catch.

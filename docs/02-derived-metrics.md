@@ -1,125 +1,201 @@
-# Derived Metrics (MVP)
+<!-- GENERATED FROM contracts/*.yaml BY 'make contracts' — DO NOT EDIT -->
 
-This document defines the mathematical formulas and processing rules for all derived metrics.
-All metrics are computed from `RequestFact` or `ServiceEvent` tables.
+# Derived Metrics
 
-## 1. Bucketing Strategy
+Every metric Gravix reports has a published contract: its formula, the facts and
+fields it consumes, its grain, how exact it is, how it may be aggregated, what
+happens to late data, and the command that rebuilds it.
 
-- **Granularity**: Strictly **1-minute** buckets.
-- **Alignment**: Buckets align to the start of the UTC minute (`SS=00`).
-- **Timestamp**: The bucket timestamp is the **inclusive start time** of the bucket.
-  - Example: A request at `10:00:59.999` belongs to the `10:00:00` bucket.
-  - Example: A request at `10:01:00.000` belongs to the `10:01:00` bucket.
+The contract is the promise. Changing a shipped metric's meaning requires a new
+version rather than an edit in place, because someone who stored last month's
+numbers must still be able to find out what they meant.
 
-## 2. Metric Definitions
+Two fields are worth reading before any of the definitions:
 
-### `request_count`
+- **Exactness** is `exact` (computed from raw facts), `sketch` (a bounded-error
+  summary, with the bound stated), or `approximate` (an error that is **not**
+  bounded). An `approximate` metric is a defect this project owes a fix on, not a
+  design choice, and every one of them is listed under [Known defects](#known-defects).
+- **Mergeability** says whether two grains may be combined at all. `none` means
+  any query that aggregates the metric across grains is reporting a number with no
+  defined meaning.
 
-- **Definition**: Total number of `RequestFact` rows in the bucket.
-- **Filter**: None.
-- **Formula**: `COUNT(*)`
+## Metrics
 
-### `error_count`
+### `request_count` — Requests
 
-- **Definition**: Total number of `RequestFact` rows where the request failed.
-- **Filter**: `status_code >= 500`.
-- **Formula**: `COUNT(*) WHERE status_code >= 500`
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | COUNT(*) over RequestFacts in the bucket |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `exact` |
+| **Error bound** | none; this is a count of facts |
+| **Mergeability** | `sum` |
 
-### `error_rate`
+**Aggregating it.** Counts add. Summing the per-minute counts over any window gives the exact count for that window.
 
-- **Definition**: The proportion of requests that failed.
-- **Precondition**: `request_count > 0`. If `request_count == 0`, `error_rate` is `NULL` (or `0` depending on visualization requirements, but logically undefined).
-- **Formula**: `error_count / request_count`
+**Late data.** A late fact is appended to the fact stream with its original event_time. The bucket it belongs to is rebuilt from scratch on the next rollup or recompute, so the count corrects itself rather than drifting.
 
-### `p50_latency`
-
-- **Definition**: The 50th percentile of `latency_ms`.
-- **Method**: Exact set or T-Digest approximation (implementation dependent, but conceptually the median).
-- **Formula**: `APPROX_PERCENTILE(latency_ms, 0.5)`
-
-### `p95_latency`
-
-- **Definition**: The 95th percentile of `latency_ms`.
-- **Method**: Exact set or T-Digest approximation.
-- **Formula**: `APPROX_PERCENTILE(latency_ms, 0.95)`
-
-## 3. Late Arrival Handling
-
-- **Facts are Immutable**: Late arriving facts are simply appended to the `RequestFact` table with their original `event_time`.
-- **Metrics are Derived**: The metric table is **NOT** updated in real-time for late data.
-- **Correction Mechanism**:
-  - The system detects partitions (time windows) where the row count of Facts has changed since the last metric computation.
-  - The metrics for that specific 1-minute bucket are **fully recomputed** and overwritten.
-  - No "updates" or "increments" — only atomic replacement of the calculated values for that bucket.
-
-## 4. Recomputation Strategy
-
-- **Batch Oriented**: Metrics are computed in periodic batches (e.g., every 5-15 minutes).
-- **Idempotency**: Computing metrics for a time window `[T1, T2]` is idempotent.
-  - `Compute(T1, T2)` always produces the same result given the same set of Facts.
-- **Full History**: To correct historical errors or logical bugs in metric definitions:
-  1. Update the definition (e.g., change `error_count` to include 400s).
-  2. Truncate the metrics table (or a specific time range).
-  3. Re-run the batch computation over the entire history of Facts.
-
-## 5. `gravix recompute`
-
-Recomputation is not a manual procedure. `gravix recompute` rebuilds any historical
-window from the raw facts and replaces the prior output in place.
+**Rebuild it.**
 
 ```bash
-# Rebuild one week
-gravix recompute --from 2026-09-01 --to 2026-09-08
-
-# See what would change, without writing
-gravix recompute --from 2026-09-01 --to 2026-09-02 --dry-run
-
-# Multi-tenant, four partitions at a time
-gravix recompute --from 2026-09-01 --to 2026-09-08 --tenant acme --tenant globex --concurrency 4
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
 ```
 
-| Flag | Default | Meaning |
+### `error_count` — Errors
+
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | COUNT(*) over RequestFacts in the bucket WHERE status_code >= 500 |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `status_code` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `exact` |
+| **Error bound** | none; this is a count of facts |
+| **Mergeability** | `sum` |
+
+**Aggregating it.** Counts add. Note the threshold: a 4xx is a client error and is deliberately not counted here, because it is usually the caller's fault and not a signal about this service's health.
+
+**Late data.** Same as request_count: the bucket is rebuilt from facts, so a late error is counted once the bucket is next computed.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `error_rate` — Error rate
+
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | error_count / request_count within the bucket; 0 when request_count is 0 |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `status_code` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `exact` |
+| **Error bound** | none within a bucket; exact across buckets when merged as specified |
+| **Mergeability** | `weighted_mean` |
+
+**Aggregating it.** MUST be recomputed across buckets as sum(error_count) / sum(request_count). NEVER average the per-bucket rates. Averaging gives every bucket equal weight regardless of traffic, so one idle minute with a single failed request counts as much as a busy minute with ten thousand successes — which can turn a healthy hour into an apparent outage, or hide a real one.
+
+**Late data.** Both numerator and denominator are recomputed together from facts, so the rate is always internally consistent; it is never a new numerator over a stale denominator.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `latency_p50` — Median latency (p50)
+
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | 50th percentile of latency_ms over RequestFacts in the bucket |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `approximate` |
+| **Error bound** | UNBOUNDED across buckets; exact within one bucket |
+| **Mergeability** | `none` |
+
+**Aggregating it.** Do not aggregate across buckets. There is no correct way to combine per-bucket percentiles without the underlying distribution, which this metric does not store.
+
+**Late data.** The bucket is recomputed from all of its facts, so a late fact shifts the percentile to its correct value rather than being folded into a stale one.
+
+> **Known defect.**
+>
+> Exact within a single one-minute bucket, computed from raw latencies.
+> Across buckets the Cube model currently exposes MAX of the per-minute values
+> (cube/model/schema/RequestMetricsMinute.js), which is not the percentile of the
+> combined window and has an unbounded error. Do not aggregate this metric across
+> buckets. Fixed by GRVX-804, which stores a mergeable t-digest sketch.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `latency_p95` — 95th percentile latency (p95)
+
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | 95th percentile of latency_ms over RequestFacts in the bucket |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `approximate` |
+| **Error bound** | UNBOUNDED across buckets; exact within one bucket |
+| **Mergeability** | `none` |
+
+**Aggregating it.** Do not aggregate across buckets. There is no correct way to combine per-bucket percentiles without the underlying distribution, which this metric does not store.
+
+**Late data.** The bucket is recomputed from all of its facts, so a late fact shifts the percentile to its correct value rather than being folded into a stale one.
+
+> **Known defect.**
+>
+> Exact within a single one-minute bucket, computed from raw latencies.
+> Across buckets the Cube model currently exposes MAX of the per-minute values
+> (cube/model/schema/RequestMetricsMinute.js), which is not the percentile of the
+> combined window and has an unbounded error. Do not aggregate this metric across
+> buckets. Fixed by GRVX-804, which stores a mergeable t-digest sketch.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+### `latency_p99` — 99th percentile latency (p99)
+
+| Field | Value |
+|---|---|
+| **Version** | `v1` |
+| **Formula** | 99th percentile of latency_ms over RequestFacts in the bucket |
+| **Grain** | 1 minute, per service/method/path_template |
+| **Input facts** | `RequestFact` |
+| **Input fields** | `event_time`, `service`, `method`, `path_template`, `latency_ms` |
+| **Dimensions** | `tenant_id`, `service`, `method`, `path_template` |
+| **Exactness** | `approximate` |
+| **Error bound** | UNBOUNDED across buckets; exact within one bucket |
+| **Mergeability** | `none` |
+
+**Aggregating it.** Do not aggregate across buckets. There is no correct way to combine per-bucket percentiles without the underlying distribution, which this metric does not store. At p99 a one-minute bucket may hold too few requests for the figure to mean much on its own — a bucket with fewer than 100 requests has no 99th percentile in any useful sense.
+
+**Late data.** The bucket is recomputed from all of its facts, so a late fact shifts the percentile to its correct value rather than being folded into a stale one.
+
+> **Known defect.**
+>
+> Exact within a single one-minute bucket, computed from raw latencies.
+> Across buckets the Cube model currently exposes MAX of the per-minute values
+> (cube/model/schema/RequestMetricsMinute.js), which is not the percentile of the
+> combined window and has an unbounded error. Do not aggregate this metric across
+> buckets. Fixed by GRVX-804, which stores a mergeable t-digest sketch.
+
+**Rebuild it.**
+
+```bash
+gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+```
+
+## Known defects
+
+Three of the metrics above are `approximate`: their error is not bounded. They are listed here because an undisclosed approximation is worse than a missing metric — a reader cannot tell a wrong number from a right one.
+
+| Metric | Error bound | Fixed by |
 |---|---|---|
-| `--from` | *required* | Start of the window, RFC3339 or `YYYY-MM-DD` |
-| `--to` | *required* | End of the window, **exclusive** |
-| `--metric` | `request_metrics_minute` | Metric to rebuild |
-| `--tenant` | *(none)* | Tenant id; repeatable. Omit for single-tenant mode |
-| `--input` | `./data/raw` | Raw facts directory |
-| `--output` | `./data/warehouse` | Warehouse output directory |
-| `--dry-run` | `false` | Plan and report without writing |
-| `--concurrency` | `1` | Partitions rebuilt in parallel |
-
-Exit codes: `0` success, `1` a partition failed, `2` invalid flags, `3` the lock is
-held by a running rollup.
-
-### 5.1 What makes a rebuild safe
-
-- **One partition, one key.** A tenant-day always writes to
-  `warehouse/<metric>/event_day=YYYY-MM-DD/<metric>_YYYYMMDD.parquet`. The key is
-  derived from the partition, never minted per run, so a rebuild **replaces** its
-  prior output rather than adding a second file the query layer would double-count.
-- **Byte-identical output.** The same facts always encode to the same bytes. Rows are
-  sorted by the full aggregation key (bucket, service, method, path template), each
-  bucket's latencies are sorted before its percentiles are taken, the compression
-  level is pinned rather than inherited from the library default, and nothing
-  run-scoped — no timestamp, hostname, or run id — is written into the file.
-- **Unchanged partitions are left alone.** Before writing, the engine encodes the new
-  file in memory and compares it with what is already stored. Identical bytes count as
-  `unchanged` and no write happens, so re-running a window is a genuine no-op rather
-  than a rewrite that merely lands on the same values.
-- **Read order does not matter.** The object store gives no ordering guarantee. Fact
-  files are read in a fixed order and every aggregation is order-independent, so two
-  rebuilds of the same day agree bit for bit.
-- **Facts are never touched.** Recompute reads facts and rewrites derivatives only,
-  per `docs/00-system-truth.md` §2.
-- **One writer at a time.** A recompute takes the same lock as the cron rollup, so the
-  two can never write the same partition concurrently. A held lock exits `3` and
-  writes nothing.
-
-### 5.2 Why it matters
-
-`docs/00-system-truth.md` §4 promises that every metric is recomputable. That promise
-is only worth something if a rebuild is provably the same as the original — otherwise
-"recomputable" means "will produce some other number, later". The determinism rules
-above are what make the promise checkable, and `pkg/recompute` tests each of them by
-name.
+| `latency_p50@v1` | UNBOUNDED across buckets; exact within one bucket | `GRVX-804` |
+| `latency_p95@v1` | UNBOUNDED across buckets; exact within one bucket | `GRVX-804` |
+| `latency_p99@v1` | UNBOUNDED across buckets; exact within one bucket | `GRVX-804` |

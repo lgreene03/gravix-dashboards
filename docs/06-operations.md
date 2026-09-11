@@ -187,3 +187,65 @@ Since raw data (JSONL) and warehouse data (Parquet) are separated:
 
 - If **Parquet** is corrupted: Delete the files and re-run the Rollup Job from Raw data.
 - If **Raw** is corrupted: Data for that period may be lost if not backed up externally.
+
+## 5. Rebuilding metrics (`gravix recompute`)
+
+Recomputation is not a manual procedure. `gravix recompute` rebuilds any historical
+window from the raw facts and replaces the prior output in place.
+
+```bash
+# Rebuild one week
+gravix recompute --from 2026-09-01 --to 2026-09-08
+
+# See what would change, without writing
+gravix recompute --from 2026-09-01 --to 2026-09-02 --dry-run
+
+# Multi-tenant, four partitions at a time
+gravix recompute --from 2026-09-01 --to 2026-09-08 --tenant acme --tenant globex --concurrency 4
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--from` | *required* | Start of the window, RFC3339 or `YYYY-MM-DD` |
+| `--to` | *required* | End of the window, **exclusive** |
+| `--metric` | `request_metrics_minute` | Metric to rebuild |
+| `--tenant` | *(none)* | Tenant id; repeatable. Omit for single-tenant mode |
+| `--input` | `./data/raw` | Raw facts directory |
+| `--output` | `./data/warehouse` | Warehouse output directory |
+| `--dry-run` | `false` | Plan and report without writing |
+| `--concurrency` | `1` | Partitions rebuilt in parallel |
+
+Exit codes: `0` success, `1` a partition failed, `2` invalid flags, `3` the lock is
+held by a running rollup.
+
+### 5.1 What makes a rebuild safe
+
+- **One partition, one key.** A tenant-day always writes to
+  `warehouse/<metric>/event_day=YYYY-MM-DD/<metric>_YYYYMMDD.parquet`. The key is
+  derived from the partition, never minted per run, so a rebuild **replaces** its
+  prior output rather than adding a second file the query layer would double-count.
+- **Byte-identical output.** The same facts always encode to the same bytes. Rows are
+  sorted by the full aggregation key (bucket, service, method, path template), each
+  bucket's latencies are sorted before its percentiles are taken, the compression
+  level is pinned rather than inherited from the library default, and nothing
+  run-scoped — no timestamp, hostname, or run id — is written into the file.
+- **Unchanged partitions are left alone.** Before writing, the engine encodes the new
+  file in memory and compares it with what is already stored. Identical bytes count as
+  `unchanged` and no write happens, so re-running a window is a genuine no-op rather
+  than a rewrite that merely lands on the same values.
+- **Read order does not matter.** The object store gives no ordering guarantee. Fact
+  files are read in a fixed order and every aggregation is order-independent, so two
+  rebuilds of the same day agree bit for bit.
+- **Facts are never touched.** Recompute reads facts and rewrites derivatives only,
+  per `docs/00-system-truth.md` §2.
+- **One writer at a time.** A recompute takes the same lock as the cron rollup, so the
+  two can never write the same partition concurrently. A held lock exits `3` and
+  writes nothing.
+
+### 5.2 Why it matters
+
+`docs/00-system-truth.md` §4 promises that every metric is recomputable. That promise
+is only worth something if a rebuild is provably the same as the original — otherwise
+"recomputable" means "will produce some other number, later". The determinism rules
+above are what make the promise checkable, and `pkg/recompute` tests each of them by
+name.
