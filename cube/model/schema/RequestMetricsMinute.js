@@ -4,6 +4,21 @@
 const isDuckDB = (typeof process !== 'undefined' && process.env && process.env.CUBEJS_DB_TYPE === 'duckdb');
 const isMultiTenant = (typeof process !== 'undefined' && process.env && !!process.env.TENANT_DB_PATH);
 
+// Pre-aggregations need somewhere to put their rollup tables, and that is Cube
+// Store — an `externalDriverFactory`. The bootstrap stack deliberately runs no
+// Cube Store (F-035: it would contradict the single-VPS premise), so a query that
+// matches a rollup here fails with
+//   "externalDriverFactory is not provided"
+// rather than falling back to the source. Cube prefers the rollup and errors; it
+// does not degrade gracefully.
+//
+// So the rollups are declared only where they can actually be built. The condition
+// is DERIVED from the capability rather than read from a separate on/off flag,
+// because a flag can be set to disagree with the infrastructure and this cannot:
+// no external store means no pre-aggregations, and there is no third state.
+const hasExternalStore = (typeof process !== 'undefined' && process.env &&
+    !(process.env.CUBEJS_CACHE_AND_QUEUE_DRIVER === 'memory' && !process.env.CUBEJS_CUBESTORE_HOST));
+
 const requestMetricsSql = isDuckDB
   ? isMultiTenant
     ? `SELECT * FROM read_parquet('/cube/data/warehouse/*/request_metrics_minute/**/*.parquet', union_by_name=true)`
@@ -142,7 +157,7 @@ cube(`RequestMetricsMinute`, {
   // the day's p95 — the same defect this model exists to remove, but cached.
   // Percentiles at any granularity above a minute come from
   // GET /api/v1/percentile, which merges the sketches.
-  preAggregations: {
+  preAggregations: hasExternalStore ? {
     endpointDaily: {
       measures: [requestCount, errorCount],
       dimensions: [service, method, pathTemplate],
@@ -162,7 +177,7 @@ cube(`RequestMetricsMinute`, {
         every: `5 minute`
       }
     }
-  },
+  } : {},
 
   dataSource: `default`
 });

@@ -2077,3 +2077,92 @@ which puts them furthest from the end of the log. Reading this failure needed th
 file. Logs are read from the end. The most important lines should be last, next to the `FAIL`. Not
 changed in this commit — it is presentation, and this commit is already carrying a stack fix — but it
 is the next thing to do to this script.
+
+---
+
+## F-036 — Cube routes a query to a rollup it cannot build, and fails it rather than reading the source
+
+**Found by** the `timed-onboarding` poll on `18cede3`, immediately after F-035's fix took effect.
+**Owner** `semantic-modeler`
+**Severity** critical — the last link in the chain; every query still failed.
+**Status** FIXED and guarded.
+
+### The error moved, which is how we know the previous fix worked
+
+F-035 set `CUBEJS_CACHE_AND_QUEUE_DRIVER=memory`. The Cube Store error disappeared and a different
+one replaced it:
+
+```
+last Cube response: {"error":"Error: externalDriverFactory is not provided. Please use
+                     CUBEJS_DEV_MODE=true or provide Cube Store connection env variables
+                     for production usage."}
+```
+
+This is precisely the residual uncertainty F-035 recorded and could not resolve without a Docker
+daemon: **whether Cube errors when a query matches a pre-aggregation it cannot build.** It does.
+`externalDriverFactory` is the mechanism that writes a rollup table, Cube Store provides it, and this
+stack deliberately runs none.
+
+The important behaviour, worth stating because it is not obvious: **Cube does not degrade
+gracefully.** Faced with a rollup it cannot materialise, it fails the query rather than falling back
+to the source it could have read directly. The poll's query — `requestCount`, no dimensions, no time
+dimension — is a subset of `endpointDaily`, so Cube preferred the rollup and stopped.
+
+The same output confirms two earlier fixes held: the gateway returned a JWT, and the corrected
+reporting line read `token obtained: yes earlier, then discarded because a Cube query failed`, which
+is exactly what happened.
+
+### Fixed
+
+`cube/model/schema/` now declares its three rollups only when an external store exists:
+
+```js
+const hasExternalStore = (typeof process !== 'undefined' && process.env &&
+    !(process.env.CUBEJS_CACHE_AND_QUEUE_DRIVER === 'memory' && !process.env.CUBEJS_CUBESTORE_HOST));
+…
+preAggregations: hasExternalStore ? { … } : {}
+```
+
+**The condition is derived from the capability, not read from an on/off flag.** A flag can be set to
+disagree with the infrastructure — someone turns rollups "on" in a stack with no store and gets this
+same failure back. No external store means no pre-aggregations; there is no third state, and encoding
+it this way makes the contradiction unrepresentable.
+
+Verified across all three configurations:
+
+| Environment | rollups declared |
+|---|---|
+| default (full stack) | 2, 1, 1 |
+| `memory` driver, no Cube Store (bootstrap) | 0, 0, 0 |
+| `memory` driver **with** `CUBEJS_CUBESTORE_HOST` | 2, 1, 1 |
+
+That third row is the one that matters for the guard. A condition keyed on the cache driver alone
+would pass the first two and silently strip rollups from a stack that has a perfectly good store.
+
+### The guard
+
+`tests/cube/model_compiles.test.js` checks all three states, and fails if no cube declares a
+pre-aggregation in any of them — a condition that is always true and one that is always false both
+look like success from one side only.
+
+Mutation-tested, control green either side, with the harness verifying each edit actually applied:
+
+| Mutation | Result |
+|---|---|
+| rollups declared unconditionally (the original defect) | fails |
+| rollups withheld unconditionally (full stack loses them too) | fails |
+| condition keyed on the driver alone, ignoring a named Cube Store | fails |
+
+### Consequence for GRVX-1006, restated
+
+The bootstrap stack now serves queries straight from Parquet via DuckDB. Any latency figure measured
+here is a **cold read**, not a pre-aggregated one. Quoting it as the latter would be the same category
+of error as F-020 and F-022 — a number that is real but not the number the claim needs. The full
+stack keeps its rollups, so a pre-aggregated figure has to come from there.
+
+### Nine runs, nine findings
+
+F-019, F-021, F-023, F-027, F-030, F-032, F-034, F-035 and now F-036. Every one was a total break of
+the documented `docker compose up` path, and every one was hidden behind the one before it — this
+gate could only ever see the first unfixed link in the chain. That is an argument for the gate
+existing, and equally an argument against trusting a stack nothing has executed end to end.
