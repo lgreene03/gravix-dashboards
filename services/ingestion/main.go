@@ -674,12 +674,37 @@ func (ds *DurableSink) startupScan() {
 			return nil
 		} // Ignore active file
 
-		// Found a batch file!
-		// Infer topic from parent dir name
+		// Found a batch file. The topic is the directory path RELATIVE to the
+		// buffer root, not the parent directory's name.
+		//
+		// In multi-tenant mode the layout is buffer/<tenant-id>/<topic>/, because
+		// rotation writes to filepath.Join(bufferDir, topicForTenant(id, topic)).
+		// Taking filepath.Base of the parent recovered "request_facts" and dropped
+		// the tenant, so this sweep re-uploaded to raw/request_facts/ while the
+		// normal path wrote raw/<tenant-id>/request_facts/. Two consequences, and
+		// the second is the serious one (F-033):
+		//
+		//  1. a file still on disk when the sweep runs is uploaded twice, to two
+		//     different keys — duplicate storage, and it inflates any
+		//     bytes-per-event figure measured from disk;
+		//  2. a file that ONLY this sweep recovers — the crash-recovery case it
+		//     exists for — lands under a prefix the multi-tenant rollup never
+		//     scans. Those facts are durably written and never read again, which
+		//     is silent loss on exactly the path that is supposed to prevent it.
+		//
+		// Relative resolution yields "<tenant-id>/request_facts" here and plain
+		// "request_facts" in legacy single-tenant mode, matching both layouts
+		// without needing to know which one is in use.
 		dir := filepath.Dir(path)
-		topic := filepath.Base(dir)
+		rel, relErr := filepath.Rel(ds.bufferDir, dir)
+		if relErr != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			slog.Error("orphaned batch file is not under the buffer root; skipping",
+				"path", path, "buffer_dir", ds.bufferDir, "error", relErr)
+			return nil
+		}
+		topic := filepath.ToSlash(rel)
 
-		slog.Info("found orphaned batch file", "path", path)
+		slog.Info("found orphaned batch file", "path", path, "topic", topic)
 		// Upload using file mod time as heuristic
 		ds.uploadFile(topic, path, info.ModTime().UTC())
 		return nil

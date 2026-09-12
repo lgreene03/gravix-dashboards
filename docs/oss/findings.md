@@ -1859,9 +1859,50 @@ a crash loop without drawing any attention to it.
 
 **Found by** reading the ingestion log in the same diagnostic output.
 **Owner** `senior-engineering-lead`
-**Severity** medium — duplicate storage and a second copy under a prefix the multi-tenant rollup
-never scans. Recorded, not fixed: it is outside what the current work touches, and the fix needs a
-look at the orphan-recovery path rather than a one-line change.
+**Severity** **high, revised up from medium.** The duplicate storage is the lesser half. A batch that
+is recovered *only* by this sweep — the crash-recovery case it exists for — lands under a prefix the
+multi-tenant rollup never scans, so those facts are durably written and never read again. That is
+silent loss, on the one path whose entire purpose is preventing loss, in a project whose first
+principle is that facts are immutable and authoritative.
+**Status** FIXED and guarded.
+
+### The cause
+
+`services/ingestion/main.go`'s `startupScan` inferred the topic from the parent directory's *name*:
+
+```go
+dir := filepath.Dir(path)
+topic := filepath.Base(dir)
+```
+
+Rotation writes to `filepath.Join(ds.bufferDir, topicForTenant(id, topic))`, so the on-disk layout is
+`buffer/<tenant-id>/request_facts/`. `filepath.Base` of the parent yields `request_facts` and drops
+the tenant. And it is not only a startup scan: `retryLoop` calls it **every five minutes**, so any
+file present when the sweep runs is mis-filed.
+
+### The fix
+
+Resolve the topic *relative to the buffer root* — `filepath.Rel(ds.bufferDir, dir)` — which yields
+`<tenant-id>/request_facts` in multi-tenant mode and plain `request_facts` in the legacy layout,
+without needing to know which is in use. A path that escapes the buffer root is skipped with an
+error rather than guessed at.
+
+A side effect worth naming: both uploaders now target the **same** key, so the duplicate-write half
+becomes idempotent. Before the fix one batch produced two objects under two prefixes; now it produces
+one.
+
+### The guards
+
+`TestStartupScanRecoversUnderTheTenantPrefix` asserts on the destination **key**, because that is the
+property — a recovered object has to be somewhere the reader looks — and asserts exactly one object
+per batch. `TestStartupScanStillWorksWithoutATenant` covers the legacy layout, so the fix cannot be
+"correct" by breaking single-tenant recovery. Mutation-tested: restoring `filepath.Base` fails,
+control green either side, with the edit verified as applied.
+
+### Original note, kept
+
+Recorded first as medium and deferred; the severity was wrong because the analysis stopped at the
+duplicate write and did not ask what happens when the sweep is the *only* uploader.
 
 Three consecutive lines for one batch file:
 

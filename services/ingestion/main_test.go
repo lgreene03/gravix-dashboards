@@ -1190,3 +1190,111 @@ func TestUploadedFactsLandWhereTheRollupReads(t *testing.T) {
 		t.Errorf("F-015 regression: %s exists; the object store is rooted one level too deep", doubled)
 	}
 }
+
+// ─── F-033: the orphan sweep must preserve the tenant prefix ───────────────
+
+// startupScan recovers batch files left in the buffer — the crash-recovery path.
+// It inferred the topic as filepath.Base of the parent directory, which yields
+// "request_facts" for a buffer laid out as buffer/<tenant-id>/request_facts/ and
+// silently drops the tenant.
+//
+// Two consequences, and the second is why this is not merely wasteful:
+//
+//  1. a file still on disk when the 5-minute sweep runs is uploaded twice, under
+//     two different keys, inflating any bytes-per-event figure measured from disk
+//     (GRVX-1003, GRVX-1004);
+//  2. a file that ONLY the sweep recovers lands under a prefix the multi-tenant
+//     rollup never scans, so those facts are durably stored and never read again.
+//     Silent loss, on the path that exists to prevent loss.
+//
+// The assertion is on the destination key, because that is the property: the
+// recovered object has to be somewhere the reader looks.
+func TestStartupScanRecoversUnderTheTenantPrefix(t *testing.T) {
+	bufDir := t.TempDir()
+	rawDir := t.TempDir()
+	store, err := storage.NewLocalStore(rawDir)
+	if err != nil {
+		t.Fatalf("local store: %v", err)
+	}
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
+	if err != nil {
+		t.Fatalf("NewDurableSink: %v", err)
+	}
+	t.Cleanup(func() { sink.Close() })
+
+	const tenant = "7ffced1b-b947-41c1-a484-3b5d8f736bd2"
+	// Exactly the layout rotation produces: bufferDir/<topicForTenant(...)>/
+	topicDir := filepath.Join(bufDir, topicForTenant(tenant, "request_facts"))
+	if err := os.MkdirAll(topicDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	orphan := filepath.Join(topicDir, "batch_20260912024509_orphan.jsonl")
+	if err := os.WriteFile(orphan, []byte("{\"event_id\":\"x\"}\n"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+
+	sink.startupScan()
+
+	keys, err := store.List(context.Background(), "raw")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("the sweep uploaded nothing; it is supposed to recover orphaned batches")
+	}
+
+	for _, k := range keys {
+		if !strings.Contains(k, tenant) {
+			t.Errorf("F-033 REGRESSION: the sweep recovered an orphaned batch to %q, which does\n"+
+				"not carry the tenant id %s.\n"+
+				"The multi-tenant rollup scans raw/<tenant-id>/request_facts/ only, so a fact\n"+
+				"recovered to this key is durably stored and never read again — silent loss on\n"+
+				"the crash-recovery path. The topic must be resolved relative to the buffer root,\n"+
+				"not as the parent directory's base name.", k, tenant)
+		}
+	}
+
+	// And exactly one copy: the duplicate-write half of F-033.
+	if len(keys) != 1 {
+		t.Errorf("F-033 REGRESSION: one orphaned file produced %d objects (%v); it must be\n"+
+			"uploaded once. Two keys for one batch is duplicate storage and it inflates every\n"+
+			"bytes-per-event figure measured from disk.", len(keys), keys)
+	}
+}
+
+// TestStartupScanStillWorksWithoutATenant covers the legacy single-tenant layout,
+// where the buffer is buffer/<topic>/ with no tenant segment. The relative
+// resolution must yield the bare topic there, not break it.
+func TestStartupScanStillWorksWithoutATenant(t *testing.T) {
+	bufDir := t.TempDir()
+	rawDir := t.TempDir()
+	store, err := storage.NewLocalStore(rawDir)
+	if err != nil {
+		t.Fatalf("local store: %v", err)
+	}
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
+	if err != nil {
+		t.Fatalf("NewDurableSink: %v", err)
+	}
+	t.Cleanup(func() { sink.Close() })
+
+	topicDir := filepath.Join(bufDir, topicForTenant("", "request_facts"))
+	if err := os.MkdirAll(topicDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(topicDir, "batch_legacy.jsonl"),
+		[]byte("{\"event_id\":\"x\"}\n"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+
+	sink.startupScan()
+
+	keys, err := store.List(context.Background(), "raw/request_facts")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Errorf("legacy single-tenant recovery produced %d objects under raw/request_facts (%v),"+
+			" want 1", len(keys), keys)
+	}
+}
