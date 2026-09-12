@@ -53,15 +53,20 @@ diagnose() {
     if [ -n "${TOKEN:-}" ]; then
         echo "token obtained:              yes (${#TOKEN} chars)"
     else
-        echo "token obtained:              no"
+        # WHY there is no token, not just that there is none. F-034 was a run where
+        # the poll never attempted a login for the full 600s, and this line said
+        # only "no" — indistinguishable from a login that was tried and rejected.
+        echo "token obtained:              no — ${NO_TOKEN_REASON:-fetch_token never ran}"
     fi
     echo "last Cube response:          ${LAST_CUBE_RESPONSE:-<never got one>}"
     echo
-    echo "data/login.txt:"
-    if [ -r ./data/login.txt ]; then
-        sed -E 's/^password:.*/password: <redacted>/' ./data/login.txt | head -4
+    echo "data/login.txt (read through the gateway container — the host uid cannot"
+    echo "                 read a 0600 file owned by the image's gravix user):"
+    login_dump="$(read_login_file 2>/dev/null || true)"
+    if [ -n "$login_dump" ]; then
+        printf '%s\n' "$login_dump" | sed -E 's/^password:.*/password: <redacted>/' | head -4
     else
-        echo "  (absent — bootstrap-init never wrote it)"
+        echo "  (unavailable — neither the container nor the host could read it)"
     fi
     echo "raw facts on disk:  $(find ./data/raw -name '*.jsonl' 2>/dev/null | wc -l) file(s)"
     echo "warehouse parquet:  $(find ./data/warehouse -name '*.parquet' 2>/dev/null | wc -l) file(s)"
@@ -103,6 +108,28 @@ $COMPOSE down -v >/dev/null 2>&1 || true
 START=$(date +%s)
 $COMPOSE up -d --build
 
+# read_login_file prints the generated login, or nothing if it is not available
+# yet. It reads through a container rather than from the host.
+#
+# The host cannot read it. bootstrap_seed writes login.txt mode 0600 — it is a
+# password — and bootstrap-init chowns /app/data to the image's `gravix` user to
+# fix F-021. That user comes from `adduser -S`, so its uid is whatever Alpine
+# assigned and never the uid running this script. `[ -r ./data/login.txt ]` is
+# therefore false on a correctly working stack, and the guard that used to open
+# fetch_token returned empty on every iteration: the poll never attempted a login
+# at all, for the whole 600s, while reporting only that no data arrived (F-034).
+#
+# Reading it from inside a service that runs as that same user is what an operator
+# would do, and it works whatever uid the host session has.
+read_login_file() {
+    $COMPOSE exec -T gateway cat /app/data/login.txt 2>/dev/null && return 0
+    # A host-readable file is still honoured, for anyone running this outside CI
+    # with matching ownership.
+    if [ -r "$LOGIN_FILE" ]; then
+        cat "$LOGIN_FILE"
+    fi
+}
+
 # fetch_token logs in with the credentials bootstrap_seed generated and sets the
 # global TOKEN, empty if login is not possible yet: early failures are the normal
 # state of a stack that is still booting, and the elapsed clock is the thing
@@ -114,11 +141,19 @@ $COMPOSE up -d --build
 # reported "<never attempted>" on every run, however the login had actually failed.
 fetch_token() {
     TOKEN=""
-    [ -r "$LOGIN_FILE" ] || return 0
-    local email password response
-    email="$(sed -n 's/^email: //p' "$LOGIN_FILE")"
-    password="$(sed -n 's/^password: //p' "$LOGIN_FILE")"
-    [ -n "$email" ] && [ -n "$password" ] || return 0
+    local email password response login
+    login="$(read_login_file)"
+    if [ -z "$login" ]; then
+        NO_TOKEN_REASON="the generated login could not be read, from the gateway container or the host"
+        return 0
+    fi
+    email="$(printf '%s\n' "$login" | sed -n 's/^email: //p')"
+    password="$(printf '%s\n' "$login" | sed -n 's/^password: //p')"
+    if [ -z "$email" ] || [ -z "$password" ]; then
+        NO_TOKEN_REASON="login.txt was read but has no email/password line"
+        return 0
+    fi
+    NO_TOKEN_REASON="the gateway login was attempted; see the response above"
 
     # -s not -sf: a 4xx body says why, and `curl -f` throws it away.
     response="$(python3 -c '
@@ -175,6 +210,7 @@ sys.exit(1)
 }
 
 TOKEN=""
+NO_TOKEN_REASON=""
 TIMED_OUT=1
 while true; do
     NOW=$(date +%s)

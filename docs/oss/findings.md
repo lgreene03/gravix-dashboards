@@ -1878,3 +1878,100 @@ It bears on GRVX-1003's storage figures and on the cost claims in GRVX-1004, sin
 is on disk. Whoever picks it up should start at the orphan-recovery sweep in
 `services/ingestion/main.go`, which appears to compute its topic without the tenant that the normal
 rotation path applies via `topicForTenant`.
+
+---
+
+## F-034 — the poll never attempted a login, because the credential is unreadable from the host
+
+**Found by** the `timed-onboarding` diagnostics on `8536ea3`, one line above the container table.
+**Owner** `product-designer` for the usability half; the harness half is fixed here.
+**Severity** high — the gate spent 600s reporting "no data" without ever trying to authenticate.
+**Status** harness FIXED. The usability question is **open** and needs a decision.
+
+### What the log said
+
+```
+data/login.txt:
+  (absent — bootstrap-init never wrote it)
+```
+
+And, fourteen lines below, from `bootstrap-init` itself:
+
+```
+jwt signing secret written to /app/data/jwt_secret.txt
+dashboard login written to /app/data/login.txt
+  password: zlUUI-lWGnTOci1n0MxIm1uH159NjcLAH-97vdR5UEI
+```
+
+Both are true. `bootstrap_seed` writes `login.txt` mode **0600** — it is a password — and
+`bootstrap-init` chowns `/app/data` to the image's `gravix` user to fix F-021. That user comes from
+`adduser -S`, so its uid is whatever Alpine assigned and is never the uid running the test script. A
+0600 file owned by another uid fails `[ -r ]`, so:
+
+```bash
+fetch_token() {
+    [ -r "$LOGIN_FILE" ] || return 0      # ← returned here, every iteration, for 600s
+```
+
+The poll never issued `POST /api/gateway/login`. The gateway was healthy the whole time.
+
+**F-021's fix is what made this appear.** Before the chown, `./data` was root-owned and the script
+could not read it either — but the stack did not boot at all then, so the guard was never the thing
+that mattered. Each fix in this chain has exposed the next.
+
+### Fixed in the harness
+
+`read_login_file` now reads the credential through a service that runs as that user —
+`docker compose exec -T gateway cat /app/data/login.txt` — and falls back to the host file for anyone
+running the script outside CI with matching ownership. Verified against stubs for all three routes:
+container-readable, host-readable, neither.
+
+### The reporting defect behind it, which cost the run
+
+`diagnose()` printed:
+
+```
+token obtained:              no
+```
+
+"No" covers two completely different failures: *a login was attempted and refused*, and *no login was
+ever attempted*. They need opposite investigations, and the line could not tell them apart. It now
+reports the reason:
+
+```
+token obtained:  no — the generated login could not be read, from the gateway container or the host
+token obtained:  no — the gateway login was attempted; see the response above
+```
+
+Both verified against stubs. This is the second time in two runs that the diagnostic, not the stack,
+was what hid the answer — the first was `gateway` missing from the service list in F-032. A
+diagnostic is code, and it needs the same suspicion as the code it inspects.
+
+### Open: a first-time user cannot read their own password either
+
+This is not only a test-harness problem. The README points at `data/login.txt`, and after
+`docker compose up` on a fresh VPS that file is mode 0600 owned by a uid that does not exist on the
+host. **The person who just installed Gravix cannot read their own dashboard password without
+`sudo`.** The working path today is `docker compose logs bootstrap-init`, which prints it — but that
+is not what the documentation says.
+
+The options, none of which should be chosen by an implementer:
+
+1. Write `login.txt` 0644. It is a local development credential on a single-tenant box, and the
+   directory is already the operator's. Simple; weakens a deliberate choice.
+2. Keep 0600 and change the documentation to `docker compose logs bootstrap-init` as the primary
+   route. No security change; the file becomes a secondary artefact.
+3. Have `bootstrap-init` chown the data directory to the **host** uid, passed in as an environment
+   variable. Correct on a single-user box, more moving parts, and wrong in a shared deployment.
+
+Option 2 is the smallest honest change and option 1 is the most convenient; the choice is about how
+the bootstrap stack expects to be operated, which is a product question.
+
+### No unit-level guard, and why
+
+The property is "the poll attempts a login when the stack is up", and proving it needs a running
+stack — there is no Docker daemon in the implementation environment. A test asserting that
+`fetch_token` does not contain a particular `[ -r ]` line would match on text, protect only the
+spelling its author knew, and pass while the property was broken; that is the pattern this register
+has now recorded nine times. The gate itself is the test. What changed is that its failure now names
+the stage, so the next occurrence is one read rather than a full cycle.
