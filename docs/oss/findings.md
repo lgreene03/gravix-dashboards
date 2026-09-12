@@ -1423,7 +1423,10 @@ in a required check is a job that does not exist.
 **Found by:** `senior-engineer` diagnosing the `timed-onboarding` timeout on commit `2fab4f6`
 **Owner:** `sre-release-manager`
 **Severity:** critical — the bootstrap stack boots completely and shows an empty dashboard forever
-**Status:** FIXED in this commit, with a derived regression guard
+**Status:** the producer half is FIXED and guarded. **The consumer claim below was wrong** — see
+F-037. The rollup now writes `warehouse/<tenant-id>/…`, which the logs confirm, but Cube's
+`isMultiTenant` conditional never evaluates true inside its schema compiler, so Cube globs the
+single-tenant path and the two still do not meet. Half a fix; the half that is fixed is real.
 
 `timed-onboarding` on `2fab4f6` — the first head carrying all five earlier bootstrap fixes — got the
 whole stack up and then still failed:
@@ -2085,7 +2088,11 @@ is the next thing to do to this script.
 **Found by** the `timed-onboarding` poll on `18cede3`, immediately after F-035's fix took effect.
 **Owner** `semantic-modeler`
 **Severity** critical — the last link in the chain; every query still failed.
-**Status** FIXED and guarded.
+**Status** the rollups are no longer declared in this stack, and the error did move — but
+**F-037 shows this fix took effect for the wrong reason.** `process.env` is invisible to Cube's
+schema compiler, so `hasExternalStore` is false there regardless of the cache driver, and the
+guard below passes only because it injects `process` into its sandbox. The change is still the
+right shape; the mechanism it relies on is not the one that fired. Read F-037.
 
 ### The error moved, which is how we know the previous fix worked
 
@@ -2166,3 +2173,110 @@ F-019, F-021, F-023, F-027, F-030, F-032, F-034, F-035 and now F-036. Every one 
 the documented `docker compose up` path, and every one was hidden behind the one before it — this
 gate could only ever see the first unfixed link in the chain. That is an argument for the gate
 existing, and equally an argument against trusting a stack nothing has executed end to end.
+
+---
+
+## F-037 — `process.env` is invisible to Cube's schema compiler, so every environment conditional in the model has always taken its fallback branch
+
+**Found by** the `timed-onboarding` poll on `238a58c`.
+**Owner** `semantic-modeler` — and the fix is a **decision**, not an edit. See the options below.
+**Severity** critical, and it subsumes part of two earlier findings.
+**Status** diagnosed, NOT fixed. Recorded rather than improvised.
+
+### The evidence
+
+F-036's fix removed the pre-aggregation error and revealed this:
+
+```
+SELECT sum("request_metrics_minute".request_count) "request_metrics_minute__request_count"
+  FROM gravix.raw.request_metrics_minute AS "request_metrics_minute" LIMIT 10000
+
+Error: Binder Error: Catalog "gravix" does not exist!
+```
+
+`gravix.raw.request_metrics_minute` is the **Trino** table reference. DuckDB is the database. The
+model chooses between them:
+
+```js
+const isDuckDB = (typeof process !== 'undefined' && process.env && process.env.CUBEJS_DB_TYPE === 'duckdb');
+const requestMetricsSql = isDuckDB
+  ? `SELECT * FROM read_parquet('/cube/data/warehouse/…')`
+  : `SELECT * FROM gravix.raw.request_metrics_minute`;
+```
+
+`CUBEJS_DB_TYPE=duckdb` **is** set on the `cube` service — line 147 of
+`docker-compose.bootstrap.yml`. The Trino branch was taken anyway. Therefore
+`process.env.CUBEJS_DB_TYPE` did not read `duckdb` inside the compiler: Cube compiles model files
+with `vm.runInNewContext`, and that sandbox does not carry the process environment.
+
+Two pieces of corroboration were already in the repository:
+
+1. The `typeof process !== 'undefined'` guards exist at all. Nobody writes that against Node's real
+   `process`; whoever wrote them suspected the sandbox.
+2. `tests/cube/model_compiles.test.js`, which I wrote earlier tonight, has to **inject** `process`
+   into its sandbox (`if (p === 'process') return { env };`) or the conditionals do not see anything.
+   My own test harness documented the defect while I was using it to test something else.
+
+### What this subsumes
+
+**Every** environment conditional in `cube/model/schema/` has always evaluated false:
+
+| Conditional | Intended | Actual, always |
+|---|---|---|
+| `isDuckDB` | DuckDB `read_parquet` SQL | Trino SQL → `Catalog "gravix" does not exist` |
+| `isMultiTenant` | glob `warehouse/*/request_metrics_minute/` | glob `warehouse/request_metrics_minute/` |
+| `hasExternalStore` (added in F-036) | rollups only with a store | rollups never declared |
+
+**F-036's fix worked for the wrong reason, and I am correcting that here.** The rollups disappeared
+because `process` is unavailable in the sandbox, not because `CUBEJS_CACHE_AND_QUEUE_DRIVER=memory`
+was read. The guard I wrote for it passes because it injects `process` — it tests a code path Cube
+never executes. This is precisely the failure I have named eight times in this register tonight, and
+this instance is mine.
+
+**F-027 needs qualifying too.** That finding said Cube's multi-tenant glob reads
+`warehouse/*/request_metrics_minute/` and the rollup was writing to the non-tenant path. The rollup
+half was real and the fix was right — it now writes `warehouse/<tenant-id>/…`, which the logs confirm.
+But `isMultiTenant` is false in the compiler, so **Cube is globbing the single-tenant path**, and the
+two still do not meet. F-027 is half a fix: the producer is correct, the consumer was never reading
+where I said it was.
+
+### Why this is not fixed here
+
+The model must vary by backend — `read_parquet` is DuckDB-only, `gravix.raw.*` is Trino-only — and it
+cannot read the environment. The three ways out are not equivalent, and one of them costs something
+this project's central claim depends on:
+
+1. **`COMPILE_CONTEXT`.** Cube's documented mechanism for passing configuration from `cube.js` (a
+   normal, unsandboxed Node module that *can* read `process.env`) into schema files. The right shape,
+   and unverifiable here: v0.35's exact semantics need a running Cube, and I have now been wrong twice
+   tonight about Cube internals (F-035's residual uncertainty, and F-036's fix above). A third guess
+   at 03:00 is not diligence.
+2. **A separate model directory per stack.** Fully verifiable without Docker, because the SQL becomes
+   a literal. It duplicates the three model files — and **a duplicated semantic model is two
+   definitions of one metric, which is the exact thing this project claims to get right.** Drift here
+   would undermine the correctness axis, not merely annoy a maintainer.
+3. **Generate the variant at build time** from the canonical model. Avoids both problems and adds a
+   code-generation step to a project whose dashboards deliberately have no build step.
+
+Option 1 is almost certainly correct and needs one person with a Docker daemon to confirm in ten
+minutes. Option 2 is the safe fallback and has a real cost that should be paid deliberately, not by
+an implementer at the end of a long session. Per `CLAUDE.md`, a choice that trades off a stated
+project claim is not an implementation detail.
+
+### The guard that should exist, and why it is absent
+
+The invariant is: **nothing in `cube/model/` may change its SQL or its table reference based on
+`process.env`**, because the compiler does not provide it. That is directly testable — load each
+model with and without `process` in the sandbox and require identical output.
+
+It is not added, because it fails today and a red test is not a deliverable. It should land with
+whichever option above is chosen, and it is the test that would have caught this on the day the
+conditional was written.
+
+### Ten runs, ten findings
+
+F-019, F-021, F-023, F-027, F-030, F-032, F-034, F-035, F-036, F-037. The gate has done exactly what
+it was built to do — it can only ever see the first unfixed link, and it has surfaced ten of them in
+a path that `docker compose up` was documented to make work. It has also now caught one of my own
+fixes passing for the wrong reason, which is the argument for running the real thing rather than
+trusting a guard that tests a path production never takes.
