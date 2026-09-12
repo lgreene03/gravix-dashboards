@@ -1665,13 +1665,38 @@ Mutation-tested four ways, control green either side:
 | an unbalanced brace in a model file | fails |
 | the mount path renamed, so the guard watches nothing | fails |
 
-### Still open, same class, not a break
+### The postscript, now fixed
 
 `docker-compose.bootstrap.yml` mounts `./dashboards` as nginx's document root, so
-`dashboards/lib/*.test.js` is served over HTTP at `/lib/tco.test.js`. Nothing breaks — nginx serves
-them as static files — but shipping test code to visitors is untidy for a project meant to be read.
-Not moved here: the bootstrap stack's ability to serve data is what needed proving first, and one
-change verified beats two unverified. The fix is the same shape as this one.
+`dashboards/lib/*.test.js` was served over HTTP at `/lib/*.test.js` on every deployed bootstrap
+stack. Nothing broke — and the bytes are public on GitHub anyway — but a dashboard handing out its
+own test suite is not what this project should look like.
+
+**Fixed at the serving layer, not by moving the files.** `storage/dashboard/nginx.conf` gains a
+`location ~* \.test\.js$` block returning 404. That was chosen over relocating the five files to
+`tests/dashboards/` deliberately: the property is *"the dashboard does not serve tests"*, and a rule
+holds for files nobody has written yet where a one-time move does not. It is also five files of path
+rewriting avoided on a branch that is already red.
+
+**The ordering is load-bearing and invisible.** nginx evaluates regex locations in file order and
+takes the first match, so the same deny rule placed *after* the existing `\.(css|js)$` block never
+runs — and the config still loads, still reads correctly, and still serves the tests. A reviewer
+sees a deny rule and has no reason to suspect position matters.
+
+`TestDashboardDoesNotServeTestFiles` therefore checks three things: the rule exists, it precedes the
+`\.(css|js)$` block, and its pattern matches every `*.test.js` in the tree while matching none of
+the application scripts. It fails if it finds zero of either kind, since a check that matches nothing
+proves nothing.
+
+Mutation-tested, control green either side, each edit verified as applied: removing the rule fails,
+moving it after the `css|js` block fails, and broadening the pattern to `\.js$` — which would block
+`app.js` and break the dashboard — fails.
+
+One mutation of mine did *not* fail, and it was my mutation that was wrong rather than the guard:
+`test\.?js$` still requires the literal `test`, so it never matched application code and was not the
+broadening I had described. Re-run with `\.js$`, the guard caught it. Worth recording because a
+mutation that does not do what its label claims is indistinguishable from a guard that does not
+work.
 
 ### What the gate has now found
 

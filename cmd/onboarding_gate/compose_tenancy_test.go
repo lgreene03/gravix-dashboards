@@ -688,3 +688,104 @@ func TestNoSigningSecretIsHardcodedInCompose(t *testing.T) {
 		}
 	}
 }
+
+// ─── F-030: the dashboard must not serve its own test files ────────────────
+
+// ./dashboards is the nginx document root, so every file in that tree is
+// reachable over HTTP — including dashboards/lib/*.test.js, served at
+// /lib/*.test.js on every deployed bootstrap stack.
+//
+// storage/dashboard/nginx.conf denies them. Two things about that rule can break
+// silently, and both are checked here:
+//
+//  1. the pattern must actually match the test files and must NOT match the real
+//     application scripts, and
+//  2. it must appear BEFORE the \.(css|js)$ block. nginx evaluates regex
+//     locations in file order and takes the first match, so the same rule placed
+//     after that block never runs — and the config still loads, still looks
+//     right, and still serves the tests.
+//
+// The second is the reason this test exists. A reviewer reading the diff sees a
+// deny rule; nothing about the file says the order is load-bearing.
+func TestDashboardDoesNotServeTestFiles(t *testing.T) {
+	const confPath = "../../storage/dashboard/nginx.conf"
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", confPath, err)
+	}
+	conf := string(data)
+
+	locRe := regexp.MustCompile(`(?m)^\s*location\s+~\*\s+(\S+)\s*\{`)
+	matches := locRe.FindAllStringSubmatchIndex(conf, -1)
+	if len(matches) == 0 {
+		t.Fatal("no regex location blocks found; the config shape changed and this guard is " +
+			"watching nothing")
+	}
+
+	var denyIdx, jsIdx = -1, -1
+	var denyPattern string
+	for i, m := range matches {
+		pat := conf[m[2]:m[3]]
+		switch {
+		case strings.Contains(pat, `test`):
+			if denyIdx == -1 {
+				denyIdx, denyPattern = i, pat
+			}
+		case strings.Contains(pat, `css|js`):
+			if jsIdx == -1 {
+				jsIdx = i
+			}
+		}
+	}
+
+	if denyIdx == -1 {
+		t.Fatalf("storage/dashboard/nginx.conf has no location block denying test files.\n"+
+			"./dashboards is the document root, so %s is served at /lib/*.test.js on every\n"+
+			"deployed stack (F-030).", "dashboards/lib/*.test.js")
+	}
+	if jsIdx == -1 {
+		t.Fatal("no \\.(css|js)$ location found; the config shape changed")
+	}
+	if denyIdx > jsIdx {
+		t.Errorf("F-030 REGRESSION: the test-file deny rule (%s) appears AFTER the \\.(css|js)$\n"+
+			"block. nginx takes the first matching regex location in file order, so the deny\n"+
+			"never runs and the tests are served again — with a config that loads cleanly and\n"+
+			"reads as if it were correct.", denyPattern)
+	}
+
+	// Go's RE2 and nginx's PCRE agree on a pattern this simple; the risk being
+	// checked is a wrong pattern, not a dialect difference.
+	deny, err := regexp.Compile(`(?i)` + strings.TrimPrefix(denyPattern, `~*`))
+	if err != nil {
+		t.Fatalf("the deny pattern %q does not compile: %v", denyPattern, err)
+	}
+
+	served, err := filepath.Glob("../../dashboards/lib/*.js")
+	if err != nil || len(served) == 0 {
+		t.Fatalf("found no dashboard scripts to check (err=%v); the tree moved", err)
+	}
+	var tests, app int
+	for _, f := range served {
+		name := filepath.Base(f)
+		isTest := strings.HasSuffix(name, ".test.js")
+		blocked := deny.MatchString(name)
+		switch {
+		case isTest && !blocked:
+			t.Errorf("F-030 REGRESSION: %s is a test file and the deny pattern %s does not match "+
+				"it, so it is served at /lib/%s", name, denyPattern, name)
+		case !isTest && blocked:
+			t.Errorf("the deny pattern %s matches %s, which is application code the dashboard "+
+				"needs. The rule is too broad.", denyPattern, name)
+		}
+		if isTest {
+			tests++
+		} else {
+			app++
+		}
+	}
+	if tests == 0 || app == 0 {
+		t.Fatalf("checked %d test file(s) and %d application file(s); both must be non-zero or "+
+			"this proves nothing", tests, app)
+	}
+	t.Logf("%d test file(s) denied, %d application file(s) still served", tests, app)
+}
