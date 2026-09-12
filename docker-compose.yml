@@ -15,7 +15,13 @@ services:
       - "8090:8080"
     volumes:
       - ./data:/app/data
-    command: [ "./ingestion-service", "--base-dir", "/app/data" ]
+    # Flags only: the image's ENTRYPOINT is already ["./ingestion-service"] and
+    # Compose appends command to it, so naming the binary here ran
+    # `./ingestion-service ./ingestion-service --base-dir /app/data` and Go's flag
+    # package dropped --base-dir at the first positional argument (F-032). It
+    # happened to equal the built-in default, so nothing broke — until someone
+    # changed the value.
+    command: [ "--base-dir", "/app/data" ]
     environment:
       - TENANT_DB_PATH=/app/data/gravix.db
       - S3_ENDPOINT=http://minio:9000

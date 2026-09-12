@@ -1522,8 +1522,9 @@ cannot be amended without a force-push this environment denies; the code comment
 **Found by** `senior-engineer`, re-reading `docker-compose.yml` after making it loadable for F-011.
 **Owner** `security-engineer` for the second half; the first half is fixed here.
 **Severity** high — an empty dashboard with every container healthy, and a public signing secret.
-**Status** the mismatch is FIXED and guarded. The bootstrap stack's shared public secret is
-**open** and needs a decision.
+**Status** FIXED in full. The mismatch was fixed here; the bootstrap stack's shared public secret was
+resolved by **F-032**, which found it also crash-looped the gateway and so collapsed the three
+options below to the one that works. Option 1 is implemented — see F-032.
 
 ### The mismatch, and why fixing F-011 caused it
 
@@ -1758,3 +1759,122 @@ harness had tested an unmodified file. The same false negative is recorded in GR
 the same reason. The harness now takes an `md5sum` before and after each edit and reports SKIP rather
 than PASS when the file is unchanged. **A mutation test that cannot tell "the guard held" from "I
 mutated nothing" is not evidence**, and it fails in the direction that flatters the guard.
+
+---
+
+## F-032 — the bootstrap gateway crash-looped on every boot, so the dashboard's login could never succeed
+
+**Found by** the `timed-onboarding` diagnostics on `d344411`, in the `docker compose ps -a` table.
+**Owner** `sre-release-manager`
+**Severity** critical — the gateway has never started in the bootstrap stack.
+**Status** FIXED, with three guards.
+
+### What the table said
+
+```
+gravix-gateway   gravix-dashboards-gateway   "./gateway ./gateway…"   Restarting (1) 46 seconds ago
+```
+
+Two separate faults are visible in that one line.
+
+### Fault 1: the signing secret was 23 characters, and the gateway requires 32
+
+`services/gateway/main.go:221` exits 1 when `JWT_SECRET` is shorter than 32 characters.
+`docker-compose.bootstrap.yml` set `JWT_SECRET=supersecretjwtkey12345!` — **23 characters**. So the
+gateway exited 1, was restarted, and exited 1 again, forever. Deterministic, on every boot, since the
+value was introduced.
+
+The poll's first step is `POST /api/gateway/login`, so no token was ever obtained and
+`RequestMetricsMinute.requestCount` was never queried. Every earlier finding this gate produced —
+F-019, F-021, F-023, F-027, F-030 — was in front of this one in the pipeline, which is why each had
+to be cleared before this became visible.
+
+**This resolves F-029's open half.** That entry left the choice of how to handle the published secret
+to an owner, listing three options. The choice has collapsed: a longer hardcoded literal is no better
+functionally and strictly worse for security, so option 1 — `bootstrap_seed` generates it — is the
+only one that both starts the stack and keeps zero-config. Implemented:
+
+- `cmd/bootstrap_seed` writes a 256-bit URL-safe secret to `data/jwt_secret.txt`, mode 0600, and
+  **reuses an existing one**. Regenerating would invalidate every issued token and, worse, could be
+  written while Cube still held the old value — a stack that disagrees with itself about its own
+  signing key presents as an empty dashboard, not as an authentication error.
+- `services/gateway/main.go` accepts `JWT_SECRET_FILE` / `--jwt-secret-file`.
+- `cube/cube.js` reads the same file. A missing file **throws** rather than falling back to
+  `JWT_SECRET`: falling back would leave Cube verifying with a different value than the gateway signs
+  with, which is the silent-empty-dashboard failure again.
+
+The rejection message now reports the length and where the value came from. It previously named only
+the rule, so a crash loop caused by a 23-character string said nothing about which string or which
+source — and cost a full CI cycle to identify.
+
+### Fault 2: `command` repeated the binary the image already runs
+
+The image declares `ENTRYPOINT ["./gateway"]`; the compose service set
+`command: ["./gateway", "--tenant-db", ...]`. Compose **appends** `command` to `ENTRYPOINT`, so the
+process ran as `./gateway ./gateway --tenant-db /app/data/gravix.db`. Go's `flag` package stops at
+the first positional argument, so `--tenant-db` was silently dropped.
+
+Nothing broke: `TENANT_DB_PATH` covered it. `ingestion` had the identical defect in **both** compose
+files, where the dropped `--base-dir` happened to equal the built-in default. A flag that is ignored
+while its value is right by coincidence is a defect that surfaces on the day someone changes the
+value.
+
+### Guards
+
+| Test | What it asserts |
+|---|---|
+| `TestServiceCommandDoesNotRepeatTheEntrypointBinary` | derives ENTRYPOINT and CMD from each service's Dockerfile and checks `command` against the right rule for each |
+| `TestNoSigningSecretIsHardcodedInCompose` | no `*SECRET*`/`*PASSWORD*`/`*TOKEN*`/`*API_KEY*` variable may hold a literal — it must interpolate or be a `_FILE` path |
+| `TestProvisionWritesAUsableJWTSecret` | the generated secret is 0600 and at least the 32 characters the gateway enforces |
+| `TestReprovisionKeepsTheSameJWTSecret` | a second provision does not replace it |
+
+**ENTRYPOINT and CMD are checked separately, and that distinction was found the hard way.** The first
+version of the command guard used one regex for both and reported `load-generator` as defective.
+Compose *appends* to ENTRYPOINT but *replaces* CMD, so naming the binary is a bug against the first
+and mandatory against the second — `load-generator`'s image has only CMD, and "fixing" it would have
+broken a working service. The guard now enforces the opposite rule in each case.
+
+Mutation-tested, control green either side: reintroducing the duplication on the gateway and on
+ingestion, restoring the short literal, giving Cube a *long* literal (still published, still caught),
+writing the old literal instead of a random secret, mode 0644, and regenerating on every provision —
+each fails.
+
+### The diagnostic that missed it
+
+`diagnose()` printed the logs of `bootstrap-init`, `ingestion`, `request-metrics-rollup`, `cube` and
+`synthetic-traffic`. All five were working. **The gateway was not in the list**, and it is the first
+dependency of the thing being measured. The function printed a page of healthy services while the
+failure sat one column over in a table nobody was reading closely.
+
+Fixed: `gateway` is now first in that list, `dashboard` was added too, and the function counts
+`Restarting` containers and prints an explicit line naming them, because `docker compose ps` reports
+a crash loop without drawing any attention to it.
+
+---
+
+## F-033 — ingestion writes every recovered batch twice, once to a path nothing reads
+
+**Found by** reading the ingestion log in the same diagnostic output.
+**Owner** `senior-engineering-lead`
+**Severity** medium — duplicate storage and a second copy under a prefix the multi-tenant rollup
+never scans. Recorded, not fixed: it is outside what the current work touches, and the fix needs a
+look at the orphan-recovery path rather than a one-line change.
+
+Three consecutive lines for one batch file:
+
+```
+INFO  found orphaned batch file    path=data/buffer/<tenant>/request_facts/batch_….jsonl
+INFO  uploaded to storage          key=raw/<tenant>/request_facts/2026-09-12/00/batch_….jsonl
+WARN  uploaded but failed to remove local file   error=… no such file or directory
+INFO  uploaded to storage          key=raw/request_facts/2026-09-12/00/batch_….jsonl
+```
+
+The same file is uploaded twice: once under the tenant prefix and once under the bare, non-tenant
+prefix, with the failed local removal in between showing the two paths racing over one file. The
+second copy lands where the rollup — in multi-tenant mode since F-027 — never looks, so it is pure
+waste that also inflates any bytes-per-event measurement taken from disk.
+
+It bears on GRVX-1003's storage figures and on the cost claims in GRVX-1004, since both measure what
+is on disk. Whoever picks it up should start at the orphan-recovery sweep in
+`services/ingestion/main.go`, which appears to compute its topic without the tenant that the normal
+rotation path applies via `topicForTenant`.

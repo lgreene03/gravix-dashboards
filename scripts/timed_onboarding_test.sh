@@ -68,8 +68,21 @@ diagnose() {
     echo
     echo "container state:"
     $COMPOSE ps -a 2>&1 | head -20
+    # Restarting means a crash loop, which `ps` reports without drawing attention
+    # to it. F-032 sat in this table for a full run before anyone read the column.
+    restarting="$($COMPOSE ps -a 2>&1 | grep -c 'Restarting' || true)"
+    if [ "${restarting:-0}" -gt 0 ]; then
+        echo
+        echo ">>> $restarting container(s) are CRASH-LOOPING (Restarting) — their logs below are the failure, not the symptom."
+    fi
     echo
-    for svc in bootstrap-init ingestion request-metrics-rollup cube synthetic-traffic; do
+    # gateway FIRST, and it was missing from this list until F-032. The poll's
+    # first step is a gateway login, so a crash-looping gateway makes every later
+    # stage unreachable — and that is exactly what happened, silently, while this
+    # function printed the logs of five services that were all working. A
+    # diagnostic that omits the first dependency of the thing being diagnosed
+    # sends the reader past the failure.
+    for svc in gateway bootstrap-init ingestion request-metrics-rollup cube dashboard synthetic-traffic; do
         echo "─── $svc (last 15) ───"
         $COMPOSE logs --tail=15 "$svc" 2>&1 | head -20
     done

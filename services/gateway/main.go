@@ -195,12 +195,25 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]interface{}{"error": msg, "code": code})
 }
 
+// jwtSecretSource names where the secret was read from, so a rejected value can
+// be traced to the thing that set it.
+func jwtSecretSource(file string) string {
+	if file != "" {
+		return "file " + file
+	}
+	if os.Getenv("JWT_SECRET") != "" {
+		return "JWT_SECRET environment variable"
+	}
+	return "--jwt-secret flag"
+}
+
 func main() {
 	logging.Init("gateway")
 
 	port := flag.Int("port", 8091, "HTTP port")
 	tenantDBPath := flag.String("tenant-db", "", "Path to tenant SQLite database")
 	jwtSecret := flag.String("jwt-secret", "", "JWT signing secret")
+	jwtSecretFile := flag.String("jwt-secret-file", "", "Path to a file holding the JWT signing secret (overrides JWT_SECRET)")
 	flag.Parse()
 
 	if *tenantDBPath == "" {
@@ -208,6 +221,23 @@ func main() {
 	}
 	if *jwtSecret == "" {
 		*jwtSecret = os.Getenv("JWT_SECRET")
+	}
+	// A file, rather than an environment variable, so the bootstrap stack can
+	// generate the secret at first boot instead of shipping one in a compose file
+	// that anyone can read. bootstrap_seed writes it; cube/cube.js reads the same
+	// file, which is what keeps the signer and the verifier in agreement (F-029).
+	if *jwtSecretFile == "" {
+		*jwtSecretFile = os.Getenv("JWT_SECRET_FILE")
+	}
+	if *jwtSecretFile != "" {
+		b, err := os.ReadFile(*jwtSecretFile)
+		if err != nil {
+			slog.Error("cannot read the JWT secret file", "path", *jwtSecretFile, "error", err)
+			os.Exit(1)
+		}
+		if t := strings.TrimSpace(string(b)); t != "" {
+			*jwtSecret = t
+		}
 	}
 
 	if *tenantDBPath == "" && os.Getenv("DB_DRIVER") == "" {
@@ -219,7 +249,12 @@ func main() {
 		os.Exit(1)
 	}
 	if len(*jwtSecret) < 32 {
-		slog.Error("JWT_SECRET must be at least 32 characters")
+		// The length is reported. The bootstrap stack shipped a 23-character
+		// literal and this check rejected it on every boot, but the message named
+		// only the rule, so the crash loop said nothing about which value was
+		// wrong or where it came from (F-032).
+		slog.Error("JWT_SECRET must be at least 32 characters",
+			"length", len(*jwtSecret), "source", jwtSecretSource(*jwtSecretFile))
 		os.Exit(1)
 	}
 

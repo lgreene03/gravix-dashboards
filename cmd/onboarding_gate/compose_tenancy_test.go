@@ -75,6 +75,35 @@ var goBuildRe = regexp.MustCompile(`-o\s+(\S+)\s+(\./\S+)`)
 // is the binary a service runs when it overrides neither.
 var dockerEntrypointRe = regexp.MustCompile(`(?m)^\s*(?:ENTRYPOINT|CMD)\s*\[\s*"([^"]+)"`)
 
+// ENTRYPOINT and CMD are matched separately as well, because Compose treats them
+// oppositely: a service's `command` is APPENDED to ENTRYPOINT as arguments, but
+// REPLACES CMD wholesale. So naming the binary in `command` is a bug against an
+// ENTRYPOINT image and mandatory against a CMD-only one. The first version of the
+// guard below used the combined pattern and reported load-generator — whose image
+// has only CMD — as a defect. Conflating the two produces a false positive that
+// would have been "fixed" by breaking a working service.
+var (
+	dockerExecEntrypointRe = regexp.MustCompile(`(?m)^\s*ENTRYPOINT\s*\[\s*"([^"]+)"`)
+	dockerExecCmdRe        = regexp.MustCompile(`(?m)^\s*CMD\s*\[\s*"([^"]+)"`)
+)
+
+// imageInvocation reports the binary an image's ENTRYPOINT declares, and the one
+// its CMD declares, as separate answers.
+func imageInvocation(t *testing.T, dockerfile string) (entrypoint, cmd string) {
+	t.Helper()
+	data, err := os.ReadFile(dockerfile)
+	if err != nil {
+		t.Fatalf("read %s: %v", dockerfile, err)
+	}
+	if m := dockerExecEntrypointRe.FindStringSubmatch(string(data)); m != nil {
+		entrypoint = strings.TrimPrefix(m[1], "./")
+	}
+	if m := dockerExecCmdRe.FindStringSubmatch(string(data)); m != nil {
+		cmd = strings.TrimPrefix(m[1], "./")
+	}
+	return entrypoint, cmd
+}
+
 // flatten renders any of compose's command shapes — a string, a list of
 // strings, a list containing one heredoc script — as a single string. The shape
 // is not the property under test and has changed twice in this repository
@@ -525,6 +554,136 @@ func TestOneStackResolvesOneSigningSecret(t *testing.T) {
 					"gateway issues: an empty dashboard with every container reporting healthy.",
 					filepath.Base(composeFile), names[0], n, secretVar,
 					names[0], want, n, declared[n])
+			}
+		}
+	}
+}
+
+// ─── command must not repeat the image's entrypoint binary ─────────────────
+
+// Compose APPENDS a service's `command` to the image's ENTRYPOINT. So a service
+// whose command begins with the same binary the Dockerfile already declares runs
+// it as `./x ./x --flag`, where Go's flag package stops at the first positional
+// argument and every flag after it is silently ignored.
+//
+// The bootstrap stack did this for both the gateway and ingestion. Nothing broke
+// visibly: the gateway's dropped --tenant-db was covered by TENANT_DB_PATH, and
+// ingestion's dropped --base-dir happened to equal the built-in default. A flag
+// that is ignored while its value is right by luck is the kind of defect that
+// surfaces the day someone changes the value. See F-032.
+func TestServiceCommandDoesNotRepeatTheEntrypointBinary(t *testing.T) {
+	checked := 0
+	for _, composeFile := range composeFiles {
+		data, err := os.ReadFile(composeFile)
+		if err != nil {
+			t.Fatalf("read %s: %v", composeFile, err)
+		}
+		var doc tenancyDoc
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("%s is not loadable: %v", composeFile, err)
+		}
+
+		names := make([]string, 0, len(doc.Services))
+		for n := range doc.Services {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			svc := doc.Services[name]
+			if svc.Build == nil || svc.Build.Dockerfile == "" {
+				continue
+			}
+			// A service that overrides entrypoint (e.g. to /bin/sh -c) is running
+			// a script, not appending to the image's entrypoint, so the rule does
+			// not apply.
+			if strings.TrimSpace(flatten(svc.Entrypoint)) != "" {
+				continue
+			}
+			cmd := strings.Fields(flatten(svc.Command))
+			if len(cmd) == 0 {
+				continue
+			}
+			entrypointBin, cmdBin := imageInvocation(t, filepath.Join("../..", svc.Build.Dockerfile))
+			first := strings.TrimPrefix(cmd[0], "./")
+
+			if entrypointBin != "" {
+				checked++
+				if first == entrypointBin {
+					t.Errorf("F-032 REGRESSION: %s service %q sets command starting with %q, but its\n"+
+						"image's ENTRYPOINT is already [\"./%s\"]. Compose APPENDS command to entrypoint,\n"+
+						"so this runs `./%s ./%s ...` — Go's flag package stops at the first positional\n"+
+						"argument and every flag after it is silently ignored. Drop the binary and pass\n"+
+						"only flags.",
+						filepath.Base(composeFile), name, cmd[0], entrypointBin, entrypointBin, entrypointBin)
+				}
+				continue
+			}
+
+			if cmdBin != "" {
+				// The opposite rule: command REPLACES CMD, so it has to name
+				// something executable. A command of bare flags would have Docker
+				// try to exec the first flag.
+				checked++
+				if strings.HasPrefix(first, "-") {
+					t.Errorf("F-032 REGRESSION: %s service %q sets command starting with the flag %q,\n"+
+						"but its image declares no ENTRYPOINT — only CMD [\"./%s\"]. Compose REPLACES\n"+
+						"CMD rather than appending to it, so this asks Docker to execute %q. Name the\n"+
+						"binary first here.",
+						filepath.Base(composeFile), name, cmd[0], cmdBin, cmd[0])
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no service with an image entrypoint and an explicit command was found in %v;\n"+
+			"the derivation broke rather than the stacks being clean", composeFiles)
+	}
+}
+
+// ─── no signing secret is committed to a compose file ──────────────────────
+
+// The bootstrap stack shipped JWT_SECRET=supersecretjwtkey12345! on two services.
+// Two separate faults in one literal: it is published in this repository, so
+// anyone could mint a token for any tenant; and at 23 characters it is shorter
+// than the 32 services/gateway/main.go requires, so the gateway exited 1 on every
+// boot and the dashboard's login could never succeed (F-029, F-032).
+//
+// The rule is on the shape, not on the string: a signing secret in a compose file
+// must come from the environment or from a file, never from a literal. That holds
+// for a secret nobody has thought of yet, where a check for this one value would
+// not.
+func TestNoSigningSecretIsHardcodedInCompose(t *testing.T) {
+	secretish := regexp.MustCompile(`(?i)(SECRET|PASSWORD|TOKEN|API_KEY)`)
+	// A literal is anything that is not an interpolation and not obviously a path.
+	interpolated := regexp.MustCompile(`\$\{[^}]+\}`)
+
+	for _, composeFile := range composeFiles {
+		data, err := os.ReadFile(composeFile)
+		if err != nil {
+			t.Fatalf("read %s: %v", composeFile, err)
+		}
+		var doc tenancyDoc
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("%s is not loadable: %v", composeFile, err)
+		}
+		for name, svc := range doc.Services {
+			for k, v := range envPairs(svc.Environment) {
+				if !secretish.MatchString(k) || v == "" {
+					continue
+				}
+				// _FILE variables name a path, which is the shape we want.
+				if strings.HasSuffix(k, "_FILE") {
+					continue
+				}
+				if interpolated.MatchString(v) {
+					continue
+				}
+				t.Errorf("F-029/F-032 REGRESSION: %s service %q sets %s to a literal value.\n"+
+					"A secret written into a compose file is published with this repository, and a\n"+
+					"literal cannot be rotated per deployment. Use ${%s:?...} to require it from the\n"+
+					"environment, or %s_FILE pointing at a file bootstrap_seed generates.",
+					filepath.Base(composeFile), name, k, k, k)
 			}
 		}
 	}

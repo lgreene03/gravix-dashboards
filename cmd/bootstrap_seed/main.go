@@ -51,6 +51,7 @@ type provisionConfig struct {
 	IngestionURL    string
 	GatewayURL      string
 	LoginFile       string
+	JWTSecretFile   string
 }
 
 func main() {
@@ -63,6 +64,7 @@ func main() {
 	flag.StringVar(&cfg.IngestionURL, "ingestion-url", "http://localhost:8090", "Value written into dashboard_config.js as ingestionApiUrl")
 	flag.StringVar(&cfg.GatewayURL, "gateway-url", "http://localhost:8091", "Value written into dashboard_config.js as gatewayUrl")
 	flag.StringVar(&cfg.LoginFile, "login-file", "./data/login.txt", "Path to write the generated dashboard login (mode 0600)")
+	flag.StringVar(&cfg.JWTSecretFile, "jwt-secret-file", "./data/jwt_secret.txt", "Path to write the generated JWT signing secret (mode 0600)")
 	flag.Parse()
 
 	if err := provision(context.Background(), cfg, os.Stdout); err != nil {
@@ -89,7 +91,7 @@ func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error
 		return fmt.Errorf("bootstrap_seed: %w", err)
 	}
 
-	for _, path := range []string{cfg.DBPath, cfg.APIKeyFile, cfg.DashboardConfig, cfg.LoginFile} {
+	for _, path := range []string{cfg.DBPath, cfg.APIKeyFile, cfg.DashboardConfig, cfg.LoginFile, cfg.JWTSecretFile} {
 		if dir := filepath.Dir(path); dir != "" {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return fmt.Errorf("bootstrap_seed: %w", err)
@@ -172,6 +174,19 @@ func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error
 		}
 	}
 
+	// The JWT signing secret. The gateway signs the dashboard's token with it and
+	// cube/cube.js verifies with the same value, so the two must agree; generating
+	// it here is what lets both read one file instead of sharing a literal that is
+	// published in this repository (F-029).
+	//
+	// Reused rather than regenerated when the file already exists. A fresh secret
+	// would invalidate every token already issued and, worse, could be written
+	// while Cube still holds the old one — a stack that authenticates against
+	// itself inconsistently is harder to diagnose than one that plainly fails.
+	if err := ensureJWTSecret(cfg.JWTSecretFile); err != nil {
+		return err
+	}
+
 	// 0600, like the API key: this is the credential to the dashboard.
 	login := fmt.Sprintf("email: %s\npassword: %s\n", cfg.TenantEmail, password)
 	if err := os.WriteFile(cfg.LoginFile, []byte(login), 0o600); err != nil {
@@ -191,9 +206,40 @@ func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error
 	// Printed as well as written, because this is the one moment the password
 	// exists in plaintext anywhere other than that file, and the log is where a
 	// first-time user is already looking.
+	fmt.Fprintf(stdout, "jwt signing secret written to %s\n", cfg.JWTSecretFile)
 	fmt.Fprintf(stdout, "dashboard login written to %s\n", cfg.LoginFile)
 	fmt.Fprintf(stdout, "  email:    %s\n", cfg.TenantEmail)
 	fmt.Fprintf(stdout, "  password: %s\n", password)
+	return nil
+}
+
+// ensureJWTSecret writes a 256-bit random signing secret to path if it is not
+// already there, and leaves an existing one untouched.
+//
+// The length matters and is checked by the consumer: services/gateway/main.go
+// exits 1 when JWT_SECRET is shorter than 32 characters. The literal this
+// replaced was 23, so the gateway crash-looped on every boot of the bootstrap
+// stack and the dashboard's login could never succeed (F-032). A URL-safe
+// base64 encoding of 32 random bytes is 43 characters.
+func ensureJWTSecret(path string) error {
+	// An empty path is a caller that forgot, not a request to skip. Skipping would
+	// leave the gateway with no secret and the stack dead, reported as a missing
+	// file rather than as the misconfiguration it is.
+	if path == "" {
+		return errors.New("bootstrap_seed: -jwt-secret-file is required")
+	}
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("bootstrap_seed: %w", err)
+	}
+	secret, err := generatePassword()
+	if err != nil {
+		return fmt.Errorf("bootstrap_seed: generate jwt secret: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0o600); err != nil {
+		return fmt.Errorf("bootstrap_seed: %w", err)
+	}
 	return nil
 }
 

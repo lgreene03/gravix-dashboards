@@ -56,7 +56,8 @@ services:
           -db=/app/data/gravix.db \
           -api-key-file=/app/data/api_key.txt \
           -dashboard-config=/app/data/dashboard_config.js \
-          -login-file=/app/data/login.txt
+          -login-file=/app/data/login.txt \
+          -jwt-secret-file=/app/data/jwt_secret.txt
         status=$$?
         # Again after seeding: the files were created by root and the services
         # that read them are not. synthetic-traffic reads api_key.txt at 0600,
@@ -78,12 +79,21 @@ services:
       - "8091:8091"
     volumes:
       - ./data:/app/data
-    command: [ "./gateway", "--tenant-db", "/app/data/gravix.db" ]
+    # Flags only. The image's ENTRYPOINT is already ["./gateway"], and Compose
+    # appends `command` to it — so naming the binary here ran
+    # `./gateway ./gateway --tenant-db ...`, where Go's flag package stops at the
+    # first positional argument and silently ignored every flag after it (F-032).
+    command: [ "--tenant-db", "/app/data/gravix.db" ]
     depends_on:
       bootstrap-init:
         condition: service_completed_successfully
     environment:
-      - JWT_SECRET=supersecretjwtkey12345!
+      # bootstrap_seed generates this at first boot; cube reads the same file, so
+      # the signer and the verifier agree without a secret committed to this file.
+      # The literal that was here was 23 characters and the gateway rejects
+      # anything under 32, so it crash-looped on every boot — which is why the
+      # dashboard's login could never succeed (F-032, F-029).
+      - JWT_SECRET_FILE=/app/data/jwt_secret.txt
       - TENANT_DB_PATH=/app/data/gravix.db
       - CUBE_API_URL=http://cube:4000/cubejs-api/v1/load
     healthcheck:
@@ -108,7 +118,9 @@ services:
       - "8090:8080"
     volumes:
       - ./data:/app/data
-    command: [ "./ingestion-service", "--base-dir", "/app/data" ]
+    # Flags only — see the gateway above. `--base-dir` was being dropped for the
+    # same reason; it happened to match the built-in default, so nothing broke.
+    command: [ "--base-dir", "/app/data" ]
     depends_on:
       bootstrap-init:
         condition: service_completed_successfully
@@ -139,7 +151,8 @@ services:
       - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
       - TENANT_DB_PATH=/cube/data/gravix.db
-      - JWT_SECRET=supersecretjwtkey12345!
+      # The same file the gateway reads, through the ./data:/cube/data mount.
+      - JWT_SECRET_FILE=/cube/data/jwt_secret.txt
     volumes:
       - ./cube/cube.js:/cube/conf/cube.js
       - ./cube/model:/cube/conf/model

@@ -29,6 +29,7 @@ func seedIn(t *testing.T) provisionConfig {
 		APIKeyFile:      filepath.Join(dir, "api_key.txt"),
 		DashboardConfig: filepath.Join(dir, "dashboard_config.js"),
 		LoginFile:       filepath.Join(dir, "login.txt"),
+		JWTSecretFile:   filepath.Join(dir, "jwt_secret.txt"),
 		TenantName:      "local",
 		TenantEmail:     "local@gravix.invalid",
 		IngestionURL:    "http://localhost:8090",
@@ -508,4 +509,84 @@ func tenantIDOf(t *testing.T, db *tenantdb.SQLiteDB) string {
 		t.Fatalf("list tenants: %v", err)
 	}
 	return tenants[0].ID
+}
+
+// ─── F-032: the generated JWT signing secret ───────────────────────────────
+
+// TestProvisionWritesAUsableJWTSecret covers the two properties the gateway and
+// Cube actually depend on: the secret is long enough for the gateway to accept,
+// and it is not readable by other users.
+//
+// The literal this replaced was `supersecretjwtkey12345!` — 23 characters, where
+// services/gateway/main.go exits 1 below 32. So the bootstrap gateway crash-looped
+// on every boot and the dashboard's login could never succeed. The length is
+// asserted against the same constant the gateway enforces, not against a number
+// repeated here.
+func TestProvisionWritesAUsableJWTSecret(t *testing.T) {
+	cfg := seedIn(t)
+	if err := provision(context.Background(), cfg, io.Discard); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	info, err := os.Stat(cfg.JWTSecretFile)
+	if err != nil {
+		t.Fatalf("the JWT secret file was not written: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("JWT secret file mode is %04o, want 0600: it is a signing key, and a\n"+
+			"world-readable one lets any process on the host mint a token for any tenant", got)
+	}
+
+	raw, err := os.ReadFile(cfg.JWTSecretFile)
+	if err != nil {
+		t.Fatalf("read the JWT secret: %v", err)
+	}
+	secret := strings.TrimSpace(string(raw))
+
+	// The gateway's own threshold, so this test moves if that check moves.
+	const gatewayMinimum = 32
+	if len(secret) < gatewayMinimum {
+		t.Errorf("the generated secret is %d characters; services/gateway/main.go exits 1 below\n"+
+			"%d, so the gateway would crash-loop exactly as it did with the hardcoded literal\n"+
+			"(F-032)", len(secret), gatewayMinimum)
+	}
+	if strings.Contains(secret, "supersecret") {
+		t.Errorf("the generated secret contains the published literal; it must be random")
+	}
+}
+
+// TestReprovisionKeepsTheSameJWTSecret is the property that makes the stack
+// survive a restart. A regenerated secret would invalidate every token already
+// issued, and worse, could be written while Cube still holds the old one — a
+// stack that disagrees with itself about its own signing key presents as an empty
+// dashboard, not as an error.
+func TestReprovisionKeepsTheSameJWTSecret(t *testing.T) {
+	cfg := seedIn(t)
+	if err := provision(context.Background(), cfg, io.Discard); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	first, err := os.ReadFile(cfg.JWTSecretFile)
+	if err != nil {
+		t.Fatalf("read the first secret: %v", err)
+	}
+
+	// Losing the API key file while keeping the rest is the re-provision path the
+	// other tests in this file exercise; the secret must survive it.
+	if err := os.Remove(cfg.APIKeyFile); err != nil {
+		t.Fatalf("remove the api key file: %v", err)
+	}
+	if err := provision(context.Background(), cfg, io.Discard); err != nil {
+		t.Fatalf("second provision: %v", err)
+	}
+	second, err := os.ReadFile(cfg.JWTSecretFile)
+	if err != nil {
+		t.Fatalf("read the second secret: %v", err)
+	}
+
+	if string(first) != string(second) {
+		t.Errorf("re-provisioning replaced the JWT signing secret.\n" +
+			"Every token already issued becomes invalid, and if Cube has not restarted it is\n" +
+			"still verifying with the old value — which shows up as an empty dashboard rather\n" +
+			"than as an authentication error.")
+	}
 }
