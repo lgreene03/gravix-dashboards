@@ -26,7 +26,7 @@ test-race:
 # until now there was no way to run them locally short of copying the command
 # out of the workflow, and a gate you can only trip in CI is one you trip in CI.
 test-js:
-	node --test cube/model/schema/*.test.js dashboards/lib/*.test.js
+	node --test tests/cube/*.test.js dashboards/lib/*.test.js
 
 coverage:
 	go test ./... -coverprofile=coverage.out -covermode=atomic

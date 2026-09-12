@@ -329,6 +329,20 @@ func allIndexes(haystack, needle string) []int {
 var (
 	demoWorkDir = regexp.MustCompile(`/[^\s"]*gravix-prove-it[^\s"/]*`)
 	demoDate    = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
+	// The same dates in their compact spelling, which appear in the Parquet
+	// filename and the idempotency key. demoDate above covers the hyphenated
+	// form only, so those two lines drifted out of the page at the first UTC
+	// midnight after it was generated and stayed out. Anchored to the `_` or `:`
+	// that precedes them so an eight-digit row count is not mistaken for a date.
+	demoCompactDate = regexp.MustCompile(`([_:])(20\d{6})\b`)
+	// Content digests. scripts/prove_it.sh anchors its dataset to a window
+	// ending yesterday — deliberately, because `gravix evolve` refuses a window
+	// older than fact retention — so the partition day, and therefore every
+	// digest over it, differs on every calendar day the demo is run. Pinning a
+	// literal digest in the page made it true for exactly one day. What the demo
+	// proves is that a recompute reproduces the digest it just produced, and
+	// that assertion lives inside the run, not in this comparison.
+	demoDigest  = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
 	demoTime    = regexp.MustCompile(`T\d{2}:\d{2}:\d{2}Z`)
 	demoRuntime = regexp.MustCompile(`runtime: \d+s`)
 	// Each sub-command reports how long it took. That is wall-clock, so it
@@ -341,6 +355,8 @@ func normalizeDemo(s string) string {
 	// to a capture group named WORK, and an undefined group expands to nothing.
 	s = demoWorkDir.ReplaceAllLiteralString(s, "$WORK")
 	s = demoDate.ReplaceAllLiteralString(s, "YYYY-MM-DD")
+	s = demoCompactDate.ReplaceAllString(s, "${1}YYYYMMDD")
+	s = demoDigest.ReplaceAllLiteralString(s, "sha256:<64 hex>")
 	s = demoTime.ReplaceAllLiteralString(s, "THH:MM:SSZ")
 	s = demoRuntime.ReplaceAllLiteralString(s, "runtime: Ns")
 	s = demoDuration.ReplaceAllLiteralString(s, "duration: N")

@@ -1580,3 +1580,181 @@ exactly that mistake an hour earlier with F-028. Searching first showed the lite
 F-016 and in `spec-defects.md` as context for the credential chain — but no entry owns it, and the
 gateway/cube mismatch appears nowhere. So the number is new and the search is recorded here so the
 next person does not have to repeat it.
+
+---
+
+## F-030 — a test file inside Cube's model directory stopped Cube serving any data, from Phase 8 until now
+
+**Found by** the `timed-onboarding` diagnostics added for this purpose, on commit `9691d51`.
+**Owner** `semantic-modeler`
+**Severity** critical — Cube compiled no schema at all, so every query errored, for roughly a month
+of subsequent work.
+**Status** FIXED and guarded with Cube's own parser.
+
+### What the log said
+
+With F-027 fixed, the rollup did its job and said so:
+
+```
+"multi-tenant mode", "active_tenants":1
+"processing tenant", "tenant_id":"ccab18fb-3932-446a-accf-d1bb54924052"
+"uploaded metrics", "row_count":430,
+  "dest_key":"warehouse/ccab18fb-…/request_metrics_minute/event_day=2026-09-11/request_metrics_minute_20260911.parquet"
+```
+
+430 rows, on the per-tenant path Cube's glob reads. The data was there. Cube's log, the next block
+down:
+
+```
+{"message":"Compiling schema error", …
+ "error":"Error: Compile errors:\n\nschema/RequestMetricsMinute.test.js:17\n
+ const here = dirname(fileURLToPath(import.meta.url));\n
+ SyntaxError: Cannot use 'import.meta' outside a module\n
+     at new Script (node:vm:99:7)
+     …
+     at DataSchemaCompiler.compileJsFile (…/DataSchemaCompiler.js:256:10)"}
+```
+
+### The mechanism
+
+`docker-compose.bootstrap.yml` mounts `./cube/model` at `/cube/conf/model`, and Cube's
+`DataSchemaCompiler` compiles **every** `.js` file it finds there with `new vm.Script(src)`. That is
+not an ES module context, so `import.meta` is a hard `SyntaxError` — and `throwIfAnyErrors` fails the
+**entire** compile on one bad file. No cube is defined, so `RequestMetricsMinute.requestCount` does
+not exist and every query returns an error.
+
+`cube/model/schema/RequestMetricsMinute.test.js` was added in `9d21c66` (GRVX-808, Phase 8) and sat
+beside the model it tests. So Cube has not served a row since Phase 8.
+
+### Why fourteen tests in that very file did not catch it
+
+They load the model by reading it and evaluating it with a stubbed `cube()` under `node --test`,
+where the file is a module and `import.meta` is legal. The tests assert things *about* the model and
+never ask Cube whether it can compile the directory. They passed continuously while the file they
+live in made the model uncompilable.
+
+This is the same shape as the AC-8 hole found earlier today, and the ninth instance this phase: **a
+guard written against the mechanism that produces a property passes for every route to breaking the
+property that does not go through that mechanism.** Here the property is "Cube can serve this model"
+and the mechanism tested was "the model's definitions are correct". The file's own presence was
+outside what it examined.
+
+### The fix
+
+Moved to `tests/cube/RequestMetricsMinute.test.js`, outside the mount, with `Makefile`,
+`.github/workflows/ci.yml` and `CONTRIBUTING.md` updated. All 109 JS tests pass from the new
+location.
+
+`tests/cube/model_compiles.test.js` guards it by running **Cube's own parser**: it derives the
+mounted host directory from the compose files, walks it, and calls `new vm.Script` on every `.js` —
+the exact call in the stack trace above. A check for `import`/`export`/`import.meta` keywords would
+protect the constructs its author thought of; this rejects precisely what Cube rejects, including
+constructs nobody has written yet. It also fails if it finds no mount or no file, because a guard
+that silently checks nothing is the failure this register keeps recording.
+
+Mutation-tested four ways, control green either side:
+
+| Mutation | Result |
+|---|---|
+| the ESM test file back in `cube/model/` | fails |
+| a *model* file using `import` (no "test" in its name) | fails |
+| an unbalanced brace in a model file | fails |
+| the mount path renamed, so the guard watches nothing | fails |
+
+### Still open, same class, not a break
+
+`docker-compose.bootstrap.yml` mounts `./dashboards` as nginx's document root, so
+`dashboards/lib/*.test.js` is served over HTTP at `/lib/tco.test.js`. Nothing breaks — nginx serves
+them as static files — but shipping test code to visitors is untidy for a project meant to be read.
+Not moved here: the bootstrap stack's ability to serve data is what needed proving first, and one
+change verified beats two unverified. The fix is the same shape as this one.
+
+### What the gate has now found
+
+`timed-onboarding` (GRVX-910) has returned five findings on five runs and has not yet passed:
+F-019, F-021, F-023, F-027 and F-030. Every one was a real, total break of the documented
+`docker compose up` path, and every one was invisible to the rest of the suite. Its Definition of
+Done stays unticked and §11.4's elapsed time stays unmeasured, because it has not passed.
+
+---
+
+## F-031 — the prove-it gate goes red at every UTC midnight, and the docs page published a digest reproducible for one day
+
+**Found by** the pre-push verification sweep, minutes after the date rolled to 2026-09-12.
+**Owner** `semantic-modeler`
+**Severity** high — `test-correctness` is in `ci-summary`'s `needs`, so this blocks every pull
+request, every day, until someone regenerates a page by hand.
+**Status** FIXED.
+
+### How it surfaced
+
+`make test-correctness` passed at 23:4x UTC and failed at 00:0x, on the same commit, with no change
+in between. Verified by stashing all working changes and re-running against the pushed `be0a3a2`:
+still red. So it was the clock, not the diff.
+
+`TestDocsPageClaimsAreScriptOutput` runs `scripts/prove_it.sh` live and requires every line of the
+published transcript to be a line the script actually printed. Four lines stopped matching:
+
+```
+data file:     warehouse/request_metrics_minute/event_day=YYYY-MM-DD/request_metrics_minute_20260903.parquet
+idempotency:   request_metrics_minute:v2:_single:20260903
+digest:        sha256:db3b4faca1add9c1396021f2bf633ca9c47922fb66a70ef9efbe6de354defafc
+revision:      1  (revised YYYY-MM-DDTHH:MM:SSZ, previously sha256:9b4a9ce6653529ea1fd8407a74975b61bd81e0baa7fdd037a4702797a78087f9)
+```
+
+### Why
+
+`scripts/prove_it.sh:53-54` anchors the dataset to the seven days ending yesterday. Its own comment
+explains why, and the reason is sound:
+
+> It has to be recent rather than fixed: `gravix evolve` refuses a window older than fact retention,
+> quite rightly, and a demonstration that tripped that guard would be demonstrating the guard.
+
+So on 2026-09-11 the window was 09-03…09-10 and the partition day was `20260903`. At the next UTC
+midnight it became `20260904`, and every digest over that partition changed with it.
+
+The test already normalises volatile text before comparing — work directory, `runtime: Ns`,
+timestamps, and dates. The page is written against those placeholders, which is why it shows
+`event_day=YYYY-MM-DD`. **The normaliser covered `\d{4}-\d{2}-\d{2}` and nothing else.** The same
+dates in their compact `\d{8}` spelling — in the Parquet filename and the idempotency key — went
+through untouched, as did the digests. Two spellings of one value, one of them handled.
+
+### Fixed, without touching the script
+
+The floating window is correct and was left alone. The normaliser now also covers:
+
+- `([_:])(20\d{6})\b` → `${1}YYYYMMDD`, anchored to the `_` or `:` before it so an eight-digit row
+  count is not mistaken for a date;
+- `sha256:[0-9a-f]{64}` → `sha256:<64 hex>`.
+
+### The published-number half
+
+Masking the digest in the comparison is only correct because **the page should never have promised
+one**. A reader who ran the demo the next day got a different digest with no explanation, from a
+project whose central claim is recomputability — the worst possible place to look non-deterministic.
+
+The page now carries a note saying the dates and digests will differ on their run, why the window
+floats, and what the demo actually proves: that a recompute reproduces the digest *that same run*
+just produced, which the `PROVED` block asserts against the reader's own output. It was never a
+promise that they would see this page's digest.
+
+### What the guard still catches
+
+Loosening a comparison is worth checking rather than asserting. Mutation-tested, control green
+either side:
+
+| Mutation | Result |
+|---|---|
+| page claims metric version `v3` instead of `v2` | fails |
+| page claims `rows written: 9999` | fails |
+| page claims `partitions: 8   rebuilt: 8` | fails |
+| page says `lakehouse/` instead of `warehouse/` | fails |
+
+Only the two genuinely day-dependent values are masked.
+
+**A method note, for the second time.** My first mutation run reported a PASS for `row count:` →
+`row counts:`. The page contains no such line, so `sed` changed nothing and the "PASS" meant the
+harness had tested an unmodified file. The same false negative is recorded in GRVX-1004 §11.4 for
+the same reason. The harness now takes an `md5sum` before and after each edit and reports SKIP rather
+than PASS when the file is unchanged. **A mutation test that cannot tell "the guard held" from "I
+mutated nothing" is not evidence**, and it fails in the direction that flatters the guard.

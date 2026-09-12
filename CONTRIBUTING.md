@@ -49,7 +49,7 @@ make test-correctness               # the properties Gravix's claims rest on —
 go test ./schemas/... -v -cover     # must stay at 100% — see below
 make lint                           # go vet and staticcheck, the same two CI runs
 make check-boundary                 # open-core boundary
-node --test cube/model/schema/*.test.js dashboards/lib/*.test.js   # the Cube model and dashboard
+node --test tests/cube/*.test.js dashboards/lib/*.test.js   # the Cube model and dashboard
 ```
 
 ### The correctness suite

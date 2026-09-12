@@ -19,8 +19,6 @@
 # switch to docker-compose.yml (adds Trino, MinIO, monitoring) or deploy
 # to AWS EKS with the Helm chart.
 
-version: '3.8'
-
 networks:
   frontend:
     driver: bridge

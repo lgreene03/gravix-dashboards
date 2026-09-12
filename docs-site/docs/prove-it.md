@@ -170,6 +170,27 @@ PROVED
 ═════════════════════════════════════════════════════════════════════
 ```
 
+:::note Why your run shows different dates and digests
+
+Dates appear as `YYYY-MM-DD` above because the demo builds its dataset over the
+seven days ending yesterday, so the window moves with the calendar. That is
+deliberate: `gravix evolve` refuses a window older than fact retention, and a demo
+that tripped that guard would be demonstrating the guard rather than the feature.
+
+Two consequences to expect on your own run:
+
+- the Parquet filename and the idempotency key carry the day **you** ran it, not
+  the day shown here;
+- **the digests will differ from the ones printed above**, because the partition
+  day is part of what is hashed.
+
+Neither weakens what the run proves. The claim is that a recompute reproduces the
+digest that same run just produced, byte for byte — which the `PROVED` block below
+asserts against your own output. It is not a claim that you will see this page's
+digest, and you will not.
+
+:::
+
 ## Why this is hard for other tools
 
 The mechanism, not the marketing.

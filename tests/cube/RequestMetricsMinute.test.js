@@ -2,7 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // GRVX-808 §4.1. Run with:
-//   node --test cube/model/schema/RequestMetricsMinute.test.js
+//   node --test tests/cube/RequestMetricsMinute.test.js
+//
+// This file lives OUTSIDE cube/model/ deliberately. docker-compose mounts that
+// whole directory as Cube's schema directory, and Cube's DataSchemaCompiler
+// compiles every .js in it through vm.runInNewContext — which is not an ES
+// module context, so the `import.meta` on line 19 below is a hard SyntaxError
+// there. One unparseable file fails the entire compile, no cube gets defined,
+// and every query returns an error. That is F-030: this file, sitting beside the
+// model it tests, stopped Cube serving any data at all from Phase 8 until it was
+// moved. A test file does not belong in a directory that is mounted into a
+// running service as that service's configuration.
 //
 // The Go tests in services/gateway/percentile_handler_test.go assert the model's
 // text. These load it, so they catch what text cannot: a measure referenced from
@@ -17,9 +27,10 @@ import { dirname, join } from 'node:path';
 import vm from 'node:vm';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const modelPath = join(here, 'RequestMetricsMinute.js');
-const clientPath = join(here, '..', '..', '..', 'dashboards', 'lib', 'cube-client.js');
-const appPath = join(here, '..', '..', '..', 'dashboards', 'app.js');
+const repoRoot = join(here, '..', '..');
+const modelPath = join(repoRoot, 'cube', 'model', 'schema', 'RequestMetricsMinute.js');
+const clientPath = join(repoRoot, 'dashboards', 'lib', 'cube-client.js');
+const appPath = join(repoRoot, 'dashboards', 'app.js');
 
 // loadModel evaluates the model with a stubbed `cube()` and the given env, and
 // returns the definition it registered.
