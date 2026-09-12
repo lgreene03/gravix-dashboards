@@ -1975,3 +1975,105 @@ stack — there is no Docker daemon in the implementation environment. A test as
 spelling its author knew, and pass while the property was broken; that is the pattern this register
 has now recorded nine times. The gate itself is the test. What changed is that its failure now names
 the stage, so the next occurrence is one read rather than a full cycle.
+
+---
+
+## F-035 — Cube answers every query with a Cube Store error, because the bootstrap stack runs no Cube Store
+
+**Found by** the poll's own authenticated query, on `a2a5c68`.
+**Owner** `semantic-modeler`
+**Severity** critical — no query can succeed, so the dashboard is empty however correct the data is.
+**Status** FIXED, with the trade-off stated.
+
+### The evidence, finally from the query path
+
+Earlier runs showed this error, but every instance carried `requestId: "scheduler-…"` — the
+background refresh scheduler and the pre-aggregation loader. Whether an *ad-hoc* query also failed was
+unobservable, because no token existed to make one with. F-034's fix produced the token, and the
+answer arrived:
+
+```
+last gateway login response: {"email":"local@gravix.invalid","email_verified":true,"plan":"free",
+                              "role":"admin","tenant_id":"d46186c8-…","token":"<redacted>",
+                              "user_id":"06ecff74-…"}
+
+last Cube response: {"error":"Error: Cube Store was specified as queue/cache driver. Please set
+                     CUBEJS_CUBESTORE_HOST and CUBEJS_CUBESTORE_PORT variables."}
+```
+
+The gateway authenticates and mints a JWT. Cube rejects the query that carries it — not on
+authentication, but before reaching the data at all. The stack trace in the container log shows why:
+`QueryCache.loadRefreshKeys` is reached from `OrchestratorApi.executeQuery`, so the cache driver sits
+on the ordinary query path and not only the scheduler's.
+
+`CUBEJS_DEV_MODE` defaults to `false` in this compose file, and in production mode Cube v0.35 defaults
+its queue/cache driver to Cube Store — a separate service the bootstrap stack does not run.
+
+### Fixed
+
+`CUBEJS_CACHE_AND_QUEUE_DRIVER=memory` on the `cube` service: the documented single-node driver, no
+extra container, nothing against the ~800MB RAM budget or the $20/month figure. Adding a `cubestore`
+service was the alternative and was rejected — it would contradict the premise the whole stack exists
+to demonstrate.
+
+`CUBEJS_SCHEDULED_REFRESH_TIMER=false` alongside it, and `cube/cube.js` now reads that variable
+instead of hardcoding `scheduledRefreshTimer: 300`. A literal there overrode the environment, so the
+bootstrap stack could not turn the scheduler off; with no pre-aggregations to refresh its only output
+was the error above, every 300 seconds. Verified: unset → 300, `"false"` → `false`, `"600"` → 300 (only
+the explicit string disables it, so an unrecognised value keeps the safe default).
+
+### The trade-off, stated rather than buried
+
+**Pre-aggregations will not build in the bootstrap stack.** They need Cube Store to hold their rollup
+tables, and `cube/model/schema/` declares three (`endpointDaily`, `recentEvents`, `dailySummary`).
+
+That is the right call here — DuckDB reads the Parquet directly, and a rollup buys a single-node demo
+nothing — but it is a real difference from the full stack, and two consequences follow:
+
+1. **GRVX-1006's latency figures will be measured without pre-aggregations.** Any number taken from
+   this stack is a cold-read-from-Parquet number. Quoting it as a pre-aggregated figure would be the
+   same category of error as F-020 and F-022.
+2. The model files are shared, so the full stack keeps its pre-aggregations. Nothing in the model
+   changed; only where it runs.
+
+**Residual uncertainty, admitted.** Whether Cube errors when a query *matches* a pre-aggregation it
+cannot build is not verified — the implementation environment has no Docker daemon, and the poll's
+query (`requestCount`, no dimensions, no time dimension) could in principle be routed to
+`endpointDaily`. If the next run shows a pre-aggregation error rather than a result, the answer is to
+stop declaring those rollups for this stack, and that will be a separate finding with its own
+evidence. One informed change beats a stack of guesses; this one is informed by the query response
+above.
+
+### A reporting correction
+
+`diagnose()` said:
+
+```
+token obtained:              no — the gateway login was attempted; see the response above
+```
+
+Misleading. A token *was* minted; the poll loop then discarded it, because it clears the token
+whenever a Cube query stops working — reasonable for an expired credential, wrong when Cube is broken
+for an unrelated reason. The line pointed at the login, which was fine. It now reports:
+
+```
+token obtained:              yes earlier, then discarded because a Cube query failed
+                             (so the login works; read the Cube response above)
+```
+
+Verified against a stub, including that no token material reaches the log.
+
+**Third run in a row where the diagnostic needed fixing alongside the stack** — `gateway` missing from
+the service list (F-032), a bare "no" covering two opposite failures (F-034), and now a "no" that was
+actively wrong. Worth stating as a pattern: a diagnostic is written when the failure is not yet
+understood, so its first version encodes the author's wrong model of what can go wrong. It earns
+trust the same way the code does, by being wrong in front of you and corrected.
+
+### An ordering flaw in the diagnostic, noted
+
+The summary lines — login response, token, Cube response — print at the **top** of the diagnose block,
+which puts them furthest from the end of the log. Reading this failure needed three widening fetches
+(118, 158, 190 lines) and the fourth exceeded the tool's response limit and had to be grepped from a
+file. Logs are read from the end. The most important lines should be last, next to the `FAIL`. Not
+changed in this commit — it is presentation, and this commit is already carrying a stack fix — but it
+is the next thing to do to this script.

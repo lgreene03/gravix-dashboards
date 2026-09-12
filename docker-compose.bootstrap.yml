@@ -149,6 +149,24 @@ services:
       # entry as a mapping key and Compose rejects the file. See F-010.
       - "CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:"
       - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
+      # Without this, Cube runs in production mode and defaults its queue/cache
+      # driver to Cube Store — a separate service this stack does not run and will
+      # not add. EVERY query then fails, including ad-hoc ones: the poll's own
+      # authenticated request came back
+      #   {"error":"Cube Store was specified as queue/cache driver. Please set
+      #     CUBEJS_CUBESTORE_HOST and CUBEJS_CUBESTORE_PORT variables."}
+      # `memory` is the documented single-node driver and costs no container, no
+      # RAM against the ~800MB budget, and nothing against the $20/mo figure.
+      #
+      # The trade-off, stated: pre-aggregations need Cube Store to hold their
+      # rollup tables, so the three declared in cube/model/schema/ will not build
+      # here. That is the right call for this stack — DuckDB reads the Parquet
+      # directly and a rollup buys a single-node demo nothing — but it is a real
+      # difference from the full stack. See F-035.
+      - CUBEJS_CACHE_AND_QUEUE_DRIVER=memory
+      # Nothing to refresh once pre-aggregations are not building, and the refresh
+      # scheduler is what filled the logs with the error above every 300s.
+      - CUBEJS_SCHEDULED_REFRESH_TIMER=false
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
       - TENANT_DB_PATH=/cube/data/gravix.db
       # The same file the gateway reads, through the ./data:/cube/data mount.

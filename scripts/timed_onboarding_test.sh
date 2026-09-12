@@ -56,7 +56,15 @@ diagnose() {
         # WHY there is no token, not just that there is none. F-034 was a run where
         # the poll never attempted a login for the full 600s, and this line said
         # only "no" — indistinguishable from a login that was tried and rejected.
-        echo "token obtained:              no — ${NO_TOKEN_REASON:-fetch_token never ran}"
+        if [ -n "${TOKEN_EVER_OBTAINED:-}" ]; then
+            # A token was minted earlier and then cleared, which the loop does when
+            # a Cube query stops working. Saying plainly "no" here pointed at the
+            # login, which was fine; the failure was downstream of it.
+            echo "token obtained:              yes earlier, then discarded because a Cube query failed"
+            echo "                             (so the login works; read the Cube response above)"
+        else
+            echo "token obtained:              no — ${NO_TOKEN_REASON:-fetch_token never ran}"
+        fi
     fi
     echo "last Cube response:          ${LAST_CUBE_RESPONSE:-<never got one>}"
     echo
@@ -154,6 +162,7 @@ fetch_token() {
         return 0
     fi
     NO_TOKEN_REASON="the gateway login was attempted; see the response above"
+    TOKEN_EVER_OBTAINED=""
 
     # -s not -sf: a 4xx body says why, and `curl -f` throws it away.
     response="$(python3 -c '
@@ -176,6 +185,9 @@ try:
 except Exception:
     print("")
 ' 2>/dev/null)" || TOKEN=""
+    if [ -n "$TOKEN" ]; then
+        TOKEN_EVER_OBTAINED="yes"
+    fi
 }
 
 # has_data asks the one question. Exits 0 only when a row comes back with a
@@ -211,6 +223,7 @@ sys.exit(1)
 
 TOKEN=""
 NO_TOKEN_REASON=""
+TOKEN_EVER_OBTAINED=""
 TIMED_OUT=1
 while true; do
     NOW=$(date +%s)

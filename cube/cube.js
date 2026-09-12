@@ -20,7 +20,12 @@ function signingSecret() {
 }
 
 module.exports = {
-    scheduledRefreshTimer: 300,
+    // A literal here overrides the environment, so the bootstrap stack could not
+    // turn the scheduler off. It has to: without Cube Store there are no
+    // pre-aggregations to refresh, and the scheduler's only output was the same
+    // Cube Store error every 300s (F-035).
+    scheduledRefreshTimer:
+        process.env.CUBEJS_SCHEDULED_REFRESH_TIMER === 'false' ? false : 300,
 
     // Isolate each tenant into its own Cube app context so pre-aggregation
     // namespaces and connection pool partitions don't bleed across tenants.
