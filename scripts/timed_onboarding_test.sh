@@ -43,7 +43,14 @@ fi
 # blob host the artifact lives on is unreachable from some networks, and this
 # failure cost four CI round trips partly for that reason. So the diagnosis goes
 # to STDOUT, in the job log, where anyone reading the failure already is.
-diagnose() {
+# summarise prints the three lines that actually identify the failing stage.
+# It is called at the END of diagnose as well as the start, and the reason is
+# practical rather than stylistic: reading these runs means tailing the job log,
+# and at the top of a hundred-line block these lines are the furthest from the
+# end. Every verdict tonight cost three or four widening fetches to reach them,
+# and one exceeded the log tool's response limit entirely. Logs are read
+# backwards; the answer belongs next to the FAIL.
+summarise() {
     echo
     echo "─── why the poll saw no data ───────────────────────────────────────"
     echo "last gateway login response: ${LAST_LOGIN_RESPONSE:-<never attempted>}"
@@ -67,6 +74,10 @@ diagnose() {
         fi
     fi
     echo "last Cube response:          ${LAST_CUBE_RESPONSE:-<never got one>}"
+}
+
+diagnose() {
+    summarise
     echo
     echo "data/login.txt (read through the gateway container — the host uid cannot"
     echo "                 read a 0600 file owned by the image's gravix user):"
@@ -99,6 +110,10 @@ diagnose() {
         echo "─── $svc (last 15) ───"
         $COMPOSE logs --tail=15 "$svc" 2>&1 | head -20
     done
+    # Again, last: see the note on summarise above.
+    echo
+    echo "─── the three lines that matter, repeated so a tail reaches them ───"
+    summarise
     echo "────────────────────────────────────────────────────────────────────"
 }
 
