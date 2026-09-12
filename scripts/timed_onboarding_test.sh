@@ -110,16 +110,28 @@ diagnose() {
         echo "─── $svc (last 15) ───"
         $COMPOSE logs --tail=15 "$svc" 2>&1 | head -20
     done
-    # Again, last: see the note on summarise above.
-    echo
-    echo "─── the three lines that matter, repeated so a tail reaches them ───"
-    summarise
     echo "────────────────────────────────────────────────────────────────────"
 }
 
 cleanup() {
     $COMPOSE logs > "$LOG_FILE" 2>&1 || true
     $COMPOSE down -v || true
+
+    # The summary again, here rather than at the end of diagnose, because this runs
+    # AFTER `compose down`. Measured on the CI log: the teardown is ~33 lines and
+    # GitHub's own artifact-upload and post-job cleanup another ~44, so a summary
+    # printed inside diagnose still sits ~85 lines from the end. Printed here it
+    # sits just above GitHub's block, which a ~50-line tail reaches.
+    #
+    # This correction exists because the previous attempt was verified against a
+    # local stub and claimed "a 7-line tail reaches it" — true of the stub, false
+    # of the log it was meant to help read. Measure the thing itself.
+    if [ "${TIMED_OUT:-0}" -eq 1 ] && [ -n "${LAST_CUBE_RESPONSE:-}${LAST_LOGIN_RESPONSE:-}" ]; then
+        echo
+        echo "─── the lines that identify the failing stage, after teardown ───────"
+        summarise
+        echo "────────────────────────────────────────────────────────────────────"
+    fi
 }
 trap cleanup EXIT
 
