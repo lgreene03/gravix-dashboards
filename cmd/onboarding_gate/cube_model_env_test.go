@@ -236,18 +236,54 @@ func TestModelSQLRespondsToTenancy(t *testing.T) {
 func TestModelsDeclareNoPreAggregations(t *testing.T) {
 	root := repoRootDir(t)
 
-	// First the infrastructure half of the claim, so the test fails if someone adds
-	// a Cube Store without revisiting the models.
+	// First the infrastructure half of the claim, so the test fails if someone gives
+	// Cube an external store without revisiting the models.
+	//
+	// An earlier version of this guard looked for CUBEJS_CUBESTORE_HOST and nothing
+	// else — the one name its author happened to know. That is the same mistake this
+	// file exists to prevent, and Cube's own OptsHandler.initializeCoreOptions names
+	// eleven triggers, not one:
+	//
+	//   externalDbType = opts.externalDbType
+	//     || process.env.CUBEJS_EXT_DB_TYPE
+	//     || ((getEnv('devMode') || definedExtDBVariables.length > 0) && 'cubestore')
+	//
+	// where definedExtDBVariables is any of CUBEJS_EXT_DB_{URL,HOST,NAME,PORT,USER,PASS}
+	// or CUBEJS_CUBESTORE_{HOST,PORT,USER,PASS}. Dev mode is the one that matters most
+	// and was missed entirely: with CUBEJS_DEV_MODE truthy the official cubejs/cube
+	// image starts an EMBEDDED Cube Store on port 3030, so an external store appears
+	// with no service, no host variable, and nothing in the compose file to grep for.
+	//
+	// Both compose files set CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}, so the default
+	// has no store. A reader who exports CUBEJS_DEV_MODE=true gets one.
+	extStoreEnv := []string{
+		"CUBEJS_EXT_DB_TYPE",
+		"CUBEJS_EXT_DB_URL", "CUBEJS_EXT_DB_HOST", "CUBEJS_EXT_DB_NAME",
+		"CUBEJS_EXT_DB_PORT", "CUBEJS_EXT_DB_USER", "CUBEJS_EXT_DB_PASS",
+		"CUBEJS_CUBESTORE_HOST", "CUBEJS_CUBESTORE_PORT",
+		"CUBEJS_CUBESTORE_USER", "CUBEJS_CUBESTORE_PASS",
+	}
 	for _, rel := range []string{"docker-compose.yml", "docker-compose.bootstrap.yml"} {
 		b, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
-		if strings.Contains(string(b), "CUBEJS_CUBESTORE_HOST=") {
-			t.Errorf("%s now configures a Cube Store. Pre-aggregations may be worth "+
-				"restoring — as a plain object literal, never behind a ternary (F-038) — "+
-				"but this test and the comments in cube/model/schema/ must be updated "+
-				"deliberately, not left to drift.", rel)
+		text := string(b)
+		for _, v := range extStoreEnv {
+			if strings.Contains(text, v+"=") {
+				t.Errorf("%s sets %s, which gives Cube an external pre-aggregation store. "+
+					"Pre-aggregations may be worth restoring — as a plain object literal, never "+
+					"behind a ternary (F-038) — but this test and the comments in "+
+					"cube/model/schema/ must be updated deliberately, not left to drift.", rel, v)
+			}
+		}
+		// Dev mode defaults the external store to an embedded Cube Store. A literal
+		// true here would enable it for everyone; the ${VAR:-false} form leaves it to
+		// the reader, which is what both files do today.
+		if strings.Contains(text, "CUBEJS_DEV_MODE=true") {
+			t.Errorf("%s hardcodes CUBEJS_DEV_MODE=true. The official cubejs/cube image then "+
+				"starts an embedded Cube Store, so pre-aggregations become buildable and the "+
+				"models' claim that none can be built stops holding. See F-038.", rel)
 		}
 	}
 

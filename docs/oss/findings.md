@@ -2484,15 +2484,60 @@ Qualifying the references (`RequestMetricsMinute.requestCount`) does not help �
 not in the sandbox either. Only removing the ternary does: with `preAggregations` as a plain object
 literal all four rollups compile and register.
 
-**Second, and decisive: no stack in this repository runs a Cube Store.** Neither
+**Second: no stack in this repository runs a Cube Store in its default configuration.** Neither
 `docker-compose.yml` nor `docker-compose.bootstrap.yml` nor anything under `deploy/` defines a
-`cubestore` service, and `CUBEJS_CUBESTORE_HOST` is set nowhere. A pre-aggregation is materialised in
-Cube Store through an `externalDriverFactory`, and F-036 established that Cube does not degrade
-gracefully without one: it prefers the rollup and fails the query rather than reading the source.
+`cubestore` service. A pre-aggregation is materialised in Cube Store through an
+`externalDriverFactory`, and F-036 established that Cube does not degrade gracefully without one: it
+prefers the rollup and fails the query rather than reading the source.
 
-So the gate was not merely broken, it was vestigial. There is no configuration this repository ships
-in which a declared rollup could be built, and therefore none in which declaring one is anything but
-a way to fail the queries it was meant to accelerate.
+So the gate was not merely broken, it was vestigial: in the configuration these files ship, declaring
+a rollup is only a way to fail the queries it was meant to accelerate.
+
+### Correction — "could never be built" was an overclaim, and the first guard repeated the same mistake
+
+The paragraph above originally read *"there is no configuration this repository ships in which a
+declared rollup could be built"*, and the guard written for it looked for `CUBEJS_CUBESTORE_HOST` and
+nothing else. Both were wrong, and wrong in the way this register keeps recording: **a guard that
+matches on a name protects the names its author knew about.** Cube's own
+`OptsHandler.initializeCoreOptions` names eleven triggers:
+
+```js
+const externalDbType = opts.externalDbType
+  || process.env.CUBEJS_EXT_DB_TYPE
+  || ((getEnv('devMode') || definedExtDBVariables.length > 0) && 'cubestore')
+  || undefined;
+```
+
+where `definedExtDBVariables` is any of `CUBEJS_EXT_DB_{URL,HOST,NAME,PORT,USER,PASS}` or
+`CUBEJS_CUBESTORE_{HOST,PORT,USER,PASS}`.
+
+**Dev mode is the one that matters, and it was missed entirely.** With `CUBEJS_DEV_MODE` truthy the
+external type defaults to `cubestore`, and in the official `cubejs/cube` image Cube *starts an
+embedded Cube Store on port 3030 itself* — no service, no host variable, nothing in a compose file to
+grep for:
+
+```js
+if (externalDbType === 'cubestore' && this.isDevMode() && !opts.serverless) {
+  const cubeStoreHandler = new cubeStorePackage.CubeStoreHandler({ … });
+  console.log(`🔥 Cube Store (${version}) is assigned to 3030 port.`);
+  if (isDockerImage()) { cubeStoreHandler.acquire()… }
+  externalDriverFactory = () => new cubeStorePackage.CubeStoreDevDriver(cubeStoreHandler);
+}
+```
+
+Both compose files set `CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}`, so the default has no store and
+the decision to declare no pre-aggregations stands unchanged. But a reader who exports
+`CUBEJS_DEV_MODE=true` **does** get one, and telling them a rollup could never be built would have
+been false.
+
+`TestModelsDeclareNoPreAggregations` now derives the condition from all eleven triggers plus a
+hardcoded `CUBEJS_DEV_MODE=true`, rather than from one variable name. Re-mutation-tested: seven
+mutants, one per route, all killed — six of which the original guard would have let through.
+
+Also worth separating, because GRVX-1006 §2 conflates them: **Redis is not an external
+pre-aggregation store.** `CUBEJS_CACHE_AND_QUEUE_DRIVER` selects the queue and cache driver;
+`CUBEJS_EXT_DB_TYPE` and the variables above select where rollup tables live. Turning Redis on does
+not make a pre-aggregation buildable.
 
 ### Fixed
 
