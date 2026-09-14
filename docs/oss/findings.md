@@ -2154,11 +2154,14 @@ is the next thing to do to this script.
 **Found by** the `timed-onboarding` poll on `18cede3`, immediately after F-035's fix took effect.
 **Owner** `semantic-modeler`
 **Severity** critical — the last link in the chain; every query still failed.
-**Status** the rollups are no longer declared in this stack, and the error did move — but
-**F-037 shows this fix took effect for the wrong reason.** `process.env` is invisible to Cube's
-schema compiler, so `hasExternalStore` is false there regardless of the cache driver, and the
-guard below passes only because it injects `process` into its sandbox. The change is still the
-right shape; the mechanism it relies on is not the one that fired. Read F-037.
+**Status** superseded. The finding itself — Cube fails a query that matches a rollup it cannot
+build, rather than reading the source — stands, and it is why the models declare no
+pre-aggregations today. **The fix below was wrong twice over.** It took effect for the wrong
+reason (`process.env` is invisible to Cube's compiler, so `hasExternalStore` was false regardless
+of the cache driver — F-037), and the `cond ? {…} : {}` form it introduced could never have
+compiled in the first place, because a ConditionalExpression breaks the transpiler's member
+resolution — F-038. The guard written for it passed only because it injected `process` into its own
+sandbox. Read F-037 and F-038; the table of verified states below is not real.
 
 ### The error moved, which is how we know the previous fix worked
 
@@ -2245,9 +2248,11 @@ existing, and equally an argument against trusting a stack nothing has executed 
 ## F-037 — `process.env` is invisible to Cube's schema compiler, so every environment conditional in the model has always taken its fallback branch
 
 **Found by** the `timed-onboarding` poll on `238a58c`.
-**Owner** `semantic-modeler` — and the fix is a **decision**, not an edit. See the options below.
+**Owner** `semantic-modeler`
 **Severity** critical, and it subsumes part of two earlier findings.
-**Status** diagnosed, NOT fixed. Recorded rather than improvised.
+**Status** **FIXED.** The decision the earlier draft of this entry deferred turned out not to be a
+decision: reading Cube v0.35's compiler settled it, and none of the three options below was the
+answer. See "How it was actually fixed" at the end.
 
 ### The evidence
 
@@ -2339,9 +2344,164 @@ It is not added, because it fails today and a red test is not a deliverable. It 
 whichever option above is chosen, and it is the test that would have caught this on the day the
 conditional was written.
 
+### How it was actually fixed
+
+The three options above were written without being able to run Cube. They did not need a Docker
+daemon to resolve — they needed the compiler's source, which is on npm:
+
+```
+npm pack @cubejs-backend/server-core@0.35.81
+npm install @cubejs-backend/schema-compiler@0.35.81
+```
+
+`DataSchemaCompiler.compileJsFile` is fourteen lines and settles the whole question:
+
+```js
+vm.runInNewContext(file.content, {
+  view, cube, context, addExport, setExport, asyncModule,
+  require: (extensionName) => { … },
+  COMPILE_CONTEXT: this.standalone ? this.standaloneCompileContextProxy()
+                                   : this.cloneCompileContextWithGetterAlias(this.compileContext || {}),
+}, { filename: file.fileName, timeout: 15000 });
+```
+
+The sandbox is an explicit, closed object. There is no `process` in it, and a fresh V8 context does
+not supply one, because `process` is a Node global rather than a V8 intrinsic. That is the defect,
+confirmed at the source rather than inferred from a symptom.
+
+**Option 1 (`COMPILE_CONTEXT`) was wrong**, and would have been a bad fix even where it works.
+`compileContext` is the per-request context — `{ securityContext }` — threaded from
+`CompilerApi`. It carries no environment, and `extendContext` goes to the API gateway rather than to
+the compiler. Putting the choice of database engine there would make a cube's SQL a function of who
+is asking, which is the opposite of what the correctness axis needs.
+
+**Options 2 and 3 were unnecessary.** The sandbox's own `require` is the way out. For a specifier
+that does not resolve to another model file, Cube falls through to Node's `require`
+(`allowNodeRequire` defaults to `true` in `server-core`), resolving it against
+`repository.localPath()` — and Node's `require` runs the module in the ordinary Node context, where
+`process` is live. No duplicated model, no code generation.
+
+So `cube/model_flags.js` sits beside `cube.js` in `/cube/conf`, deliberately **outside**
+`/cube/conf/model`: a file inside the model directory is found by `resolveModuleFile` and compiled in
+the sandbox again, which would reintroduce this finding in silence. Each model now begins:
+
+```js
+const { tableSql, timestampSql } = require('../model_flags.js');
+```
+
+Verified by compiling the real models with the real `prepareCompiler`, one environment per process:
+
+| Environment | `RequestMetricsMinute.sql` |
+|---|---|
+| before, either stack | `SELECT * FROM gravix.raw.request_metrics_minute` |
+| DuckDB + `TENANT_DB_PATH` | `SELECT * FROM read_parquet('/cube/data/warehouse/*/request_metrics_minute/**/*.parquet', union_by_name=true)` |
+| DuckDB, no tenant path | `SELECT * FROM read_parquet('/cube/data/warehouse/request_metrics_minute/**/*.parquet', union_by_name=true)` |
+| Trino | `SELECT * FROM gravix.raw.request_metrics_minute` |
+
+### The guard, and why it is not the one this entry proposed
+
+The earlier draft proposed: *load each model with and without `process` in the sandbox and require
+identical output.* **That guard is wrong and would have been worse than none.** It asserts
+insensitivity to `process`, which is exactly what a model hardcoded to one engine also satisfies —
+it would have passed, in perpetuity, on the broken code it was written to catch.
+
+The requirement is not "ignores `process`". It is **"the SQL responds to the environment"**. So
+`cmd/onboarding_gate/cube_model_env_test.go` compiles the models the way Cube does — a sandbox with
+Cube's globals and no `process` — under two engines and two tenancy settings, and requires the SQL to
+differ. `tests/cube/model_compiles.test.js` asserts the same requirement in JavaScript, replacing the
+F-036 guard that injected a fake `process` and so passed on the defect.
+
+Mutation-tested; all eight killed:
+
+| Mutant | Result |
+|---|---|
+| guarded `process.env` back in a model (the original F-037) | killed |
+| unguarded `process.env` in a model | killed |
+| `model_flags.js` moved inside `cube/model/` (silently re-sandboxed) | killed |
+| the mount dropped from one compose file | killed |
+| tenant prefix dropped from the warehouse glob | killed |
+| engine branch hardcoded | killed |
+| a pre-aggregation reintroduced | killed |
+| a Cube Store configured without revisiting the models | killed |
+
+### What this did not fix
+
+`timed-onboarding` has not been re-run — it needs a Docker daemon this sandbox does not have. What is
+proven is that the models now compile to the right SQL for the bootstrap stack, which is the thing
+that was failing. Whether the rest of that job passes is not yet established, and should not be
+claimed until CI says so.
+
+---
+
+## F-038 — the pre-aggregation gate could never have compiled, and no stack can build a rollup anyway
+
+**Found by** fixing F-037: making `hasExternalStore` live for the first time turned a silent
+mis-compile into a hard compile error.
+**Owner** `semantic-modeler`
+**Severity** high — latent, and it made F-036's fix unfalsifiable.
+**Status** fixed; pre-aggregations are removed from the models, with their definitions preserved in
+comments.
+
+### Two independent defects, both hidden behind F-037
+
+**First: the gate's shape was incompatible with Cube's transpiler.** F-036 wrote
+
+```js
+preAggregations: hasExternalStore ? { endpointDaily: { measures: [requestCount, …] } } : {}
+```
+
+Cube resolves a cube's member references in `CubePropContextTranspiler`, which finds the fields it
+must rewrite by walking the `ObjectProperty` chain from a property up to the cube's top-level object
+and matching the resulting path against `/^(preAggregations|…)\.[_a-zA-Z]\w*\.(…|measures|…)$/`. A
+`ConditionalExpression` in that chain breaks the walk, so the path never matches, `measures` is never
+rewritten, and `requestCount` reaches the sandbox as a bare undefined identifier:
+
+```
+schema/RequestMetricsMinute.js:141
+      measures: [requestCount, errorCount],
+                 ^
+ReferenceError: requestCount is not defined
+```
+
+That error fails the **entire** schema compile — every cube in every file. It had never been seen
+because `hasExternalStore` was always falsy (F-037), so the object behind the ternary was never
+evaluated. Two defects, each concealing the other.
+
+Qualifying the references (`RequestMetricsMinute.requestCount`) does not help — the cube's own name is
+not in the sandbox either. Only removing the ternary does: with `preAggregations` as a plain object
+literal all four rollups compile and register.
+
+**Second, and decisive: no stack in this repository runs a Cube Store.** Neither
+`docker-compose.yml` nor `docker-compose.bootstrap.yml` nor anything under `deploy/` defines a
+`cubestore` service, and `CUBEJS_CUBESTORE_HOST` is set nowhere. A pre-aggregation is materialised in
+Cube Store through an `externalDriverFactory`, and F-036 established that Cube does not degrade
+gracefully without one: it prefers the rollup and fails the query rather than reading the source.
+
+So the gate was not merely broken, it was vestigial. There is no configuration this repository ships
+in which a declared rollup could be built, and therefore none in which declaring one is anything but
+a way to fail the queries it was meant to accelerate.
+
+### Fixed
+
+`preAggregations: {}` in all three models, with each rollup's definition preserved verbatim in a
+comment beside it, together with the two reasons it is not active and what restoring it would require.
+`hasExternalStore` is gone from `model_flags.js` rather than left exported and unused, because an
+unused export is an invitation to rebuild the gate that could not work.
+
+`TestModelsDeclareNoPreAggregations` asserts both halves — no rollup in any model, and no
+`CUBEJS_CUBESTORE_HOST` in either compose file — so adding a Cube Store fails the test and forces the
+models to be revisited deliberately rather than left to drift.
+
+### This settles a GRVX-1006 hazard
+
+The standing warning was right and is now a tested fact: **this stack has no pre-aggregations, so
+every latency figure it produces is a cold read from Parquet.** Quoting one as pre-aggregated would
+repeat F-020 and F-022.
+
+
 ### Ten runs, ten findings
 
-F-019, F-021, F-023, F-027, F-030, F-032, F-034, F-035, F-036, F-037. The gate has done exactly what
+F-019, F-021, F-023, F-027, F-030, F-032, F-034, F-035, F-036, F-037, F-038. The gate has done exactly what
 it was built to do — it can only ever see the first unfixed link, and it has surfaced ten of them in
 a path that `docker compose up` was documented to make work. It has also now caught one of my own
 fixes passing for the wrong reason, which is the argument for running the real thing rather than

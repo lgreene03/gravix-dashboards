@@ -48,6 +48,20 @@ func readCubeModel(t *testing.T) string {
 	return string(data)
 }
 
+// readCubeFlags reads the module that builds the models' source SQL. It sits
+// beside cube.js rather than under cube/model/, deliberately: Cube sandboxes
+// everything in the model directory and that sandbox has no `process`. See F-037.
+func readCubeFlags(t *testing.T) string {
+	t.Helper()
+	// cubeModelPath is cube/model/schema/<Cube>.js; the flags module is cube/model_flags.js.
+	path := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(cubeModelPath(t)))), "model_flags.js")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read cube model flags at %s: %v", path, err)
+	}
+	return string(data)
+}
+
 // ─── AC-1, AC-2, AC-5, AC-9, AC-10: the model ───
 
 func TestNoMaxOverPercentiles(t *testing.T) {
@@ -150,25 +164,33 @@ func TestSketchDimensionHidden(t *testing.T) {
 }
 
 func TestAllFourCubeConfigs(t *testing.T) {
-	model := readCubeModel(t)
+	// The source SQL used to be built inside the model file. It is now built in
+	// cube/model_flags.js, because Cube evaluates model files in a vm sandbox with
+	// no `process` and the environment conditionals there were dead — every stack
+	// got the Trino SQL, including the DuckDB one (F-037).
+	//
+	// This test reads that file rather than the model for the same reason it was
+	// written: the percentile endpoint needs the latency_sketch column, and it only
+	// gets one if every configuration still selects it. cmd/onboarding_gate
+	// separately proves the SQL actually responds to the environment, by compiling
+	// the models the way Cube does; this is the narrower column check.
+	flags := readCubeFlags(t)
 
-	// The model switches on CUBEJS_DB_TYPE and TENANT_DB_PATH. All four
-	// combinations must still resolve to a SQL source.
 	for _, want := range []string{
 		"CUBEJS_DB_TYPE === 'duckdb'",
 		"TENANT_DB_PATH",
-		"read_parquet('/cube/data/warehouse/*/request_metrics_minute/**/*.parquet'",
-		"read_parquet('/cube/data/warehouse/request_metrics_minute/**/*.parquet'",
-		"gravix.raw.request_metrics_minute",
+		"/cube/data/warehouse/*/${table}/**/*.parquet",
+		"/cube/data/warehouse/${table}/**/*.parquet",
+		"gravix.raw.${table}",
 	} {
-		if !strings.Contains(model, want) {
-			t.Errorf("the model no longer handles %q", want)
+		if !strings.Contains(flags, want) {
+			t.Errorf("cube/model_flags.js no longer handles %q", want)
 		}
 	}
 
 	// The sketch column must be readable in every configuration, which it is
 	// because every branch selects *.
-	if strings.Count(model, "SELECT * FROM") < 2 {
+	if strings.Count(flags, "SELECT * FROM") < 2 {
 		t.Error("a configuration no longer selects every column, so the sketch may be missing")
 	}
 }

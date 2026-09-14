@@ -23,7 +23,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import vm from 'node:vm';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -40,15 +40,27 @@ const appPath = join(repoRoot, 'dashboards', 'app.js');
 // by JavaScript. Evaluating the file therefore needs those names to exist. The
 // Proxy supplies each one as its own name, so a reference to a member that has
 // been deleted still evaluates, and assertMembersExist below is what catches it.
+// The sandbox mirrors Cube's, and the two differences are deliberate.
+//
+// It provides `require`, resolved against the model directory the way Cube's does,
+// because that is how the models reach ../model_flags.js.
+//
+// And it does NOT provide `process`. Cube's sandbox does not: it compiles model
+// files with vm.runInNewContext and a fresh V8 context has no `process`, which is a
+// Node global rather than a V8 intrinsic. An earlier version of this helper injected
+// one, and that is why F-037 survived so long — every environment conditional in the
+// models was dead in production while this loader reported it working. A test
+// sandbox that is more generous than the real one proves nothing about the real one.
 function loadModel(env = {}) {
   const src = readFileSync(modelPath, 'utf8');
+  const modelRoot = dirname(dirname(modelPath));
   let captured = null;
 
   const names = new Proxy({}, {
     has: () => true,
     get: (_t, prop) => {
       if (prop === 'cube') return (name, def) => { captured = { name, def }; };
-      if (prop === 'process') return { env };
+      if (prop === 'require') return (p) => loadFlags(modelRoot, p, env);
       if (prop === Symbol.unscopables) return undefined;
       return String(prop);
     }
@@ -57,6 +69,17 @@ function loadModel(env = {}) {
   vm.runInNewContext(`with (names) { ${src} }`, { names });
   assert.ok(captured, 'the model did not call cube()');
   return captured;
+}
+
+// loadFlags evaluates cube/model_flags.js in an ordinary Node context — with the
+// case's environment — which is exactly where Cube's require puts it.
+function loadFlags(modelRoot, spec, env) {
+  const file = resolve(modelRoot, spec);
+  const module = { exports: {} };
+  vm.runInNewContext(readFileSync(file, 'utf8'), {
+    module, exports: module.exports, process: { env },
+  }, { filename: file });
+  return module.exports;
 }
 
 // loadCubeClient evaluates the browser IIFE and returns the CubeClient global.
@@ -308,9 +331,20 @@ test('TestNoPercentileInPreAggregations', () => {
     }
   }
 
-  assert.ok(checked > 0,
-    'no pre-aggregation measures were checked; the model has changed shape and this guard ' +
-    'is no longer guarding anything');
+  // The model currently declares no pre-aggregations, so there is nothing to check
+  // and `checked` is 0. That is not this guard going stale — it is the stronger
+  // form of the same property, and it is asserted rather than assumed: a rollup
+  // needs a Cube Store to hold it, no stack in this repository runs one, and Cube
+  // fails a query that matches a rollup it cannot build rather than reading the
+  // source. See F-035 and F-038.
+  //
+  // If pre-aggregations ever come back, `checked` becomes non-zero and the loop
+  // above resumes doing the work. Either way the invariant holds; what must never
+  // happen is a pre-aggregation existing AND this guard reporting nothing.
+  const declared = Object.keys(def.preAggregations || {}).length;
+  assert.ok(declared === 0 || checked > 0,
+    `the model declares ${declared} pre-aggregation(s) but this guard checked no measures; ` +
+    'it is no longer guarding anything');
 });
 
 // A second angle on the same rule: catch a percentile by what it reads, with a

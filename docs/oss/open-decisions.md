@@ -50,11 +50,26 @@ already work around them and say so.
 
 `timed-onboarding` has never returned a green verdict. Until it does:
 
+**Update.** F-037 — the blocker this list was waiting on — is fixed, and it did not need the
+Docker daemon or the owner decision this page previously said it did. Cube's compiler is on npm;
+reading it settled the question in an hour. Cube evaluates model files in a `vm` sandbox with no
+`process`, so every environment conditional in `cube/model/schema/` was dead and both stacks
+compiled to the Trino SQL — including the DuckDB one. The models now take their SQL from
+`cube/model_flags.js`, which Cube loads through Node's own `require`, and compiling them with the
+real `prepareCompiler` confirms each stack gets the right source. Fixing it exposed F-038: the
+pre-aggregation gate could never have compiled either, and no stack here runs a Cube Store to build
+a rollup in, so the models now declare none.
+
+That removes the F-037 decision from this page. It does not make the job green — that still needs a
+Docker daemon, and nothing below should be assumed cleared until CI says so.
+
 - **F-025** *(high)* — the full stack has F-021 too, and the fix is the chown init container that has
   not yet been observed working. Porting it now would be guessing twice.
 - **GRVX-1003** — returned `SPEC DEFECT: §5.1`; the measured footprint is 206.68 bytes/event against
   a 120 budget, and 35.59 if raw JSONL were compressed at rest, which nothing does.
-- **GRVX-1006** — nine of ten criteria need a running Cube.
+- **GRVX-1006** — nine of ten criteria need a running Cube. Note, now a tested fact rather than a
+  warning: this stack declares no pre-aggregations, so every latency figure it produces is a **cold
+  read from Parquet**. Quoting one as pre-aggregated repeats F-020 and F-022. See F-038.
 - **GRVX-1007, GRVX-1008** — not startable; 1007 depends on 1002/1003/1005/1006, and 1008 on 1007.
 
 Five defects were fixed to get this far — F-015, F-016, F-019, F-021, F-023 — and the gate found

@@ -214,6 +214,13 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required - set it in .env}
     volumes:
       - ./cube/cube.js:/cube/conf/cube.js
+      # Beside cube.js and deliberately OUTSIDE /cube/conf/model: Cube evaluates
+      # everything under the model directory in a vm sandbox with no `process`,
+      # so the models reach their environment-derived SQL through Node's own
+      # require of this file instead. A file inside the model directory would be
+      # sandboxed too. Without this mount the require throws and the cubes fail
+      # to register — loudly, which is the point. See F-037.
+      - ./cube/model_flags.js:/cube/conf/model_flags.js
       - ./cube/model:/cube/conf/model
       - ./data:/cube/data:ro
     depends_on:

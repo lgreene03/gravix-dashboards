@@ -1,29 +1,13 @@
 // Copyright 2026 The Gravix Authors
 // SPDX-License-Identifier: Apache-2.0
 
-const isDuckDB = (typeof process !== 'undefined' && process.env && process.env.CUBEJS_DB_TYPE === 'duckdb');
-const isMultiTenant = (typeof process !== 'undefined' && process.env && !!process.env.TENANT_DB_PATH);
+// Stack capabilities come from ../model_flags.js, which Cube loads through Node's
+// own require rather than evaluating in its model sandbox. Reading process.env
+// here instead would silently do nothing: the sandbox has no `process`. See F-037
+// and the comment at the top of that file.
+const { tableSql, timestampSql } = require('../model_flags.js');
 
-// Pre-aggregations need somewhere to put their rollup tables, and that is Cube
-// Store — an `externalDriverFactory`. The bootstrap stack deliberately runs no
-// Cube Store (F-035: it would contradict the single-VPS premise), so a query that
-// matches a rollup here fails with
-//   "externalDriverFactory is not provided"
-// rather than falling back to the source. Cube prefers the rollup and errors; it
-// does not degrade gracefully.
-//
-// So the rollups are declared only where they can actually be built. The condition
-// is DERIVED from the capability rather than read from a separate on/off flag,
-// because a flag can be set to disagree with the infrastructure and this cannot:
-// no external store means no pre-aggregations, and there is no third state.
-const hasExternalStore = (typeof process !== 'undefined' && process.env &&
-    !(process.env.CUBEJS_CACHE_AND_QUEUE_DRIVER === 'memory' && !process.env.CUBEJS_CUBESTORE_HOST));
-
-const requestMetricsSql = isDuckDB
-  ? isMultiTenant
-    ? `SELECT * FROM read_parquet('/cube/data/warehouse/*/request_metrics_minute/**/*.parquet', union_by_name=true)`
-    : `SELECT * FROM read_parquet('/cube/data/warehouse/request_metrics_minute/**/*.parquet', union_by_name=true)`
-  : `SELECT * FROM gravix.raw.request_metrics_minute`;
+const requestMetricsSql = tableSql('request_metrics_minute');
 
 cube(`RequestMetricsMinute`, {
   sql: requestMetricsSql,
@@ -121,7 +105,7 @@ cube(`RequestMetricsMinute`, {
     },
 
     bucketStart: {
-      sql: isDuckDB ? `bucket_start` : `CAST(bucket_start AS TIMESTAMP)`,
+      sql: timestampSql('bucket_start'),
       type: `time`,
       title: `Time`
     },
@@ -157,27 +141,43 @@ cube(`RequestMetricsMinute`, {
   // the day's p95 — the same defect this model exists to remove, but cached.
   // Percentiles at any granularity above a minute come from
   // GET /api/v1/percentile, which merges the sketches.
-  preAggregations: hasExternalStore ? {
-    endpointDaily: {
-      measures: [requestCount, errorCount],
-      dimensions: [service, method, pathTemplate],
-      timeDimension: bucketStart,
-      granularity: `day`,
-      refreshKey: {
-        every: `5 minute`
-      }
-    },
-
-    metricsHourly: {
-      measures: [requestCount, errorCount],
-      dimensions: [service],
-      timeDimension: bucketStart,
-      granularity: `hour`,
-      refreshKey: {
-        every: `5 minute`
-      }
-    }
-  } : {},
+  // No pre-aggregations. This is a property of the infrastructure, not a
+  // preference.
+  //
+  // A rollup has to be materialised somewhere, and for Cube that somewhere is
+  // Cube Store, reached through an `externalDriverFactory`. No stack in this
+  // repository runs one: neither docker-compose.yml nor
+  // docker-compose.bootstrap.yml nor deploy/ defines a cubestore service, and
+  // CUBEJS_CUBESTORE_HOST is never set. Cube does not degrade gracefully when a
+  // declared rollup cannot be built — it prefers the rollup and fails the query
+  // with "externalDriverFactory is not provided" rather than reading the source.
+  // So declaring one here would break exactly the queries it was meant to speed
+  // up. See F-035 and F-038.
+  //
+  // These definitions were previously written as `preAggregations: cond ? {…} : {}`.
+  // That form never compiled: Cube's CubePropContextTranspiler resolves member
+  // references by walking the ObjectProperty chain up to the cube's top-level
+  // object, and a ConditionalExpression breaks that walk, so `measures: [requestCount]`
+  // reached the sandbox as an undefined identifier. The condition was always false
+  // for an unrelated reason (F-037), which is the only thing that kept the error
+  // hidden. If a Cube Store is ever added, restore them as a plain object literal
+  // — never behind a ternary — and prove it compiles.
+  //
+  //   endpointDaily: {
+  //     measures: [requestCount, errorCount],
+  //     dimensions: [service, method, pathTemplate],
+  //     timeDimension: bucketStart,
+  //     granularity: `day`,
+  //     refreshKey: { every: `5 minute` }
+  //   },
+  //   metricsHourly: {
+  //     measures: [requestCount, errorCount],
+  //     dimensions: [service],
+  //     timeDimension: bucketStart,
+  //     granularity: `hour`,
+  //     refreshKey: { every: `5 minute` }
+  //   }
+  preAggregations: {},
 
   dataSource: `default`
 });

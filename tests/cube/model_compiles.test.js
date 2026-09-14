@@ -24,7 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import vm from 'node:vm';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -94,25 +94,46 @@ test('F-030: every file in Cube\'s model directory parses the way Cube parses it
     assert.ok(checked > 0, 'no .js file was checked; the derivation broke');
 });
 
-// ─── F-036: rollups are declared only where they can be built ──────────────
+// ─── F-037: the models must actually read their environment ────────────────
 
-// A pre-aggregation needs an external store — Cube Store — to hold its rollup
-// table. The bootstrap stack deliberately runs none, and Cube does NOT degrade
-// gracefully when a query matches a rollup it cannot build: it fails the query
-// with "externalDriverFactory is not provided" rather than reading the source.
+// The sandbox below is Cube's, transcribed rather than approximated, and the one
+// thing it deliberately withholds is the subject of the test.
 //
-// So the model declares its rollups only when a store exists. This checks both
-// states, because a condition that is always true and a condition that is always
-// false both look like "it works" from one side.
+// Cube compiles model files with vm.runInNewContext. A fresh V8 context has no
+// `process` — that is a Node global, not a V8 intrinsic — so a model file reading
+// process.env reads nothing: guarded by `typeof process !== 'undefined'` it takes
+// the false branch in silence. Every environment conditional in cube/model/schema/
+// was dead for exactly that reason, and both stacks compiled to the Trino SQL,
+// including the bootstrap stack, which runs DuckDB over Parquet and no Trino.
+//
+// The guard that missed this injected a `process` into its own sandbox and then
+// checked that a flag named hasExternalStore flipped. It passed for the same reason
+// the defect existed: it exercised a code path Cube never runs. A test sandbox more
+// generous than the real one proves nothing about the real one.
+//
+// So this checks the requirement instead of the mechanism: point the models at two
+// different engines and the SQL that comes out must differ. Any route to a model
+// that ignores its environment fails it, whatever the flag is called.
 
-function loadCube(file, env) {
+function loadCube(file, env, modelRoot) {
     let captured = null;
     const names = new Proxy({}, {
         has: () => true,
         get: (_t, p) => {
             if (p === 'cube') return (name, def) => { captured = def; };
-            if (p === 'process') return { env };
             if (p === 'Symbol') return Symbol;
+            if (p === 'require') return (spec) => {
+                // Cube falls through to Node's own require for a path that is not
+                // another model file, resolving it against the model root — which
+                // is what puts model_flags.js in an ordinary Node context.
+                const target = resolve(modelRoot, spec);
+                const module = { exports: {} };
+                vm.runInNewContext(readFileSync(target, 'utf8'),
+                    { module, exports: module.exports, process: { env } },
+                    { filename: target });
+                return module.exports;
+            };
+            // Deliberately absent: `process`. Cube's sandbox has none.
             return String(p);
         },
     });
@@ -120,53 +141,52 @@ function loadCube(file, env) {
     return captured;
 }
 
-test('F-036: rollups are declared with an external store and withheld without one', () => {
+test('F-037: every model produces different SQL for DuckDB and for Trino', () => {
     const dirs = modelDirsFromCompose();
-    const files = [];
+    assert.ok(dirs.size > 0, 'no model directory is mounted; this guard is watching nothing');
+
+    let checked = 0;
     for (const dir of dirs.keys()) {
-        files.push(...jsFilesUnder(join(repoRoot, dir)));
+        const modelRoot = join(repoRoot, dir);
+        for (const file of jsFilesUnder(modelRoot)) {
+            const rel = relative(repoRoot, file);
+
+            const duck = loadCube(file, { CUBEJS_DB_TYPE: 'duckdb', TENANT_DB_PATH: '/d' }, modelRoot);
+            const trino = loadCube(file, { CUBEJS_DB_TYPE: 'trino', TENANT_DB_PATH: '/d' }, modelRoot);
+            assert.ok(duck && trino, `${rel} did not register a cube`);
+            checked++;
+
+            assert.notEqual(duck.sql, trino.sql,
+                `${rel} produces the same SQL for DuckDB and Trino:\n    ${duck.sql}\n` +
+                'The model is not reading its environment. Cube evaluates model files in a vm ' +
+                'sandbox with no `process`, so process.env there reads nothing — take the value ' +
+                'from ../model_flags.js, which Cube loads through Node\'s require (F-037).');
+
+            assert.match(duck.sql, /read_parquet/,
+                `${rel} does not read Parquet under DuckDB:\n    ${duck.sql}`);
+            assert.doesNotMatch(trino.sql, /read_parquet/,
+                `${rel} reads Parquet under Trino:\n    ${trino.sql}`);
+        }
     }
-    assert.ok(files.length > 0, 'no model files found');
+    assert.ok(checked > 0, 'no model was checked; the derivation broke');
+});
 
-    let declaring = 0;
-    for (const file of files) {
-        const rel = relative(repoRoot, file);
-
-        // With a store available — the full stack's shape.
-        const withStore = loadCube(file, { CUBEJS_DB_TYPE: 'duckdb' });
-        // Memory driver and no Cube Store — the bootstrap stack's shape.
-        const noStore = loadCube(file, {
-            CUBEJS_DB_TYPE: 'duckdb',
-            CUBEJS_CACHE_AND_QUEUE_DRIVER: 'memory',
-        });
-        // Memory driver but a Cube Store host is named: a store exists, so the
-        // rollups must come back. This is what catches a condition keyed on the
-        // driver alone.
-        const memoryPlusStore = loadCube(file, {
-            CUBEJS_DB_TYPE: 'duckdb',
-            CUBEJS_CACHE_AND_QUEUE_DRIVER: 'memory',
-            CUBEJS_CUBESTORE_HOST: 'cubestore',
-        });
-
-        assert.ok(withStore && noStore && memoryPlusStore, `${rel} did not register a cube`);
-
-        const n = Object.keys(withStore.preAggregations || {}).length;
-        if (n === 0) continue;   // a cube with no rollups has nothing to withhold
-        declaring++;
-
-        assert.equal(Object.keys(noStore.preAggregations || {}).length, 0,
-            `${rel} still declares ${n} pre-aggregation(s) with the memory driver and no Cube ` +
-            'Store. Cube will route a matching query to a rollup it cannot build and fail it ' +
-            'with "externalDriverFactory is not provided" — it does not fall back to the ' +
-            'source (F-036).');
-
-        assert.equal(Object.keys(memoryPlusStore.preAggregations || {}).length, n,
-            `${rel} withholds its pre-aggregations even though CUBEJS_CUBESTORE_HOST names a ` +
-            'store. The condition must track whether a store EXISTS, not merely which cache ' +
-            'driver is set.');
+test('F-037: the tenant prefix reaches the warehouse glob', () => {
+    const dirs = modelDirsFromCompose();
+    let checked = 0;
+    for (const dir of dirs.keys()) {
+        const modelRoot = join(repoRoot, dir);
+        for (const file of jsFilesUnder(modelRoot)) {
+            const rel = relative(repoRoot, file);
+            const multi = loadCube(file, { CUBEJS_DB_TYPE: 'duckdb', TENANT_DB_PATH: '/d' }, modelRoot);
+            const single = loadCube(file, { CUBEJS_DB_TYPE: 'duckdb' }, modelRoot);
+            assert.ok(multi && single, `${rel} did not register a cube`);
+            checked++;
+            assert.notEqual(multi.sql, single.sql,
+                `${rel} globs the same path with and without TENANT_DB_PATH:\n    ${multi.sql}\n` +
+                'The rollups write warehouse/<tenant>/<table>/, so a single-tenant glob matches ' +
+                'nothing and the dashboard is silently empty (F-027, F-037).');
+        }
     }
-
-    assert.ok(declaring > 0,
-        'no cube declares a pre-aggregation in any state, so this guard proved nothing. ' +
-        'Either the models changed or the loader broke.');
+    assert.ok(checked > 0, 'no model was checked; the derivation broke');
 });
