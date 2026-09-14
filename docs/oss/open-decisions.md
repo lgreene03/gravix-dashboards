@@ -48,7 +48,11 @@ already work around them and say so.
 
 ## Blocked on one thing working
 
-`timed-onboarding` has never returned a green verdict. Until it does:
+**`timed-onboarding` is GREEN.** It returned `PASS: time to populated dashboard 466s (budget: 600s)`
+on 2026-09-14, twice independently, and `ci-summary` is green with it. This section's premise no
+longer holds; the items below are unblocked and need re-checking rather than waiting.
+
+Previously — retained because the items still need doing:
 
 **Update.** F-037 — the blocker this list was waiting on — is fixed, and it did not need the
 Docker daemon or the owner decision this page previously said it did. Cube's compiler is on npm;

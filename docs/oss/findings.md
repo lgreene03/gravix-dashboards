@@ -2424,12 +2424,25 @@ Mutation-tested; all eight killed:
 | a pre-aggregation reintroduced | killed |
 | a Cube Store configured without revisiting the models | killed |
 
-### What this did not fix
+### Confirmed by CI
 
-`timed-onboarding` has not been re-run — it needs a Docker daemon this sandbox does not have. What is
-proven is that the models now compile to the right SQL for the bootstrap stack, which is the thing
-that was failing. Whether the rest of that job passes is not yet established, and should not be
-claimed until CI says so.
+`timed-onboarding` returned its first green verdict in the history of this repository:
+
+```
+PASS: time to populated dashboard 466s (budget: 600s)
+```
+
+Twice, independently — on `497c757` (the fix) and on `82745b0` (which adds only a docs correction),
+in separate runs on separate runners. `ci-summary`, the aggregate gate, is green with it.
+
+The whole documented `docker compose up` path now works end to end: bootstrap-init seeds and exits,
+ingestion reports healthy in 6s, Cube is healthy in 12s, and the dashboard holds real numbers 5
+minutes later. Eleven total breaks of that path were found and fixed to get here — F-019, F-021,
+F-023, F-027, F-030, F-032, F-034, F-035, F-036, F-037, F-038 — each hidden behind the one before it,
+because a gate can only ever see the first unfixed link.
+
+The one remaining red check on the PR is `check` (DCO), which is unrelated to any of this and needs
+the repository owner.
 
 ---
 
