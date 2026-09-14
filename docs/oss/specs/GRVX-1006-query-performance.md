@@ -276,3 +276,30 @@ guessed ones.
 - [ ] All four latency figures, with and without Redis — blocked
 - [x] No percentile in any pre-aggregation — now enforced by behaviour, not by name
 - [x] Zero new skipped tests
+
+### 11.5 `SPEC DEFECT: §5.1` — the rollups cannot be built on the stack this spec targets
+
+Filed as **SD-024**. §5.1 mandates four pre-aggregations and AC-1 is premised on them, but §2 and §3
+name **Redis** as the optional component the target must be met without. Redis is not where a rollup
+lives: `CUBEJS_CACHE_AND_QUEUE_DRIVER` picks the queue and cache driver, while a rollup table is
+materialised through an `externalDriverFactory` selected by `CUBEJS_EXT_DB_TYPE` and the
+`CUBEJS_EXT_DB_*` / `CUBEJS_CUBESTORE_*` variables. None of those is set in any compose file or under
+`deploy/`, and no stack defines a `cubestore` service.
+
+F-036 established that Cube does not fall back to the source when it cannot build a matching rollup —
+it fails the query. So adding §5.1's rollups to the bootstrap stack would not miss the ≤400 ms
+target; it would break the dashboard.
+
+The three resolutions each cost something already decided elsewhere (another container contradicts
+F-035 and GRVX-1004's cost figure; dev mode makes a development flag load-bearing for production
+performance; meeting the target without rollups makes §5.1's table wrong rather than unexecutable).
+§10's escalation table anticipated a shortfall against Redis and has no row for this. See SD-024.
+
+**Unchanged by this:** AC-3 stays complete; §5.3's four figures remain the right shape; and every
+latency this stack produces is still a cold read from Parquet, so publishing one as pre-aggregated
+would repeat F-020 and F-022.
+
+**Still blocked besides:** §6 steps 1 and 4 need a running Cube, and the implementation environment
+has no Docker daemon. `timed-onboarding` going green cleared the stack blocker §11.3 named, not this
+one.
+

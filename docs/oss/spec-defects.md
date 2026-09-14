@@ -1327,3 +1327,84 @@ forbids — or something the interface does not describe.
 Option 2 is the one that delivers the spec's own throughput goal on a multi-tenant node, and it is
 not what §5.1 describes. Which to build is a design decision with a measurable cost either way, so it
 is recorded rather than guessed.
+
+---
+
+## SD-024 — GRVX-1006 requires pre-aggregations and names Redis as the optional component, but rollups need an external store no shipped stack provides
+
+**Severity** high — §5.1 is not executable on the bootstrap stack as written, and AC-1 is premised
+on it.
+**Status** open; returned as `SPEC DEFECT: §5.1`. AC-3 remains complete (§11.1); nothing in this
+entry changes it.
+
+### The mismatch
+
+§5.1 mandates exactly four pre-aggregations, and AC-1 requires warm p95 ≤400 ms through them. §2 and
+§3 identify the optional component to work without as **Redis**:
+
+> Redis is optional and the target must be met without it, since the bootstrap stack has none.
+
+> Do NOT require Redis to hit the target. The bootstrap stack has none, and a target only reachable
+> with an optional component is not the free product's target.
+
+That instinct is right and aimed at the wrong component. **Redis is not where a pre-aggregation
+lives.** `CUBEJS_CACHE_AND_QUEUE_DRIVER` selects the queue and cache driver; a rollup table is
+materialised through an `externalDriverFactory`, selected by `CUBEJS_EXT_DB_TYPE` and the variables
+below. Turning Redis on does not make a single pre-aggregation buildable, and turning it off does not
+prevent one.
+
+The component §5.1 actually depends on is an external store, and the spec never mentions it.
+
+### What the shipped stacks provide
+
+Cube v0.35 `OptsHandler.initializeCoreOptions`:
+
+```js
+const externalDbType = opts.externalDbType
+  || process.env.CUBEJS_EXT_DB_TYPE
+  || ((getEnv('devMode') || definedExtDBVariables.length > 0) && 'cubestore')
+  || undefined;
+```
+
+`definedExtDBVariables` is any of `CUBEJS_EXT_DB_{URL,HOST,NAME,PORT,USER,PASS}` or
+`CUBEJS_CUBESTORE_{HOST,PORT,USER,PASS}`. None is set in either compose file or anywhere under
+`deploy/`, and no stack defines a `cubestore` service. `CUBEJS_DEV_MODE` is
+`${CUBEJS_DEV_MODE:-false}` in both compose files, so the default resolves `externalDbType` to
+`undefined` and there is no `externalDriverFactory`.
+
+F-036 established what Cube then does with a query that matches a rollup it cannot build: it prefers
+the rollup and **fails the query** rather than reading the source. So on the bootstrap stack, adding
+§5.1's four pre-aggregations does not miss the ≤400 ms target — it breaks the dashboard.
+
+### Why this is not the implementer's call
+
+The three ways out each cost something the project has already taken a position on:
+
+1. **Add a Cube Store to the bootstrap stack.** F-035 rejected exactly this: another container
+   contradicts the single-VPS premise and the $20/mo figure GRVX-1004 publishes.
+2. **Run Cube in dev mode**, where the official image starts an embedded Cube Store on port 3030 with
+   no extra service. Cheap, and it makes `CUBEJS_DEV_MODE=true` load-bearing for the free product's
+   performance — a development flag deciding production behaviour.
+3. **Meet ≤400 ms with no pre-aggregations at all**, reading Parquet through DuckDB directly. Then
+   §5.1's table is wrong rather than unexecutable, and §10's escalation ("400 ms unreachable without
+   Redis → publish the no-Redis number") is asking about the wrong variable.
+
+§10's escalation table anticipated a shortfall against Redis. It did not anticipate that the rollups
+cannot be built at all, and none of its rows covers this.
+
+### What is unaffected
+
+- **AC-3** (no percentile in any pre-aggregation) is complete and stays complete; with no
+  pre-aggregations declared it holds trivially, and `TestNoPercentileInPreAggregations` still fails
+  the moment one appears (F-038).
+- **The cold-read caveat stands.** The bootstrap stack serves every query by reading Parquet, so any
+  latency figure it produces is a cold read. Publishing one as pre-aggregated repeats F-020 and
+  F-022, whichever way this defect is resolved.
+- §5.3's four published figures remain the right shape. It is §5.1's mechanism, not §5.3's honesty,
+  that is in question.
+
+### Blocked regardless
+
+Even resolved, §6 steps 1 and 4 need a running Cube to measure. The implementation environment has no
+Docker daemon. `timed-onboarding` going green (F-037, F-038) cleared the *stack* blocker §11.3 named;
+it did not clear this one.
