@@ -42,7 +42,7 @@ already work around them and say so.
 
 | Item | What is needed |
 |---|---|
-| **DCO** | `git rebase --signoff origin/main && git push --force-with-lease` on `claude/gravix-opensource-roadmap-c8ija8`. This sandbox denies it as a destructive git action. It is the only thing keeping the `check` job red, and a standing-down comment is already on the PR. |
+| **DCO** | `git rebase --signoff origin/main && git push --force-with-lease` on `claude/gravix-opensource-roadmap-c8ija8` — the command the `check` job itself prints. 74 of the 82 commits in the PR range carry no `Signed-off-by` trailer. **This needs a person for a better reason than the force-push.** The DCO is an attestation that the contributor has the right to submit the work; adding the trailer is making that certification, and it is the repository owner's to make, not an implementer's. Signing off as `Claude <noreply@anthropic.com>` would be a non-person certifying provenance, and signing off as the owner would be forging their attestation. A standing-down comment is already on the PR. |
 | **GRVX-1002 CLAIM AUDIT** | A `market-analyst` pass over `bench/cardinality/competitor_units.yaml`, reading each vendor's own pricing page and recording the date. Every entry is `verified: false` and the demo withholds the comparison until that happens. The implementer must not self-verify. |
 | **GRVX-1004 prices** | The same discipline for `pkg/costmodel/prices.yaml`. Every infrastructure rate is marked `estimate`, not `list_price`, because none has been read off a vendor page and dated. |
 
