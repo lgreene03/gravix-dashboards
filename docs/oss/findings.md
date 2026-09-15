@@ -2737,3 +2737,71 @@ make it self-enforcing, in the same spirit as `check-boundary`.
 
 Until then, the breaking change in GRVX-1105 is recorded here and in that spec's §11.5, which is the
 wrong place for a user to have to look.
+
+---
+
+## F-042 — the Spec Readiness Gate checks that paths are well-formed, not that they are right, and Phase 11 shows the cost
+
+**Found by** `senior-engineer` and `qa-engineer` executing GRVX-1101, 1102, 1105 and 1107 in
+sequence, and reading GRVX-1108.
+**Owner** `senior-engineering-lead` (runs the gate) with `orchestrator` (could enforce it).
+**Severity** medium — no defect reached production, but every one cost an implementer a detour, and
+two of them would have produced a red build if followed literally.
+**Status** open.
+
+### The pattern
+
+Every Phase 11 spec header records `Readiness Gate | 12/12 — PASS`. Four of the five I engaged with
+carried a §2 or §4 defect anyway:
+
+| Spec | Defect | Registered |
+|---|---|---|
+| GRVX-1101 | §6 mandates a published query whose glob matches no file a real warehouse writes; DuckDB fails it outright | SD-026 |
+| GRVX-1101 | §2 states "compaction does not change column names or types"; it drops five | SD-025 |
+| GRVX-1102 | §2/§4.2's `protoc` command writes to a gitignored path and does not regenerate the file §4.2 names | SD-028 |
+| GRVX-1102 | §5.4 requires `tenant_id`; §6 step 7 says it is empty in legacy mode and then says to validate | SD-027 |
+| GRVX-1107 | §2 names `services/gateway/enterprise.go` as holding the scheduled-export code; it holds none. §4 omits both files the spec cannot be finished without | SD-029 |
+| GRVX-1108 | §4 omits `cmd/cli/cmd_recompute.go` and `cmd/cli/cmd_explain.go`, which AC-6 and AC-7 require changing (read, not yet executed) | — |
+
+GRVX-1105 was executable as written; its §2 line numbers had drifted and §6 step 1 mispredicted an
+unused import, neither blocking.
+
+### Why the gate passes them
+
+Check 1 reads:
+
+> Every file to create or modify is named by **exact repo-relative path** — fails if any path is
+> described rather than given
+
+It tests the *form* of the paths, not their *truth* or their *coverage*.
+`services/gateway/enterprise.go` is an exact repo-relative path; it is simply the wrong one, and the
+gate has no way to notice. Nor does any check ask whether §4's list covers every file §6's steps and
+§7's criteria require touching — which is how GRVX-1107 and GRVX-1108 both ended up mandating
+behaviour in files their own §4 forbids.
+
+Checks 2, 3, 6 and 11 are about the spec's prose being specific, and Phase 11's specs are specific.
+Being specific and being correct are different properties, and only the first is gated.
+
+### Two costs beyond the detour
+
+**A red build.** GRVX-1107 §4 omits `cmd/cli/main.go`, where subcommands are dispatched from a
+hard-coded switch. Following §4 literally leaves `cmd/cli/cmd_export.go` unreachable, and the `lint`
+job runs `staticcheck`, which fails on U1000 dead code. A spec that passes 12/12 cannot currently be
+executed to a green build.
+
+**A published falsehood.** GRVX-1101 §6 requires the guide to publish a query verified in CI and
+broken for every reader who runs it on their own data. The gate's check 5 — "Verification is
+copy-pasteable shell" — was satisfied: the commands run. They run against a fixture.
+
+### What would close it
+
+Two mechanical checks, both scriptable in the spirit of `check-boundary`:
+
+1. **Every repo-relative path a spec names in §2 or §4.2 exists in the repository** (§4.1 paths are
+   exempt: they are being created). A path that does not resolve is a spec bug, caught before
+   dispatch instead of by an implementer an hour in.
+2. **Every file named in §6's steps or §7's criteria appears in §4.1 or §4.2.** This is the check
+   that would have caught GRVX-1107 and GRVX-1108, and it needs no judgement.
+
+Neither replaces check 12. Both convert "the Lead read it carefully" into something that fails a
+build, which is the difference this project already relies on everywhere else.
