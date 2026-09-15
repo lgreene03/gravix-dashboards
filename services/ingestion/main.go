@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 	"github.com/lgreene/gravix-dashboards/pkg/baseline"
+	"github.com/lgreene/gravix-dashboards/pkg/cardinality"
 	"github.com/lgreene/gravix-dashboards/pkg/circuitbreaker"
 	"github.com/lgreene/gravix-dashboards/pkg/discovery"
 	"github.com/lgreene/gravix-dashboards/pkg/lateness"
@@ -328,6 +329,7 @@ func init() {
 	prometheus.MustRegister(ingestionQuotaRejectedTotal)
 	prometheus.MustRegister(factsByLatenessTotal)
 	prometheus.MustRegister(ingestionTraceSamplesTotal)
+	prometheus.MustRegister(ingestionRemoteWriteSeriesTotal)
 	prometheus.MustRegister(circuitBreakerState)
 	prometheus.MustRegister(circuitBreakerTripsTotal)
 }
@@ -948,6 +950,21 @@ func main() {
 	traceSampleRate := getTraceSampleRate()
 	slog.Info("trace sampling configured", "rate", traceSampleRate)
 
+	// Cardinality budget for external metrics protocols. Prometheus
+	// remote-write is the one ingest path where the sender, not Gravix,
+	// chooses the label set, so it is the one path that needs a hard cap to
+	// keep docs/04-non-goals.md §5 true. State is in-memory: a restart
+	// forgives the window, which is the right failure direction for a cap
+	// whose purpose is to stop abuse rather than to bill for it.
+	externalMetricsBudget := cardinality.NewBudget(cardinality.DefaultMaxSeriesPerMetricPerDay)
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			externalMetricsBudget.Reset()
+		}
+	}()
+
 	// Buffer-full middleware: reject new data when buffer exceeds limit
 	bufferCheck := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -966,6 +983,7 @@ func main() {
 	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleEvents(sink, tdb))))))
 	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleTraces(sink, tdb, traceSampleRate))))))
 	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleOTLPTraces(sink))))))
+	http.Handle("/api/v1/remote_write", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleRemoteWrite(sink, externalMetricsBudget))))))
 	http.Handle("/api/v1/deploy", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleDeployWebhook(sink, tdb)))))
 	// Read-only and off the ingest path, so it carries neither the rate limiter
 	// nor the buffer check: a full buffer is precisely when someone needs to see

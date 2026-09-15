@@ -1522,3 +1522,95 @@ decision, and this entry is the request for it.
 Either name the fixture files as production names them, or publish the `*.parquet` glob as the
 verified query. The first is cleaner: a fixture that does not reproduce production filenames cannot
 prove a published path works.
+
+---
+
+## SD-027 — GRVX-1102 requires `tenant_id` and also says it is empty, so remote-write cannot work in legacy single-key mode
+
+**Found by:** `senior-engineer` executing GRVX-1102
+**Affects:** GRVX-1102 §5.4, §6 step 7, §6.1 (a missing row), AC-1
+**Severity:** medium — the shipped compose files are unaffected; a legacy `API_KEY` deployment is
+totally broken
+**Status:** open; returned as `SPEC DEFECT: §5.4 — tenant_id is required, but §6 step 7 says it is
+empty in legacy single-key mode`.
+
+### The contradiction
+
+§5.4 declares `ErrExternalMetricMissingTenant = errors.New("tenant_id is required")` among the rules
+`ValidateExternalMetricSample` enforces. §6 step 7 constructs the sample with:
+
+> `TenantId`: the request's tenant ID (**empty string in legacy single-key mode**)
+
+and then says to validate it. In legacy mode, therefore, every sample the handler builds fails the
+validation the same step mandates — and §6.1 has no row saying what happens next, so the behaviour on
+a validation failure is undefined as well.
+
+`services/ingestion/main.go:858` confirms legacy mode is a supported, shipped configuration
+("legacy single-key auth enabled"), reached whenever `API_KEY` is set without `TENANT_DB_PATH`.
+`getTenantID` returns `""` there by design.
+
+### What was implemented
+
+§5.4 literally: all seven rules enforced, `tenant_id` among them. Two reasons to prefer §5.4 over
+§6 step 7's parenthetical rather than the other way round — dropping the rule would leave a declared
+error that never fires, which is the decorative-guard failure this project keeps finding; and
+`docker-compose.yml` and `docker-compose.bootstrap.yml` both set `TENANT_DB_PATH`, so the shipped
+stack populates tenant IDs and is unaffected.
+
+A validation failure returns 500 with `failed to persist external metric sample`, reusing §6 step 8's
+row rather than inventing a message §6.1 does not define.
+
+`TestHandleRemoteWriteFailsInLegacySingleKeyMode` pins this: it asserts the 500 and carries a comment
+saying that when the defect is resolved the test must be replaced with one asserting 204. The broken
+path is visible in the suite rather than discovered by whoever runs `API_KEY` without a tenant DB.
+
+### What §5.4/§6 should decide
+
+Either remote-write requires a multi-tenant deployment and §6 step 7's parenthetical is wrong and
+should be removed — with the endpoint returning a clear 400 in legacy mode rather than a 500 — or
+`tenant_id` is not required and `ErrExternalMetricMissingTenant` should be deleted from §5.4 rather
+than left unenforced.
+
+---
+
+## SD-028 — the `protoc` command GRVX-1102 §4.2 points at does not regenerate the file it names
+
+**Found by:** `senior-engineer` executing GRVX-1102
+**Affects:** GRVX-1102 §2, §4.2, §8 step 2; `CLAUDE.md`'s "Regenerate protobuf code" command
+**Severity:** medium — silently produces no change, which is worse than failing
+**Status:** open; returned as `SPEC DEFECT: §4.2 — the named command writes to gen/proto/, not
+gen/gravix/v1/`.
+
+### What the spec says
+
+§2 cites the generation pattern as `protoc --go_out=./gen --go_opt=paths=source_relative
+proto/gravix.proto`, quoting `CLAUDE.md`. §4.2 says to regenerate `gen/gravix/v1/gravix.pb.go` "via
+the protoc command in CLAUDE.md", and §8 step 2 expects `git status --short gen/` to then show that
+file modified.
+
+### What actually happens
+
+`paths=source_relative` puts the output beside its source path, so that command writes
+`gen/proto/gravix.pb.go` — a path that is **not** the tracked file, and that `.gitignore:16` (`/gen`)
+hides, so `git status` shows nothing at all. Run as documented, the step appears to succeed, changes
+nothing, and produces a stray untracked file nobody sees.
+
+The command that actually reproduces the tracked layout uses the module flag:
+
+```bash
+protoc --go_out=./gen --go_opt=module=github.com/lgreene/gravix-dashboards/gen \
+  proto/gravix.proto proto/remote_write.proto
+```
+
+`gen/gravix/v1/gravix.pb.go` is tracked despite `/gen` being ignored, so a newly generated file needs
+`git add -f` or it will be silently left out of the commit. `gen/remotewrite/v1/remote_write.pb.go`
+was added that way.
+
+### Why it matters beyond this spec
+
+The drift it concealed is recorded as **F-040**: `gen/gravix/v1/gravix.pb.go` was two fields behind
+`proto/gravix.proto`, and a documented regeneration command that quietly writes elsewhere is exactly
+how a generated file stays behind its source for that long. `CLAUDE.md` calls `proto/gravix.proto`
+the source of truth; the command beneath it does not keep the derived file in step.
+
+`CLAUDE.md` is outside §4.1/§4.2, so it was not edited. Fixing the command there is the actual repair.

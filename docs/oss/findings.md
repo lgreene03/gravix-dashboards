@@ -2638,3 +2638,55 @@ Whether compaction preserves `latency_sketch` and merges sketches (correct, larg
 compacted days are documented as scalar-only with percentiles dropped rather than averaged. Averaging
 them is not one of the options: a wrong number is worse than an absent one, and this project's whole
 argument is that it knows the difference.
+
+---
+
+## F-040 — the committed protobuf Go code was two fields behind its own `.proto`, and `tenant_id` was rejected on the wire
+
+**Found by** `senior-engineer` executing GRVX-1102, whose §4.2 requires regenerating
+`gen/gravix/v1/gravix.pb.go`.
+**Owner** `senior-engineering-lead` (the schema contract) with `docs-engineer` (the command in
+`CLAUDE.md`).
+**Severity** medium — no compile error, no failing test, and a field the project's own schema
+declares was rejected at the API boundary.
+**Status** fixed as a side effect of GRVX-1102's mandated regeneration. The cause — the documented
+command writing elsewhere — is **SD-028** and is not fixed.
+
+### What had drifted
+
+`proto/gravix.proto` declares `string tenant_id = 9` on `RequestFact` and `string tenant_id = 8` on
+`ServiceEvent`. The committed `gen/gravix/v1/gravix.pb.go` had neither. Regenerating from the
+unmodified `.proto` adds both, with their getters and the corresponding raw descriptor bytes.
+
+Nothing in the Go code referenced `RequestFact.TenantId` or `ServiceEvent.TenantId`, which is why
+`go build ./...` and the whole suite passed against generated code that did not match its source.
+Tenancy is carried separately — through `topicForTenant` and the storage path — so the fields were
+declared, never wired, and never missed.
+
+### The part that was not cosmetic
+
+`schemas.ParseRequestFact` decodes with `protojson.Unmarshal` and default options, and protojson
+rejects unknown fields by default. Verified directly:
+
+```
+tenant_id: ACCEPTED (post-regeneration)
+unknown field: REJECTED (protojson unmarshal error: proto: (line 1:171): unknown field "nope")
+```
+
+So before this regeneration, a client posting a `RequestFact` carrying the `tenant_id` field that
+`proto/gravix.proto` publishes as part of the contract would have been rejected with
+`unknown field "tenant_id"`. The schema said the field existed; the endpoint said it did not.
+
+### Why it went unnoticed
+
+`CLAUDE.md` names `proto/gravix.proto` the source of truth for these messages and gives a regeneration
+command directly beneath it. That command writes to `gen/proto/`, which `.gitignore` hides, so anyone
+following the documented procedure saw a clean `git status` and concluded the generated code was
+already current (**SD-028**). No CI job regenerates protobuf and diffs it — `check-codegen` in
+`.github/workflows/sdk-codegen.yml` covers only the TypeScript and Python SDK types.
+
+### What should happen
+
+Fix the command in `CLAUDE.md`, and add a protobuf arm to `check-codegen` that regenerates and fails
+on a diff, exactly as it already does for the SDK types. A generated file that no job regenerates is
+a file that will drift again; this one did so for two fields without anyone noticing.

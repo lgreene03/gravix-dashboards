@@ -400,3 +400,106 @@ make build-oss && make test-oss
 | Any ambiguity in this spec | Return `SPEC DEFECT: §<n> — <what is ambiguous>`. Do not guess. |
 | A criterion that cannot be met without an out-of-scope file | Return `SPEC DEFECT: §4 — needs <path>`. |
 | `protoc`/`protoc-gen-go` unavailable in the build environment | Return `SPEC DEFECT: §8 — protoc toolchain missing`. Do not hand-write the generated file. |
+
+---
+
+## 11. Implementation report
+
+All twelve acceptance criteria pass, plus ten additional tests. `pkg/cardinality` is at 100%
+statement coverage and race-clean. Two spec defects and one codebase finding registered.
+
+```
+ok  github.com/lgreene/gravix-dashboards/pkg/cardinality   coverage: 100.0% of statements
+ok  github.com/lgreene/gravix-dashboards/schemas
+ok  github.com/lgreene/gravix-dashboards/services/ingestion
+boundary: 0 violations
+build-oss exit=0
+test-oss exit=0
+```
+
+`github.com/golang/snappy v0.0.4`, resolved from `go.sum`:
+
+```
+github.com/golang/snappy v0.0.4 h1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=
+github.com/golang/snappy v0.0.4/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
+```
+
+`go get` recorded it `// indirect`; `go mod tidy` graduated it to a direct requirement once
+`services/ingestion/remote_write.go` imported it. It is pure Go, as §3 requires.
+
+### 11.1 SD-028 and F-040 — the regeneration step §4.2 mandates does nothing
+
+§4.2 says to regenerate `gen/gravix/v1/gravix.pb.go` "via the protoc command in CLAUDE.md". That
+command uses `paths=source_relative`, which writes `gen/proto/gravix.pb.go` — not the tracked file —
+and `.gitignore:16` (`/gen`) hides it, so the step reports success and changes nothing. The command
+that reproduces the tracked layout is `--go_opt=module=github.com/lgreene/gravix-dashboards/gen`.
+Registered as **SD-028**.
+
+Using it surfaced **F-040**: the committed generated code was two fields behind its own `.proto`.
+`proto/gravix.proto` declares `tenant_id` on both `RequestFact` (field 9) and `ServiceEvent`
+(field 8); the generated Go had neither. Nothing referenced those fields, so nothing failed — but
+`schemas.ParseRequestFact` decodes with `protojson.Unmarshal` at default options, which rejects
+unknown fields, so a client sending the `tenant_id` the published schema declares was answered
+`unknown field "tenant_id"`. Verified directly before and after. The regeneration this spec mandates
+fixes it; the documented command that concealed it is SD-028's to fix.
+
+`gen/remotewrite/v1/remote_write.pb.go` needed `git add -f`, since `/gen` is ignored and the existing
+generated file is tracked by an earlier force-add.
+
+### 11.2 SD-027 — `tenant_id` is required and also empty
+
+§5.4 makes `tenant_id` a validation rule; §6 step 7 says it is "empty string in legacy single-key
+mode" and then says to validate. In legacy mode every sample therefore fails the validation the same
+step mandates, and §6.1 defines no behaviour for a validation failure.
+
+§5.4 was implemented literally — dropping the rule would leave a declared error that never fires,
+and both shipped compose files set `TENANT_DB_PATH`, so the default stack is unaffected. A validation
+failure returns 500 under §6 step 8's existing row rather than inventing a message §6.1 does not
+define. `TestHandleRemoteWriteFailsInLegacySingleKeyMode` pins the broken path in the suite, with a
+comment saying to replace it with a 204 assertion once the defect is resolved.
+
+### 11.3 Where the label-set fingerprint had to be more careful than the spec says
+
+§5.3 specifies `Admit(tenantID, metricName, labels)` without saying how a label set becomes a key.
+It matters: label names and values arrive from an untrusted remote-write payload, so a `"k=v,k=v"`
+join lets a sender who controls a value embed the separators and make two genuinely different label
+sets produce one key — one series posing as another, and the cap counting them as one. Every part is
+length-prefixed instead, which no choice of label content can forge, and
+`TestBudgetDistinguishesLabelSetsThatJoinIdentically` drives the three collisions a naive join
+admits. `metricKey` is a struct for the same reason: `("a","bc")` and `("ab","c")` must not share a
+bucket, or one tenant could drain another's budget by choosing its own name.
+
+### 11.4 The correlation-label ban is on the dimension, not the spelling
+
+§5.5 lists six names. `TestHandleRemoteWriteRejectsEveryCorrelationLabelSpelling` drives thirteen —
+`TRACE_ID`, `TraceID`, `SpanId`, `ParentSpanID` and the rest — because a guard that matches the names
+its author typed protects only those. The case-insensitive lookup §6 step 5 specifies is what makes
+the ban hold; the test is what proves it still does.
+
+### 11.5 Two readings resolved without a defect
+
+**Duplicate `__name__`.** §6 step 4 rejects a series with "more than one label named exactly
+`__name__`", but a `map[string]string` collapses duplicates before anything can object. The count is
+taken while reading the repeated field, not after building the map.
+
+**The counter in §6 step 9.** "Once per `TimeSeries` processed" with one `result` label cannot mean
+every series is counted on a whole-request rejection, since the later series are never examined. A
+rejection increments once, for the series that caused it, under its specific reason; a success
+increments `accepted` once per series. Rejections are therefore counted by cause and acceptances by
+volume, which is what makes the counter readable.
+
+### 11.6 Not a defect, but §2's line numbers have drifted
+
+Every anchor in §2 is off — `DurableSink.Write` is at `services/ingestion/main.go:393` not 242-326,
+`topicForTenant` at 130 not 121-128, the `http.Handle` block at 964-980 not 786-792, and the
+trace-sample-rate construction at 948 not 766-772. The named symbols are all present and
+unambiguous, so nothing was blocked; searching by name rather than trusting a line number is the only
+thing that made the spec executable.
+
+### 11.7 Scope
+
+No Cube model, Trino table or dashboard panel was added (§3). `services/ingestion/otlp.go`,
+`schemas/request_fact.go`, `schemas/trace_sample.go`, `storage/trino/init.sql` and
+`services/ingestion/main_test.go` are untouched (§4.3) — `remote_write_test.go` reuses
+`setupSink` from `main_test.go` without modifying it. `/api/v1/facts`, `/api/v1/events` and every
+other existing route are unchanged.
