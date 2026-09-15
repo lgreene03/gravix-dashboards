@@ -982,7 +982,9 @@ func main() {
 	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb, reg, learner))))))
 	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleEvents(sink, tdb))))))
 	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleTraces(sink, tdb, traceSampleRate))))))
-	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleOTLPTraces(sink))))))
+	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, requireScope("traces:write", handleOTLPTracesRejected))))
+	http.Handle("/v1/logs", authMW(tenantRateLimitMiddleware(trl, requireScope("traces:write", handleOTLPLogsRejected))))
+	http.Handle("/v1/metrics", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleOTLPMetrics(sink, externalMetricsBudget))))))
 	http.Handle("/api/v1/remote_write", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleRemoteWrite(sink, externalMetricsBudget))))))
 	http.Handle("/api/v1/deploy", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleDeployWebhook(sink, tdb)))))
 	// Read-only and off the ingest path, so it carries neither the rate limiter

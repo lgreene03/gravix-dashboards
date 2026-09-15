@@ -2690,3 +2690,50 @@ already current (**SD-028**). No CI job regenerates protobuf and diffs it — `c
 Fix the command in `CLAUDE.md`, and add a protobuf arm to `check-codegen` that regenerates and fails
 on a diff, exactly as it already does for the SDK types. A generated file that no job regenerates is
 a file that will drift again; this one did so for two fields without anyone noticing.
+
+---
+
+## F-041 — `CHANGELOG.md` has been empty for the whole of Horizon 2, and no spec's §4 lets an implementer fix it
+
+**Found by** `senior-engineer` executing GRVX-1105, which removes a working endpoint's behaviour.
+**Owner** `sre-release-manager` (owns the changelog and semver policy) with `docs-engineer`.
+**Severity** medium — it is how a user finds out about a breaking change by hitting it.
+**Status** open. Not fixable inside any spec as written: `CHANGELOG.md` is outside §4.1/§4.2
+everywhere, and §9's "No file outside §4.1/§4.2 modified" is a hard gate.
+
+### What is wrong
+
+`CHANGELOG.md` declares itself Keep a Changelog and semver:
+
+> The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+> and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Its `## [Unreleased]` section is empty, and has been through every phase of Horizon 2 — Phase 7's
+open-core split, Phase 8's correctness work, Phase 9, Phase 10, and now Phase 11. The last populated
+entry is `## [1.0.0] - 2026-03-23`.
+
+GRVX-1105 makes this concrete rather than theoretical. It **removes** the OTLP trace receiver at
+`POST /v1/traces`: a deployment pointing an OpenTelemetry Collector's trace pipeline at that endpoint
+starts receiving 400s on upgrade. Under semver that is a breaking change and belongs under
+`### Removed` in `[Unreleased]`. There is nowhere for the implementer to write it.
+
+The same gap swallowed new surface, not only removed surface: `POST /api/v1/remote_write` and
+`POST /v1/metrics` (GRVX-1102, GRVX-1105) and the bare-Parquet guide (GRVX-1101) all shipped without
+an entry.
+
+### Why the spec corpus produces this
+
+Each spec's §4.1/§4.2 lists exactly the files its implementer may touch, which is the constraint that
+keeps product decisions out of implementation code — and it works. But no spec template asks whether
+the change alters public surface, and none includes `CHANGELOG.md` when it does. The result is a
+corpus that is rigorous about proving each change and silent about announcing any of them.
+
+### What should happen
+
+Add a `CHANGELOG.md` row to §4.2 of every spec that changes a public endpoint, CLI flag, config key,
+or output format, and a Definition-of-Done checkbox for it — the same shape as the existing
+`docs-engineer` delta line. A release gate that fails when `[Unreleased]` is empty on a tag would
+make it self-enforcing, in the same spirit as `check-boundary`.
+
+Until then, the breaking change in GRVX-1105 is recorded here and in that spec's §11.5, which is the
+wrong place for a user to have to look.

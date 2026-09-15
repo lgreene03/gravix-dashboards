@@ -422,3 +422,130 @@ make build-oss && make test-oss
 | Any ambiguity in this spec | Return `SPEC DEFECT: §<n> — <what is ambiguous>`. Do not guess. |
 | `bannedCorrelationLabels`, `ErrExemplarRejected`, or `ErrCorrelationLabel` do not exist in `services/ingestion/remote_write.go` at implementation time | Return `SPEC DEFECT: §2 — GRVX-1102 not yet merged or its identifiers differ`. Do not duplicate them speculatively. |
 | A criterion that cannot be met without an out-of-scope file | Return `SPEC DEFECT: §4 — needs <path>`. |
+
+---
+
+## 11. Implementation report
+
+All twelve acceptance criteria pass, plus nine additional tests — 21 in
+`services/ingestion/otlp_test.go`, which did not exist before.
+
+```
+--- PASS: TestHandleOTLPTracesRejectsAllRequests
+--- PASS: TestHandleOTLPTracesNeverWritesToSink
+--- PASS: TestHandleOTLPTracesRejectsRegardlessOfMethod
+--- PASS: TestHandleOTLPLogsRejectsAllRequests
+--- PASS: TestHandleOTLPMetricsAcceptsValidGauge
+--- PASS: TestHandleOTLPMetricsSumBecomesCounter
+--- PASS: TestHandleOTLPMetricsRejectsExemplar
+--- PASS: TestHandleOTLPMetricsRejectsTraceIDAttribute
+--- PASS: TestHandleOTLPMetricsRejectsEveryCorrelationAttributeSpelling
+--- PASS: TestHandleOTLPMetricsSharesCardinalityBudgetWithRemoteWrite
+--- PASS: TestHandleOTLPMetricsRejectsHistogram
+--- PASS: TestHandleOTLPMetricsMergesServiceNameLabel
+--- PASS: TestHandleOTLPMetricsResourceServiceNameWinsOverAttribute
+--- PASS: TestHandleOTLPMetricsMethodNotAllowed
+--- PASS: TestHandleOTLPMetricsRejectsMalformedJSON
+--- PASS: TestHandleOTLPMetricsRejectsMissingName
+--- PASS: TestHandleOTLPMetricsRejectsMissingValueOrTimestamp
+--- PASS: TestHandleOTLPMetricsAcceptsAsIntValue
+--- PASS: TestHandleOTLPMetricsSkipsMetricWithNoDataPoints
+--- PASS: TestHandleOTLPMetricsRejectionIsAtomic
+--- PASS: TestHandleOTLPMetricsWritesToTheSharedExternalMetricsTopic
+ok  github.com/lgreene/gravix-dashboards/services/ingestion  0.044s
+boundary: 0 violations
+build-oss exit=0
+test-oss exit=0
+```
+
+### 11.1 §9 — symbols deleted from `otlp.go`, and the §8 step 2 grep
+
+Deleted: `OTLPTraceRequest`, `ResourceSpan`, `ScopeSpan`, `OTLPSpan`, `OTLPStatus`,
+`handleOTLPTraces`, `spanToFact`, `getSpanAttr`, `getSpanAttrInt`, `parseNano`, `simplifyUserAgent`.
+
+Kept and reused: `OTLPResource`, `OTLPAttribute`, `OTLPAttrValue`, `otlpMaxBodyBytes`,
+`extractResourceAttr`.
+
+```
+$ grep -rn "spanToFact\|getSpanAttr\|getSpanAttrInt\|parseNano\|simplifyUserAgent\|OTLPTraceRequest\|ResourceSpan\|OTLPSpan\b" services/ingestion/*.go
+$
+```
+
+No output: nothing in the package references a deleted symbol. One clarification for anyone running
+the grep repository-wide rather than scoped to `services/ingestion/*.go` as §8 step 2 specifies:
+`sdk/go/otel/exporter.go` has its own `spanToFact`, a different function in a different package with
+a different signature. It is the sanctioned client-side conversion path §2 describes, it is
+untouched, and it is not a dangling reference.
+
+### 11.2 §6 step 1's prediction about unused imports did not hold
+
+§6 step 1 says to remove now-unused imports, "at minimum `strings`, used only by the deleted
+`simplifyUserAgent` and `spanToFact`". `strings` is still used — by
+`strings.ToLower(k)` in the correlation-label check this spec adds. No import became unused; the
+final set is the original seven plus `errors`, `strconv`, `uuid`, `pkg/cardinality`, `schemas`,
+`prometheus`, `protojson` and `timestamppb`. `go build` and `go vet` are clean.
+
+### 11.3 The shared ledger is the part worth testing, and it is tested end to end
+
+§5.1 says `budget` "must be the same `*cardinality.Budget` instance" as
+`/api/v1/remote_write`, and §6 gives no way to verify that from inside either handler — a second
+instance would work perfectly and silently double every tenant's effective budget.
+`TestHandleOTLPMetricsSharesCardinalityBudgetWithRemoteWrite` therefore exhausts the budget for
+`(acme, queue_depth)` entirely through `handleRemoteWrite`, then sends a brand-new label set for the
+same pair through `handleOTLPMetrics` and requires the 400. It fails if the two handlers are ever
+given separate instances, which is the only failure mode that matters here.
+
+### 11.4 Where the spec's wording needed a decision, and what was chosen
+
+**The resource wins.** §6 step 5e says to set `labels["service_name"]` from the resource
+"overwriting any data-point attribute literally named `service_name`". Implemented as written, and
+`TestHandleOTLPMetricsResourceServiceNameWinsOverAttribute` pins the reason: the resource is the
+authoritative statement of who produced the metric, so a data point must not be able to claim a
+different origin by declaring its own. Without the test the overwrite reads like an accident.
+
+**`asInt` that will not parse.** §6 step 6 gives `v, _ := strconv.ParseInt(p.AsInt, 10, 64)` —
+discarding the error, which would silently store `0` for a malformed integer. §6 step 5e validates
+`p.AsDouble == nil && p.AsInt == ""` but never that `AsInt` is a number, so a value of `"twelve"`
+would pass validation and be persisted as zero. The parse error is checked instead and rejected with
+§6.1's existing `ErrOTLPMetricMissingValue` row, which already covers "missing asDouble/asInt, or an
+invalid or missing timeUnixNano" — no new message invented. Covered by
+`TestHandleOTLPMetricsRejectsMissingValueOrTimestamp/unparseable_asInt`. Storing a wrong number is
+worse than refusing one, and this project's argument is that it knows the difference.
+
+### 11.5 Deleting the receiver rather than hardening it
+
+`/v1/traces` previously parsed OTLP JSON and converted any span with an `http.method` attribute into
+a `RequestFact`. `TestHandleOTLPTracesRejectsAllRequests` posts exactly such a well-formed legacy
+span body and requires the 400: nothing about a payload's validity earns it a hearing now.
+`TestHandleOTLPTracesNeverWritesToSink` and the `/v1/logs` half of
+`TestHandleOTLPLogsRejectsAllRequests` (which posts a log record containing what looks like a secret)
+check that the body is never read, parsed, or stored.
+
+This is a **breaking change**: a deployment pointing an OTel Collector's trace pipeline at
+`/v1/traces` will start receiving 400s. The migration is `sdk/go/otel/exporter.go`, which does the
+same conversion client-side so no trace ID leaves the caller's process. Nothing in
+`docs-site/docs/api-reference.md` ever documented the endpoint, so no public documentation is
+falsified — **NO DOCS DELTA REQUIRED** for the docs site. Two historical planning documents
+(`docs/engineering-plan-phases-24-32.md:496`, `docs/engineering-plan-phase-33-beta.md:21`) describe
+the receiver as it was when built; they are dated records of past sprints, not current API docs, and
+are outside §4.
+
+What is *not* covered: `CHANGELOG.md` has an `## [Unreleased]` section and no spec's §4 includes it,
+so a breaking change ships with no changelog entry. Registered as **F-041**.
+
+### 11.6 §2's line numbers have drifted again
+
+As in GRVX-1102: `getTenantID` is at `services/ingestion/main.go:91` not 83-88, `writeErrorJSON` at
+221 not 131-138, and the registration block at 978-992 not 766-791. The `otlp.go` line references in
+§2 were accurate. The named symbols are unambiguous, so nothing was blocked — but §2's line numbers
+should not be trusted by the next implementer.
+
+### 11.7 Scope
+
+`services/ingestion/remote_write.go` and `pkg/cardinality/**` are reused unmodified — this spec
+references `bannedCorrelationLabels`, `ErrExemplarRejected` and `ErrCorrelationLabel` directly rather
+than duplicating them, so one refusal has one wording whichever protocol carried the payload.
+`handleTraces` (`/api/v1/traces`, the native low-volume sampling feature), `schemas/trace_sample.go`,
+`sdk/go/otel/exporter.go`, `proto/gravix.proto` and `schemas/external_metric_sample.go` are
+untouched. No OTLP protobuf/gRPC support, no histogram/summary conversion, no new dependency, no
+Cube model or Trino table.
