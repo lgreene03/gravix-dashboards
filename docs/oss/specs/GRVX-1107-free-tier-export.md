@@ -266,3 +266,107 @@ make check-boundary && make build-oss && make test-oss
 | Pressure to cap export volume or gate it by plan | Refuse, citing charter §2.3. Route to `license-boundary-auditor`. |
 | A request to add a filter expression | Refuse, citing non-goal §5 and §3. Export takes a range; querying is what SQL over the Parquet is for. |
 | An export unreadable outside Gravix | STOP. `CORRECTNESS DEFECT` — this defeats the feature's entire purpose. |
+
+---
+
+## 11. Implementation report (partial — §4.1 complete, gateway half returned as SD-029)
+
+`pkg/export` and `cmd/cli/cmd_export.go` are complete and tested. The gateway half was returned as
+`SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and cmd/cli/main.go`; details in
+**SD-029**, including every pre-existing scheduled-export validation rule §9 asks to have listed.
+
+```
+ok  github.com/lgreene/gravix-dashboards/pkg/export   coverage: 79.3% of statements
+ok  github.com/lgreene/gravix-dashboards/cmd/cli      coverage: 58.4% of statements
+staticcheck ./cmd/cli/ ./pkg/export/   (no findings)
+boundary: 0 violations
+build-oss exit=0
+test-oss exit=0
+```
+
+### 11.1 Acceptance criteria
+
+| ID | Status | Evidence |
+|---|---|---|
+| AC-1 | **PASS** | `TestExportAllDatasetsAllFormats` — 9 combinations, each writing one file per day |
+| AC-2 | **PASS** | `TestExportedParquetReadableExternally` — stock DuckDB CLI, no Gravix process |
+| AC-3 | **PASS** | `TestExportedCSVReadableExternally` |
+| AC-4 | **PASS** | `TestExportManifestIncludesHowToRead`, and `TestManifestHowToReadCommandActuallyRuns` |
+| AC-5 | **PASS** | `TestExportStreamsWithinMemoryBound` |
+| AC-6 | **PASS** | `TestExportToLocalFilesystem` |
+| AC-7 | **BLOCKED** | route-level; needs `services/gateway/gateway_platform.go` (SD-029). Package-level equivalent proved by `TestExportHasNoVolumeCapOrPlanGate` |
+| AC-8 | **BLOCKED** | route-level; needs the same file |
+| AC-9 | **BLOCKED** | needs the same file |
+| AC-10 | **BLOCKED** | needs the same file |
+| AC-11 | **PASS** | `TestExportAcceptsNoQueryExpression`, `TestExportCommandExposesNoQueryFlag` |
+| AC-12 | **BLOCKED** | needs the same file; the rules themselves are recorded in SD-029 |
+
+### 11.2 The manifest's `how_to_read` is executed, not just written
+
+§5.2 calls `how_to_read` "the point", and a string that looks like a command is not one.
+`TestManifestHowToReadCommandActuallyRuns` reads the manifest each export writes, runs its
+`how_to_read` through `sh -c` in the export directory with an environment of exactly `PATH`, `HOME`
+and `TMPDIR`, and requires output. It covers Parquet, CSV and JSONL. A published instruction that
+does not work is worse than none, because the user believes it.
+
+The CLI prints the same instruction on completion. The manifest carries it too, but the user who has
+not opened the manifest yet is exactly the user who needs it.
+
+### 11.3 AC-5 — what "bounded by one partition" was actually measured as
+
+The export walks the range one day at a time and holds only the current partition's rows. The test
+exports the same two days of data twice, once with a 2-day range and once with a 40-day range, and
+measures `runtime.MemStats.TotalAlloc` across each. Both read identical rows; only the number of
+empty days differs. An implementation that accumulated the range would allocate for the empty days
+too. The bound asserted is 4×, generous enough not to be flaky and tight enough that accumulating 20×
+the days would fail it.
+
+Parquet is the one format that must buffer a whole partition before it can be encoded — that is
+inherent to the format, and it is exactly the bound §5.1 promises.
+
+### 11.4 Two decisions the spec did not make
+
+**A stdout export is the data stream.** §5.3 makes `--out -` the default, and §5.1's `Result` reports
+files and byte counts. Printing that summary on stdout would corrupt the file the user is piping.
+The summary goes to stderr whenever the destination is `-`.
+`TestExportCommandKeepsStdoutCleanForPiping` captures the real `os.Stdout`, asserts every line of it
+parses as JSON, and fails if the summary leaks into the stream.
+
+**`Compress` is ignored for Parquet.** §5.1 says "gzip for csv and jsonl; parquet is already
+compressed", but does not say what `Compress: true` with `FormatParquet` does. Gzip-wrapping a
+Parquet file produces something no Parquet reader can open, for no size benefit, so the flag is
+ignored and the file is neither renamed nor wrapped.
+`TestExportParquetIgnoresCompressFlag` checks the `PAR1` magic and the absence of a `.gz` suffix.
+
+### 11.5 Two guards against a future change quietly breaking the guarantee
+
+**`TestExportAcceptsNoQueryExpression`** pins `Request`'s exact field list. A name containing
+`filter`, `where`, `predicate`, `query`, `limit` and six others fails immediately; any *other* new
+field fails the list comparison, which forces whoever adds it to decide deliberately whether it is a
+query in disguise (§3, non-goal §5). `TestExportCommandExposesNoQueryFlag` does the same for the CLI
+flags, and also checks all seven flags §5.3 promises are present.
+
+**`TestExportHasNoVolumeCapOrPlanGate`** reads `export.go` and `format.go` as text and fails on
+`requirePlan`, `planRank`, `maxRows`, `rowLimit`, `MaxExportRows` or `quota`. Charter §2.3 says
+gating export is hostage-taking; this makes adding a cap fail a test rather than pass review.
+
+### 11.6 Two schema choices worth their own tests
+
+`FactRow` and `EventRow` are declared in `pkg/export` rather than aliased from the generated protobuf
+types. An export file's columns are a published interface — someone's script selects them by name —
+so they change in a struct a reviewer can see, not as a side effect of a proto edit.
+`TestExportedSchemasAreStable` pins both column lists in order.
+
+`MetricRow` **is** aliased, from `pkg/recompute`, so an exported metrics file carries the warehouse's
+columns including `latency_sketch` and `sketch_version`.
+`TestExportedMetricsCarryTheLatencySketch` requires them: exporting the scalar percentiles alone
+would hand the user a file they cannot recompute a correct cross-bucket percentile from, which is
+the same loss F-039 records in compaction. An anti-lock-in export that drops the column making
+correctness possible is not much of one.
+
+### 11.7 Scope
+
+`transforms/**`, `services/ingestion/**`, `pkg/tenantdb/migrations/**` and `cmd/purge/**` are
+untouched (§4.3). No plan gate, volume cap, row limit or filter expression exists anywhere in the new
+code. `docs/openapi.yaml` is **not** updated: it documents the on-demand endpoint that SD-029 blocks,
+so there is nothing yet to describe.

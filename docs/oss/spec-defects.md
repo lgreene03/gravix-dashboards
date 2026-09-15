@@ -1614,3 +1614,101 @@ how a generated file stays behind its source for that long. `CLAUDE.md` calls `p
 the source of truth; the command beneath it does not keep the derived file in step.
 
 `CLAUDE.md` is outside §4.1/§4.2, so it was not edited. Fixing the command there is the actual repair.
+
+---
+
+## SD-029 — GRVX-1107 §4 names a file that has no export code, and omits both files the spec cannot be finished without
+
+**Found by:** `senior-engineer` executing GRVX-1107
+**Affects:** GRVX-1107 §2, §4.2, §6 steps 1/6/7, AC-9, AC-10, AC-12
+**Severity:** high — half the spec is unreachable, and following §4 literally produces code that
+fails the repository's own lint gate
+**Status:** open; returned as `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and
+cmd/cli/main.go`. §4.1 was implemented in full; the gateway half was not.
+
+### The file named does not contain the feature
+
+§2 opens:
+
+> `services/gateway/enterprise.go` implements `/api/gateway/exports/scheduled` (Horizon 1 Phase 6.7):
+> full CRUD, admin-only create/update/delete, 5-field cron validation, `s3://` destination required,
+> `lookback_days` 1–90, formats jsonl/csv/parquet. Read it in full.
+
+`services/gateway/enterprise.go` contains no export code at all. Its declarations are
+`handleSSOConfig`, `handleTwoFactorSetup`, `handleTwoFactorConfirm`, `handleTwoFactorDisable`,
+`handleSessions`, `handleMultiOrg`, `totpEncryptionKey`, `handleSSOLogin`, `handleSSOCallback`,
+`handleReferrals`, `handleRedeemReferral` — SSO, 2FA, sessions, multi-org and referrals.
+
+The scheduled-export implementation is in **`services/gateway/gateway_platform.go`**:
+`handleScheduledExports` at line 241 and `handleScheduledExportByID` at line 329.
+
+Everything else §2 says about it is accurate — the description is right, only the filename is wrong.
+The validation rules are exactly as described, and are recorded here so §9's "every pre-existing
+rule listed" survives this defect:
+
+| Rule | Behaviour |
+|---|---|
+| `name` | required, rejected when blank after `TrimSpace` |
+| `schedule` | must match `validCronRe` — a 5-field cron expression |
+| `destination_url` | must have the `s3://` prefix |
+| `data_type` | defaults `request_facts`; must be `request_facts` or `service_events` |
+| `format` | defaults `jsonl`; must be `jsonl`, `csv` or `parquet` |
+| `lookback_days` | `<= 0` becomes 7; `> 90` rejected |
+| POST | requires `auth.RoleAdmin` |
+| GET | **no role check at all** |
+
+That last row matters: §4.2 asks to "remove the admin-only restriction on **read**, keeping it on
+create/update/delete", and there is no admin-only restriction on read to remove. The GET branch of
+`handleScheduledExports` lists by tenant with no role test. §6 step 7 is already satisfied.
+
+### §4 also omits `cmd/cli/main.go`, and that one breaks the build
+
+§4.1 creates `cmd/cli/cmd_export.go`. `cmd/cli/main.go` dispatches subcommands from a hard-coded
+`switch os.Args[1]`, and it is in neither §4.1 nor §4.2, so `gravix export` cannot be reached from a
+command line no matter what `cmd_export.go` contains.
+
+This is not only a usability gap. The `lint` CI job runs `staticcheck`, and an unreachable
+subcommand is dead code:
+
+```
+cmd/cli/cmd_export.go:21:2: const exportExitOK is unused (U1000)
+cmd/cli/cmd_export.go:27:6: func runExport is unused (U1000)
+cmd/cli/cmd_export.go:33:6: func exportMain is unused (U1000)
+…
+```
+
+Following §4 literally therefore produces a red build. Worked around by dropping the conventional
+`runExport(args []string)` wrapper — the only symbol a test cannot reach — and keeping
+`exportMain(ctx, args, stdout, stderr) int`, which the tests exercise in full. Wiring it up later is
+one line:
+
+```go
+case "export":
+    os.Exit(exportMain(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+```
+
+### §4 never mentions the on-demand export that already exists
+
+§5.4 specifies a new `POST /api/gateway/exports`. `services/gateway/main.go:443` already registers
+`/api/gateway/export` — singular — handled by `handleExport` at line 1285, which "streams a tar.gz
+archive of raw JSONL files for a date range". Two endpoints one character apart, with different
+shapes and different output, is a trap for every user and every piece of documentation. §4 is silent
+about the existing one, so an implementer following the spec ships both.
+
+### What was implemented anyway
+
+All of §4.1, which is the substance of the feature and needs none of the missing files:
+`pkg/export` (engine, three format writers, the §5.2 manifest) and `cmd/cli/cmd_export.go`. Eight of
+the twelve acceptance criteria are met and proved — AC-1 through AC-6 and AC-11, plus a charter test
+that no plan gate, volume cap or row limit exists in the package.
+
+Unmet, because each needs a file §4 does not permit: **AC-7** and **AC-8** (route-level plan gate and
+role checks), **AC-9** (schedule mutation stays admin-only), **AC-10** (scheduled and on-demand agree),
+**AC-12** (pre-existing schedule validation intact).
+
+### What §4 should say
+
+§2's filename corrected to `services/gateway/gateway_platform.go`; that file added to §4.2;
+`cmd/cli/main.go` added to §4.2 for the dispatch line; and a decision recorded about
+`/api/gateway/export` versus `/api/gateway/exports` — reconcile them, or name the difference in
+§5.4 so both can coexist deliberately rather than by accident.
