@@ -218,3 +218,114 @@ make build-oss && make test-oss
 | Any ambiguity in this spec | Return `SPEC DEFECT: §<n> — <what is ambiguous>`. Do not guess. |
 | A criterion that cannot be met without an out-of-scope file | Return `SPEC DEFECT: §4 — needs <path>`. |
 | The `MetricRow`/`EventSummaryRow` struct in the two transform files have already diverged from each other | Return `SPEC DEFECT: §2 — transforms/request_metrics_minute/main.go and transforms/compaction/main.go MetricRow disagree on <field>` |
+
+---
+
+## 11. Implementation report
+
+All five acceptance criteria pass, plus four additional tests that close gaps the criteria leave
+open. Two spec defects were found and registered; neither blocked execution, and both are recorded
+rather than resolved in code, because each is a product decision.
+
+```
+--- PASS: TestBareParquetRead (0.03s)
+--- PASS: TestBareParquetJoinAcrossPartitions (0.02s)
+--- PASS: TestBareParquetReadNoGravixProcessRequired (0.02s)
+--- PASS: TestDocContainsVerifiedQuery (0.00s)
+--- PASS: TestBareParquetReadSkipsWithoutDuckDB (0.00s)
+--- PASS: TestFixtureSchemaMatchesProduction (0.00s)
+--- PASS: TestWriteFixtureRejectsEmptyDays (0.00s)
+--- PASS: TestBareParquetProductionFilenameGlob (0.03s)
+--- PASS: TestDocColumnTableMatchesDuckDB (0.02s)
+ok  	github.com/lgreene/gravix-dashboards/tests/e2e	0.137s
+```
+
+### 11.1 SD-026 — the mandated query matches no file in a real warehouse
+
+§5 fixes the fixture's filenames as `part-0.parquet` and §6 step 4 requires that exact glob to be
+published as the verified query. Nothing in Gravix writes that name. A rollup writes
+`request_metrics_minute_<YYYYMMDD>.parquet` (`pkg/recompute/recompute.go:299`) and compaction writes
+`metrics_<uuid>_<YYYYMMDD>.parquet` (`transforms/compaction/main.go:784`), so against real data the
+published query does not return zero rows — it fails:
+
+```
+IO Error: No files found that match the pattern "request_metrics_minute/event_day=*/part-0.parquet"
+```
+
+A guide whose headline query is green in CI and broken for every reader is the failure mode the
+correctness register exists to catch, arriving through a spec instead of through code.
+
+The mandated query is published and tested verbatim, so AC-1 and AC-4 hold as written. The guide then
+carries the same statement with the filename widened to `*.parquet`, which matches rollup and
+compaction output alike, and says which to use on your own data.
+`TestBareParquetProductionFilenameGlob` renames the fixture files to the production shape and asserts
+that the narrow glob now fails and the wide one still returns 55 per day — so the guide's warning
+cannot go stale either. Full entry: **SD-026**.
+
+### 11.2 SD-025 and F-039 — found by writing the column reference §9 requires
+
+§10 row three anticipated this and it fired: the two `MetricRow` structs have diverged.
+`pkg/recompute.MetricRow`, which the rollup writes, has seventeen parquet columns; compaction's own
+`MetricRow` has twelve, and compaction reads and writes with the twelve-field struct on both sides.
+parquet-go ignores file columns the target struct does not name, so compaction silently deletes
+`latency_sketch`, `sketch_version`, `user_agent_family`, `extra_quantile_label` and
+`extra_quantile_ms`. §2's sentence "Compaction does not change column names or types" is false.
+
+Worse, and outside this spec: `mergeMetricRows` sets each merged percentile to the arithmetic mean of
+the per-bucket percentiles. The mean of p95s is not a p95, and the error is unbounded. That is the
+exact error `latency_sketch` was introduced to eliminate, committed by the job that deletes the
+sketch. Registered as **F-039** for `semantic-modeler`; `transforms/compaction/main.go` is on §4.3's
+do-not-touch list and the fix is a schema decision, not a patch.
+
+The guide documents the rollup's seventeen columns and states plainly, under a warning, that
+compacted partitions carry twelve and that a correct cross-bucket percentile is not recoverable from
+a compacted day. Publishing one column table as though it were true of both was the alternative.
+
+### 11.3 Two guards the acceptance criteria do not ask for
+
+§5 requires the fixture to duplicate the production structs rather than import them. Duplication
+without a drift check is just a stale copy, so two tests make it honest:
+
+- `TestFixtureSchemaMatchesProduction` compares the fixture's `MetricRow` against
+  `pkg/recompute.MetricRow` by reflection — parquet tag, Go type and declaration order, since
+  parquet-go derives column order from the struct. A column added, renamed, retyped or reordered in
+  production fails here.
+- `TestDocColumnTableMatchesDuckDB` asks DuckDB to `DESCRIBE` the fixture and requires the guide to
+  carry a table row for every column it reports, with the type DuckDB reports, and no extras. The
+  published column reference is a verified claim rather than a hand-maintained list.
+
+Both were mutation-tested. Renaming a fixture parquet tag, changing one type in the guide's table,
+deleting one row from it, and narrowing the guide's production glob back to `part-0.parquet` each
+fail the suite with a message naming the specific column or query.
+
+That last mutant matters most: `event_day` is `VARCHAR` inside the file but reads back as `DATE`,
+because `hive_partitioning=true` derives it from the path and the path value wins over the file
+column. The guide said `VARCHAR` until `TestDocColumnTableMatchesDuckDB` was written and disagreed.
+
+### 11.4 Deviation from §8 — the CI install method
+
+§8 installs DuckDB with `curl -fsSL https://install.duckdb.org | sh` and notes the CI step matches.
+The CI step added here instead fetches a pinned `duckdb_cli-linux-amd64.zip` from the project's
+GitHub releases. Two reasons, one practical and one principled: `install.duckdb.org` returns 403
+through this environment's egress policy, so the piped installer could not be verified at all, and an
+unpinned installer would let a DuckDB release turn the build red with no change to Gravix — and would
+make the proof unreproducible for anyone re-running it a year later. Verified against **v1.1.3**.
+§4.2's requirement, "a step that installs the DuckDB CLI", is met either way; §8's parenthetical is
+now stale.
+
+### 11.5 What AC-3 actually proves, and what it does not
+
+`TestBareParquetReadNoGravixProcessRequired` dials 8080, 8090, 8091 and 8081, requires every dial to
+fail, and only then runs the query. It proves no Gravix process was *reachable on its documented
+ports* while DuckDB read the files. It does not prove no Gravix process exists on some other port.
+The stronger half of the guarantee comes from `runDuckDB`, which launches DuckDB with an environment
+of exactly `PATH`, `HOME` and `TMPDIR` — no endpoint, no API key, no config file — so there is
+nothing for a running Gravix to be contacted *through*, whatever is listening.
+
+### 11.6 Not done, and why
+
+`docs-site/sidebars.js` is not updated, so the new page is reachable by URL and search but not from
+site navigation. §9 forbids modifying any file outside §4.1/§4.2 and `sidebars.js` is in neither.
+`docs-site/docs/prove-it.md` is already orphaned the same way, so this is a pre-existing docs-site
+gap rather than one this spec introduces — but "published" in §1 is doing some work that a sidebar
+entry would need to finish. One line in `sidebars.js`, in whatever change next touches that file.

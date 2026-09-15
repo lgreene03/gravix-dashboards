@@ -1408,3 +1408,117 @@ cannot be built at all, and none of its rows covers this.
 Even resolved, §6 steps 1 and 4 need a running Cube to measure. The implementation environment has no
 Docker daemon. `timed-onboarding` going green (F-037, F-038) cleared the *stack* blocker §11.3 named;
 it did not clear this one.
+
+---
+
+## SD-025 — GRVX-1101 §2 says compaction does not change column names, and it drops five of them
+
+**Found by:** `qa-engineer` executing GRVX-1101
+**Affects:** GRVX-1101 §2 (context), and the published column reference the spec asks for
+**Severity:** medium as a spec defect — GRVX-1101 stays executable — but the underlying codebase
+behaviour it mis-describes is high, recorded separately as F-039
+**Status:** open; returned as `SPEC DEFECT: §2 — transforms/request_metrics_minute/main.go and
+transforms/compaction/main.go MetricRow disagree on latency_sketch, sketch_version,
+user_agent_family, extra_quantile_label and extra_quantile_ms`. This is the escalation §10 row three
+anticipated.
+
+### What the spec assumed
+
+§2 describes the two transform files as writing "the same three row shapes after compaction", and
+states outright:
+
+> Compaction does not change column names or types.
+
+### What is actually true
+
+They disagree on five columns. `transforms/request_metrics_minute/main.go:73-77` aliases
+`pkg/recompute.MetricRow`, which declares **seventeen** parquet columns.
+`transforms/compaction/main.go:29-41` declares its own `MetricRow` with **twelve**, missing
+`latency_sketch`, `sketch_version`, `user_agent_family`, `extra_quantile_label` and
+`extra_quantile_ms`.
+
+Compaction reads a rollup's output through `parquet.NewGenericReader[MetricRow]` and rewrites it
+through `parquet.NewGenericWriter[MetricRow]` — its own twelve-field struct on both sides
+(`transforms/compaction/main.go:384,397`). parquet-go silently ignores file columns absent from the
+target struct, so the five columns are read as nothing and written as nothing. A compacted partition
+has a strictly narrower schema than the one the rollup wrote.
+
+### Why it matters to this spec specifically
+
+GRVX-1101 §9 requires the published guide to carry a column reference, and §1 calls it a *verified*
+guide. A single column table is not true of both a fresh and a compacted partition, so the guide has
+to say which — it now documents the rollup's seventeen columns and states explicitly that compacted
+partitions carry twelve.
+
+### What was done anyway
+
+Nothing in §5, §6 or §7 depends on the false sentence: §5 names `transforms/request_metrics_minute`
+as the source for `MetricRow` and `transforms/compaction` as the source for `EventSummaryRow`, each
+unambiguously, and the verified query touches only `event_day` and `request_count`, present in both.
+GRVX-1101 was therefore implemented in full rather than halted.
+
+`TestFixtureSchemaMatchesProduction` now compares the fixture's duplicated struct against
+`pkg/recompute.MetricRow` by reflection, so the next divergence fails a test instead of waiting to be
+noticed by hand.
+
+### What §2 should say
+
+That the rollup and compaction write different column sets, which of the two the reader is looking
+at, and — once F-039 is fixed — that they agree again.
+
+---
+
+## SD-026 — the query GRVX-1101 requires the guide to publish matches no file in a real warehouse
+
+**Found by:** `qa-engineer` executing GRVX-1101
+**Affects:** GRVX-1101 §5 (fixture filenames), §6 steps 4 and 8, AC-4
+**Severity:** high — the spec's whole objective is a *verified* published guide, and as written the
+published query fails on real data
+**Status:** open; returned as `SPEC DEFECT: §6 — the mandated published query's glob matches only the
+test fixture`.
+
+### What the spec requires
+
+§5 fixes the fixture's filenames as `part-0.parquet`. §6 step 4 then requires the test to run a query
+"byte-identical to the one published in `docs-site/docs/bare-parquet-access.md`'s first fenced code
+block", and gives it:
+
+```sql
+FROM read_parquet('request_metrics_minute/event_day=*/part-0.parquet', hive_partitioning=true)
+```
+
+§6 step 8 and AC-4 then hold the doc and the test to that same string.
+
+### What is actually true
+
+`part-0.parquet` is an invention of the fixture. Nothing in Gravix writes it. A rollup writes
+`request_metrics_minute_<YYYYMMDD>.parquet` (`pkg/recompute.DeterministicKey`,
+`pkg/recompute/recompute.go:299`); compaction writes `metrics_<uuid>_<YYYYMMDD>.parquet`
+(`transforms/compaction/main.go:784`). Run against either, the published query does not return zero
+rows — it fails outright:
+
+```
+IO Error: No files found that match the pattern "request_metrics_minute/event_day=*/part-0.parquet"
+```
+
+So the spec, followed literally, publishes a guide whose headline query is verified green in CI and
+broken for every reader who tries it. That is the exact failure mode `correctness-defects.md` exists
+to catch, arriving through a spec rather than through code.
+
+### What was done
+
+Both. The mandated query is published and tested verbatim, so AC-1 and AC-4 are met as written. The
+guide then carries a second query — the same statement with the filename widened to `*.parquet`,
+which matches rollup and compaction output alike — and says plainly which to use on your own data.
+`TestBareParquetProductionFilenameGlob` renames the fixture files to the production shape and asserts
+that the narrow glob now fails and the wide one still returns the expected sums, so the guide's
+warning cannot go stale either.
+
+The mandated query was not silently rewritten. Choosing what a public page publishes is a product
+decision, and this entry is the request for it.
+
+### What §5/§6 should say
+
+Either name the fixture files as production names them, or publish the `*.parquet` glob as the
+verified query. The first is cleaner: a fixture that does not reproduce production filenames cannot
+prove a published path works.

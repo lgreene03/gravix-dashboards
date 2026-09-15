@@ -2564,3 +2564,77 @@ it was built to do — it can only ever see the first unfixed link, and it has s
 a path that `docker compose up` was documented to make work. It has also now caught one of my own
 fixes passing for the wrong reason, which is the argument for running the real thing rather than
 trusting a guard that tests a path production never takes.
+
+---
+
+## F-039 — compaction destroys the latency sketches and replaces percentiles with the mean of percentiles
+
+**Found by** `qa-engineer` executing GRVX-1101, while writing the published column reference the
+guide requires.
+**Owner** `semantic-modeler`, with `perf-cost-engineer` on the retention consequences.
+**Severity** high — it silently deletes data on the project's first superiority axis, and it makes a
+published correctness claim false for any day old enough to have been compacted.
+**Status** open. Not fixed here: `transforms/compaction/main.go` is on GRVX-1101 §4.3's do-not-touch
+list, and the fix is a schema decision, not a patch.
+
+### Two defects, one function
+
+**First: five columns are dropped.** `pkg/recompute.MetricRow` — what the rollup writes — declares
+seventeen parquet columns. `transforms/compaction/main.go:29-41` declares its own `MetricRow` with
+twelve. Compaction reads with `parquet.NewGenericReader[MetricRow]` and writes with
+`parquet.NewGenericWriter[MetricRow]`, both bound to the twelve-field struct
+(`transforms/compaction/main.go:384,397`). parquet-go ignores file columns the target struct does not
+name, so `latency_sketch`, `sketch_version`, `user_agent_family`, `extra_quantile_label` and
+`extra_quantile_ms` are read as nothing, written as nothing, and gone the moment the original
+partition is replaced.
+
+`latency_sketch` is the one that hurts. Its doc comment in `pkg/recompute/recompute.go` states its
+purpose exactly:
+
+> The scalars above stay: within one bucket they are exact and cheaper to read. The sketch is what
+> makes a correct percentile over many buckets possible at all.
+
+After compaction, that is no longer possible at all. The capability Phase 8 built is deleted by a
+retention job.
+
+**Second: the merge averages percentiles.** `mergeMetricRows`
+(`transforms/compaction/main.go:87-152`) combines buckets by summing counts — correct — and then:
+
+```go
+p50 = s50 / float64(len(grp))
+p95 = s95 / float64(len(grp))
+p99 = s99 / float64(len(grp))
+```
+
+The arithmetic mean of per-bucket p95s is not the p95 of the union, and the error is unbounded: a
+quiet bucket with one slow request contributes its p95 with the same weight as a busy one. This is
+the precise error the sketch was introduced to eliminate, committed by the job that deletes the
+sketch.
+
+### Why it was not caught
+
+Nothing compares the two structs. They are independent declarations in different packages that
+happen to share a name, so adding columns to `pkg/recompute.MetricRow` — which Phase 8 did — left
+compaction's copy behind with no compile error and no failing test. GRVX-1101 now carries
+`TestFixtureSchemaMatchesProduction`, which catches drift between the bare-Parquet fixture and
+`pkg/recompute.MetricRow`; no equivalent guard exists between the rollup and compaction, and one
+should.
+
+### What is affected
+
+- **Any percentile read over a compacted day** is the mean of means, not a percentile.
+- **`docs-site/docs/bare-parquet-access.md`** documents this, under a warning, because the
+  alternative was publishing a column table that is wrong for half the warehouse.
+- **GRVX-1006's percentile work and the correctness axis claims** need re-reading against this: a
+  claim that Gravix computes percentiles correctly is true for fresh data and false for compacted
+  data, and no published claim currently makes that distinction.
+- **Recomputability is the mitigation, not the fix.** The facts in `data/raw/` are untouched, so a
+  compacted day can be rebuilt — until raw data passes its own thirty-day purge, after which the
+  sketches are unrecoverable.
+
+### What the fix has to decide
+
+Whether compaction preserves `latency_sketch` and merges sketches (correct, larger files), or whether
+compacted days are documented as scalar-only with percentiles dropped rather than averaged. Averaging
+them is not one of the options: a wrong number is worse than an absent one, and this project's whole
+argument is that it knows the difference.

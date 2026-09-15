@@ -358,6 +358,29 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-
 
+      # Bare-Parquet access (GRVX-1101). The DuckDB CLI is a foreign, unmodified
+      # SQL engine, and tests/e2e/bare_parquet_test.go shells out to it to prove
+      # the warehouse layout is readable by a generic engine with no Gravix
+      # process running. Without it those tests skip, so the proof is only real
+      # while this step succeeds.
+      #
+      # The version is pinned: an unpinned installer would let a DuckDB release
+      # turn this build red with no change to Gravix, and would make the proof
+      # unreproducible for anyone re-running it later. Bump it deliberately, and
+      # run `go test ./tests/e2e/ -run TestBareParquet -v` against the new
+      # version first.
+      - name: Install DuckDB CLI
+        env:
+          DUCKDB_VERSION: v1.1.3
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$RUNNER_TEMP/duckdb.zip" \
+            "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
+          unzip -o -d "$HOME/.local/bin" "$RUNNER_TEMP/duckdb.zip" duckdb
+          chmod +x "$HOME/.local/bin/duckdb"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/duckdb" --version
+
       - name: Run end-to-end tests
         env:
           E2E_TEST: "1"
