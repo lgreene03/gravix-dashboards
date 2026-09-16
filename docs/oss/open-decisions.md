@@ -85,6 +85,22 @@ Docker daemon, and nothing below should be assumed cleared until CI says so.
   warning: this stack declares no pre-aggregations, so every latency figure it produces is a **cold
   read from Parquet**. Quoting one as pre-aggregated repeats F-020 and F-022. See F-038.
 - **GRVX-1007, GRVX-1008** — not startable; 1007 depends on 1002/1003/1005/1006, and 1008 on 1007.
+- **GRVX-1103** — *no longer blocked.* It was marked blocked with no reason recorded here, and turned
+  out to be two documentation pages and a script: AC-3 and AC-4 are proven, only AC-1 and AC-2 need
+  Docker and a live Trino. Now `partial`. Its §5.1 table was wrong twice — see SD-052. The lesson is
+  the one below.
+- **GRVX-1407** — blocked for two independent reasons, neither of which was written down until now.
+  It `Depends on GRVX-1308`, and 1308 is one of the six specs SD-040 holds, so 1407 is
+  **transitively governance-blocked**: it cannot start until a second maintainer exists to approve
+  RFC 0002. Separately, a SOC 2 Type 2 opinion requires an **external auditor** and an observation
+  window over a **running** cloud, and §3 of the spec is explicit that this produces evidence while
+  "an auditor forms the opinion". Neither is something an implementer can supply. The executable
+  part — gathering the evidence — still waits on 1308.
+
+**On "blocked" as a label.** Two specs carried it with no recorded cause. One of them, GRVX-1103, was
+not actually blocked at all, and stayed untouched longer than it needed to. Every entry above now
+names a decision, a defect, a dependency or a person. An unexplained `blocked` is indistinguishable
+from a spec nobody looked at, and it hides work that could be done today.
 
 Five defects were fixed to get this far — F-015, F-016, F-019, F-021, F-023 — and the gate found
 three of them itself.
