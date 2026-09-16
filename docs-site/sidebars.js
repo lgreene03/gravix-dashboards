@@ -44,6 +44,7 @@ const sidebars = {
         // docs-site/docs/ that cannot be navigated to — and an unreachable
         // migration guide is the one page that must never be hard to find.
         'cloud-to-selfhost-migration',
+        'selfhost-to-cloud-migration',
         'leaving-gravix',
         'prove-it',
       ],

@@ -2655,7 +2655,15 @@ GRVX-1207 added seven pages to the same file beyond its own §4.2 for the same r
 Of all the pages in this repository, the migration guide is the one that must not be hard to find.
 It is read once, at the worst possible moment, by somebody who has already decided to leave.
 
-### Two smaller notes from the same execution, neither a defect
+### The same omission recurs in GRVX-1404
+
+`GRVX-1404` §4.1 creates `docs-site/docs/selfhost-to-cloud-migration.md` and its §4.2 lists only
+`cmd/cli/main.go`. Identical shape, identical consequence, handled identically: one entry added to
+`docs-site/sidebars.js`, beside the page GRVX-1403 added. Recorded here rather than as a separate
+defect, because it is one omission repeated, and the fix for both is the same line in the same
+spec template — a §4.2 that creates a `docs-site/docs/` page must also name `docs-site/sidebars.js`.
+
+### Two smaller notes from GRVX-1403, neither a defect
 
 **§2's line references are stale, its facts are not.** §2 cites `services/gateway/main.go:1251`
 for `handleExport`. GRVX-1302 moved the gateway's implementation to `pkg/gatewaycore/` (SD-038), so

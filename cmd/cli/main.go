@@ -13,6 +13,7 @@
 //	gravix evolve      add-percentile --quantile=0.999 --from=2026-08-12 --to=2026-09-11
 //	gravix plugin new  --name=gravix-notifier-demo --kind=notifier
 //	gravix migrate export-cloud --tenant-id=ten_abc --since=2026-01-01
+//	gravix migrate import-cloud --tenant-dir-name=ten_abc --api-key=$GRAVIX_API_KEY
 //
 // Environment variables:
 //
@@ -73,14 +74,16 @@ func main() {
 		runImport(os.Args[2:])
 	case "migrate":
 		if len(os.Args) < 3 {
-			fmt.Fprintf(os.Stderr, "Usage: gravix migrate <export-cloud> [flags]\n")
+			fmt.Fprintf(os.Stderr, "Usage: gravix migrate <export-cloud|import-cloud> [flags]\n")
 			os.Exit(1)
 		}
 		switch os.Args[2] {
 		case "export-cloud":
 			runMigrateExportCloud(os.Args[3:])
+		case "import-cloud":
+			runMigrateImportCloud(os.Args[3:])
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown migrate subcommand: %s\nUsage: gravix migrate <export-cloud> [flags]\n", os.Args[2])
+			fmt.Fprintf(os.Stderr, "Unknown migrate subcommand: %s\nUsage: gravix migrate <export-cloud|import-cloud> [flags]\n", os.Args[2])
 			os.Exit(1)
 		}
 	case "export":
@@ -117,7 +120,7 @@ Usage:
   gravix explain      Show where a number came from
   gravix import       Import history from Prometheus or Datadog
   gravix export       Export facts, metrics or events out of Gravix
-  gravix migrate      Move a Gravix Cloud tenant to a self-hosted install
+  gravix migrate      Move a tenant between Gravix Cloud and a self-hosted install
   gravix plugin       Scaffold, list and validate plugins
   gravix version      Print version
   gravix help         Show this help
