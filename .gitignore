@@ -9,6 +9,7 @@ bin/
 /badge_server
 /bootstrap_seed
 /checkboundary
+/incidentaudit
 /cli
 /compaction
 /demo_seed

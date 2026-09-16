@@ -535,3 +535,44 @@ What specifically caused this incident? Be precise.
 - **Document:** Update runbooks with lessons learned.
 
 Track action items in your issue tracker. Review completion in the next team sync.
+
+---
+
+## Feedback to the open-source project
+
+Every incident here ends one of two ways: a **merged change in the Apache-2.0 core**, or a **public
+note explaining why no change was warranted**. There is no third outcome, and there is no private
+runbook of fixes we keep for ourselves.
+
+This is not a policy you have to remember. It is `pkg/incident/`, and a weekly audit that fails when
+the rules are broken.
+
+### After the blameless review, before the incident is closed
+
+1. **Answer the dogfood question.** Was Gravix sufficient to diagnose this? If not, write down what
+   was missing — the capability, in terms somebody could build, not "monitoring was insufficient".
+   This is the single most valuable thing an outage produces, and it is the field people skip.
+
+2. **Disposition it.** `improved` with a merged pull request number, or `no_change` with a reason
+   that will be published. `pending` is a waiting room bounded at 30 days, not an answer.
+
+3. **For SEV1 and SEV2, publish a postmortem** in [`docs/oss/incidents/`](oss/incidents/) within five
+   working days, using [`_TEMPLATE.md`](oss/incidents/_TEMPLATE.md). No tenant ids, no organisation
+   names or domains, no email addresses, no API key fragments, no IP addresses. Scale goes in bands
+   — "several tenants", "under 1% of ingest" — never as a figure that identifies anyone.
+
+4. **Add the machine-readable record** beside it and run `make incident-audit` before you open the
+   pull request.
+
+A near miss counts. An incident does not have to have been customer-visible to go through this
+loop; a near miss is the cheapest lesson available.
+
+### Why
+
+A hosted product accumulates operational knowledge that self-hosters do not have. Left alone that
+gap widens, and the free product stops benefiting from its own popularity. "It is a cloud-only
+problem" is the disposition to be suspicious of: most incidents are software problems observed at
+scale.
+
+See [`docs/oss/incidents/README.md`](oss/incidents/README.md) for the full rules and the
+commitment we publish.

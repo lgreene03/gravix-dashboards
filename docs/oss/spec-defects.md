@@ -2683,3 +2683,51 @@ that "may go down and must never go up", and GRVX-1403 §9 requires zero new ski
 where DuckDB exists and with `parquet-go` otherwise, asserting the same row and request counts
 either way. It is therefore a real assertion in every suite, and `TestMigrationE2EJobInstallsDuckDB`
 fails if the `e2e` job ever stops installing the foreign engine that makes the stronger half true.
+
+---
+
+## SD-043 — GRVX-1408 asks for a script, and a script alone cannot run the checks it specifies
+
+**Found by:** `sre-release-manager` executing GRVX-1408
+**Affects:** GRVX-1408 §4.1
+**Severity:** low — one extra file, following a pattern the repository already uses
+**Status:** file created, recorded here
+
+### The gap
+
+§4.1 lists `scripts/incident_audit.sh`, and §5.4 specifies five reports it must produce:
+pending beyond `MaxPendingDays`, `improved` with no merged PR, `no_change` with no reason,
+`high`+ incidents past the postmortem deadline, and the recurring-`WhatWasMissing` pattern count.
+
+Those five are the same rules `pkg/incident` implements, and four of the twelve acceptance criteria
+(AC-7, AC-8, AC-9, AC-10) are Go tests against `incident.Audit`. A shell script reimplementing them
+would be a second implementation of the same rules, free to drift from the one the tests cover —
+which is the shape of defect this repository has recorded five times already.
+
+A `.sh` file cannot call into a Go package. So the script is a thin wrapper, and the logic runs
+through `cmd/incidentaudit`, a nine-line `main` that loads the records, calls `incident.Audit` and
+maps its result onto §5.4's exit codes.
+
+### The precedent
+
+`cmd/checkboundary` exists for exactly this reason and is invoked by `make check-boundary`. This
+follows it. `scripts/incident_audit.sh` keeps the interface §4.1 and §8 name, including `--dir`
+and the `0`/`1`/`2` exit codes, so nothing outside this note has to know.
+
+### Also done, and beyond §4.2
+
+§4.2 names `.github/workflows/ci.yml` for the weekly job. It went into
+`.github/workflows/incident-audit.yml` instead, for the reason SD-037 already established for the
+access audit: `ci.yml` has no schedule, and giving it one would run the entire test matrix weekly
+to read a directory of JSON. The schedule is Mondays at 09:00 UTC, after the access audit at 07:00
+and the good-first-issue inventory at 08:00, so a maintainer reading Monday's reports gets access,
+then queue health, then what last week's incidents owe the open-source project.
+
+### One judgement call worth recording
+
+§5.3 says "severity `high` or above". `docs/incident-response.md` — which §2 says to read and
+extend rather than replace — uses SEV1 to SEV4, and already requires a blameless review for "any
+SEV1 or SEV2". Introducing a second severity vocabulary would have meant two definitions of "bad
+enough to write up", so `RequiresPostmortem` is defined on the SEV scale and accepts
+`high`/`critical` as aliases resolving to the same ranks. `TestSeverityScaleMatchesTheRunbook`
+reads the runbook and fails if either half moves.

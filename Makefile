@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -169,6 +169,16 @@ roadmap-check: ## Fail if the published roadmap is stale
 # happened. The register is maintained by hand, so it is checked by machine.
 spec-status-check: ## Verify every spec marked done has the files its §4.1 names
 	python3 scripts/audit_spec_status.py
+
+# --- The incident loop (GRVX-1408) ----------------------------------------
+# Every incident on Gravix Cloud ends as a merged change in the Apache-2.0 core
+# or as a public reason why not. There is no third outcome, and this is what
+# notices when one has quietly become a backlog item.
+#
+# It reports; it dispositions nothing. A machine deciding that an incident
+# produced no learning would defeat the purpose of the loop.
+incident-audit: ## Report incidents that have not closed the loop back to the core
+	./scripts/incident_audit.sh
 
 # --- Release notes (GRVX-1209) --------------------------------------------
 # Crediting people is the part that must not depend on somebody remembering, so

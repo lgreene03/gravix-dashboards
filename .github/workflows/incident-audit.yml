@@ -1,0 +1,76 @@
+name: incident audit
+
+# Every incident on Gravix Cloud ends as a merged change in the Apache-2.0 core,
+# or as a public reason why no change was warranted. This is what makes that
+# structural rather than aspirational: it notices when an incident has quietly
+# become a backlog item, and when a gap Gravix could not diagnose has come up
+# more than once.
+#
+# It REPORTS. It dispositions nothing and closes nothing. A workflow that could
+# decide an incident produced no learning would defeat the purpose entirely.
+#
+# It is its own workflow rather than a job in ci.yml because ci.yml has no
+# schedule, and giving it one would run the entire test matrix weekly to read a
+# directory of JSON. GRVX-1408 §4.2 named ci.yml; this follows the precedent
+# SD-037 set for the access audit, for the same reason.
+
+on:
+  schedule:
+    # Mondays at 09:00 UTC, after the access audit (07:00) and the
+    # good-first-issue inventory (08:00), so a maintainer reading Monday's
+    # reports gets access, then queue health, then what last week's incidents
+    # owe the open-source project.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+  # And on any change to the records themselves, because that is the moment a
+  # disposition is most likely to be wrong.
+  pull_request:
+    paths:
+      - 'docs/oss/incidents/**'
+      - 'pkg/incident/**'
+      - 'scripts/incident_audit.sh'
+      - 'cmd/incidentaudit/**'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Audit the incident loop
+        id: audit
+        run: |
+          set +e
+          ./scripts/incident_audit.sh | tee audit.txt
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Fail when an incident has not closed the loop
+        if: steps.audit.outputs.status == '1'
+        run: |
+          echo "::error::An incident has not closed the loop back to the open-source project."
+          echo "See docs/oss/incidents/README.md. There are two dispositions and no third."
+          exit 1
+
+      - name: Fail when the records cannot be read
+        if: steps.audit.outputs.status == '2'
+        run: |
+          echo "::error::The incident records could not be read."
+          exit 1
+
+      # The recurring-gap report is the single most valuable input the roadmap
+      # has, and it is only visible as a pattern. It goes in the summary every
+      # week whether or not anything failed.
+      - name: Report what Gravix could not diagnose
+        if: always()
+        run: |
+          echo "### Incident audit" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat audit.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
