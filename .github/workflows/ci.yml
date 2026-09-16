@@ -53,6 +53,20 @@ jobs:
       - name: Staticcheck
         run: staticcheck ./...
 
+      # tests/e2e/, tests/correctness/ and bench/ are behind `//go:build slow`,
+      # so an untagged vet and staticcheck never load them at all — an entire
+      # partition of the suite, silently unlinted. That is how a dead constant
+      # lived in tests/e2e for a day, next to a comment claiming a test used it.
+      #
+      # These run the same checks over that partition. They are separate steps
+      # rather than extra flags on the two above, so a failure names which half
+      # of the tree it came from.
+      - name: Vet (slow-tagged suites)
+        run: go vet -tags=slow ./...
+
+      - name: Staticcheck (slow-tagged suites)
+        run: staticcheck -tags=slow ./...
+
   vuln:
     runs-on: ubuntu-latest
     steps:

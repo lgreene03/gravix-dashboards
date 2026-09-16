@@ -25,7 +25,7 @@ const evaluationPath = "docs/oss/foundation-evaluation.md"
 
 func evaluation(t *testing.T) string {
 	t.Helper()
-	return repoFile(t, "docs", "oss", "foundation-evaluation.md")
+	return repoFile(t, strings.Split(evaluationPath, "/")...)
 }
 
 // verdicts are the only three permitted by GRVX-1506 §5.2.

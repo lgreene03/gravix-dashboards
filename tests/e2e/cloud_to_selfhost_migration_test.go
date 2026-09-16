@@ -234,6 +234,14 @@ func TestMigrationGuidePublishesTheCommandThatRuns(t *testing.T) {
 		}
 	}
 
+	// The headline command must be the one this test runs, flag for flag — not
+	// merely a page that mentions each flag somewhere, which is what the loop
+	// above checks and is a much weaker thing. The guide wraps it across lines
+	// with backslash continuations, so both sides are flattened first.
+	if !strings.Contains(flattenShell(body), flattenShell(migrationCommand)) {
+		t.Errorf("the guide does not publish the command this test executes:\n%s", migrationCommand)
+	}
+
 	// The confirm-before-you-cancel query must be the one this test ran.
 	if !strings.Contains(body, migrationVerifyQuery) {
 		t.Errorf("the guide does not publish the query this test executes:\n%s", migrationVerifyQuery)
@@ -245,6 +253,12 @@ func TestMigrationGuidePublishesTheCommandThatRuns(t *testing.T) {
 			t.Errorf("the guide gates the exit path behind %q", forbidden)
 		}
 	}
+}
+
+// flattenShell turns a shell command into one line, so a command wrapped with
+// backslash continuations compares equal to the same command written flat.
+func flattenShell(s string) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(s, "\\\n", " ")), " ")
 }
 
 // TestMigrationE2EJobInstallsDuckDB: the DuckDB half of the proof above runs

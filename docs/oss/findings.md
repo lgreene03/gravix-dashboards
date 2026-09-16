@@ -3428,3 +3428,74 @@ option costs something different:
 
 Until one is chosen, the two published `go get` commands are wrong, and the docs should say so
 rather than print a command that cannot work.
+
+---
+
+## F-051 — an entire build-tag partition of the test suite was never linted
+
+**Found by:** `lint` failing on `f7251e3`, then running the same tool with `-tags=slow`
+**Affects:** `.github/workflows/ci.yml` (the `lint` job), `tests/e2e/`, `tests/correctness/`, `bench/`
+**Severity:** low — it hid dead code, not a defect in shipped behaviour
+**Status:** fixed
+
+### The symptom
+
+```
+tests/governance/foundation_test.go:24:7: const evaluationPath is unused (U1000)
+```
+
+An ordinary dead constant, caught by `staticcheck` and not by `go vet`, which does not report unused
+package-level identifiers. It was declared and then a duplicate string literal was used instead.
+
+### What looking for others found
+
+Running the same check with the build tag turned up a second one, older:
+
+```
+$ staticcheck -tags=slow ./...
+tests/e2e/cloud_to_selfhost_migration_test.go:39:7: const migrationCommand is unused (U1000)
+```
+
+`tests/e2e/`, `tests/correctness/` and `bench/` are all behind `//go:build slow`. `go vet ./...` and
+`staticcheck ./...` do not merely skip their *tests* — the build constraint means those files are
+never loaded, so the tools report nothing about them and exit 0. CI ran both, on every pull request,
+and had never once looked at that part of the tree.
+
+### Why the second one mattered more than a dead constant usually does
+
+`migrationCommand` carried this comment:
+
+```go
+// The single command a customer runs to leave Gravix Cloud. It is written out
+// here, once, and the test below runs exactly this — so the guide cannot
+// publish a command nobody executed.
+```
+
+No test referenced it. The comment described a guarantee that did not exist, which is worse than dead
+code: `TestMigrationGuidePublishesTheCommandThatRuns` checked that the published guide *mentions*
+`--tenant-id`, `--since` and `--gateway-token` somewhere on the page, and nothing checked that the
+headline command was the command. A reordered flag, a renamed one, or a missing `--out-dir` would
+have shipped on the one page that is read once, by somebody who has already decided to leave and
+will not be filing a bug about it.
+
+The sibling constant `migrationVerifyQuery` is wired up exactly as the comment describes, which is
+why the gap was invisible: the pattern was right there, one declaration below, working.
+
+### What changed
+
+- `evaluationPath` is now used by `evaluation()` instead of a duplicate literal.
+- `migrationCommand` is compared against the guide's headline command, flattened on both sides
+  because the guide wraps it with backslash continuations. Verified non-vacuous: the command is
+  present, and changing `--out-dir` to `--outdir` makes the assertion fail.
+- The `lint` job gained `go vet -tags=slow ./...` and `staticcheck -tags=slow ./...` as separate
+  steps, so a failure names which half of the tree it came from.
+
+### The general shape of it
+
+A build tag partitions the code for the *test runner*, and it silently partitions it for every other
+tool that loads packages. Anything that runs `./...` without the tag is reporting on a subset while
+looking like it reported on everything — the same failure as F-049's adopter check, which exited 0
+because it could not ask.
+
+Worth stating as a rule: a build tag that hides code from the test runner hides it from the linter
+too, and every tool run over `./...` needs a tagged twin or the partition is unchecked.
