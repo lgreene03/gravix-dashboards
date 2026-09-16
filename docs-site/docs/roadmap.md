@@ -48,7 +48,6 @@ cannot be checked.
 | GRVX-1103 | SQL-vs-PromQL guide + verified Metabase/Superset connection | 11 |
 | GRVX-1104 | Grafana datasource plugin — keep Grafana, get Gravix correctness | 11 |
 | GRVX-1106 | Apache Iceberg table format, readable by Spark and Trino | 11 |
-| GRVX-1208 | Adopters, case studies, and the community call record | 12 |
 | GRVX-1210 | Grant merge rights to at least three non-founder maintainers | 12 |
 
 ## What is next

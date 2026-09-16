@@ -1,0 +1,73 @@
+name: Adopter listing
+description: Ask to be listed in ADOPTERS.md. Only someone at your organisation can.
+title: "[adopters] "
+labels: ["adopter-listing"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gravix collects **no usage data, no telemetry, and no fingerprinting** (charter §7.4). We
+        genuinely do not know who is running it, and the only way anyone appears in
+        [`ADOPTERS.md`](https://github.com/lgreene03/gravix-dashboards/blob/main/ADOPTERS.md) is by
+        asking. This issue becomes the `Submission` reference on your row, which is what makes the
+        opt-in claim checkable rather than merely stated.
+
+        **You can ask us to remove your entry at any time, for any reason, and we will do it within 48 hours without asking why.**
+
+        Being listed is a technical fact, not a lead. We do not ask what you pay for anything, how
+        many people you employ, what industry you are in, or who to talk to about buying something.
+        If anyone from this project treats your listing as one of those, that is a bug worth
+        reporting loudly.
+  - type: input
+    id: organisation
+    attributes:
+      label: Organisation
+      description: As you would like it written.
+      placeholder: Example Ltd
+    validations:
+      required: true
+  - type: input
+    id: since
+    attributes:
+      label: Roughly when did you start using Gravix?
+      description: Month and year is plenty.
+      placeholder: 2026-11
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment shape
+      options:
+        - "self-hosted, bootstrap stack"
+        - "self-hosted, full stack"
+        - "Helm chart"
+        - "built from source, run directly"
+        - "other"
+    validations:
+      required: true
+  - type: input
+    id: scale
+    attributes:
+      label: Approximate scale
+      description: Events per month, services, whatever you can share. Approximate is the point.
+      placeholder: "~4M events/mo, 9 services"
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: Contact handle (optional)
+      description: >-
+        A GitHub handle other users could reach if they want to ask you about running Gravix. Leave
+        it blank; nothing about the listing depends on it.
+      placeholder: "@handle"
+  - type: checkboxes
+    id: authorisation
+    attributes:
+      label: Before submitting
+      options:
+        - label: I am at this organisation and I am authorised to ask for it to be listed. Nobody can be listed on someone else's behalf.
+          required: true
+        - label: I understand the listing is public, and that I can ask for it to be removed at any time, for any reason, within 48 hours and without explaining.
+          required: true

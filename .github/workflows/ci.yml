@@ -147,6 +147,15 @@ jobs:
       - name: Check the published roadmap is current
         run: make roadmap-check
 
+      # Gravix collects no telemetry, so the only way anyone is listed in
+      # ADOPTERS.md is that somebody at that organisation asked. The Submission
+      # column records where, and this is what makes that opt-in claim
+      # checkable rather than merely stated.
+      - name: Verify every adopter opted in
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./scripts/verify_adopters.sh
+
       - name: Run tests with race detector
         # -tags=slow so this covers every suite. GRVX-1206 split the suites by
         # speed for contributors; CI still runs all of them on every pull request.
