@@ -476,8 +476,11 @@ capabilities:
       q4_previously_open: false
       q5_only_reason_is_money: false
     paths:
-      - ee/placeholder/
-    note: Not yet implemented. GRVX-1307 builds it under ee/fleet/; path updates then.
+      - ee/fleet/
+    note: >-
+      Built by GRVX-1307. Q1 stays `no` because a managed install is fully
+      operable with the console absent — permanently, not for a grace period —
+      so a team with one install loses nothing by not having this.
 
   - id: compliance-siem-evidence
     name: SIEM log streaming, proactive retention-hold archival, SOC2 evidence packs

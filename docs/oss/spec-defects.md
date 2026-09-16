@@ -2454,13 +2454,18 @@ over the OSS binaries and fails if any dependency is under `ee/`, and asserts th
 §4.1 lists two test files. AC-1's proof runs the entire core pipeline five ways and is large enough
 to be its own file, `ee/degrade/core_unaffected_test.go`. Everything is still under `ee/degrade/`.
 
-§9's *"Expiry demonstrated against a live instance with ingestion running throughout"* is **not
-done**, and cannot be yet: there is no `ee/` feature that degrades. `GRVX-1302` shipped the
-extension-point skeleton with zero registrants and `GRVX-1303` ships the guard with nothing to
-guard, so a live instance would demonstrate a licence expiring and nothing changing — which is the
-right outcome but not a demonstration of it. `TestCoreUnaffectedInEveryState` covers the same
-guarantee in process today. The live demonstration belongs to **GRVX-1304**, the first spec that
-puts a real capability behind the guard.
+§9's *"Expiry demonstrated against a live instance with ingestion running throughout"* was **not
+done** when this was written, and could not be: there was no `ee/` feature that degrades.
+`GRVX-1302` shipped the extension-point skeleton with zero registrants and `GRVX-1303` ships the
+guard with nothing to guard, so a live instance would have demonstrated a licence expiring and
+nothing changing — the right outcome, but not a demonstration of it.
+
+**Resolved by GRVX-1307**, not GRVX-1304 as expected here: `GRVX-1304` is blocked on SD-040, and
+`ee/fleet` turned out to be the first capability to sit behind the guard. `ee/fleet/demo_expiry.sh`
+runs both gateways and the ingestion service against a licence that expired on 2020-01-01, and
+shows the console refusing a write with 402 and `core_unaffected: true` while
+`POST /api/v1/facts` returns 201 before it, after it, and after the console process is killed
+outright.
 
 ---
 

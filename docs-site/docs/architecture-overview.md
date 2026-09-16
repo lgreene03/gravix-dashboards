@@ -111,6 +111,8 @@ That yields two binaries from one codebase. `make build` produces `bin/gateway` 
 
 `GET /api/gateway/ee/status` lists what is mounted. On an open-source install it answers `200` with `{"extensions":[]}`, because the registry is empty rather than because anything checks a licence: with no `ee/` package in the build graph, nothing ever calls `Register`. There is no upsell in that response, and none in the dashboard.
 
+The first capability mounted this way is the fleet console (`ee/fleet`), which manages many Gravix installations from one place. It is **source-available, not open source**: it is licensed under BUSL-1.1, its source is in the repository, and it is not part of the Apache-2.0 core. A managed installation does not need it — every install runs, ingests, aggregates, alerts and serves dashboards with the console unreachable, permanently. When an Enterprise licence lapses, the console's configuration becomes read-only and every managed installation is entirely unaffected; `ee/fleet/demo_expiry.sh` runs both binaries against an expired licence and shows exactly that.
+
 ### Rollup ETL jobs
 
 **Location**: `transforms/request_metrics_minute/`
