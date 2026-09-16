@@ -89,3 +89,7 @@ Thumbs.db
 # path would be rewritten on every install and go stale against the SDK it
 # points at, so the recipe deliberately has none.
 examples/recipes/express/package-lock.json
+
+# Python bytecode caches
+__pycache__/
+*.pyc
