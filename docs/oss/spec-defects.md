@@ -2104,3 +2104,67 @@ Three things opted back into the tag rather than losing coverage:
 
 Change §4.3's row to *"Any `_test.go` file, except to add the `slow` build tag — this spec
 partitions the suites; it changes no test"*.
+
+---
+
+## SD-036 — GRVX-1207 §4 omits the two files the generator cannot work without
+
+**Found by:** `oss-steward` executing GRVX-1207
+**Affects:** GRVX-1207 §4.1, §4.2, §6 step 1
+**Severity:** low — both omissions are obvious once the generator is written
+**Status:** both files created, recorded here
+
+### `docs/04-non-goals.md` is read and had to be written to
+
+§6 step 1 says the generator reads "only from the three source documents", one of which is the
+non-goals. §6 step 7 says to *"verify every non-goal on the board names an alternative tool"*, and
+§6.1 makes a non-goal without one a generation failure with the message
+`roadmap: non-goal §<n> names no alternative tool`.
+
+Measured before any change: **two of the seven** named an alternative, and neither named a *tool*.
+§1 and §2 pointed at Gravix's own `ServiceEvent`s; §3, §4, §5, §6 and §7 offered a *Design logic*,
+a *Constraint*, a *Constraint*, a *Constraint* and a *Philosophy* respectively. The generator could
+not have produced a board at all.
+
+`GOVERNANCE.md` already promised the missing half:
+
+> We will say so kindly, cite the section, and name the tool that does do it.
+
+So the non-goals document gained one `**Alternative tool**:` line per section, naming a real product
+— Jaeger or Tempo, Loki or OpenSearch, node_exporter or Telegraf, Prometheus or Grafana Live,
+ClickHouse, Trino or DuckDB, and Datadog or New Relic or Grafana Cloud. **No `WILL NOT` line was
+touched**, no non-goal was weakened, and nothing was removed: the additions make an existing decline
+actionable rather than changing what is declined. `docs/04-non-goals.md` appears in neither §4.1 nor
+§4.2, and it is not on §4.3's do-not-touch list either.
+
+### `docs/oss/spec-status.json` had to be created
+
+§5.1 requires the board's first section to show "the current phase, its goal, its specs and their
+status, from the spec index". The spec index carries no status column — it lists placement, goal,
+dependencies, role and days. There is nowhere in the three source documents that records whether a
+spec has been executed.
+
+Deriving it from git history was rejected: `scripts/build_oss.sh` copies the tree **without** `.git`
+to prove the core builds with `ee/` deleted, so a board that needed history would fail there. The
+status is now a small JSON file written by whoever merges the work.
+
+Without it every spec renders as `planned`, and the board would have announced Phase 7 as the
+current phase while Phase 12 was being executed — a published page confidently stating something
+false, which is worse than no page.
+
+### One judgement call worth recording
+
+`current_and_next` skips a phase whose only unfinished specs are `blocked`. Phase 10 is entirely
+blocked on an owner decision or a Docker daemon; calling it "what we are working on now" would tell
+a reader we are busy with something nobody can move. The blocked specs are not hidden — they get
+their own subsection on the board, listed with the phase they belong to, because a roadmap that
+shows only what is moving cannot be checked.
+
+### Also done, and beyond §4.2
+
+`docs-site/sidebars.js` gained the roadmap **and seven pages that were already orphaned from it**:
+`bare-parquet-access`, `migrating`, `leaving-gravix`, `prove-it`, `development-setup`,
+`writing-a-plugin` and `plugin-registry`. §4.2 asked only for the roadmap. Leaving seven published
+pages unreachable while adding an eighth would have been following the letter of a file list past
+the point it was useful. `TestBoardIsInTheSidebar` now fails if any page in `docs-site/docs/` is
+unreachable.

@@ -2,6 +2,7 @@
 const sidebars = {
   tutorialSidebar: [
     'getting-started',
+    'roadmap',
     {
       type: 'category',
       label: 'Platform',
@@ -29,6 +30,28 @@ const sidebars = {
       ],
     },
     'api-reference',
+    // Your data is yours, and these are the pages that prove it rather than
+    // asserting it. Every one was orphaned from this sidebar until GRVX-1207;
+    // a page nobody can navigate to is a page that does not exist.
+    {
+      type: 'category',
+      label: 'Your data',
+      items: [
+        'bare-parquet-access',
+        'migrating',
+        'leaving-gravix',
+        'prove-it',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Contributing',
+      items: [
+        'development-setup',
+        'writing-a-plugin',
+        'plugin-registry',
+      ],
+    },
     {
       type: 'category',
       label: 'Comparisons',

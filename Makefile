@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check relnotes bench
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -147,6 +147,17 @@ rfc-index: ## Regenerate docs/oss/rfcs/index.md from docs/oss/rfcs/
 rfc-check: ## Validate every RFC and fail if the decision log is stale
 	go run ./pkg/rfc/cmd/gen -in docs/oss/rfcs -out /tmp/rfc-index.check.md
 	diff -u docs/oss/rfcs/index.md /tmp/rfc-index.check.md
+
+# --- Public roadmap board (GRVX-1207) -------------------------------------
+# docs-site/docs/roadmap.md is generated from the goal tree, the spec index and
+# the non-goals. roadmap-check is what stops the published roadmap disagreeing
+# with the documents that actually decide it.
+
+roadmap-board: ## Regenerate docs-site/docs/roadmap.md
+	python3 scripts/gen_roadmap_board.py
+
+roadmap-check: ## Fail if the published roadmap is stale
+	python3 scripts/gen_roadmap_board.py --check
 
 # --- Release notes (GRVX-1209) --------------------------------------------
 # Crediting people is the part that must not depend on somebody remembering, so

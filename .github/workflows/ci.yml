@@ -141,6 +141,12 @@ jobs:
       - name: Validate the RFCs and the decision log
         run: make rfc-check
 
+      # The published roadmap is generated from the goal tree, the spec index and
+      # the non-goals. A stale board is a red build rather than something a
+      # reader finds out by believing it.
+      - name: Check the published roadmap is current
+        run: make roadmap-check
+
       - name: Run tests with race detector
         # -tags=slow so this covers every suite. GRVX-1206 split the suites by
         # speed for contributors; CI still runs all of them on every pull request.
