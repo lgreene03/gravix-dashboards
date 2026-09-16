@@ -2845,3 +2845,81 @@ Separately, every prose assertion normalises whitespace before matching. These f
 columns, a reader never experiences the line breaks, and three assertions failed the first time
 purely because a phrase spanned two lines. The verbatim tie statement is the one exception: that is
 a promise quoted exactly, newlines included.
+
+---
+
+## SD-046 — GRVX-1508's §8 grep cannot match the text its own §5.3 mandates
+
+**Found by:** `cpo` executing GRVX-1508
+**Affects:** GRVX-1508 §4.1, §4.2, §8
+**Severity:** low — the verification command is wrong, not the requirement
+**Status:** recorded; the requirement was met and the command corrected here
+
+### The grep
+
+§8 step 4:
+
+```bash
+grep -c "you should treat that as the signal it is" docs/oss/charter-review/README.md
+# expect: 1
+```
+
+§5.3 gives the statement to publish **verbatim**, and its own formatting breaks that sentence across
+two lines:
+
+```
+violated by the mechanism meant to protect it, and you should treat that as the
+signal it is.
+```
+
+A line-oriented `grep` cannot match a phrase that spans a line break. Reformatting the statement to
+make the command pass would have violated AC-9, which checks it verbatim — so the statement is
+verbatim and the command is the thing that is wrong.
+
+The working form:
+
+```bash
+tr '\n' ' ' < docs/oss/charter-review/README.md | grep -c "you should treat that as the signal it is"
+# 1
+```
+
+`TestEntrenchmentStatementVerbatim` checks the multi-line block exactly, which is the assertion that
+actually matters, and checks the closing sentence against whitespace-normalised text.
+
+### Files created beyond §4.1
+
+- **`pkg/charterreview/cmd/evidence/main.go`** — §4.1 lists `scripts/charter_evidence.sh` and a Go
+  package, with nothing between them. A shell script cannot call a Go package, and reimplementing
+  the evidence rules in bash would put them somewhere the tests do not reach. Same remedy as SD-043
+  and SD-044, same repository pattern.
+- **`docs/oss/charter-review/2026.md`** — §6 step 9 says "produce the first review" and §9 requires
+  it, but §4.1 does not name a file for it.
+
+### Files modified beyond §4.2
+
+- **`.github/workflows/charter-review.yml`** rather than a job in `ci.yml`, per SD-037: `ci.yml` has
+  no schedule and giving it one would run the full test matrix annually to check a date.
+- **`ee/fleet/fleet_test.go`** and **`pkg/gatewaycore/ee_mount_test.go`** gained one allowlist entry
+  each. Both enforcers search every core file for an `ee/` import path, and `pkg/charterreview`
+  legitimately contains one: it counts core→ee imports for the review, and its test builds a
+  fixture with one in it to prove the count is not always zero. `pkg/boundary` and
+  `cmd/checkboundary` are on the same allowlists for the same reason.
+
+  The fleet allowlist gained a second check while it was being edited: an entry naming a file that
+  no longer contains the string now fails. An exemption nobody is using is one the next person
+  copies.
+
+### The bug the tests caught, which is the one worth recording
+
+`CheckAmendment` refuses a proposal that would weaken an entrenched clause. The first version
+searched a character window around each clause mention, and flagged *"We removed the deprecated
+cost calculator; §7.1 is unaffected."* — a sentence about something else entirely.
+
+Rewritten to search within a clause, it then matched **nothing at all**, including
+*"We propose to remove §7.1"*. The clause splitter split on every full stop, and `§7.1` contains
+one: the clause carrying the section reference never existed, so the guard was silently inert.
+
+It now splits on a full stop only when followed by whitespace or the end of the text. Both
+directions are pinned by test — four weakening proposals refused, five legitimate ones accepted —
+because a guard that matches everything gets weakened and a guard that matches nothing gets
+trusted.

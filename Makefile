@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check charter-evidence
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -189,6 +189,17 @@ supported-versions: ## Regenerate SECURITY.md's supported-versions table
 
 supported-versions-check: ## Fail if SECURITY.md's supported-versions table is stale
 	go run ./pkg/version/cmd/gen -check
+
+# --- The annual charter review (GRVX-1508) --------------------------------
+# Every number in the review is computed here, not typed. A field nothing
+# measured comes back as -1 and is listed as unmeasurable — never as 0, which
+# would read as a measurement.
+#
+# Exit 2 means a capability moved from core into ee/ (a §7.3 Q4 violation) and
+# exit 3 means the canary tripped. Both are findings that must reach a person
+# before the review is published.
+charter-evidence: ## Collect the measured evidence for the annual charter review
+	./scripts/charter_evidence.sh
 
 # --- Release notes (GRVX-1209) --------------------------------------------
 # Crediting people is the part that must not depend on somebody remembering, so

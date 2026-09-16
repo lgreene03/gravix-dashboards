@@ -257,3 +257,20 @@ This charter may be amended only by:
 
 §7.1 (core is Apache-2.0), §7.3 Q4 (once open, always open) and §7.4 (no dark patterns) are
 **entrenched**: they may be strengthened, never weakened.
+
+### 6.1 Annual review
+
+Once a year, within 30 days of this charter's ratification anniversary, we publish measured evidence
+of whether §5's success conditions were met, and put any proposed amendment through the procedure
+above in public.
+
+The procedure, the template and the record are in
+[`docs/oss/charter-review/`](charter-review/README.md). Three things about it are not discretionary:
+
+- The evidence is **computed** by `make charter-evidence`, not asserted. A field nothing measured is
+  reported as `-1` and listed as unmeasurable, never as zero.
+- The **"Where we fell short" section is mandatory and may not be empty.** A transparency report
+  with nothing uncomfortable in it is a press release.
+- The review is **bound by the entrenchment above exactly as everyone else is.** It may propose
+  strengthening §7.1, §7.3 Q4 or §7.4, and it may never propose weakening one — not even an annual
+  review that finds it inconvenient.

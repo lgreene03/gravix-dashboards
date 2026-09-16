@@ -238,6 +238,8 @@ func TestNoCoreFileReferencesEE(t *testing.T) {
 		"cmd/checkboundary/main_test.go":                   "builds offending sources to prove the enforcer catches them",
 		"cmd/checkboundary/testdata/violating/importer.go": "the deliberate violation the enforcer is tested against",
 		"tests/e2e/exit_path_test.go":                      "asserts the exit path's own files do not import ee/",
+		"pkg/charterreview/evidence.go":                    "counts core→ee imports for the annual review, so it names the prefix it counts",
+		"pkg/charterreview/evidence_test.go":               "builds a fixture tree containing the import, to prove the count is not always zero",
 	}
 
 	var offenders []string

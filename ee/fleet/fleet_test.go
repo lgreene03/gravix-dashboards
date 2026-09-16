@@ -194,6 +194,15 @@ If the console is down, nothing observable happens to your monitoring.`
 // form of "zero core files modified".
 func TestNoCoreFilesModified(t *testing.T) {
 	needle := "gravix-dashboards/" + "ee/fleet"
+
+	// A named allowlist. One core file legitimately contains the string: the
+	// annual charter review's test builds a fixture tree with a core→ee import
+	// in it, to prove its core→ee import count is not always zero. It does not
+	// import ee/fleet, and `make build-oss` would fail if it did.
+	allowed := map[string]string{
+		"pkg/charterreview/evidence_test.go": "builds a fixture containing this import, to prove the count can be non-zero",
+	}
+
 	var offenders []string
 	err := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -218,7 +227,9 @@ func TestNoCoreFilesModified(t *testing.T) {
 			return readErr
 		}
 		if strings.Contains(string(src), needle) {
-			offenders = append(offenders, rel)
+			if _, ok := allowed[filepath.ToSlash(rel)]; !ok {
+				offenders = append(offenders, rel)
+			}
 		}
 		return nil
 	})
@@ -227,6 +238,19 @@ func TestNoCoreFilesModified(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		t.Errorf("core files reference ee/fleet: %s", strings.Join(offenders, ", "))
+	}
+
+	// An allowlist entry for a file that no longer contains the string is an
+	// exemption nobody is using, and the next person to add one will copy it.
+	for rel, reason := range allowed {
+		src, readErr := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(rel)))
+		if readErr != nil {
+			t.Errorf("allowlisted %s (%s) does not exist", rel, reason)
+			continue
+		}
+		if !strings.Contains(string(src), needle) {
+			t.Errorf("allowlisted %s no longer contains %q; remove the exemption", rel, needle)
+		}
 	}
 }
 
