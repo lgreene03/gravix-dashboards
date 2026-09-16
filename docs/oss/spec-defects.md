@@ -1712,3 +1712,93 @@ role checks), **AC-9** (schedule mutation stays admin-only), **AC-10** (schedule
 `cmd/cli/main.go` added to §4.2 for the dispatch line; and a decision recorded about
 `/api/gateway/export` versus `/api/gateway/exports` — reconcile them, or name the difference in
 §5.4 so both can coexist deliberately rather than by accident.
+
+---
+
+## SD-030 — GRVX-1108 requires a Prometheus TSDB block reader and specifies no way to build one that this project would accept
+
+**Found by:** `senior-engineer` starting GRVX-1108
+**Affects:** GRVX-1108 §5.2 (`Options.Input`), §6 step 2, AC-1, AC-2, AC-11, and `pkg/importer/prometheus.go` in §4.1
+**Severity:** high — it is the spec's hardest component, and every route to it costs something the
+project has already ruled out elsewhere
+**Status:** open; returned as `SPEC DEFECT: §6 — no method is given for reading a TSDB block, and
+each available method contradicts a decision already taken`.
+
+### What the spec asks for
+
+§5.2 types `Options.Input` as "path to a TSDB dir or an export file". §6 step 2 says:
+
+> Implement the Prometheus reader over TSDB blocks; detect whether samples are per-request or
+> aggregated and refuse `ModeFacts` for the latter.
+
+§3 adds "Do NOT require a running Prometheus", and AC-11 (`TestImportersReadFilesOnly`) tests it.
+Nothing in §2, §3 or §5 says how the block is to be read, and §10's escalation table has no row for
+it.
+
+A Prometheus TSDB block is not a text format. Reading one means implementing the index format
+(symbol table, series section, postings) and the Gorilla/XOR bitstream chunk decoder.
+
+### The three routes, and what each costs
+
+**1. Take `github.com/prometheus/prometheus/tsdb`.** Measured in a scratch module rather than
+estimated:
+
+```
+$ go get github.com/prometheus/prometheus/tsdb@latest
+go: added k8s.io/client-go v0.35.3
+go: added k8s.io/klog/v2 v2.140.0
+go: added k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2
+$ go list -m all | wc -l
+296
+```
+
+**296 modules, including the entire Kubernetes client-go tree**, to read a directory of files. This
+is the same dependency GRVX-1102 §3 refused by name:
+
+> Do NOT add `github.com/prometheus/prometheus` … (a multi-module dependency tree unrelated to what
+> this spec needs) — it defines the minimal wire-compatible message set itself.
+
+GRVX-1102 defined a 5-message `.proto` instead, and that decision is a week old. Reversing it in the
+next spec over, for the same repository, is not an implementer's call — and it lands in `core`,
+where `vuln` (govulncheck) scans every dependency on every commit.
+
+**2. Hand-parse the block format.** No dependency, and it keeps the CGO-free, small-module posture.
+It is also several days of careful work against an undocumented-in-spec binary format, in a package
+whose §8 demands ≥90% coverage, to read a format whose only purpose here is one-time migration.
+
+**3. Read a text export instead of a raw block.** `promtool tsdb dump` emits stable
+`labels timestamp value` lines, and `promtool` ships with Prometheus, so a migrating user already has
+it. No dependency, no binary parsing, and AC-11 still holds — it reads a file and needs no running
+server. But §5.2 says "a TSDB dir", so choosing this narrows the documented input, and telling a user
+to run another tool first is a product decision about the migration experience.
+
+### Why this is not the implementer's call
+
+Route 1 reverses a stated architectural decision. Route 2 spends days of core-maintained code on a
+format Gravix reads exactly once per user. Route 3 changes what the spec promises to accept. Each is
+defensible; none is implied by the spec; and §10 anticipates none of them.
+
+### What is unaffected
+
+Everything except `pkg/importer/prometheus.go`. §5.1's two-mode design — the heart of this spec, and
+the guard against fabricating facts from aggregates — is independent of which Prometheus input format
+is read, as is the Datadog reader (§4.1 `datadog.go`, a text export), the provenance work in
+`pkg/manifest`, the CLI, and `docs-site/docs/migrating.md`. AC-2, AC-3, AC-4, AC-5, AC-8, AC-9, AC-10
+and AC-12 do not depend on it.
+
+### Two smaller §4 gaps found in the same read
+
+- **AC-6 and AC-7** name `gravix recompute` and `gravix explain` behaviour, whose code is in
+  `cmd/cli/cmd_recompute.go` and `cmd/cli/cmd_explain.go`. Neither is in §4. §8 step 2 runs both
+  tests under `./pkg/importer/...`, so the detection and its exact message can live in the package
+  and be tested there; only the exit code §6.1 specifies (`exit 1`) needs the CLI file. Same shape as
+  SD-029, and further evidence for F-042.
+- **§9** requires the "manifest `SchemaVersion` 3 golden fixture updated". That fixture is
+  `pkg/manifest/testdata/golden_manifest.json`; §4.2 lists only `pkg/manifest/manifest.go`. The
+  intent is unambiguous here — §9 names the fixture — so this is a §4 omission to correct, not a
+  decision to take.
+
+### What §5.2/§6 should decide
+
+Which input Prometheus importing accepts, stated as a format rather than a directory, and with the
+dependency question answered explicitly given GRVX-1102 §3's precedent.
