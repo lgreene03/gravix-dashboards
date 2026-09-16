@@ -80,11 +80,20 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Run the contributor suite and enforce the 5-minute budget
+      - name: Run the contributor suite and enforce its budget
         # Exit 4 means every test passed and the suite was over budget. That is
         # a regression in its own right, and it is deliberately not the same
         # exit code as a failing test: a contributor who cannot tell them apart
         # fixes the wrong one.
+        #
+        # The budget here is 8 minutes rather than the contributor's 5. A shared
+        # runner is slower and far more variable than a developer machine: the
+        # same tree measured 3m30s and 5m33s on two runners twenty minutes apart
+        # (F-047), so the 5-minute number would be red at random. 8 minutes still
+        # catches the suite growing — it is 1.6x the typical run — while
+        # measuring the suite rather than the runner.
+        env:
+          GRAVIX_FAST_SUITE_BUDGET_SECONDS: '480'
         run: ./scripts/test_fast.sh --timing
 
   test:

@@ -108,14 +108,38 @@ func TestFastSuiteWithinBudget(t *testing.T) {
 		// that this package is in the fast set so the branch above is reached
 		// every time the suite runs.
 		script := read(t, "scripts", "test_fast.sh")
-		if !strings.Contains(script, "BUDGET_SECONDS=300") {
-			t.Error("scripts/test_fast.sh does not declare the 5-minute budget")
+		if !strings.Contains(script, `BUDGET_SECONDS="${GRAVIX_FAST_SUITE_BUDGET_SECONDS:-300}"`) {
+			t.Error("scripts/test_fast.sh does not default to the 5-minute budget")
 		}
 		if !strings.Contains(script, `export GRAVIX_FAST_SUITE_STARTED="$START"`) {
 			t.Fatal("the script does not export its start time, so the budget cannot be checked from inside")
 		}
-		if !strings.Contains(read(t, ".github", "workflows", "ci.yml"), "./scripts/test_fast.sh --timing") {
+		ci := read(t, ".github", "workflows", "ci.yml")
+		if !strings.Contains(ci, "./scripts/test_fast.sh --timing") {
 			t.Error("no CI job runs the suite and measures it")
+		}
+
+		// CI overrides the budget because a shared runner is slower and far more
+		// variable than a developer machine — the same tree measured 3m30s and
+		// 5m33s twenty minutes apart (F-047). The override is bounded here so it
+		// cannot quietly grow into a way of not having a budget at all.
+		if !strings.Contains(ci, "GRAVIX_FAST_SUITE_BUDGET_SECONDS") {
+			t.Error("CI does not set its own budget; the 5-minute contributor number would be red at random")
+		}
+		ciBudget := regexp.MustCompile(`GRAVIX_FAST_SUITE_BUDGET_SECONDS: '(\d+)'`).FindStringSubmatch(ci)
+		if ciBudget == nil {
+			t.Fatal("CI's budget is not a plain number this test can read")
+		}
+		secs, err := strconv.Atoi(ciBudget[1])
+		if err != nil {
+			t.Fatalf("CI budget %q: %v", ciBudget[1], err)
+		}
+		if secs <= 300 {
+			t.Errorf("CI's budget is %ds; an override below the contributor's own budget is pointless", secs)
+		}
+		if secs > 600 {
+			t.Errorf("CI's budget is %ds. Past ten minutes it stops catching anything: the point "+
+				"is to measure the suite on a slower machine, not to stop measuring it.", secs)
 		}
 
 		fast := goListPackages(t, repoRoot(t), false)
@@ -145,8 +169,8 @@ func TestFastSuiteWithinBudget(t *testing.T) {
 func TestOverBudgetExitCode(t *testing.T) {
 	script := read(t, "scripts", "test_fast.sh")
 
-	if !strings.Contains(script, "BUDGET_SECONDS=300") {
-		t.Error("the script does not set the 5-minute budget")
+	if !strings.Contains(script, `BUDGET_SECONDS="${GRAVIX_FAST_SUITE_BUDGET_SECONDS:-300}"`) {
+		t.Error("the script does not default to the 5-minute budget")
 	}
 	if !strings.Contains(script, "exit 4") {
 		t.Error("the script has no exit-4 path")
@@ -165,7 +189,8 @@ func TestOverBudgetExitCode(t *testing.T) {
 
 	// Drive the budget to zero and check the script really exits 4 rather than
 	// printing a warning and passing.
-	patched := strings.Replace(script, "BUDGET_SECONDS=300", "BUDGET_SECONDS=0", 1)
+	patched := strings.Replace(script,
+		`BUDGET_SECONDS="${GRAVIX_FAST_SUITE_BUDGET_SECONDS:-300}"`, "BUDGET_SECONDS=0", 1)
 	patched = strings.Replace(patched, `go test ./... -count=1`, `go test ./schemas/... -count=1`, 1)
 	patched = strings.Replace(patched, `./scripts/golden_path_test.sh`, `true`, 1)
 	// The copy lives in a temp directory, and the script locates the repository

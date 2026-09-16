@@ -9,7 +9,16 @@
 # somewhere on every pull request.
 set -euo pipefail
 
-BUDGET_SECONDS=300           # 5 minutes, from GRVX-1206 §5.1
+# 5 minutes, from GRVX-1206 §5.1. The number is a promise about a contributor's
+# machine: run this before pushing and you get an answer inside five minutes.
+#
+# GRAVIX_FAST_SUITE_BUDGET_SECONDS overrides it, and CI sets a larger one. That
+# is not the budget being softened — it is the budget being measured under the
+# conditions it was written for. The same tree took 3m30s and 5m33s on two
+# GitHub runners twenty minutes apart (F-047); enforcing a contributor-machine
+# number on a shared runner measures the runner. The repository already makes
+# this distinction for the race detector, in pkg/gatewaycore/race_off.go.
+BUDGET_SECONDS="${GRAVIX_FAST_SUITE_BUDGET_SECONDS:-300}"
 SLOWEST_TO_REPORT=10
 TIMING=0
 

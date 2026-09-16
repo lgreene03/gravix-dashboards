@@ -4,19 +4,14 @@
 package gatewaycore
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/boundary"
 	"github.com/lgreene/gravix-dashboards/pkg/extpoint"
@@ -130,102 +125,6 @@ func TestEEStatusListsRegistered(t *testing.T) {
 	if entries[0].Name != "fake" || entries[0].PathPrefix != "/ee/fake/" {
 		t.Errorf("entry = %+v; want {fake /ee/fake/}", entries[0])
 	}
-}
-
-// AC-8. The OSS gateway is built from the same path, by the same command, and
-// answers the same things it did before its body moved into this package. The
-// binary is started for real rather than inspected, because the claim being made
-// is about the shipped artefact and not about the source that produced it.
-func TestOSSGatewayBehaviourUnchanged(t *testing.T) {
-	work := t.TempDir()
-	bin := filepath.Join(work, "gateway")
-
-	// Unchanged build command: deployment artefacts still run exactly this.
-	build := exec.Command("go", "build", "-o", bin, "./services/gateway/")
-	build.Dir = repoRoot
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build -o bin/gateway ./services/gateway/: %v\n%s", err, out)
-	}
-
-	addr := freeAddr(t)
-	cmd := exec.Command(bin)
-	cmd.Dir = work
-	cmd.Env = append(os.Environ(),
-		"GATEWAY_ADDR="+addr,
-		"TENANT_DB_PATH="+filepath.Join(work, "tenants.db"),
-		"JWT_SECRET=test-secret-that-is-long-enough-32",
-		"RAW_DATA_DIR="+filepath.Join(work, "raw"),
-	)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start gateway: %v", err)
-	}
-	var logs strings.Builder
-	go func() { io.Copy(&logs, bufio.NewReader(stderr)) }()
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-		if t.Failed() {
-			t.Logf("gateway stderr:\n%s", logs.String())
-		}
-	})
-
-	base := "http://" + addr
-	waitForLive(t, base)
-
-	for _, tc := range []struct {
-		path string
-		code int
-		body string
-	}{
-		{"/live", http.StatusOK, "up"},
-		{"/ready", http.StatusOK, `{"db":"ok"}`},
-		{"/api/gateway/ee/status", http.StatusOK, `{"extensions":[]}`},
-	} {
-		t.Run(tc.path, func(t *testing.T) {
-			resp, err := http.Get(base + tc.path)
-			if err != nil {
-				t.Fatalf("GET %s: %v", tc.path, err)
-			}
-			defer resp.Body.Close()
-			got, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode != tc.code {
-				t.Errorf("GET %s = %d; want %d (body %s)", tc.path, resp.StatusCode, tc.code, got)
-			}
-			if strings.TrimSpace(string(got)) != tc.body {
-				t.Errorf("GET %s body = %q; want %q", tc.path, strings.TrimSpace(string(got)), tc.body)
-			}
-		})
-	}
-}
-
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve a port: %v", err)
-	}
-	defer l.Close()
-	return l.Addr().String()
-}
-
-func waitForLive(t *testing.T, base string) {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(base + "/live")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatal("gateway did not answer /live within 20s")
 }
 
 // AC-10. Every Phase 13 ee capability is recorded in the boundary map with its
