@@ -1968,3 +1968,63 @@ that cannot return 1 against the spec's own verbatim block) and now this. **F-04
 Spec Readiness Gate checks are about paths in §2 and §4; neither looks at §8. A cheap third check
 would catch both: **every test name in §7 must be matched by the `-run` pattern in §8**, which is
 mechanically decidable from the spec text alone.
+
+---
+
+## SD-034 — GRVX-1205 §5.3 asks for a bot that §5.5 and §10 forbid
+
+**Found by:** `oss-steward` executing GRVX-1205
+**Affects:** GRVX-1205 §5.3, §5.5, §10
+**Severity:** medium — the two readings produce different software
+**Status:** resolved in favour of §10; the workflow reports and a person sends the message
+
+### What the spec asks for
+
+§5.3, on a claim older than 21 days:
+
+> A contributor claims an issue by commenting. The claim holds for **21 days**. After that, the bot
+> comments once: […] Then unclaims after 7 more days.
+
+§5.5, on the same workflow:
+
+> `.github/workflows/gfi-inventory.yml` runs `scripts/gfi_audit.sh` weekly, opens or updates a
+> tracking issue when the inventory is below target or any issue fails the standard, and **never
+> closes or edits contributor issues automatically**.
+
+§10, last row:
+
+> Pressure to auto-close stale contributor issues → Refuse. **The workflow reports; humans decide.**
+
+A bot that comments on someone's issue and then unclaims it is editing a contributor issue
+automatically. A workflow that never edits one cannot do what §5.3 describes. Both cannot be built.
+
+### What was done
+
+§10 was followed, because it is stated as a principle rather than as a mechanism, and because §5.5
+repeats it. The workflow:
+
+- audits the committed inventory and the live tracker;
+- lists every claim older than 21 days in the maintainer tracking issue;
+- carries §5.3's message **verbatim**, labelled as the text a maintainer sends;
+- writes only to the tracking issue it opened itself, found by its own `gfi-inventory` label.
+
+`TestWorkflowDoesNotModifyIssues` enforces the last point: no `gh issue close`, no label or assignee
+change, and every `gh issue edit`/`gh issue comment` scoped to `$existing`.
+
+The 21-day timer still works on the queue. What changes is that a person, not a cron job, is the
+thing that tells a contributor their time ran out — which is the outcome §5.3's own note was
+reaching for when it said *"an unclaim message that reads as a reprimand loses the contributor
+permanently, and the point of the timer is the queue, not the person."*
+
+### Suggested correction
+
+Rewrite §5.3's second paragraph as: *"After 21 days the audit lists the claim, and a maintainer
+sends this message"*, keeping the wording as it is. If automation is genuinely wanted later, it
+needs §5.5 and §10 amended first, in public — which is now what `docs/oss/rfcs/` is for.
+
+### Also worth noting
+
+§4.1 names four files and §7 names ten tests, but no test file appears in §4 and §8 runs
+`go test ./tests/...`. Same omission as SD-033 and the three before it; the tests were written at
+`tests/governance/gfi_test.go`, beside GRVX-1203's. **F-042**'s proposed check — every file named in
+§6/§7 must appear in §4 — would catch it.

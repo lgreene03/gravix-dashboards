@@ -152,6 +152,32 @@ review and harder to revert. Send it separately and we will take it gladly.
 | A question | GitHub Discussions |
 | A design change | An RFC. The process and its directory arrive in `GRVX-1204`; until then, open an issue describing the design and we will treat it as one |
 
+## Your first contribution
+
+Start with the [`good first issue` label](https://github.com/lgreene03/gravix-dashboards/labels/good%20first%20issue).
+Every issue carrying it names **the file to change, what done looks like, and the command that tells
+you whether you got it right**. An issue missing any of those three is a trap rather than an
+invitation, and we treat one that slips through as our bug.
+
+When we apply that label we are promising:
+
+- the file you need to change is named in the issue;
+- what "done" looks like is described, not implied;
+- there is a command that tells you whether you got it right;
+- someone will answer a question on it within 48 hours;
+- the change is genuinely wanted, and a correct PR will be merged.
+
+`good first issue` does not mean "small". It means **specified** — small and underspecified is the
+worst combination an issue can have, because it looks approachable and then is not.
+
+**Claim one by commenting on it.** No assignment, no form, and we will not assign an issue to
+anyone who has not asked. A claim holds for 21 days; if life gets in the way, saying so is a
+complete answer and usually turns into us improving the issue.
+
+[`docs/oss/good-first-issues.md`](docs/oss/good-first-issues.md) has the full standard, and
+[`docs/oss/good-first-issue-inventory.md`](docs/oss/good-first-issue-inventory.md) is the source
+list every entry is checked against in CI.
+
 ## The contribution ladder
 
 Contributor → Reviewer → Maintainer, with published, mechanical criteria — no discretionary

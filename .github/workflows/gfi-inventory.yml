@@ -1,0 +1,122 @@
+name: good first issue inventory
+
+# Keeps a standing inventory of first issues that actually name a file, a
+# change, and a command to check it. The workflow REPORTS ONLY: it opens or
+# updates one tracking issue for maintainers and never closes, edits, labels,
+# assigns or comments on a contributor's issue. Humans decide; this tells them
+# what to decide about.
+
+on:
+  schedule:
+    # Mondays at 08:00 UTC — early enough in the week that a thin inventory can
+    # be refilled before the weekend, when most first contributions happen.
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit the committed inventory
+        id: inventory
+        run: |
+          set +e
+          ./scripts/gfi_audit.sh --inventory | tee inventory.txt
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Audit the live tracker
+        id: tracker
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          ./scripts/gfi_audit.sh | tee tracker.txt
+          code=$?
+          echo "status=$code" >> "$GITHUB_OUTPUT"
+          # Exit 2 means the tracker was unreachable, which is an infrastructure
+          # problem and not an inventory problem. It is reported, not escalated.
+          if [ "$code" = "2" ]; then echo "unreachable=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Open or update the maintainer tracking issue
+        if: steps.inventory.outputs.status != '0' || steps.tracker.outputs.status == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          TITLE="good first issue inventory needs attention"
+          BODY_FILE=body.md
+          {
+            echo "The weekly audit found the inventory below target, or an entry failing the standard."
+            echo
+            echo "This issue is for **maintainers**. No contributor issue has been changed — the audit"
+            echo "reports and never edits, closes, assigns or comments on anyone's issue."
+            echo
+            echo '### Committed inventory (`docs/oss/good-first-issue-inventory.md`)'
+            echo
+            echo '```'
+            cat inventory.txt
+            echo '```'
+            echo
+            echo '### Live tracker'
+            echo
+            echo '```'
+            cat tracker.txt
+            echo '```'
+            echo
+            echo "The standard is in [docs/oss/good-first-issues.md](docs/oss/good-first-issues.md):"
+            echo "the file, the change, and the command that verifies it. If an entry cannot state its"
+            echo "verification command, it is not a good first issue — give it a different label rather"
+            echo "than a vaguer description."
+            echo
+            echo "Do not invent tasks to hit the count. A short honest inventory beats a padded one,"
+            echo "because a fabricated task wastes somebody's evening."
+            echo
+            echo "### If a claim is over 21 days"
+            echo
+            echo "The audit lists it above. **A person sends this, not the workflow** — see the note at"
+            echo "the bottom of this file for why. Copy it as it is; the wording is the point."
+            echo
+            echo '```'
+            echo "Hi @<user> — this issue has been claimed for 21 days. If you are still working on"
+            echo "it, just say so and it stays yours. If you have run into a problem, say that"
+            echo "instead and someone will help. If we do not hear back in 7 days we will unclaim"
+            echo "it so someone else can pick it up. Nothing is owed here; life happens."
+            echo '```'
+            echo
+            echo "Unclaim 7 days after that if there is no reply. An unclaim message that reads as a"
+            echo "reprimand loses the contributor permanently, and the timer is about the queue, not"
+            echo "about the person."
+            echo
+            echo "_Opened by \`.github/workflows/gfi-inventory.yml\`._"
+          } > "$BODY_FILE"
+
+          existing=$(gh issue list --repo "$REPO" --state open --label "gfi-inventory" \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "$REPO" --body-file "$BODY_FILE"
+            gh issue comment "$existing" --repo "$REPO" \
+              --body "Re-audited $(date -u +%Y-%m-%d); the body above is current."
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body-file "$BODY_FILE" \
+              --label "gfi-inventory"
+          fi
+
+# Why this workflow never touches a contributor's issue
+#
+# GRVX-1205 §5.3 describes a bot that comments on a stale claim and then
+# unclaims it. §5.5 of the same spec says the workflow must never close or edit
+# a contributor issue automatically, and §10 says plainly: the workflow reports,
+# humans decide. Those cannot both be built, so this one reports.
+#
+# The audit surfaces every claim over 21 days and the maintainer issue carries
+# the exact wording to send. A person sends it. That keeps the 21-day timer
+# working on the queue without a bot being the thing that tells someone their
+# time ran out. Recorded as spec defect SD-034.
