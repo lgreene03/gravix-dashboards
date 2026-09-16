@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "name": "gravix-notifier-slack",
+      "kind": "notifier",
+      "description": "Posts Gravix alerts to a Slack incoming webhook.",
+      "repository": "https://github.com/lgreene03/gravix-dashboards",
+      "license": "Apache-2.0",
+      "abi_version": "1",
+      "maintainer": "@lgreene03",
+      "added": "2026-09-16",
+      "first_party": true
+    },
+    {
+      "name": "gravix-notifier-webhook",
+      "kind": "notifier",
+      "description": "POSTs Gravix alerts as JSON to an arbitrary HTTP endpoint.",
+      "repository": "https://github.com/lgreene03/gravix-dashboards",
+      "license": "Apache-2.0",
+      "abi_version": "1",
+      "maintainer": "@lgreene03",
+      "added": "2026-09-16",
+      "first_party": true
+    },
+    {
+      "name": "gravix-notifier-pagerduty",
+      "kind": "notifier",
+      "description": "Raises a PagerDuty incident through the Events v2 API.",
+      "repository": "https://github.com/lgreene03/gravix-dashboards",
+      "license": "Apache-2.0",
+      "abi_version": "1",
+      "maintainer": "@lgreene03",
+      "added": "2026-09-16",
+      "first_party": true
+    },
+    {
+      "name": "gravix-notifier-opsgenie",
+      "kind": "notifier",
+      "description": "Creates an Opsgenie alert through the Alerts API.",
+      "repository": "https://github.com/lgreene03/gravix-dashboards",
+      "license": "Apache-2.0",
+      "abi_version": "1",
+      "maintainer": "@lgreene03",
+      "added": "2026-09-16",
+      "first_party": true
+    },
+    {
+      "name": "gravix-exporter-parquet",
+      "kind": "exporter",
+      "description": "Writes exported rows as Parquet, the format the warehouse already uses.",
+      "repository": "https://github.com/lgreene03/gravix-dashboards",
+      "license": "Apache-2.0",
+      "abi_version": "1",
+      "maintainer": "@lgreene03",
+      "added": "2026-09-16",
+      "first_party": true
+    },
+    {
+      "name": "gravix-exporter-csv",
+      "kind": "exporter",
+      "description": "Writes exported rows as CSV for spreadsheets and ad-hoc tools.",
+      "repository": "https://github.com/lgreene03/gravix-dashboards",
+      "license": "Apache-2.0",
+      "abi_version": "1",
+      "maintainer": "@lgreene03",
+      "added": "2026-09-16",
+      "first_party": true
+    },
+    {
+      "name": "gravix-exporter-jsonl",
+      "kind": "exporter",
+      "description": "Writes exported rows as newline-delimited JSON, the raw fact format.",
+      "repository": "https://github.com/lgreene03/gravix-dashboards",
+      "license": "Apache-2.0",
+      "abi_version": "1",
+      "maintainer": "@lgreene03",
+      "added": "2026-09-16",
+      "first_party": true
+    }
+  ]
+}

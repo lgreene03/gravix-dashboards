@@ -1,0 +1,80 @@
+# {{.Name}}
+
+{{.Description}}
+
+A [Gravix](https://github.com/lgreene03/gravix-dashboards) `{{.Kind}}` plugin. It speaks JSON-RPC 2.0
+over stdio, so it does not link against Gravix and does not break when Gravix upgrades.
+
+- ABI version: `{{.ABIVersion}}`
+- Kind: `{{.Kind}}`
+
+## Data flow
+
+<!--
+  Required to be listed in the Gravix plugin registry (check 6). Say what this
+  plugin sends and where it sends it, and say what it does not send. Someone
+  deciding whether to install this cannot make that decision from a README
+  that does not describe it. Replace the text below with the truth.
+-->
+
+Sends nothing anywhere yet: the stub writes to stderr, which Gravix forwards to
+its own logs. Once you replace the stub, describe here exactly which fields
+leave the machine and which service receives them.
+
+Reads no facts and no metrics from Gravix beyond what it is handed on each call.
+
+## Configuration
+
+Declared in the manifest inside the source. Fields typed `secret` are never
+logged by Gravix, never included in an error message, and never written into a
+`gravix doctor` bundle.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `endpoint` | string | no | where this plugin sends data |
+
+{{if eq .Language "go"}}## Build and test
+
+```bash
+make test
+make build      # writes bin/{{.Name}}
+```
+
+## Run it under Gravix
+
+Point Gravix at the built binary. Gravix starts it, asks for its manifest, and
+refuses to load it if the ABI version does not match.
+{{else}}## Test
+
+```bash
+make test
+```
+
+## Run it under Gravix
+
+Gravix runs the interpreter: `python3 plugin.py`. It asks for the manifest
+first and refuses to load the plugin if the ABI version does not match.
+{{end}}
+## What Gravix guarantees
+
+Containment of failure, not containment of intent. This plugin runs as a
+subprocess with whatever network and filesystem access the operating system
+grants it.
+
+| Property | Rule |
+|---|---|
+| Timeout | 30s per call by default, then the process is killed |
+| Crash | Restarted with exponential backoff up to 5 minutes |
+| Failure budget | 5 consecutive failures disable it; it never blocks the pipeline |
+| Memory | 256 MB RSS by default |
+
+## Four things that will bite you
+
+1. Flush after every response — a buffered response looks like a hang.
+2. One JSON object per line; a pretty-printed response will not parse.
+3. Never write anything but responses to stdout. Diagnostics go to stderr.
+4. Return JSON-RPC errors rather than exiting. Exiting counts as a crash.
+
+## Licence
+
+Apache-2.0. See `LICENSE` — it is a placeholder; replace it before publishing.

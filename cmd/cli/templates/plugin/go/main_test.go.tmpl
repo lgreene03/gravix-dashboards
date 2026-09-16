@@ -1,0 +1,147 @@
+package main
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+// The handshake is the first thing Gravix does. A manifest that does not match
+// is refused before any call is made, so this test failing means Gravix will
+// not load the plugin at all.
+func TestDescribeReturnsManifest(t *testing.T) {
+	resp := handle(request{JSONRPC: "2.0", ID: 1, Method: "gravix.describe"})
+	if resp.Error != nil {
+		t.Fatalf("describe returned an error: %+v", resp.Error)
+	}
+	m, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("describe returned %T, want a manifest object", resp.Result)
+	}
+	if got := m["abi_version"]; got != abiVersion {
+		t.Errorf("abi_version = %v, want %v", got, abiVersion)
+	}
+	if got := m["kind"]; got != "{{.Kind}}" {
+		t.Errorf("kind = %v, want {{.Kind}}", got)
+	}
+	if got := m["name"]; got != "{{.Name}}" {
+		t.Errorf("name = %v, want {{.Name}}", got)
+	}
+}
+
+// Exiting on an unknown method would count as a crash and spend the failure
+// budget. Answering with a JSON-RPC error is a clean failure Gravix reports.
+func TestUnknownMethodIsAnError(t *testing.T) {
+	resp := handle(request{JSONRPC: "2.0", ID: 2, Method: "gravix.nope"})
+	if resp.Error == nil {
+		t.Fatal("an unknown method was accepted")
+	}
+	if resp.Error.Code != -32601 {
+		t.Errorf("code = %d, want -32601 (method not found)", resp.Error.Code)
+	}
+}
+{{if eq .Kind "notifier"}}
+func TestHandlesOneCall(t *testing.T) {
+	params, err := json.Marshal(alert{AlertID: "a-1", RuleName: "error rate", Metric: "error_rate", Threshold: 0.05, ActualValue: 0.11, Service: "checkout"})
+	if err != nil {
+		t.Fatalf("encode alert: %v", err)
+	}
+
+	resp := handle(request{JSONRPC: "2.0", ID: 3, Method: "gravix.notify", Params: params})
+	if resp.Error != nil {
+		t.Fatalf("notify returned an error: %+v", resp.Error)
+	}
+	res, ok := resp.Result.(map[string]any)
+	if !ok || res["delivered"] != true {
+		t.Fatalf("notify result = %v, want delivered", resp.Result)
+	}
+}
+
+// Gravix retries, so the same alert id may arrive twice. A second delivery
+// must not be an error; whether it is a second message is up to the
+// destination you key on alert_id.
+func TestRetryOfTheSameAlertIsNotAnError(t *testing.T) {
+	params, err := json.Marshal(alert{AlertID: "a-1", RuleName: "error rate"})
+	if err != nil {
+		t.Fatalf("encode alert: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if resp := handle(request{JSONRPC: "2.0", ID: i, Method: "gravix.notify", Params: params}); resp.Error != nil {
+			t.Fatalf("delivery %d returned an error: %+v", i+1, resp.Error)
+		}
+	}
+}
+{{end}}{{if eq .Kind "exporter"}}
+func TestHandlesOneCall(t *testing.T) {
+	row := map[string]any{"service": "checkout", "request_count": 42}
+	params, err := json.Marshal(batch{
+		Dataset:  "metrics",
+		EventDay: "2026-01-02",
+		Rows:     []map[string]any{row},
+	})
+	if err != nil {
+		t.Fatalf("encode batch: %v", err)
+	}
+
+	resp := handle(request{JSONRPC: "2.0", ID: 3, Method: "gravix.export", Params: params})
+	if resp.Error != nil {
+		t.Fatalf("export returned an error: %+v", resp.Error)
+	}
+	res, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("export result = %T, want an object", resp.Result)
+	}
+	if got := res["rows_written"]; got != int64(1) {
+		t.Errorf("rows_written = %v, want 1", got)
+	}
+	if res["destination"] == "" {
+		t.Error("destination is empty; it is what logs and `gravix doctor` show")
+	}
+}
+{{end}}{{if eq .Kind "adapter"}}
+func TestHandlesOneCall(t *testing.T) {
+	fact := requestFact{
+		EventID:      "0190000000007000800000000000000a",
+		EventTime:    "2026-01-02T03:04:05Z",
+		Service:      "checkout",
+		Method:       "GET",
+		PathTemplate: "/orders/{id}",
+		StatusCode:   200,
+		LatencyMs:    12,
+	}
+	payload, err := json.Marshal([]requestFact{fact})
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	params, err := json.Marshal(convertParams{Payload: payload, ContentType: "application/json"})
+	if err != nil {
+		t.Fatalf("encode params: %v", err)
+	}
+
+	resp := handle(request{JSONRPC: "2.0", ID: 3, Method: "gravix.convert", Params: params})
+	if resp.Error != nil {
+		t.Fatalf("convert returned an error: %+v", resp.Error)
+	}
+	facts, ok := resp.Result.([]requestFact)
+	if !ok {
+		t.Fatalf("convert result = %T, want facts", resp.Result)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("got %d facts, want 1", len(facts))
+	}
+	// Gravix drops facts whose path carries a raw id, so a converter that
+	// emits them loses data rather than getting it in.
+	if facts[0].PathTemplate != "/orders/{id}" {
+		t.Errorf("path_template = %q, want a templated path", facts[0].PathTemplate)
+	}
+}
+
+func TestUnsupportedContentTypeIsRejected(t *testing.T) {
+	params, err := json.Marshal(convertParams{Payload: []byte("<xml/>"), ContentType: "application/xml"})
+	if err != nil {
+		t.Fatalf("encode params: %v", err)
+	}
+	if resp := handle(request{JSONRPC: "2.0", ID: 4, Method: "gravix.convert", Params: params}); resp.Error == nil {
+		t.Fatal("an unsupported content type was accepted")
+	}
+}
+{{end}}

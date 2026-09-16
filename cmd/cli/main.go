@@ -11,6 +11,7 @@
 //	gravix tail dlq    [--follow]
 //	gravix recompute   --from=2026-09-01 --to=2026-09-08
 //	gravix evolve      add-percentile --quantile=0.999 --from=2026-08-12 --to=2026-09-11
+//	gravix plugin new  --name=gravix-notifier-demo --kind=notifier
 //
 // Environment variables:
 //
@@ -71,6 +72,8 @@ func main() {
 		runImport(os.Args[2:])
 	case "export":
 		os.Exit(exportMain(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+	case "plugin":
+		os.Exit(pluginMain(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
 	case "evolve":
 		runEvolve(os.Args[2:])
 	case "explain":
@@ -99,6 +102,9 @@ Usage:
   gravix recompute    Rebuild derived metrics from raw facts
   gravix evolve       Add a percentile or dimension and backfill history
   gravix explain      Show where a number came from
+  gravix import       Import history from Prometheus or Datadog
+  gravix export       Export facts, metrics or events out of Gravix
+  gravix plugin       Scaffold, list and validate plugins
   gravix version      Print version
   gravix help         Show this help
 

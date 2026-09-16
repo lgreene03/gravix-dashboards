@@ -1,0 +1,94 @@
+"""Tests for {{.Name}}.
+
+Run with: make test
+"""
+
+import base64
+import json
+import unittest
+
+import plugin
+
+
+class TestHandshake(unittest.TestCase):
+    """The handshake is the first thing Gravix does.
+
+    A manifest that does not match is refused before any call is made, so these
+    failing means Gravix will not load the plugin at all.
+    """
+
+    def test_describe_returns_manifest(self):
+        resp = plugin.handle({"jsonrpc": "2.0", "id": 1, "method": "gravix.describe"})
+        self.assertNotIn("error", resp)
+        manifest = resp["result"]
+        self.assertEqual(manifest["abi_version"], plugin.ABI_VERSION)
+        self.assertEqual(manifest["kind"], "{{.Kind}}")
+        self.assertEqual(manifest["name"], "{{.Name}}")
+
+    def test_unknown_method_is_an_error(self):
+        # Exiting would count as a crash and spend the failure budget.
+        resp = plugin.handle({"jsonrpc": "2.0", "id": 2, "method": "gravix.nope"})
+        self.assertEqual(resp["error"]["code"], -32601)
+
+
+class TestOneCall(unittest.TestCase):
+{{if eq .Kind "notifier"}}    def test_notify(self):
+        alert = {
+            "alert_id": "a-1",
+            "rule_name": "error rate",
+            "metric": "error_rate",
+            "threshold": 0.05,
+            "actual_value": 0.11,
+            "service": "checkout",
+        }
+        resp = plugin.handle({"jsonrpc": "2.0", "id": 3, "method": "gravix.notify", "params": alert})
+        self.assertNotIn("error", resp)
+        self.assertTrue(resp["result"]["delivered"])
+
+    def test_retry_of_the_same_alert_is_not_an_error(self):
+        # Gravix retries, so the same alert id may arrive twice.
+        alert = {"alert_id": "a-1", "rule_name": "error rate"}
+        for i in range(2):
+            resp = plugin.handle({"jsonrpc": "2.0", "id": i, "method": "gravix.notify", "params": alert})
+            self.assertNotIn("error", resp, "delivery {} failed".format(i + 1))
+{{end}}{{if eq .Kind "exporter"}}    def test_export(self):
+        batch = {
+            "dataset": "metrics",
+            "event_day": "2026-01-02",
+            "rows": [{"service": "checkout", "request_count": 42}],
+        }
+        resp = plugin.handle({"jsonrpc": "2.0", "id": 3, "method": "gravix.export", "params": batch})
+        self.assertNotIn("error", resp)
+        self.assertEqual(resp["result"]["rows_written"], 1)
+        # destination is what logs and `gravix doctor` show.
+        self.assertTrue(resp["result"]["destination"])
+{{end}}{{if eq .Kind "adapter"}}    def test_convert(self):
+        fact = {
+            "event_id": "0190000000007000800000000000000a",
+            "event_time": "2026-01-02T03:04:05Z",
+            "service": "checkout",
+            "method": "GET",
+            "path_template": "/orders/{id}",
+            "status_code": 200,
+            "latency_ms": 12,
+        }
+        payload = base64.b64encode(json.dumps([fact]).encode()).decode()
+        params = {"payload": payload, "content_type": "application/json"}
+        resp = plugin.handle({"jsonrpc": "2.0", "id": 3, "method": "gravix.convert", "params": params})
+        self.assertNotIn("error", resp)
+        self.assertEqual(len(resp["result"]), 1)
+        # Gravix drops facts whose path carries a raw id, so a converter that
+        # emits them loses data rather than getting it in.
+        self.assertEqual(resp["result"][0]["path_template"], "/orders/{id}")
+
+    def test_unsupported_content_type_is_rejected(self):
+        params = {
+            "payload": base64.b64encode(b"<xml/>").decode(),
+            "content_type": "application/xml",
+        }
+        resp = plugin.handle({"jsonrpc": "2.0", "id": 4, "method": "gravix.convert", "params": params})
+        self.assertIn("error", resp)
+{{end}}
+
+if __name__ == "__main__":
+    unittest.main()

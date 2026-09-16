@@ -1851,3 +1851,71 @@ and `cmd_explain.go` omitted; golden fixture omitted), GRVX-1109 (`cmd/cli/main.
 this one. **F-042** proposes the two mechanical checks that would catch all four before dispatch:
 every repo-relative path in §2/§4.2 must resolve, and every file named in §6 or §7 must appear in §4.
 This entry is the fourth data point for it.
+
+---
+
+## SD-032 — GRVX-1202 §8's disclaimer grep cannot pass while §5.3 is verbatim
+
+**Found by:** `senior-engineer` executing GRVX-1202
+**Affects:** GRVX-1202 §8 command 4
+**Severity:** low — the spec is executable; one verification command is not
+**Status:** verbatim text kept, verification command reported as failing by construction
+
+### What the spec asked for
+
+§5.3 gives the registry disclaimer as a verbatim block, line-wrapped at 80 columns. Its last
+sentence straddles a line break:
+
+```
+supported ABI version, and that its README says what data it sends where. That
+is all we check.
+```
+
+§8 command 4 then verifies it:
+
+```bash
+grep -c "Listing here is not endorsement." registry/README.md
+grep -c "That is all we check." registry/README.md
+# expect: 1 each
+```
+
+### What is actually true
+
+`grep -c` counts matching **lines**. No line of the verbatim block contains
+`That is all we check.` — the sentence is split across two — so the second command returns `0`, not
+`1`, for any README that reproduces §5.3 exactly. The two requirements cannot both hold.
+
+Measured on the delivered file:
+
+```
+$ grep -c "Listing here is not endorsement." registry/README.md
+1
+$ grep -c "That is all we check." registry/README.md
+0
+```
+
+### What was done
+
+§5.3's wording is normative and AC-7 (`TestDisclaimerVerbatim`) tests it, so the block was kept
+byte-exact and the grep was reported as returning 0. Reflowing the paragraph to make a smoke check
+pass would have meant editing the one piece of text the spec marked verbatim, and contriving a
+second unbroken copy of the sentence elsewhere in the README would have been writing prose to
+satisfy a grep.
+
+`TestDisclaimerVerbatim` quotes the whole block in the test source and asserts `strings.Contains`,
+which is stricter than either grep: it catches a softened clause, not just a missing first line.
+
+### Suggested correction
+
+Change §8 command 4 to match on a fragment that survives the wrap, for example:
+
+```bash
+grep -c "Listing here is not endorsement." registry/README.md   # expect 1
+grep -c "is all we check." registry/README.md                   # expect 1
+```
+
+This is the second verification command in Horizon 2 to be unsatisfiable as written against its own
+spec's normative text. **F-042**'s proposed Spec Readiness Gate checks are syntactic; neither would
+have caught this one, because both strings exist in the spec — they just do not exist on the same
+line. A third check is worth considering: every `grep -c … # expect: 1` in §8 must match a single
+line of the literal block §5 requires.

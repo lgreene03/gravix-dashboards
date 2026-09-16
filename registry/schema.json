@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lgreene03/gravix-dashboards/registry/schema.json",
+  "title": "Gravix plugin registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plugins"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "plugins": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "description",
+        "repository",
+        "license",
+        "abi_version",
+        "maintainer",
+        "added",
+        "first_party"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^gravix-[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Unique, prefixed plugin name (§5.2 check 4)."
+        },
+        "kind": {
+          "enum": ["notifier", "exporter", "adapter"],
+          "description": "The interface the plugin implements (§5.2 check 5)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "repository": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "description": "Public repository; must resolve (§5.2 check 1)."
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX identifier matching the repository's LICENSE (§5.2 check 2)."
+        },
+        "abi_version": {
+          "type": "string",
+          "const": "1",
+          "description": "Must equal plugin.ABIVersion (§5.2 check 3)."
+        },
+        "maintainer": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Who to contact. Gravix does not maintain third-party plugins."
+        },
+        "added": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "first_party": {
+          "type": "boolean",
+          "description": "True only for plugins in this repository. Everything else is third-party and carries no Gravix warranty."
+        }
+      }
+    }
+  }
+}

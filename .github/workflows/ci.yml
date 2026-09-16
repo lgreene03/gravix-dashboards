@@ -88,6 +88,29 @@ jobs:
       - name: Check the generated metric docs are current
         run: make contracts-check
 
+      # Checks 3, 4 and 5 of the listing rules (registry/README.md), enforced
+      # on every pull request. Checks 1, 2 and 6 are about a third-party
+      # repository rather than about this file, so they are performed once by a
+      # reviewer: a registry that goes red whenever an unrelated repository has
+      # an outage is a registry nobody can merge into.
+      - name: Validate the plugin registry against its schema
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check jsonschema
+          python3 - <<'PY'
+          import json, sys
+          from jsonschema import Draft202012Validator
+
+          schema = json.load(open("registry/schema.json"))
+          registry = json.load(open("registry/plugins.json"))
+          errors = sorted(Draft202012Validator(schema).iter_errors(registry), key=lambda e: e.path)
+          for e in errors:
+              where = "/".join(str(p) for p in e.absolute_path) or "(root)"
+              print(f"::error file=registry/plugins.json::{where}: {e.message}")
+          if errors:
+              sys.exit(1)
+          print(f"registry: {len(registry['plugins'])} entries valid against schema.json")
+          PY
+
       - name: Run tests with race detector
         run: go test ./... -v -race -count=1
 

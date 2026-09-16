@@ -33,11 +33,8 @@ const (
 // exportMain runs the subcommand and returns its exit code, rather than
 // exiting itself, so tests can exercise every exit path.
 //
-// It is not yet reachable from the command line: cmd/cli/main.go dispatches
-// subcommands from a hard-coded switch and is outside GRVX-1107 §4's file
-// list, so the one line that would wire it up —
-// `case "export": os.Exit(exportMain(context.Background(), os.Args[2:], os.Stdout, os.Stderr))`
-// — could not be added here. See SD-029.
+// GRVX-1107 §4 did not list cmd/cli/main.go, so the dispatch line that reaches
+// this function was added by GRVX-1109 instead. See SD-029.
 func exportMain(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("export", flag.ContinueOnError)
 	fs.SetOutput(stderr)
