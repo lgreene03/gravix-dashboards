@@ -318,10 +318,58 @@ func TestCoreBuildsWithoutEE(t *testing.T) {
 // nagPattern matches calls to action, not every mention of a plan name. Charter
 // §7.4 forbids showing a free user a locked feature and inviting them to pay;
 // what it forbids is the invitation. A feature that is simply absent for a plan
-// sells nobody anything. The patterns mirror the dashboard's own
-// TestNoUpsellInDashboard so the two cannot drift apart, and they are anchored
-// so that "Go produced no ..." in a benchmark test is not a nag screen.
-var nagPattern = regexp.MustCompile(`(?i)upgrade\s+(to|now|your)|go\s+pro\b|unlock\s+(this|these|with|by)|premium\s+feature|start\s+(your\s+)?free\s+trial|available\s+on\s+(the\s+)?(pro|scale|enterprise)`)
+// sells nobody anything.
+//
+// It is anchored so that "Go produced no ..." in a benchmark test is not a nag
+// screen, and the "upgrade" branch names a plan or a moment ("upgrade to Pro",
+// "upgrade now") rather than the bare word — ee/fleet orchestrates software
+// upgrades, and "upgrade to v2.0.0" in a log line is not an advertisement. The
+// dashboard keeps the broader `upgrade (to|now|your)` in its own
+// TestNoUpsellInDashboard, where the word almost always is one.
+var nagPattern = regexp.MustCompile(`(?i)` +
+	`upgrade\s+(now\b|today\b|to\s+(the\s+)?(pro|scale|enterprise|paid|premium)|your\s+plan)` +
+	`|go\s+pro\b` +
+	`|unlock\s+(this|these|with|by)` +
+	`|premium\s+feature` +
+	`|start\s+(your\s+)?free\s+trial` +
+	`|available\s+on\s+(the\s+)?(pro|scale|enterprise)`)
+
+// The nag pattern has to catch what it is for. Narrowing it so that
+// "upgrade to v2.0.0" is not an advertisement would be worthless if it stopped
+// catching "upgrade to Pro", so both directions are pinned here.
+func TestNagPatternCatchesUpsellAndNotSoftwareUpgrades(t *testing.T) {
+	upsell := []string{
+		"Upgrade now to keep your dashboards",
+		"Upgrade to Pro for alerting",
+		"upgrade to the Enterprise plan",
+		"Upgrade your plan to continue",
+		"Go Pro to unlock this",
+		"Unlock this with Gravix Scale",
+		"This is a premium feature",
+		"Start your free trial",
+		"Available on the Pro plan",
+		"upgrade today for unlimited retention",
+	}
+	for _, s := range upsell {
+		if !nagPattern.MatchString(s) {
+			t.Errorf("nagPattern does not catch %q, which is exactly what charter §7.4 forbids", s)
+		}
+	}
+
+	fine := []string{
+		"upgrade to v2.0.0",
+		"fleet: upgrade to " + "v1.4.2" + " refused",
+		"Go produced no output for this deployment",
+		"unlock the mutex before returning",
+		"the free tier includes every capability listed above",
+		"Pro and Enterprise are described on the pricing page",
+	}
+	for _, s := range fine {
+		if m := nagPattern.FindString(s); m != "" {
+			t.Errorf("nagPattern flags %q on %q; it must match a sales pitch, not the words in one", m, s)
+		}
+	}
+}
 
 // AC-12. Charter §7.4. Not one of these phrases appears in the paid tier or the
 // free dashboard, and the free dashboard is the one that matters: an OSS user

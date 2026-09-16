@@ -293,6 +293,24 @@ func TestGuardReportsCancellationNotExpiry(t *testing.T) {
 	}
 }
 
+// A nil context is a caller's bug. The guard sits on every ee/ write path, so
+// it reports the licence state rather than panicking and taking the request
+// with it.
+func TestGuardSurvivesANilContext(t *testing.T) {
+	ran := false
+	//lint:ignore SA1012 passing a nil context is the condition under test
+	if err := Guard(nil, StateLicensed, "put x", func() error { ran = true; return nil }); err != nil {
+		t.Errorf("Guard with a nil context = %v; want it to run the operation", err)
+	}
+	if !ran {
+		t.Error("the operation did not run")
+	}
+	//lint:ignore SA1012 as above
+	if err := Guard(nil, StateReadOnly, "put x", func() error { return nil }); !Refused(err) {
+		t.Errorf("Guard with a nil context in read-only = %v; want a refusal", err)
+	}
+}
+
 // Guard returns the operation's own error untouched when it is allowed to run.
 func TestGuardPassesThroughTheOperationsError(t *testing.T) {
 	sentinel := errors.New("disk full")

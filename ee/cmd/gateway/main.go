@@ -9,12 +9,15 @@
 // gatewaycore.Run used by the OSS binary. The only difference between this binary
 // and services/gateway's is the import block below: each ee/ feature package this
 // binary should include is blank-imported here so its init() registers with
-// pkg/extpoint before Run mounts extensions. Today this list is empty — no ee/
-// feature exists yet. GRVX-1304 through GRVX-1311 each add exactly one import line.
+// pkg/extpoint before Run mounts extensions. GRVX-1304 through GRVX-1311 each
+// add exactly one import line; ee/fleet (GRVX-1307) is the first.
 package main
 
 import (
-	// ee/ feature imports go here, one per shipped capability. Empty today.
+	// ee/ feature imports go here, one per shipped capability. Each is a blank
+	// import: the package's init() registers an Extension with pkg/extpoint, and
+	// gatewaycore.Run mounts whatever is registered. Nothing else changes.
+	_ "github.com/lgreene/gravix-dashboards/ee/fleet" // GRVX-1307, mounted at /ee/fleet/
 
 	"github.com/lgreene/gravix-dashboards/pkg/gatewaycore"
 )

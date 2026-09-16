@@ -20,16 +20,15 @@ import (
 
 const repoRoot = "../../.."
 
-// AC-9. The Enterprise entrypoint builds, and today it includes no ee/ feature
-// package at all — the two binaries are the same program. That is the whole point
-// of the skeleton: it proves the composition mechanism before anything uses it, so
-// the first real feature adds one import line and nothing else.
+// AC-9 (GRVX-1302). The Enterprise entrypoint builds, and differs from the OSS
+// one by its import block and nothing else. The count is pinned so that a spec
+// which added two packages, or reached into core to do it, fails here rather
+// than in review.
 //
-// GRVX-1304 through GRVX-1311 each raise wantEEImports by exactly one and add the
-// package they expect to see. A spec that added two, or that reached into core,
-// fails here rather than in review.
+// GRVX-1304 through GRVX-1311 each raise wantEEImports by exactly one.
+// ee/fleet (GRVX-1307) is the first.
 func TestEEGatewayBuildsWithNoExtensions(t *testing.T) {
-	const wantEEImports = 0
+	const wantEEImports = 1
 
 	bin := filepath.Join(t.TempDir(), "gateway-ee")
 	build := exec.Command("go", "build", "-o", bin, "./ee/cmd/gateway/")
@@ -51,6 +50,19 @@ func TestEEGatewayBuildsWithNoExtensions(t *testing.T) {
 	if len(ee) != wantEEImports {
 		t.Errorf("main.go imports %d ee/ package(s) (%s); want %d",
 			len(ee), strings.Join(ee, ", "), wantEEImports)
+	}
+
+	// Each one must be blank-imported: the point is the init(), and a named
+	// import would mean this entrypoint calls into a feature directly, which is
+	// how the two binaries start to diverge.
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	for _, p := range ee {
+		if !strings.Contains(string(src), `_ "`+p+`"`) {
+			t.Errorf("%s is not blank-imported; an ee/ feature registers itself, it is not called", p)
+		}
 	}
 }
 

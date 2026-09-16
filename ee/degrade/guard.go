@@ -57,8 +57,13 @@ const ExportEndpoint = "/api/gateway/export"
 // and adding one would be the charter §7.5 violation this spec exists to make
 // impossible.
 func Guard(ctx context.Context, s State, op string, fn func() error) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	// A nil context is a caller's bug, but this sits on every ee/ write path and
+	// a panic here would turn a licence check into a crashed request. It refuses
+	// or it runs; it never takes the process with it.
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	switch s {
 	case StateReadOnly:
