@@ -157,8 +157,20 @@ review and harder to revert. Send it separately and we will take it gladly.
 Contributor → Reviewer → Maintainer, with published, mechanical criteria — no discretionary
 promotion, because discretion is how a ladder becomes a clique.
 
-The full criteria arrive with `GRVX-1203`. Until then, [`GOVERNANCE.md`](GOVERNANCE.md) describes
-the levels and how promotion works.
+| Level | Can | Cannot |
+|---|---|---|
+| **Contributor** | Open issues and pull requests; comment; review informally | Merge; approve |
+| **Reviewer** | Everything above, plus a binding approval in their subsystem | Merge; grant levels; cut a release |
+| **Maintainer** | Everything above, plus merge, release, and grant Contributor→Reviewer | Amend the charter; overrule a veto inside a sprint |
+
+You start as a Contributor by opening your first issue or pull request. Nothing to apply for and
+nothing to sign — there is no CLA, deliberately.
+
+Every promotion criterion is evidenced by something public: merged pull requests, review comments, a
+written decision. No level requires employment, a commercial relationship, or an NDA.
+
+The full criteria, the nomination process, and what happens on inactivity are in
+[`docs/oss/contribution-ladder.md`](docs/oss/contribution-ladder.md).
 
 ## Governance
 

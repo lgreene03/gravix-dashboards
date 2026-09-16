@@ -1919,3 +1919,52 @@ spec's normative text. **F-042**'s proposed Spec Readiness Gate checks are synta
 have caught this one, because both strings exist in the spec — they just do not exist on the same
 line. A third check is worth considering: every `grep -c … # expect: 1` in §8 must match a single
 line of the literal block §5 requires.
+
+---
+
+## SD-033 — GRVX-1203 §8's test filter does not run the test for AC-3
+
+**Found by:** `senior-engineer` executing GRVX-1203
+**Affects:** GRVX-1203 §8 command 5
+**Severity:** low — the test exists and passes; the spec's own command does not invoke it
+**Status:** noted, test run separately, correction suggested
+
+### What the spec asked for
+
+§7 names ten acceptance tests. §8 command 5 runs them:
+
+```bash
+go test ./tests/... -run 'TestLadder|TestCriteria|TestNoLevel|TestEmeritus|TestRemoval|TestContributingLinks|TestGovernancePointer|TestMaintainersHas|TestNoCommercial' -v
+# expect: PASS
+```
+
+Nine alternatives for ten tests. AC-3's test is `TestNoDiscretionaryCriteria`, and no alternative
+matches it: `go test -run` matches its pattern as an unanchored regex against the test name, so
+`TestCriteria` does not match `TestNoDiscretionaryCriteria` — the shared substring is `Criteria`,
+not `TestCriteria` — and `TestNoLevel` matches only `TestNoLevelAmendsCharter`.
+
+Measured: the command runs nine tests. AC-3 — *no criterion is discretionary*, the criterion §3 and
+§10 both call the point of the whole document — is silently not among them.
+
+### What was done
+
+The command was run as written and its nine passes recorded, then
+`TestNoDiscretionaryCriteria` was run separately and also passes. Both results are in the commit
+message rather than only the second, because a verification command that quietly covers less than it
+claims is exactly the thing worth writing down.
+
+### Suggested correction
+
+Add the missing alternative:
+
+```bash
+go test ./tests/... -run 'TestLadder|TestCriteria|TestNoDiscretionary|TestNoLevel|…' -v
+```
+
+### Why it is recorded
+
+Third Horizon 2 spec in a row whose §8 cannot verify its own §7 as written: SD-032 (a `grep -c`
+that cannot return 1 against the spec's own verbatim block) and now this. **F-042**'s two proposed
+Spec Readiness Gate checks are about paths in §2 and §4; neither looks at §8. A cheap third check
+would catch both: **every test name in §7 must be matched by the `-run` pattern in §8**, which is
+mechanically decidable from the spec text alone.

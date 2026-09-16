@@ -34,9 +34,11 @@ that it still works on the day it is expensive.
 Three levels: **contributor → reviewer → maintainer**. Promotion criteria are mechanical and
 published — there is no discretionary path, because discretion is how a ladder becomes a clique.
 
-The full criteria live in `docs/oss/contribution-ladder.md` (`GRVX-1203`). Until that lands, the
-summary is: sustained, reviewed contributions; demonstrated review judgement; and, for maintainer,
-a demonstrated willingness to decline something on principle in public.
+The full criteria, the nomination process, and what happens on inactivity are in
+[`docs/oss/contribution-ladder.md`](docs/oss/contribution-ladder.md): sustained, reviewed
+contributions; demonstrated review judgement; and, for maintainer, a demonstrated willingness to
+decline something on principle in public. Every criterion is evidenced by something public, and a
+nomination cites the links.
 
 ## Losing maintainer status
 
