@@ -273,3 +273,120 @@ make check-boundary && make build-oss && make test-oss
 | Pressure to synthesise facts from counters "just for the demo" | Refuse. `docs/00-system-truth.md` §1 forbids derived data in a fact, and fabricated facts would silently corrupt every Phase 8 guarantee. |
 | A source whose aggregation cannot be detected reliably | Default to `ModeMetrics` and report it. When in doubt, declare the data derived. |
 | Imported partitions indistinguishable from native ones | Return `SPEC DEFECT: §5.1`. The distinction is the feature. |
+
+---
+
+## 11. Implementation report (partial — everything but the Prometheus reader; SD-030)
+
+Ten of twelve acceptance criteria pass. AC-1 and AC-11's Prometheus half are blocked by **SD-030**:
+§6 step 2 requires a TSDB block reader and specifies no way to build one this project would accept.
+
+```
+ok  github.com/lgreene/gravix-dashboards/pkg/importer   coverage: 92.5% of statements
+ok  github.com/lgreene/gravix-dashboards/pkg/manifest
+ok  github.com/lgreene/gravix-dashboards/cmd/cli
+staticcheck ./pkg/importer/ ./cmd/cli/ ./pkg/manifest/   (no findings)
+boundary: 0 violations
+build-oss exit=0
+test-oss exit=0
+```
+
+`go test ./...` passes with no failures.
+
+### 11.1 Acceptance criteria
+
+| ID | Status | Evidence |
+|---|---|---|
+| AC-1 | **BLOCKED** | needs a per-request source; the only one §5.1 names is a Prometheus archive (SD-030). The refusal path that guards it is proved by AC-2. |
+| AC-2 | **PASS** | `TestFactModeRefusedOnAggregates`, plus `TestFactModeRefusedOnEitherAggregationSignal` |
+| AC-3 | **PASS** | `TestNoFabricatedFacts` |
+| AC-4 | **PASS** | `TestImportedPartitionProvenance` |
+| AC-5 | **PASS** | `TestLimitationsAlwaysReported`, `TestImportShowsLimitationsBeforeAsking` |
+| AC-6 | **PASS** | `TestRecomputeReportsImportedPartition` |
+| AC-7 | **PASS** | `TestExplainReportsImportProvenance` |
+| AC-8 | **PASS** | `TestCardinalityBudgetEnforcedOnImport` |
+| AC-9 | **PASS** | `TestImportDryRunWritesNothing`, `TestImportDryRunWritesNothingAndSaysSo` |
+| AC-10 | **PASS** | `TestImportRequiresConfirmation` |
+| AC-11 | **PASS** for Datadog | `TestImportersReadFilesOnly`; Prometheus blocked by SD-030 |
+| AC-12 | **PASS** | `TestNativeAndImportedDistinguishable` |
+
+### 11.2 §9 — the aggregate-detection method
+
+Datadog declares its own aggregation, in two independent fields of the export: `aggr` (the
+aggregation applied — `avg`, `sum`, `max`) and `interval` (the rollup interval in seconds). A series
+is treated as aggregated when **either** is set.
+
+Either alone is deliberate. A guard requiring both could be walked past by an export that omits one,
+and `TestFactModeRefusedOnEitherAggregationSignal` drives all three combinations. Trusting the
+source's own declaration also beats inferring aggregation from the values, which would be a guess
+about data whose whole point is that we did not observe it. §10 row 2 says that when a source's
+aggregation cannot be detected reliably, default to `ModeMetrics` and report it — so an empty
+`--mode` defaults to metrics (`TestEmptyModeDefaultsToMetrics`), the direction that never fabricates.
+
+### 11.3 Where the exact §6.1 message lives, and why it moved
+
+§6.1's rows pair an **exit code** with a message, so they describe what the CLI does, not what the
+package returns. That distinction turned out to be load-bearing: as an error string,
+`importer: datadog holds aggregates; … Use --mode metrics.` fails `staticcheck`'s ST1005 (error
+strings should not end with punctuation), and CI runs `staticcheck ./...` unconfigured, so it would
+have turned `lint` red.
+
+Rather than suppress the check — the repository has no `lint:ignore` anywhere, and adding the first
+one to satisfy a spec's prose would be the wrong precedent — the package returns
+`ErrAggregateInFactMode`, which §5.2 already declares, and `cmd_import.go` formats the exact sentence
+beside the exit code. `TestImportRefusesFactsModeOverAggregates` asserts the sentence verbatim and
+`exit 2`; the package test asserts `errors.Is`. Both halves are pinned, and a programmatic caller
+tests for the sentinel rather than matching prose.
+
+### 11.4 The limitations are shown before the decision, not after
+
+§5.4 requires confirmation without `--yes`. The order matters more than the prompt:
+`gravix import` always runs `Plan` first, prints the report **including the full verbatim
+limitations block**, and only then asks. `TestImportShowsLimitationsBeforeAsking` compares the two
+string offsets and fails if the block appears after the prompt — a price disclosed after the decision
+is not disclosed.
+
+Confirmation requires exactly `yes`. `y` and `YES` decline
+(`TestImportRequiresConfirmation`): an import writes into the warehouse and is not trivially
+reversible, so a prompt that accepts a slip of the finger is not a prompt.
+
+### 11.5 Manifest v3, and what "empty" means
+
+`Provenance` is appended after `RevisedAt`, and `SchemaVersion` goes 2 → 3. An absent value means
+`ProvenanceNative`, exactly as v2's absent `PreviousDigest` means Revision 0 — every partition
+written before imports existed was written from facts this system received. `Manifest.IsImported()`
+and `ImportSource()` exist so no reader has to remember that rule.
+
+`TestManifestGoldenFormat` caught the change immediately and said what to do: "bump SchemaVersion and
+update the fixture in the same commit." The fixture was regenerated **through `Encode` itself**, not
+hand-edited, so it cannot drift from what the encoder actually writes. `pkg/recompute` only reads the
+constant, so it needed no edit, and `tests/correctness` passes unchanged.
+
+Provenance is excluded from `ContentDigest` for the same reason `RevisedAt` is: the digest covers row
+content, and where a row came from is not what the row says. `ContentDigest(rows any)` hashes rows
+rather than the manifest struct, so adding a field could not have affected it.
+
+### 11.6 Two refusals that are features
+
+**An unmapped series is skipped, not guessed.** `serviceFor` returns no service unless the caller's
+`--service-map` names one. Inventing a name would put rows on a dashboard under a label nobody chose.
+Skips are counted by reason in the report (`TestUnmappedSeriesSkippedNotGuessed`).
+
+**An imported partition claims no source facts.** `SourceFactKeys` is nil and `FactCount` is 0,
+because there are none. Populating them would make an imported partition look recomputable — which is
+precisely the confusion AC-12 exists to prevent.
+
+### 11.7 Not done, and why
+
+`pkg/importer/prometheus.go` and `pkg/importer/prometheus_test.go` (§4.1) are not written. Asking for
+`--source prometheus` fails with a message naming the open decision rather than an obscure error
+(`TestImportPrometheusReportsTheOpenDecision`, `TestPrometheusSourceReportsItIsNotYetReadable`), and
+`docs-site/docs/migrating.md` says the same in plain words, with the 296-module figure.
+
+`cmd/cli/cmd_recompute.go` and `cmd/cli/cmd_explain.go` are untouched: §4 does not list them.
+`RecomputeStatus` and `ExplainProvenance` in `pkg/importer` carry the decision and the exact message
+`partition is imported; no source facts exist`, tested where §8 step 2 says to test them. Only
+§6.1's `exit 1` needs the CLI files. Recorded in SD-030.
+
+`pkg/manifest/testdata/golden_manifest.json` was updated although §4.2 lists only `manifest.go` —
+§9 requires the v3 fixture by name, so the intent is unambiguous.

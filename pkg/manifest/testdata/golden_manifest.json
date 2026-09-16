@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "metric": "request_metrics_minute",
   "metric_version": "v1",
   "idempotency_key": "request_metrics_minute:v1:_single:20260909",
@@ -17,5 +17,6 @@
   "revision": 0,
   "data_file": "warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet",
   "previous_digest": "",
-  "revised_at": ""
+  "revised_at": "",
+  "provenance": ""
 }

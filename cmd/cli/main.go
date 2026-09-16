@@ -66,6 +66,8 @@ func main() {
 		runReplay(os.Args[2:])
 	case "recompute":
 		runRecompute(os.Args[2:])
+	case "import":
+		runImport(os.Args[2:])
 	case "evolve":
 		runEvolve(os.Args[2:])
 	case "explain":

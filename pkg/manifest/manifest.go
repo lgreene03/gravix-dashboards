@@ -35,7 +35,27 @@ import (
 // readable: the two fields decode as empty, which is exactly what Revision 0
 // means, so an unrevised v1 partition and an unrevised v2 partition say the same
 // thing.
-const SchemaVersion = 2
+//
+// v3 added Provenance (GRVX-1108). An older manifest is still readable for the
+// same reason: the field decodes as empty, and empty means ProvenanceNative —
+// every partition written before imports existed was written from facts this
+// system received.
+const SchemaVersion = 3
+
+// ProvenanceNative marks a partition built from facts Gravix ingested itself.
+// It is also what an absent Provenance means, so a v1 or v2 manifest reads
+// correctly without being rewritten.
+const ProvenanceNative = "native"
+
+// ProvenanceImportedPrefix marks a partition that came from another system.
+// The full value is ProvenanceImportedPrefix + the source name, e.g.
+// "imported:prometheus".
+//
+// The distinction is the point, not bookkeeping: an imported partition holds
+// derived metrics, so recompute cannot rebuild it and a retroactive percentile
+// does not apply to it. A reader that cannot tell the two apart would believe
+// guarantees that do not hold for half its history.
+const ProvenanceImportedPrefix = "imported:"
 
 // Extension is the manifest file suffix. It deliberately does not end in
 // ".parquet", so a manifest is never matched by the warehouse's read_parquet
@@ -92,6 +112,32 @@ type Manifest struct {
 	// excluded from ContentDigest — which covers row content only — so recording
 	// when a revision happened cannot make the output non-reproducible.
 	RevisedAt string `json:"revised_at"`
+
+	// Provenance is ProvenanceNative, or ProvenanceImportedPrefix followed by
+	// the source system's name. Empty means native, so manifests written before
+	// v3 need no rewrite.
+	//
+	// Like RevisedAt, it is not part of ContentDigest — that covers row content
+	// only, and where a row came from is not what the row says.
+	Provenance string `json:"provenance"`
+}
+
+// IsImported reports whether this partition came from another system rather
+// than from facts Gravix ingested.
+//
+// Callers should use this rather than comparing Provenance directly: an absent
+// value means native, and every reader would otherwise have to remember that.
+func (m Manifest) IsImported() bool {
+	return strings.HasPrefix(m.Provenance, ProvenanceImportedPrefix)
+}
+
+// ImportSource returns the source system an imported partition came from, or
+// "" when the partition is native.
+func (m Manifest) ImportSource() string {
+	if !m.IsImported() {
+		return ""
+	}
+	return strings.TrimPrefix(m.Provenance, ProvenanceImportedPrefix)
 }
 
 // schemaTooNewError carries the versions involved while still matching
