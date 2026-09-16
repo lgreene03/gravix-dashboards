@@ -1,0 +1,66 @@
+name: access audit
+
+# Who holds merge rights, who is recorded as holding them, and every discrepancy
+# between the two. A discrepancy usually means somebody was added or removed
+# without the onboarding or offboarding checklist, which is precisely the
+# failure those documents exist to prevent — and it is invisible until somebody
+# looks.
+#
+# This REPORTS. It grants nothing and revokes nothing; a workflow that could
+# would be a credential worth stealing.
+#
+# It is its own workflow rather than a job in ci.yml because ci.yml has no
+# schedule, and giving it one would run the entire matrix weekly to perform a
+# single curl. GRVX-1210 §4.2 named ci.yml; see SD-037.
+
+on:
+  schedule:
+    # Mondays at 07:00 UTC, an hour before the good-first-issue audit, so a
+    # maintainer reading Monday's reports sees access before queue health.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+  # Also on any change to the record itself, because that is the moment the
+  # record and reality are most likely to diverge.
+  pull_request:
+    paths:
+      - 'MAINTAINERS.md'
+      - '.github/CODEOWNERS'
+      - 'scripts/audit_access.sh'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit access against the record
+        id: audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          ./scripts/audit_access.sh | tee audit.txt
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Fail on a discrepancy
+        if: steps.audit.outputs.status == '1'
+        run: |
+          echo "::error::Access does not match the record. Somebody was granted or revoked without the checklist."
+          echo "See docs/oss/maintainer-onboarding.md and docs/oss/maintainer-offboarding.md."
+          exit 1
+
+      # A single-owner subsystem is reported, never failed. It is the honest
+      # state of a one-maintainer project, and an audit that went red every week
+      # for it is an audit people stop reading — at which point the discrepancy
+      # check above stops working too.
+      - name: Report the bus factor
+        if: always()
+        run: |
+          echo "### Access audit" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat audit.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,60 @@
+# Subsystem ownership.
+#
+# The target is TWO owners on every path, so that no subsystem is one person's
+# absence away from being unmaintained. That is not the current state: this
+# project has one maintainer, and every line below says so honestly rather than
+# listing a second name that does not exist.
+#
+# GRVX-1210 §6 step 1 is explicit that granting rights to somebody who has not
+# met the ladder criteria, in order to improve this file, is the wrong move.
+# MAINTAINERS.md records the real bus factor, and scripts/audit_access.sh
+# reports `bus factor 1 remains on <path>` for every line here with one owner.
+#
+# When a second maintainer is granted rights, their subsystems are added here as
+# part of the onboarding checklist — see docs/oss/maintainer-onboarding.md.
+
+# Everything, unless a more specific rule below matches.
+*                        @lgreene03
+
+# --- Correctness. The numbers Gravix's claims rest on. --------------------
+/schemas/                @lgreene03
+/pkg/recompute/          @lgreene03
+/pkg/sketch/             @lgreene03
+/pkg/lineage/            @lgreene03
+/contracts/              @lgreene03
+/tests/correctness/      @lgreene03
+
+# --- Ingest and transform -------------------------------------------------
+/services/ingestion/     @lgreene03
+/transforms/             @lgreene03
+/proto/                  @lgreene03
+
+# --- Query and presentation ----------------------------------------------
+/cube/                   @lgreene03
+/dashboards/             @lgreene03
+/services/gateway/       @lgreene03
+
+# --- Operations -----------------------------------------------------------
+/deploy/                 @lgreene03
+/scripts/                @lgreene03
+/.github/                @lgreene03
+
+# --- Governance and planning ---------------------------------------------
+/docs/oss/               @lgreene03
+/docs/04-non-goals.md    @lgreene03
+/GOVERNANCE.md           @lgreene03
+/MAINTAINERS.md          @lgreene03
+
+# --- The commercial tier --------------------------------------------------
+#
+# /ee/ deliberately keeps a single owner while the paid tier is small. That is a
+# known bus-factor gap, recorded in MAINTAINERS.md rather than papered over: a
+# second owner here is a licence and revenue question as much as a code one.
+/ee/                     @lgreene03
+
+# --- Custody, which is NOT granted with merge access ----------------------
+#
+# Organisation ownership, billing, DNS, publishing credentials and ee/ signing
+# keys are held separately on purpose, so that a compromised maintainer account
+# cannot take the project's identity. They appear in no CODEOWNERS line because
+# they are not paths in this repository. See GRVX-1503.

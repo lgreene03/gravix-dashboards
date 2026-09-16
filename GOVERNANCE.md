@@ -48,6 +48,14 @@ contributions; demonstrated review judgement; and, for maintainer, a demonstrate
 decline something on principle in public. Every criterion is evidenced by something public, and a
 nomination cites the links.
 
+Granting and revoking the access itself has its own checklists:
+[`docs/oss/maintainer-onboarding.md`](docs/oss/maintainer-onboarding.md) and
+[`docs/oss/maintainer-offboarding.md`](docs/oss/maintainer-offboarding.md). Merge access and custody
+— organisation ownership, billing, DNS, publishing credentials, `ee/` signing keys — are held
+separately on purpose, so that a compromised maintainer account cannot take the project's identity.
+`scripts/audit_access.sh` runs weekly and flags any drift between who holds access and who is
+recorded as holding it.
+
 ## Losing maintainer status
 
 - Voluntarily, at any time, with no explanation owed.

@@ -2168,3 +2168,57 @@ shows only what is moving cannot be checked.
 pages unreachable while adding an eighth would have been following the letter of a file list past
 the point it was useful. `TestBoardIsInTheSidebar` now fails if any page in `docs-site/docs/` is
 unreachable.
+
+---
+
+## SD-037 — GRVX-1210's weekly job cannot live in `ci.yml`, and four of its criteria need people
+
+**Found by:** `oss-steward` and `security-engineer` executing GRVX-1210
+**Affects:** GRVX-1210 §4.2, §7 (AC-1 … AC-4)
+**Severity:** low for the workflow placement; the rest is a fact about the project, not a defect
+**Status:** machinery built; the grants await people
+
+### The weekly job
+
+§4.2 says to run `audit_access.sh` "weekly in a scheduled job" in `.github/workflows/ci.yml`.
+`ci.yml` has no `schedule` trigger, and adding one would run the entire seventeen-job matrix —
+Docker builds, the correctness suite, two Go versions — every week to perform one `curl`.
+
+The audit lives in `.github/workflows/access-audit.yml` instead: scheduled Mondays at 07:00 UTC, an
+hour before the good-first-issue audit, plus `workflow_dispatch`, plus a `pull_request` trigger on
+`MAINTAINERS.md`, `.github/CODEOWNERS` and the script itself — because a change to the record is the
+moment the record and reality are most likely to diverge.
+
+### AC-1 to AC-4 need people who do not exist yet
+
+| AC | What it needs |
+|---|---|
+| AC-1 | A new maintainer who met every ladder criterion, with links |
+| AC-2 | Every onboarding checklist item recorded done in their grant issue |
+| AC-3 | Two-factor verified on their account before the grant |
+| AC-4 | A release cut **with** them |
+
+There are no non-founder contributors to this repository, so nobody meets the
+[ladder](contribution-ladder.md)'s Contributor→Reviewer criteria, let alone Reviewer→Maintainer.
+G6.7 targets three non-founder maintainers; the real number is zero.
+
+§6 step 1 anticipates this exactly: *"If none qualify, that is the honest finding — report it and do
+not proceed."* So the checklist, `CODEOWNERS`, the audit, the offboarding procedure and the weekly
+job are all built and tested, and no rights were granted.
+
+The four tests are written so they assert in both states. Today they check that the machinery exists
+and that **nobody has been added without it**; once somebody is listed, the same tests check their
+grant issue, their ownership entries and their release. Neither path is a skip.
+
+### The temptation that was refused
+
+`CODEOWNERS` with two names per path, and `MAINTAINERS.md` reporting a bus factor of 2, would have
+satisfied AC-6 and AC-7 as literally written. It would also have been a lie in the file an adopter
+reads to decide whether depending on this project is safe, and a lie that `audit_access.sh` would
+then have reported as a discrepancy every week.
+
+Every path has one owner, the table says 1 seventeen times, and the audit **reports**
+`bus factor 1 remains on <path>` without failing — per §6.1, where the two discrepancy rows say
+"audit exits 1" and the bus-factor row says "report". That distinction is load-bearing: an audit
+that went red every week for a fact nobody can change this month is an audit people stop reading, at
+which point the discrepancy check stops working too.
