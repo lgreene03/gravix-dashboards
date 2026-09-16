@@ -34,9 +34,23 @@ Until then, install it unsigned:
 
 ```bash
 cd grafana-plugin/gravix-datasource
-go build -o dist/gpx_gravix_datasource ./cmd
+GOOS=linux GOARCH=amd64 go build -o dist/gpx_gravix_datasource_linux_amd64 ./cmd
 npm install && npm run build
 ```
+
+**The binary's name is not a choice.** Grafana treats `plugin.json`'s `executable` as a *prefix* and
+execs `<executable>_<goos>_<goarch>`. Build it as a bare `gpx_gravix_datasource` and Grafana loads
+the frontend, then fails to start the backend:
+
+```
+Could not start plugin backend ... fork/exec
+.../gpx_gravix_datasource_linux_amd64: no such file or directory
+```
+
+The `GOOS`/`GOARCH` above must match **the machine that runs Grafana, not yours.** The compose
+snippet below runs Grafana in a `linux/amd64` container, so that is what to build even on a Mac. If
+you run Grafana natively, drop the two variables and let Go pick your host — and then name the output
+to match, which `$(go env GOOS)_$(go env GOARCH)` does for you.
 
 `dist/` now holds the backend binary, `module.js` and `plugin.json`. Mount it into Grafana and allow
 the unsigned plugin:
@@ -91,9 +105,16 @@ no Gravix-shaped layer in between that could disagree.
 | An unreachable Trino reports a health error, not a crash | **Tested** |
 | The backend builds with `CGO_ENABLED=0` | **Tested** — it has to be cross-buildable for whatever runs Grafana |
 | `npm install && npm run build` produce a loadable `dist/` | **Run** — `module.js` and `plugin.json` emitted, typecheck clean |
+| Grafana loads the plugin and starts its backend | **Runs in CI** — `TestGrafanaLoadsPlugin`, `isolated-modules` job. It failed on its first run and the fix is not yet confirmed green |
+| The documented build command produces a name Grafana can exec | **Tested** — and it did not, at first |
 | A healthy Trino reports `gravix: trino reachable` | Needs a running Trino — `TestCheckHealthOK` |
-| Grafana actually loads the plugin | Needs Docker — `TestGrafanaLoadsPlugin` |
 
-The last two have not been run in an environment that had a stack. Treat "Grafana loads it" as
-**built and not yet demonstrated** until that test has passed somewhere you can see.
-`docs/oss/spec-defects.md` SD-051 records why.
+The first time `TestGrafanaLoadsPlugin` ran, it failed: the build command on this page wrote a bare
+`gpx_gravix_datasource`, and Grafana could not exec it. Five other criteria passed throughout, because
+none of them started Grafana. If you read this page before that fix, the plugin you built did not
+work, and the note above the compose snippet is why.
+
+So treat "Grafana loads it" as **fixed and awaiting confirmation**, not as proven — this page will say
+so plainly when a run has passed. The Trino health check is separately unproven; it needs a running
+warehouse.
+`docs/oss/spec-defects.md` SD-051 records both.

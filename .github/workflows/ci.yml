@@ -103,7 +103,12 @@ jobs:
         working-directory: grafana-plugin/gravix-datasource
         env:
           CGO_ENABLED: '0'
-        run: go build -o /dev/null ./cmd
+        run: |
+          # Built under its real name, not /dev/null: Grafana execs
+          # <executable>_<goos>_<goarch>, and the first version of this job
+          # proved compilation while the plugin still could not start.
+          GOOS=linux GOARCH=amd64 go build -o dist/gpx_gravix_datasource_linux_amd64 ./cmd
+          test -x dist/gpx_gravix_datasource_linux_amd64
 
       - uses: actions/setup-node@v4
         with:

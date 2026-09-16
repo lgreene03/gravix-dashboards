@@ -471,3 +471,70 @@ func TestEverySpecIndexRowIsWellFormed(t *testing.T) {
 		t.Errorf("only %d spec rows found in the index; there should be 88", rows)
 	}
 }
+
+// GRVX-1104. Grafana treats plugin.json's `executable` as a PREFIX and execs
+// "<executable>_<goos>_<goarch>". A build command that writes the bare name
+// produces a plugin Grafana loads as a frontend and then cannot start:
+//
+//	Could not start plugin backend ... fork/exec
+//	.../gpx_gravix_datasource_linux_amd64: no such file or directory
+//
+// That is how this shipped in the first commit of the spec — the install guide,
+// the spec's own §6 step 7, and the e2e test all wrote the bare name, and five
+// passing acceptance criteria did not notice, because none of them ran Grafana.
+//
+// AC-7 catches it, but only where there is a Docker daemon. This is the cheap
+// guard that runs everywhere: whatever the docs tell a reader to type, the
+// output name must be one Grafana will actually exec.
+func TestPluginBuildCommandProducesAnExecutableGrafanaCanFind(t *testing.T) {
+	root := repoRoot(t)
+
+	var executable struct {
+		Executable string `json:"executable"`
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "grafana-plugin", "gravix-datasource", "plugin.json"))
+	if err != nil {
+		t.Fatalf("reading plugin.json: %v", err)
+	}
+	if err := json.Unmarshal(raw, &executable); err != nil {
+		t.Fatalf("parsing plugin.json: %v", err)
+	}
+	if executable.Executable == "" {
+		t.Fatal("plugin.json has no `executable`; Grafana needs one to start the backend")
+	}
+
+	// Every `go build -o <path> ./cmd` in the plugin's published docs.
+	buildLine := regexp.MustCompile(`go build -o (\S*` + regexp.QuoteMeta(executable.Executable) + `\S*)`)
+
+	for _, page := range []string{"grafana-plugin.md", "grafana-plugin-publishing.md"} {
+		body, err := os.ReadFile(filepath.Join(root, "docs-site", "docs", page))
+		if err != nil {
+			t.Fatalf("reading %s: %v", page, err)
+		}
+
+		matches := buildLine.FindAllStringSubmatch(string(body), -1)
+		if len(matches) == 0 {
+			t.Errorf("%s: no `go build -o ...%s` command found; if the build instructions moved, "+
+				"move this check with them", page, executable.Executable)
+			continue
+		}
+
+		suffixed := regexp.MustCompile(`^` + regexp.QuoteMeta(executable.Executable) + `_[a-z0-9]+_[a-z0-9]+$`)
+
+		for _, m := range matches {
+			// A shell expansion that builds the suffix is correct too, and is
+			// checked before filepath.Base because expansions like ${t%/*}
+			// contain a slash that Base would split on.
+			if strings.Contains(m[1], "$") {
+				continue
+			}
+
+			target := filepath.Base(m[1])
+			if !suffixed.MatchString(target) {
+				t.Errorf("%s: `go build -o ...%s` writes %q, but Grafana execs "+
+					"%q_<goos>_<goarch>. A reader following this builds a plugin whose "+
+					"backend cannot start.", page, executable.Executable, target, executable.Executable)
+			}
+		}
+	}
+}

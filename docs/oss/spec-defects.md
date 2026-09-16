@@ -3310,7 +3310,9 @@ to say so.
 **Found by:** `frontend-engineer` executing GRVX-1104
 **Affects:** GRVX-1104 §4.1, §4.2, §6 step 7, §7 AC-4/AC-7, §8 step 1
 **Severity:** low — two mechanical errors and one scope gap; every buildable criterion passes
-**Status:** partial; 5 of 7 acceptance criteria proven, the two needing a stack are written and gated
+**Status:** partial; 5 of 7 acceptance criteria proven. AC-7 now runs in CI, where it found a real
+defect (see below) — the fix is pushed and **not yet confirmed green**, so AC-7 is not claimed as
+passing here until a run says so. AC-4 needs a live Trino and remains unproven.
 
 ### `pkg/main.go` cannot be both
 
@@ -3348,11 +3350,12 @@ Caught by AC-6's own test failing on its first run, which is the argument for AC
 | AC-5 an unreachable Trino reports the exact health error | **passing** |
 | AC-6 the backend builds with `CGO_ENABLED=0` | **passing** |
 | AC-4 a healthy Trino reports `gravix: trino reachable` | **not run** — needs a live Trino |
-| AC-7 Grafana lists the plugin as installed | **not run** — needs a reachable Docker daemon |
+| AC-7 Grafana lists the plugin as installed | **ran, failed, fix pushed** — awaiting a green run; see below |
 
-Both are written and gate themselves. `docs-site/docs/grafana-plugin.md` carries the same table, so
-a reader is told "Grafana loads it" is **built and not yet demonstrated** rather than left to assume
-it was tested.
+Both are written and gate themselves. AC-7 has since run — see the two sections at the end of this
+entry — and the proof table in `docs-site/docs/grafana-plugin.md` is kept in step with this one,
+including the admission that a reader who followed it before the fix built a plugin that did not
+load.
 
 Three tests were added beyond §7. `TestOnlyAllowlistedColumnsReachTheStatement` asserts the property
 AC-1 and AC-2 exist to support — that the statement has exactly one format verb, that every
@@ -3437,3 +3440,58 @@ should treat 120s as nearly spent rather than nearly free.
 The rest of the run was green, including the new `isolated-modules` job. Both risks flagged before it
 ran — the Go toolchain switch from 1.25 to the module's 1.26.5, and `npm install` in CI — were
 unfounded: 48s for vet and test, 20s for the frontend build.
+
+### AC-7 ran, and the plugin did not load — the binary name was wrong everywhere
+
+The first execution of `TestGrafanaLoadsPlugin`, in the `isolated-modules` job, failed. Grafana's own
+log said why:
+
+```
+level=warn  msg="Permitting unsigned plugin" pluginId=gravix-datasource
+level=error msg="Could not start plugin backend" pluginId=gravix-datasource
+  error="fork/exec /var/lib/grafana/plugins/gravix-datasource/gpx_gravix_datasource_linux_amd64:
+         no such file or directory"
+```
+
+**Grafana treats `plugin.json`'s `executable` as a prefix and execs `<executable>_<goos>_<goarch>`.**
+Every build instruction in this repository wrote the bare `gpx_gravix_datasource`: the spec's §8 step 1
+and §6 step 7, `docs-site/docs/grafana-plugin.md`, the CI job, and the e2e test itself. Grafana loaded
+the frontend and then could not start the backend, which means **anyone following the published install
+guide built a plugin that did not work.**
+
+Five acceptance criteria passed the whole time. None of them started Grafana. That is the entire case
+for AC-7, and for the `isolated-modules` job that gives it somewhere to run — a plugin that compiles
+and does not load is indistinguishable from one that was never written, and the only thing that can
+tell the difference is Grafana.
+
+The internal contradiction was already in the tree: `grafana-plugin-publishing.md` step 5's cross-build
+loop wrote `gpx_gravix_datasource_${GOOS}_${GOARCH}` — the correct convention — while step 4 and the
+install guide on the next page wrote the bare name. Two pages of the same document set disagreed, and
+nothing checked.
+
+**Fixed, and guarded twice.** `TestGrafanaLoadsPlugin` now builds
+`gpx_gravix_datasource_linux_amd64` with `GOOS=linux GOARCH=amd64` and runs the container with
+`--platform linux/amd64` — explicitly, not `runtime.GOOS`, because the binary has to match the
+container rather than the machine running the test, or it passes on a Linux runner and fails for a
+developer on a Mac.
+
+The second guard is the one that matters more, because it needs no Docker and therefore runs
+everywhere: `TestPluginBuildCommandProducesAnExecutableGrafanaCanFind` in `tests/governance/` reads
+`executable` out of `plugin.json` and checks every `go build -o` in both published pages against it. A
+shell expansion counts; a bare name never does. It reproduced the defect from the docs alone before the
+fix, and the docs are what was actually wrong.
+
+The CI cross-build step now builds under the real name and `test -x`s it, rather than `-o /dev/null`.
+Proving compilation is what let a plugin that cannot start pass a job written to check it.
+
+### Correction to the entry above: the timeout hit two jobs, not one
+
+That entry blames `scripts/golden_path_test.sh`'s `-timeout 120s`. Incomplete. The `test` matrix job
+failed too, on both Go versions: its race step runs `go test -tags=slow ./...`, which includes
+`tests/e2e`, with no `-timeout` flag and so a 10-minute default per binary. `ci-summary` then failed as
+the aggregate. One wrong gate, three red checks.
+
+`test (1.24)` failing was initially read as possibly Go-version-specific. It was not:
+`go test -tags=slow ./... -race -count=1` on go1.24.9 — the exact failing version — passes clean
+locally in 6m0s, no failures and no data races. The opt-in fix covers both jobs, because it stops the
+test running anywhere that did not ask for it.

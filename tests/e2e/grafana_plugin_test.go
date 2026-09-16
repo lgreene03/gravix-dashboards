@@ -29,6 +29,10 @@ import (
 const grafanaImage = "grafana/grafana:11.1.0"
 const pluginID = "gravix-datasource"
 
+// pluginExecutable must match plugin.json's `executable` field. Grafana appends
+// _<goos>_<goarch> to it when it execs the backend.
+const pluginExecutable = "gpx_gravix_datasource"
+
 // TestGrafanaLoadsPlugin builds the plugin, mounts it into a Grafana container,
 // and asks Grafana's own API whether it is installed.
 func TestGrafanaLoadsPlugin(t *testing.T) {
@@ -59,6 +63,7 @@ func TestGrafanaLoadsPlugin(t *testing.T) {
 	// code.
 	run := exec.Command("docker", "run", "--rm", "-d",
 		"--name", name,
+		"--platform", "linux/amd64",
 		"-p", fmt.Sprintf("127.0.0.1:%d:3000", port),
 		"-e", "GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS="+pluginID,
 		"-e", "GF_AUTH_ANONYMOUS_ENABLED=true",
@@ -90,9 +95,22 @@ func buildPluginDist(t *testing.T, root string) {
 
 	mod := filepath.Join(root, "grafana-plugin", "gravix-datasource")
 
-	backend := exec.Command("go", "build", "-o", "dist/gpx_gravix_datasource", "./cmd")
+	// The name matters and is not ours to choose. Grafana treats plugin.json's
+	// `executable` as a PREFIX and execs "<executable>_<goos>_<goarch>", so a
+	// bare gpx_gravix_datasource is a binary Grafana cannot find — which is
+	// exactly how this test first failed:
+	//
+	//   Could not start plugin backend ... fork/exec
+	//   .../gpx_gravix_datasource_linux_amd64: no such file or directory
+	//
+	// linux/amd64 explicitly, not runtime.GOOS/GOARCH: the binary has to match
+	// the container, not the machine running the test, or this passes on a Linux
+	// runner and fails for a developer on a Mac. --platform below pins the
+	// container to the same pair.
+	out := fmt.Sprintf("dist/%s_linux_amd64", pluginExecutable)
+	backend := exec.Command("go", "build", "-o", out, "./cmd")
 	backend.Dir = mod
-	backend.Env = append(backend.Environ(), "CGO_ENABLED=0")
+	backend.Env = append(backend.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
 	if out, err := backend.CombinedOutput(); err != nil {
 		t.Fatalf("building the plugin backend: %v\n%s", err, out)
 	}

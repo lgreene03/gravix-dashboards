@@ -33,14 +33,16 @@ custodians. Not after.
 4. **Sign the build:**
    ```bash
    cd grafana-plugin/gravix-datasource
-   go build -o dist/gpx_gravix_datasource ./cmd
+   GOOS=linux GOARCH=amd64 go build -o dist/gpx_gravix_datasource_linux_amd64 ./cmd
    npm install && npm run build
    npx @grafana/sign-plugin@latest --rootUrls https://your-grafana.example.com
    ```
    Signing writes `dist/MANIFEST.txt`. Never commit it — it is specific to one build and one set of
    root URLs.
-5. **Cross-build the backend** for every platform the catalog lists. The plugin is CGO-free
-   (`TestBuildIsCGOFree` proves it), so this is `GOOS`/`GOARCH` and nothing else:
+5. **Cross-build the backend** for every platform the catalog lists. The `_<goos>_<goarch>` suffix
+   is what Grafana execs, not decoration — see the note in [the install guide](grafana-plugin.md).
+   The plugin is CGO-free (`TestBuildIsCGOFree` proves it), so this is `GOOS`/`GOARCH` and nothing
+   else:
    ```bash
    for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
      GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 \
