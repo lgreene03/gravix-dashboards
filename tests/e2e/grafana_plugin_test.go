@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,18 @@ const pluginID = "gravix-datasource"
 // TestGrafanaLoadsPlugin builds the plugin, mounts it into a Grafana container,
 // and asks Grafana's own API whether it is installed.
 func TestGrafanaLoadsPlugin(t *testing.T) {
+	// Opt-in, not merely Docker-gated. scripts/golden_path_test.sh runs this
+	// package with -timeout 120s and describes it in its own comment as "the
+	// no-Docker smoke test ... they take about four seconds". This test pulls a
+	// ~450MB Grafana image, runs npm install and waits on a container: on a CI
+	// runner, where Docker *is* present, a Docker-only gate let it into that
+	// budget and the timeout panicked the whole binary, failing every test in
+	// the package. The env var keeps it out of any suite that did not ask for
+	// it by name. CI runs it in the isolated-modules job, which has Docker,
+	// Node and no such budget.
+	if os.Getenv("GRAFANA_PLUGIN_E2E") != "1" {
+		t.Skip("set GRAFANA_PLUGIN_E2E=1 to run this; it pulls a Grafana image and builds the plugin")
+	}
 	requireDocker(t)
 
 	root := repoRootFromE2E(t)

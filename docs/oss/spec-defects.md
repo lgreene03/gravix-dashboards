@@ -3402,3 +3402,38 @@ Pinning `react` and `react-dom` together at 18.3.1 resolves it properly. `npm in
 One more mechanical fix: `tsconfig.json` cannot set `noEmit` when `ts-loader` is the webpack loader
 — the build fails with *"TypeScript emitted no output"*. `npm run typecheck` passes `--noEmit` on the
 command line instead, which is where it belongs.
+
+### Follow-up: AC-7's test broke the fast suite, because CI runners have Docker
+
+`fast-suite-budget` failed on the first commit of this spec. The budget itself was fine — 4m47s
+against 8m00s. What failed was the `E2E tests` check inside `scripts/golden_path_test.sh`, and the
+tell was in the runner's cleanup log: `Terminate orphan process: pid (33973) (npm install)`.
+
+`requireDocker` was the wrong gate on its own. This container has no Docker daemon, so the test
+skipped locally and was reported as "will skip in CI for lack of Docker" — **a GitHub Actions runner
+has Docker.** The gate passed there, the test ran, and `scripts/golden_path_test.sh` runs that
+package with `-timeout 120s`. Pulling a ~450MB Grafana image and running `npm install` does not fit
+in 120s, and a Go test timeout panics the whole binary — so every test in `tests/e2e` failed with it,
+none of them for its own reason.
+
+The script's own comment had already said so: *"it is the no-Docker smoke test, it has always run
+these, they take about four seconds."* That was a stated contract for the package, and a Docker test
+was added to it without reading it.
+
+The fix is an explicit opt-in — `GRAFANA_PLUGIN_E2E=1` — checked before `requireDocker`, so the test
+stays out of any suite that did not ask for it by name. It runs in the `isolated-modules` job, which
+already has Docker, Node and a built `dist/`, under `-timeout 15m`. That job is where a plugin test
+belongs anyway.
+
+Verified: with the variable unset the test skips at the opt-in; with it set the test falls through to
+the `docker info` probe; and `E2E_TEST=1 go test -tags=slow ./tests/e2e/... -timeout 120s` passes.
+
+**One observation for whoever adds the next test there.** That package now takes **75 seconds**, not
+four. The comment's figure is stale by a factor of twenty and the headroom against its own 120s
+timeout is far thinner than the comment implies — this failure was one test away, from any direction.
+Not changed here, because it is not this spec's to change, but the next test added to `tests/e2e`
+should treat 120s as nearly spent rather than nearly free.
+
+The rest of the run was green, including the new `isolated-modules` job. Both risks flagged before it
+ran — the Go toolchain switch from 1.25 to the module's 1.26.5, and `npm install` in CI — were
+unfounded: 48s for vet and test, 20s for the frontend build.

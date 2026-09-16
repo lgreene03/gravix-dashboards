@@ -118,6 +118,16 @@ jobs:
           test -f dist/module.js
           test -f dist/plugin.json
 
+      # AC-7, the one criterion that needs Grafana itself. It lives here rather
+      # than in the fast suite because it pulls a ~450MB image and waits on a
+      # container — scripts/golden_path_test.sh runs tests/e2e with a 120s
+      # budget and is explicitly the no-Docker smoke test. The step above has
+      # already built dist/, so the test's own build is a no-op cache hit.
+      - name: Grafana plugin — Grafana loads it (GRVX-1104 AC-7)
+        env:
+          GRAFANA_PLUGIN_E2E: '1'
+        run: go test -tags=slow ./tests/e2e/ -run TestGrafanaLoadsPlugin -count=1 -timeout 15m -v
+
   vuln:
     runs-on: ubuntu-latest
     steps:
