@@ -3499,3 +3499,59 @@ because it could not ask.
 
 Worth stating as a rule: a build tag that hides code from the test runner hides it from the linter
 too, and every tool run over `./...` needs a tagged twin or the partition is unchecked.
+
+---
+
+## F-052 — an 11 MB binary was committed, one day after the commit that removed three others
+
+**Found by:** reading `git status --short` after committing GRVX-1106
+**Affects:** `.gitignore`, `tests/devenv/suite_test.go`
+**Severity:** low — repository weight, caught within one commit
+**Status:** fixed; the binary is removed and a guard now fails the build
+
+### What happened
+
+GRVX-1106 added a new build target. Building it at the repository root left an 11 MB ELF called
+`iceberg_sync` there, and `git add -A` committed it.
+
+The pull request this branch carries already contains a hygiene commit whose subject is removing
+committed binaries — three of them, plus `sdk/node/node_modules`, 66 MB in total. That commit added
+no test, so the repository was exactly as able to accept a new binary the following day as it had
+been the day before. It did.
+
+### Why .gitignore did not stop it
+
+`.gitignore` names root binaries individually:
+
+```
+/gateway
+/ingestion-service
+/purge
+/rollup-job
+```
+
+A new target is never on a list written before it existed. That is not a mistake in the list; it is
+what enumerating instead of guarding does.
+
+### What changed
+
+`TestNoCommittedBinaries` in `tests/devenv` walks the tree and fails on any file whose first bytes
+are ELF, Mach-O or PE magic **and which git does not ignore**.
+
+"Does not ignore", not "exists", is the rule that makes it usable. Running it for the first time
+found four binaries: `iceberg_sync`, plus `gateway` (42.9 MB), `ingestion` (27.5 MB) and
+`onboarding_gate` (2.3 MB). The other three were already ignored — ordinary local build output that
+everybody has and nobody can commit. Failing on those would have made the test something people
+delete rather than something that catches the fourth.
+
+It skips itself, with a log line rather than a `t.Skip`, when there is no `.git` — `build_oss.sh`
+copies the tree without one (SD-036), and there is no repository to protect in that copy.
+
+Verified in both directions: rebuilding the binary makes it fail, removing it makes it pass. A guard
+that has never refused anything is indistinguishable from one that cannot.
+
+### The general shape of it
+
+A cleanup without a guard is a cleanup with a half-life. The 66 MB commit was correct work and it
+bought about a day, because nothing was left behind that would notice the next occurrence. The
+useful output of finding a class of mistake is the check, not the fix.

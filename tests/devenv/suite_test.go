@@ -10,6 +10,10 @@ package devenv
 
 import (
 	"bufio"
+	"bytes"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -594,4 +598,113 @@ func TestDevContainerBuilds(t *testing.T) {
 func containsAcrossLines(text, want string) bool {
 	clean := strings.NewReplacer("//", " ", "#", " ").Replace(text)
 	return strings.Contains(strings.Join(strings.Fields(clean), " "), strings.Join(strings.Fields(want), " "))
+}
+
+// binaryMagic are the leading bytes of a compiled executable, on the three
+// platforms anybody builds this on.
+//
+// Only executables. Images, Parquet fixtures and test data are legitimately
+// binary and legitimately committed; a compiled program never is.
+var binaryMagic = [][]byte{
+	{0x7f, 'E', 'L', 'F'},    // ELF — Linux
+	{0xcf, 0xfa, 0xed, 0xfe}, // Mach-O 64, little-endian — macOS
+	{0xca, 0xfe, 0xba, 0xbe}, // Mach-O universal
+	{'M', 'Z'},               // PE — Windows
+}
+
+// skipWalk are directories a build legitimately fills with binaries.
+var skipWalk = map[string]bool{
+	".git": true, "node_modules": true, "bin": true, "data": true,
+	"vendor": true, ".venv": true, "dist": true, "build": true,
+}
+
+// TestNoCommittedBinaries fails on a compiled executable git does not ignore.
+//
+// "Does not ignore" is the rule, not "exists". Everybody who runs `go build`
+// has binaries in their tree; the hazard is the one .gitignore has never heard
+// of, because that is the one `git add -A` sweeps up.
+//
+// This exists because it already happened twice. The repository once carried
+// three committed binaries and 66 MB of node_modules, removed by a hygiene
+// commit that added no guard — and the very next new build target,
+// transforms/iceberg_sync, put an 11 MB ELF back at the repository root within
+// a day. .gitignore enumerates root binaries one at a time (/gateway, /purge,
+// /rollup-job …), and a new target is never on a list written before it
+// existed. When this test was first run it found that ELF and three other
+// binaries; the other three were already ignored, which is exactly the
+// distinction it now makes.
+func TestNoCommittedBinaries(t *testing.T) {
+	root := repoRoot(t)
+
+	// scripts/build_oss.sh copies the tree without .git (SD-036). There is no
+	// repository to guard in that copy, and no way to ask what it ignores.
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		t.Log("no .git here, so there is nothing to protect from a commit; skipping the check")
+		return
+	}
+
+	var found []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // an unreadable path is not this test's problem
+		}
+		if d.IsDir() {
+			if skipWalk[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil || info.Size() < 4 {
+			return nil
+		}
+		if !looksExecutable(path) {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(root, path)
+		if gitIgnores(root, rel) {
+			return nil
+		}
+		found = append(found, fmt.Sprintf("%s (%.1f MB)", rel, float64(info.Size())/(1<<20)))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the tree: %v", err)
+	}
+
+	if len(found) > 0 {
+		t.Errorf("compiled executable(s) that .gitignore does not cover:\n  %s\n"+
+			"One `git add -A` commits these. Build into bin/, or add the target to .gitignore.",
+			strings.Join(found, "\n  "))
+	}
+}
+
+// looksExecutable reports whether the file starts with a compiled program's
+// magic bytes.
+func looksExecutable(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	head := make([]byte, 4)
+	n, _ := io.ReadFull(f, head)
+	head = head[:n]
+
+	for _, magic := range binaryMagic {
+		if len(head) >= len(magic) && bytes.Equal(head[:len(magic)], magic) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitIgnores asks git whether rel is ignored.
+func gitIgnores(root, rel string) bool {
+	cmd := exec.Command("git", "check-ignore", "-q", rel)
+	cmd.Dir = root
+	return cmd.Run() == nil
 }

@@ -24,6 +24,11 @@ bin/
 /purge
 /request_metrics_minute
 /rollup-job
+# Enumerating these one at a time is how an 11 MB iceberg_sync reached a commit
+# (F-052). tests/devenv's TestNoCommittedBinaries is the actual guard; this
+# list only keeps the common cases out of `git status`.
+/iceberg-sync
+/iceberg_sync
 /seed_tenants
 /service_events_daily
 /service_events_detail
