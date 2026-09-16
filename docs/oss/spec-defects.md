@@ -2533,8 +2533,25 @@ paid feature can attach to it, is the exact shape of change the process exists t
 | `GRVX-1305` billing, `GRVX-1306` identity, `GRVX-1310` white-label | blocked — depend on 1304 |
 | `GRVX-1308` compliance | blocked — depends on 1306 |
 | `GRVX-1312` packaging | blocked — depends on 1305 |
-| `GRVX-1401` provenance | blocked — depends on 1304 |
 | `GRVX-1307` fleet, `GRVX-1309` intelligence, `GRVX-1311` warehouse sync | **not blocked** — they mount handlers, which `Extension` already does |
+
+### Correction: GRVX-1401 is not blocked
+
+This table originally listed `GRVX-1401` as blocked, on the strength of `GRVX-1304`'s own header,
+which says it **Blocks** `GRVX-1305`, `GRVX-1307` and `GRVX-1401`. `GRVX-1401`'s header says
+**Depends on: none**, and its §2 and §4 confirm it: it adds an `actions/attest-build-provenance`
+step to `ci.yml` and a verifier under `ee/cloud/provenance/` that checks an image's attestation
+against the public commit history. Nothing in it needs a tenant. `GRVX-1307` was on that same
+Blocks list and was executed without difficulty, which is the other half of the evidence.
+
+Two specs disagreeing about their own edge is the same class of defect as this entry itself, and
+neither direction of the dependency graph is checked by anything: a spec's `Blocks` list is never
+compared against the `Depends on` lists that would have to agree with it. That is a concrete,
+scriptable check — for every spec, every id it claims to block must name it in their `Depends on`
+— and it is proposed rather than built here, because it belongs with F-042's two Readiness Gate
+checks and should be added as one piece of work rather than three.
+
+`GRVX-1401` is `planned`, not `blocked`.
 
 ### What this says about the Readiness Gate
 

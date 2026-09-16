@@ -54,7 +54,6 @@ cannot be checked.
 | GRVX-1308 | `ee/compliance/` — SIEM streaming, retention holds, SOC 2 evidence | 13 |
 | GRVX-1310 | `ee/whitelabel/` — branding, custom domains and embeds | 13 |
 | GRVX-1312 | Pro packaging, pricing, and the public page that lists what stays free | 13 |
-| GRVX-1401 | Prove Gravix Cloud runs the unmodified OSS core, by build provenance | 14 |
 
 ## What is next
 
