@@ -33,6 +33,9 @@
 /cube/                   @lgreene03
 /dashboards/             @lgreene03
 /services/gateway/       @lgreene03
+# The gateway's implementation, moved out of services/gateway/ by GRVX-1302 so a
+# second entrypoint can compose with it. services/gateway/ is now five lines.
+/pkg/gatewaycore/        @lgreene03
 
 # --- Operations -----------------------------------------------------------
 /deploy/                 @lgreene03

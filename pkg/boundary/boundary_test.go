@@ -29,20 +29,26 @@ func TestBoundaryMapHasExpectedCapabilityCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	// 35 total: 32 core, 3 ee. Expanded from 18 by SD-002, then by Phase 8: the
+	// 43 total: 32 core, 11 ee. Expanded from 18 by SD-002, then by Phase 8: the
 	// recompute engine (GRVX-801), metric manifests (GRVX-802), the contract
 	// registry (GRVX-803), quantile sketches (GRVX-804), late-data revisions
 	// (GRVX-805), retroactive evolution (GRVX-806), lineage (GRVX-807) and the
 	// windowed percentile API (GRVX-808), the lineage UI (GRVX-809) and the
 	// correctness suite (GRVX-810), the SLO engine (GRVX-811) and the public
 	// demonstration (GRVX-812).
-	if got, want := len(m.Capabilities), 35; got != want {
+	//
+	// GRVX-1302 then recorded the eight Phase 13 ee capabilities up front, so the
+	// specs that implement them (GRVX-1304 … GRVX-1311) build against a placement
+	// already ruled on rather than declaring their own. The core count is
+	// deliberately unchanged: a phase that adds paid features must not quietly
+	// move anything out of the core to do it.
+	if got, want := len(m.Capabilities), 43; got != want {
 		t.Errorf("capabilities = %d, want %d", got, want)
 	}
 	if got, want := len(m.CoreCapabilities()), 32; got != want {
 		t.Errorf("core capabilities = %d, want %d", got, want)
 	}
-	if got, want := len(m.EECapabilities()), 3; got != want {
+	if got, want := len(m.EECapabilities()), 11; got != want {
 		t.Errorf("ee capabilities = %d, want %d", got, want)
 	}
 }

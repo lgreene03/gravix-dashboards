@@ -42,7 +42,8 @@ account holding merge rights that is not listed above, and anyone listed above h
 | Wire contracts | `/proto/` | @lgreene03 | 1 |
 | Semantic layer | `/cube/` | @lgreene03 | 1 |
 | Dashboard | `/dashboards/` | @lgreene03 | 1 |
-| Gateway | `/services/gateway/` | @lgreene03 | 1 |
+| Gateway entrypoint | `/services/gateway/` | @lgreene03 | 1 |
+| Gateway implementation | `/pkg/gatewaycore/` | @lgreene03 | 1 |
 | Deployment | `/deploy/` | @lgreene03 | 1 |
 | Tooling | `/scripts/` | @lgreene03 | 1 |
 | CI and templates | `/.github/` | @lgreene03 | 1 |
@@ -50,8 +51,8 @@ account holding merge rights that is not listed above, and anyone listed above h
 | Commercial tier | `/ee/` | @lgreene03 | 1 |
 
 **Every row is 1.** That is the real number, not a placeholder, and the table lists the subsystems
-separately anyway — because "everything: 1" and seventeen rows of 1 look the same in a summary and
-different to somebody deciding whether to depend on this. Seventeen places where one person's
+separately anyway — because "everything: 1" and eighteen rows of 1 look the same in a summary and
+different to somebody deciding whether to depend on this. Eighteen places where one person's
 absence stops the work is a more useful thing to know.
 
 `/ee/` deliberately keeps a single owner while the paid tier is small. A second owner there is a

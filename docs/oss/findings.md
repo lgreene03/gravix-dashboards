@@ -281,7 +281,7 @@ The repository maintains two, by hand, with nothing keeping them in step:
 | File | Paths | Version | Who reads it |
 |---|---|---|---|
 | `docs/openapi.yaml` | 25 | 0.1.0 | The Makefile, `scripts/golden_path_test.sh`, human readers |
-| `services/gateway/openapi.json` | 57 | 1.0.0 | `scripts/generate-sdk-types.sh` → the Node, Python, Go and Java SDKs |
+| `pkg/gatewaycore/openapi.json` | 57 | 1.0.0 | `scripts/generate-sdk-types.sh` → the Node, Python, Go and Java SDKs |
 
 They disagree on almost everything a reader would check first: the number of endpoints, the version
 number, and — until this commit — the licence, which both gave as MIT for a repository that has been

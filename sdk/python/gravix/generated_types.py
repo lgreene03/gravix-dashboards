@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Auto-generated from services/gateway/openapi.json
+Auto-generated from pkg/gatewaycore/openapi.json
 Do not edit manually — run scripts/generate-sdk-types.sh
 Generated from OpenAPI spec v1.0.0
 """

@@ -105,7 +105,7 @@ capabilities:
       leave the free tier with no correct percentile at all, not a smaller one — the
       Crippleware Test's second question, answered as plainly as it ever is.
     paths:
-      - services/gateway/percentile_handler.go
+      - pkg/gatewaycore/percentile_handler.go
       - cube/model/schema/RequestMetricsMinute.js
       - dashboards/lib/cube-client.js
 
@@ -119,7 +119,7 @@ capabilities:
       only paying users can check is a version where nobody can trust the free one.
       Charter §7.4 additionally forbids upsell UI in this dashboard, which is tested.
     paths:
-      - services/gateway/lineage_handler.go
+      - pkg/gatewaycore/lineage_handler.go
       - dashboards/lib/lineage-panel.js
 
   - id: correctness-suite
@@ -147,7 +147,7 @@ capabilities:
       no write path, so there is nothing here that could be gated without gating the data.
     paths:
       - pkg/slo/
-      - services/gateway/slo_handler.go
+      - pkg/gatewaycore/slo_handler.go
 
   - id: prove-it-demo
     name: The public "prove it" demonstration
@@ -240,7 +240,7 @@ capabilities:
     charter_ref: "§2.1"
     rationale: Charter §4 permits alerting evaluable from batch facts; it shipped open in Phase 2.
     paths:
-      - services/gateway/gateway_alerts.go
+      - pkg/gatewaycore/gateway_alerts.go
       - pkg/notify/
 
   - id: alerting-anomaly
@@ -249,7 +249,7 @@ capabilities:
     charter_ref: "§2.3"
     rationale: Shipped open in Horizon 1 Phase 2.5. Charter §7.3 Q4 makes that permanent.
     paths:
-      - services/gateway/gateway_alerts.go
+      - pkg/gatewaycore/gateway_alerts.go
 
   - id: sdks
     name: Go, Python and Node SDKs
@@ -275,7 +275,7 @@ capabilities:
     charter_ref: "§2.3"
     rationale: Charter §7.3 Q3 — charging for the ability to not be breached is the pattern the charter prevents.
     paths:
-      - services/gateway/gateway_auth.go
+      - pkg/gatewaycore/gateway_auth.go
       - pkg/auth/
       - pkg/totp/
       - pkg/sso/
@@ -286,7 +286,7 @@ capabilities:
     charter_ref: "§2.3"
     rationale: Baseline security control. Charter §7.3 Q3 = yes, so it cannot be sold.
     paths:
-      - services/gateway/enterprise.go
+      - pkg/gatewaycore/enterprise.go
     # No `gate:` — verified by SD-001 that no plan gate exists on this path.
 
   - id: rate-limiting
@@ -306,7 +306,7 @@ capabilities:
     charter_ref: "§2.3"
     rationale: Reading your own data is not a premium feature. Charter §7.3 Q5 = yes.
     paths:
-      - services/gateway/gateway_platform.go
+      - pkg/gatewaycore/gateway_platform.go
     note: >-
       Gate removed by GRVX-710. Charter §7.3 Q4 makes this permanent: a
       capability released under Apache-2.0 can never be re-gated. This was the
@@ -320,7 +320,7 @@ capabilities:
     charter_ref: "§2.3"
     rationale: Charter §7.3 Q1 = yes — any team notices this missing.
     paths:
-      - services/gateway/gateway_dashboards.go
+      - pkg/gatewaycore/gateway_dashboards.go
     # No `gate:` — verified by SD-001 that no plan gate exists on this path.
 
   - id: data-export
@@ -329,7 +329,7 @@ capabilities:
     charter_ref: "§2.3"
     rationale: Export is the anti-lock-in guarantee; gating it is hostage-taking.
     paths:
-      - services/gateway/enterprise.go
+      - pkg/gatewaycore/enterprise.go
     # No `gate:` — verified by SD-001 that no plan gate exists on this path.
 
   - id: terraform-provider
@@ -397,3 +397,164 @@ capabilities:
     note: >-
       Basic tenant branding shipped Apache-2.0 in Horizon 1 and stays core;
       only custom domains, embeds and full theming are ee (GRVX-1310).
+
+  # ----------------------------------------------------- ee, Phase 13 (GRVX-1302)
+  # Eight capabilities ruled ee by the Lead in GRVX-1302 §6 step 8 and transcribed
+  # here, so that GRVX-1304 through GRVX-1311 implement against a placement already
+  # made rather than declaring their own. Each answers all five Crippleware Test
+  # questions `no`; a single `yes` would put the capability back in the core.
+  #
+  # `paths` points at ee/placeholder/ until the owning spec creates the real
+  # directory, which is the convention the three entries above already use — a path
+  # that does not exist yet would fail pkg/boundary's TestAllBoundaryPathsExist.
+
+  - id: tenancy-fleet-console
+    name: Cross-tenant fleet provisioning and lifecycle automation
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: >-
+      Operating many tenants' lifecycles from one console is running Gravix for
+      other people, not a capability a single team needs.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: Not yet implemented. GRVX-1304 builds it under ee/tenancy/; path updates then.
+
+  - id: billing-manual-invoicing
+    name: Non-Stripe manual/PO invoicing and consolidated cross-tenant statements
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: >-
+      Enterprise procurement workflows outside Stripe are a scale problem, not a
+      correctness or security one.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: Not yet implemented. GRVX-1305 builds it under ee/billing/; path updates then.
+
+  - id: identity-scim
+    name: SCIM v2 user provisioning and directory sync
+    placement: ee
+    charter_ref: "§2.3"
+    rationale: >-
+      SCIM only matters with an enterprise IdP and headcount churn — a 10-person
+      team using SSO does not miss it.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: >-
+      Not yet implemented. GRVX-1306 builds it under ee/identity/; path updates
+      then. SAML and OIDC single sign-on itself stays core (rbac-single-org,
+      charter §7.3 Q3): only directory provisioning is ee.
+
+  - id: fleet-console
+    name: Managing N separate Gravix installations from one console
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: >-
+      Only an operator running many installations needs this; a single install has
+      nothing to manage.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: Not yet implemented. GRVX-1307 builds it under ee/fleet/; path updates then.
+
+  - id: compliance-siem-evidence
+    name: SIEM log streaming, proactive retention-hold archival, SOC2 evidence packs
+    placement: ee
+    charter_ref: "§2.3"
+    rationale: >-
+      The local audit log is already free and complete; streaming it to a SIEM and
+      packaging auditor evidence only matters once a compliance team demands it.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: >-
+      Not yet implemented. GRVX-1308 builds it under ee/compliance/; path updates
+      then. The audit log itself is core (audit-log-local) and stays complete: this
+      is delivery to somebody else's system, not access to your own records.
+
+  - id: intelligence-forecasting
+    name: Seasonal forecasting and capacity projection
+    placement: ee
+    charter_ref: "§2.3"
+    rationale: >-
+      Additive analysis over the same free warehouse data; its absence makes no
+      displayed number less accurate.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: >-
+      Not yet implemented. GRVX-1309 builds it under ee/intelligence/; path updates
+      then. Q2 is `no` only because forecasting adds a projection alongside the
+      measured numbers; if it ever changed a displayed measurement, it would be core.
+
+  - id: whitelabel-custom-domains
+    name: Custom domains and signed embeddable dashboards
+    placement: ee
+    charter_ref: "§2.3"
+    rationale: >-
+      Reselling Gravix under another brand is a go-to-market choice, not a baseline
+      need.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: >-
+      Not yet implemented. GRVX-1310 builds it under ee/whitelabel/; path updates
+      then. Narrows tenant-branding above to the two capabilities GRVX-1310 actually
+      ships; basic per-tenant branding remains core.
+
+  - id: warehouse-continuous-sync
+    name: Continuous sync to an external data warehouse
+    placement: ee
+    charter_ref: "§2.3"
+    rationale: >-
+      Operational convenience for a data team; the underlying Parquet is already
+      freely exportable.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths:
+      - ee/placeholder/
+    note: >-
+      Not yet implemented. GRVX-1311 builds it under ee/warehouse/; path updates
+      then. Q5 is `no` because one-shot export stays core and complete
+      (data-export): what is sold is the scheduling, not the data.

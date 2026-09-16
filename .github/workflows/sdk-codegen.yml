@@ -3,13 +3,13 @@ name: SDK Codegen Check
 on:
   push:
     paths:
-      - 'services/gateway/openapi.json'
+      - 'pkg/gatewaycore/openapi.json'
       - 'scripts/generate-sdk-types.sh'
       - 'sdk/node/src/generated-types.ts'
       - 'sdk/python/gravix/generated_types.py'
   pull_request:
     paths:
-      - 'services/gateway/openapi.json'
+      - 'pkg/gatewaycore/openapi.json'
       - 'scripts/generate-sdk-types.sh'
 
 permissions:
@@ -43,7 +43,7 @@ jobs:
         run: |
           python3 -c "
           import json, sys
-          with open('services/gateway/openapi.json') as f:
+          with open('pkg/gatewaycore/openapi.json') as f:
               spec = json.load(f)
           paths = spec.get('paths', {})
           schemas = spec.get('components', {}).get('schemas', {})

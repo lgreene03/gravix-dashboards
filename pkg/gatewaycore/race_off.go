@@ -3,7 +3,7 @@
 
 //go:build !race
 
-package main
+package gatewaycore
 
 // raceDetectorEnabled reports whether this binary was built with -race.
 //

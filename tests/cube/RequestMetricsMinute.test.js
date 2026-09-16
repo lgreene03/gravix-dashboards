@@ -14,7 +14,7 @@
 // moved. A test file does not belong in a directory that is mounted into a
 // running service as that service's configuration.
 //
-// The Go tests in services/gateway/percentile_handler_test.go assert the model's
+// The Go tests in pkg/gatewaycore/percentile_handler_test.go assert the model's
 // text. These load it, so they catch what text cannot: a measure referenced from
 // a pre-aggregation after it was deleted, a `meta` block that is a comment rather
 // than a property, a model that throws on one of the four configurations.

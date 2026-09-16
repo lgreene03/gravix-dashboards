@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -116,6 +116,12 @@ test-correctness: ## Run the correctness suite (determinism, late data, mergeabi
 
 check-boundary: ## Enforce the open-core boundary (imports, gates, headers, map)
 	go run ./cmd/checkboundary -root . -map docs/oss/boundary.yaml
+
+# The Enterprise gateway: the same pkg/gatewaycore as `build`, plus whatever ee/
+# feature packages ee/cmd/gateway/main.go blank-imports. Not part of `build`, and
+# it fails outright when ee/ is absent — which is the point (charter §7.1).
+build-ee: ## Build the Enterprise gateway (requires ee/ present)
+	go build -o bin/gateway-ee ./ee/cmd/gateway/
 
 # --- Benchmark (GRVX-1001) -------------------------------------------------
 # Every published cost and performance number comes from here, and a stranger

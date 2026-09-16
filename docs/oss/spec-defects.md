@@ -2222,3 +2222,125 @@ Every path has one owner, the table says 1 seventeen times, and the audit **repo
 "audit exits 1" and the bus-factor row says "report". That distinction is load-bearing: an audit
 that went red every week for a fact nobody can change this month is an audit people stop reading, at
 which point the discrepancy check stops working too.
+
+---
+
+## SD-038 — GRVX-1302's file list was written against a `services/gateway/` that no longer existed
+
+**Found by:** `senior-engineer` executing GRVX-1302
+**Affects:** GRVX-1302 §2, §4.1, §4.2, §5.1, §5.2, §6 step 8, AC-11, AC-12
+**Severity:** medium — every gap had exactly one compiling resolution, but §10 names the first of
+them as a stop-and-report trigger, so it is recorded before it is acted on
+**Status:** executed with the resolutions below; the spec's intent was never in doubt
+
+### What the spec assumed
+
+§2 describes `services/gateway/` as **10 files, 10,468 lines**, of which "`main_test.go` and
+`phase6_test.go` are the two test files", and §4.1/§4.2 relocate exactly those ten. §10 then says:
+
+> A file under `services/gateway/` not listed in §4.1/§4.2 → Return `SPEC DEFECT: §4 — <path>
+> unaccounted for`.
+
+### What is actually true
+
+`wc -l services/gateway/*.go` reports **19 files, 13,588 lines**, and six of them are test files.
+Nine Go files are unaccounted for:
+
+| Unaccounted file | References `*gateway` | Why it cannot stay behind |
+|---|---|---|
+| `lineage_handler.go` | yes | `package main` in a directory whose `gateway` type has moved |
+| `lineage_handler_test.go` | yes | same |
+| `percentile_handler.go` | yes | same |
+| `percentile_handler_test.go` | yes | same |
+| `slo_handler.go` | yes | same |
+| `slo_handler_test.go` | yes | same |
+| `alert_log_channel_test.go` | yes | same |
+| `race_off.go` | no | `//go:build !race`; declares `raceDetectorEnabled`, read by the moved tests |
+| `race_on.go` | no | `//go:build race`; the same constant |
+
+They are GRVX-808, GRVX-809 and GRVX-811 work — the windowed percentile API, the lineage endpoint
+and the SLO engine — all landed after GRVX-1302 was written. §2's line numbers are stale for the
+same reason: `func main()` is at `main.go:210`, not 195; `type gateway struct` at 638, not 578; the
+`"/metrics"` registration at 519, not 459. §2 also says `boundary.yaml` records 18 capabilities, 15
+core and 3 ee; it records 35, 32 core and 3 ee, having been expanded by SD-002 and Phase 8.
+
+**Resolution:** all nineteen moved. `services/gateway/main.go` becomes the five-line entrypoint §5.4
+specifies, and a `package main` handler defining methods on a type that is no longer in the package
+does not compile — there was no second reading to choose between. §9's own wording already assumes
+this: it asks for "every `services/gateway/*.go` file as deleted".
+
+### `openapi.json` had to move too, and `//go:embed` is why
+
+`openapi.go` is one of the ten files §4.1 relocates. It contains:
+
+```go
+//go:embed openapi.json
+var openapiSpec []byte
+```
+
+`go:embed` cannot reach outside its own package directory, so relocating `openapi.go` without
+`services/gateway/openapi.json` does not build. §4 does not mention the file.
+
+**Resolution:** `openapi.json` moved with its embedder — one spec, one location, still the source
+the SDKs are generated from. Two references were repointed (`scripts/generate-sdk-types.sh`,
+`.github/workflows/sdk-codegen.yml`, whose `paths:` trigger would otherwise have stopped firing
+silently), and `./scripts/generate-sdk-types.sh` was re-run: the only change to the generated Node
+and Python types is the `Auto-generated from …` header line. The contract-drift finding at
+`findings.md` §"two OpenAPI specs" had its path cell updated for the same reason — a register
+records what was found, not a file's permanent address.
+
+### §6 step 8's `paths` would have failed an existing test
+
+§6 step 8 says each new `ee` capability's `paths` is "the `ee/<dir>/` glob each spec's own §4.1 will
+populate". `pkg/boundary`'s `TestAllBoundaryPathsExist` stats every path of every `ee` capability
+whenever `ee/` is present, so eight paths naming directories that GRVX-1304–GRVX-1311 have not
+created yet would have failed on the first run.
+
+**Resolution:** the convention the three existing `ee` entries already use — `paths: [ee/placeholder/]`
+plus a `note` naming the owning spec and the directory it will create. Adding eight placeholder
+packages to satisfy a path check would have put eight empty Go packages in the tree to make a test
+pass, which is the check working and being worked around at the same time.
+
+### Two changes to §5's verbatim code
+
+1. **§5.2's mount loop is inline in `Run()`.** `Run()` blocks on `ListenAndServe` and cannot be
+   called from a test, so AC-5 and AC-7 would have had to rebuild the loop in their own bodies and
+   assert against the copy — a test that passes whatever `Run` later does. The loop moved into
+   `mountExtensions(mux *http.ServeMux)`, body unchanged, called from the exact point §5.2
+   specifies. `TestMountLoopStripsPrefix` now exercises the code that ships.
+2. **§5.1's `Extension.Handler` doc comment** says it "is called once, at registration time". The
+   `Register` body given verbatim in the same section never calls `Handler()`; §5.2's mount loop
+   does. Registration happens in an `ee/` package's `init()`, before a flag is parsed or a
+   dependency exists, so a `Handler` built there would be built against nothing — the difference
+   matters to whoever writes GRVX-1304. The comment now says what the code does, and
+   `TestRegisterDoesNotCallHandler` pins it.
+
+### AC-11 and AC-12 as literally written
+
+**AC-11** asks for "the exact same test count". A count lets a rename hide a deletion, so the
+243 top-level test names were extracted from the pre-move files (`git show HEAD:services/gateway/*_test.go`)
+into `pkg/gatewaycore/testdata/pre_move_tests.txt`, and `TestRelocationPreservesTestSuite` asserts
+every one of them still exists. 243 names in, 243 names out.
+
+**AC-12** — "No file outside `ee/` contains the literal string `gravix-dashboards/ee/`" — is false
+today and must be. Four files name it as data: `cmd/checkboundary/main.go` defines it as the constant
+it forbids, its test builds offending sources, `cmd/checkboundary/testdata/violating/importer.go` is
+the fixture it is pointed at, and `tests/e2e/exit_path_test.go` asserts the exit path does not import
+it. `cmd/checkboundary` already excludes its own testdata for this reason. `TestNoCoreFileReferencesEE`
+keeps the raw-byte check over every other Go file in the repository, with those four allowlisted by
+name and a stated reason each.
+
+### Files changed that §4 does not list
+
+Each is a consequence of the move rather than a decision:
+
+| File | Why |
+|---|---|
+| `docs/oss/boundary.yaml` | Ten `services/gateway/*.go` paths repointed at `pkg/gatewaycore/`; §4.2 mentions only the eight additions |
+| `pkg/boundary/boundary_test.go` | Pinned capability counts: 35 → 43 total, 3 → 11 ee. The core count stays 32 — a phase that adds paid features must not move anything out of the core to do it |
+| `.github/CODEOWNERS`, `MAINTAINERS.md` | The Gateway subsystem's 13,588 lines are at a new path; the ownership record follows the code, and the bus-factor table is eighteen rows of 1 rather than seventeen |
+| `.github/workflows/sdk-codegen.yml`, `scripts/generate-sdk-types.sh`, the two generated SDK type files | The OpenAPI spec's new location |
+| `tests/cube/RequestMetricsMinute.test.js`, `docs-site/docs/architecture-overview.md`, two comments in `main.go` | Named a moved file by its old path |
+
+`docker-compose.yml`, every `Dockerfile` and `deploy/gravix/**` show zero diff, as §4.3 requires:
+`go build -o bin/gateway ./services/gateway/` still produces the same binary from the same path.
