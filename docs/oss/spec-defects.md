@@ -2731,3 +2731,70 @@ SEV1 or SEV2". Introducing a second severity vocabulary would have meant two def
 enough to write up", so `RequiresPostmortem` is defined on the SEV scale and accepts
 `high`/`critical` as aliases resolving to the same ranks. `TestSeverityScaleMatchesTheRunbook`
 reads the runbook and fails if either half moves.
+
+---
+
+## SD-044 — GRVX-1501 §4 omits the release record, the generator and three consumers
+
+**Found by:** `sre-release-manager` executing GRVX-1501
+**Severity:** low — five files, each following a pattern the repository already uses
+**Status:** files created, recorded here
+**Affects:** GRVX-1501 §4.1, §4.2, §5.3
+
+### `Release` is named but never defined
+
+§5.3 gives `Classify(version string, now time.Time, releases []Release) (*Support, error)` and
+defines `Support`, `Line` and `ErrUnknownVersion` — but not `Release`. The minimum that makes
+§5.1's table computable is a version, a release date, and whether the release is an LTS.
+
+`IsLTS` is recorded rather than derived, because §5.1 requires an LTS to be "designated at its
+release rather than retroactively, so a team can plan an upgrade before they need one". Deriving it
+later would make the designation something that could change under somebody who had already planned
+around it.
+
+### There is nowhere to read releases from
+
+§5.3 takes `releases` as a parameter, and §4.2 says `SECURITY.md`'s table is generated from
+`SupportedVersions` — but nothing in §4 creates the record the generator reads. `docs/oss/releases.json`
+now holds it, and it is empty, because Gravix has cut no versioned release.
+
+A committed file rather than git tags, for the reason SD-036 established: `scripts/build_oss.sh`
+copies the tree **without** `.git`, so anything deriving from git history fails there.
+
+### A `.md` file cannot generate itself
+
+`pkg/version/cmd/gen` renders the table and `-check` fails when it is stale.
+`pkg/version/cmd/eligible` reports §5.2's verdict so `scripts/backport.sh` and
+`docs/oss/lts-policy.md` cannot disagree about what is backported. Both follow the repository's own
+`pkg/relnotes/cmd/gen`, `pkg/rfc/cmd/gen` and `pkg/metriccontract/cmd/gen` pattern, and
+`cmd/incidentaudit` from SD-043.
+
+`eligible` prints its verdict on **stdout** and always exits 0, which looks odd until you try the
+alternative: `go run` collapses every non-zero exit to 1, so a caller reading the exit code could
+not tell "this change is not eligible" from "nobody has said what kind of change this is". Those
+need different answers — one is a decision, the other is a question.
+
+### Beyond §4.2
+
+- **`.github/workflows/ci.yml`** gained a `supported-versions-check` step. Both `SECURITY.md` and
+  `docs/oss/lts-policy.md` tell the reader that CI fails when the table goes stale, so it has to.
+- **`tests/governance/spec_status_test.go`** no longer hard-codes GRVX-1501 as its "a spec whose
+  §4.1 files do not exist" fixture. It named that spec explicitly, with a comment saying
+  `docs/oss/lts-policy.md` and `scripts/backport.sh` did not exist — and executing GRVX-1501 made
+  the "false" `done` true, so the test went red for the best possible reason. It now **chooses** an
+  unexecuted spec with a missing non-`ee/` file, and fails loudly if no such spec remains. A
+  fixture consumed by the work it describes is one that expires, and the expiry looks like a real
+  failure.
+
+### One judgement call, because it changes what a customer is owed
+
+§5.1 gives an LTS "12 months from designation" and a previous LTS "3 months' overlap after a new
+LTS is designated". Implemented as a minimum of the two, the overlap would be **exactly zero days**
+on the annual cadence the policy describes — the outgoing LTS's window ends on the very day its
+successor is designated.
+
+So the overlap is **additive**: support ends three months after the new designation, and during
+those three months three lines are supported at once. The converse edge is stated in
+`docs/oss/lts-policy.md` rather than left to be discovered: an LTS superseded *early* gets three
+months from that point rather than the remainder of its year, because once it is the previous LTS
+it receives security fixes only.

@@ -1,0 +1,89 @@
+name: LTS CI
+
+# An LTS branch that only builds when somebody touches it will be broken by a
+# dependency change, and nobody will find out until a security fix is urgent.
+# That is the whole reason this runs on a schedule as well as on push: the
+# weekly run is what makes a twelve-month support promise something we can
+# actually keep, rather than something we discover we cannot at the worst
+# moment.
+#
+# It runs the full suite plus the open-core gates. An LTS that fails
+# check-boundary would be shipping a core that depends on ee/, which is a
+# licence problem on a branch people run in production.
+
+on:
+  push:
+    branches:
+      - 'lts/**'
+  schedule:
+    # Mondays at 06:00 UTC, before the access audit at 07:00 — the LTS branches
+    # are the ones a security fix has to land on in a hurry, so their health is
+    # the first thing on the week's list.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  lts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every branch this job knows about. A new LTS is added here as part of
+        # designating it; docs/oss/lts-policy.md says so, and an LTS branch
+        # missing from this list is an LTS nobody is testing.
+        branch: ['lts/v1']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+        continue-on-error: true
+        id: checkout
+
+      # A designated-but-not-yet-cut branch is not a failure. Gravix has cut no
+      # versioned release, so lts/v1 does not exist yet and this job is
+      # machinery waiting for its first branch rather than a broken build.
+      - name: Skip a branch that does not exist yet
+        if: steps.checkout.outcome != 'success'
+        run: |
+          echo "::notice::${{ matrix.branch }} does not exist yet; nothing to test."
+          echo "SKIP=1" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v5
+        if: env.SKIP != '1'
+        with:
+          go-version: '1.25'
+
+      - name: Full test suite
+        if: env.SKIP != '1'
+        run: go test -tags=slow ./... -count=1
+
+      - name: Open-core integrity
+        if: env.SKIP != '1'
+        run: |
+          make check-boundary
+          make build-oss
+          make test-oss
+
+      # A scheduled failure needs a person, and a red run nobody sees is the
+      # same as no run. On a push the author is already looking; on the weekly
+      # run they are not.
+      - name: Open an issue when the weekly run fails
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "LTS branch ${{ matrix.branch }} is failing CI" \
+            --body "The weekly LTS run failed on \`${{ matrix.branch }}\`.
+
+          A supported branch that cannot build is a support promise we cannot keep, and the time to
+          find that out is not when a security fix is waiting on it.
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          See [docs/oss/lts-policy.md](docs/oss/lts-policy.md)." \
+            --label "lts" || echo "::warning::could not open an issue; the failure is above"

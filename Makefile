@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -179,6 +179,16 @@ spec-status-check: ## Verify every spec marked done has the files its §4.1 name
 # produced no learning would defeat the purpose of the loop.
 incident-audit: ## Report incidents that have not closed the loop back to the core
 	./scripts/incident_audit.sh
+
+# --- Support windows (GRVX-1501) ------------------------------------------
+# SECURITY.md's supported-versions table is generated from docs/oss/releases.json.
+# A security policy that claims a support window the maintainers do not honour
+# is worse than no policy, so it is not maintained by hand.
+supported-versions: ## Regenerate SECURITY.md's supported-versions table
+	go run ./pkg/version/cmd/gen
+
+supported-versions-check: ## Fail if SECURITY.md's supported-versions table is stale
+	go run ./pkg/version/cmd/gen -check
 
 # --- Release notes (GRVX-1209) --------------------------------------------
 # Crediting people is the part that must not depend on somebody remembering, so

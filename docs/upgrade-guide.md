@@ -254,6 +254,61 @@ Template for future entries:
 
 ---
 
+## Upgrading between LTS releases
+
+An LTS-to-LTS upgrade skips a year of releases, which means it skips a year of migrations — all of
+them at once, on a system that has been running untouched for twelve months. It is the upgrade most
+likely to go wrong, and the one people have the least recent practice at.
+
+Treat it as a sequence of upgrades, not one jump.
+
+### Before you start
+
+1. **Read every intervening release's notes**, not just the target's. `CHANGELOG.md` covers the
+   whole range; a breaking change in a minor you skipped is still a breaking change.
+2. **Take a backup you have restored from.** See [disaster-recovery.md](disaster-recovery.md). A
+   backup nobody has restored is a file, not a backup.
+3. **Check the support window.** [`SECURITY.md`](../SECURITY.md)'s generated table says what is
+   supported today. The outgoing LTS keeps receiving security fixes for three months after the new
+   one is designated — that overlap is your window, and it is not long.
+
+### The upgrade
+
+Step through the minors rather than jumping. Each step is an upgrade you already know how to do,
+and a failure tells you which one broke rather than leaving you to bisect a year:
+
+```bash
+# From the old LTS, one minor at a time.
+git checkout v1.4.0 && make build && ./scripts/migrate.sh
+# verify, then continue
+git checkout v1.5.0 && make build && ./scripts/migrate.sh
+```
+
+Between each step, verify the way [Verification](#verification) below describes. The facts are
+immutable and the warehouse is derived, so the check that matters is that the same range of facts
+still produces the same metrics:
+
+```bash
+gravix recompute --from <date> --to <date>
+```
+
+A recompute that produces different numbers after an upgrade is a data-correctness defect, and it
+is backport-eligible on every supported line — see
+[the LTS policy](oss/lts-policy.md). Report it rather than working around it.
+
+### If you cannot step through
+
+Restore into a fresh install of the target version and replay your facts, rather than upgrading in
+place:
+
+```bash
+gravix migrate import-cloud --data-dir ./data --tenant-dir-name <tenant> \
+  --ingestion-endpoint http://new-install:8090
+```
+
+The facts are the source of truth and everything else is recomputable, which is what makes this a
+supported path rather than a last resort.
+
 ## Rollback Procedure
 
 ### Docker Compose Rollback

@@ -50,17 +50,23 @@ there never will be — see the [Open-Core Charter](docs/oss/00-open-core-charte
 
 ## Supported versions
 
-| Version | Supported |
-|---|---|
-| The default branch | ✅ |
-| Tagged releases | ⚠️ No releases have been tagged yet |
+This table is generated from the release record (`docs/oss/releases.json`) by
+`make supported-versions`, and CI fails if it goes stale. A security policy that claims a support
+window the maintainers do not actually honour is worse than no policy, so it is not maintained by
+hand.
 
-Gravix has not yet cut a versioned release, so there is no supported-version matrix to publish. An
-LTS policy with a 12-month support window arrives in Phase 15 (`GRVX-1501`), and this table is
-generated from the release record at that point rather than hand-maintained.
+<!-- BEGIN GENERATED: supported-versions -->
+| Version | Line | Supported until | Receives |
+|---|---|---|---|
+| _none yet_ | — | — | Gravix has cut no versioned release. The default branch receives everything. |
+<!-- END GENERATED: supported-versions -->
 
-We would rather say this plainly than publish a table implying a support guarantee that does not
-exist.
+The full policy — what each line receives, how long an LTS is supported, and what is backported to
+one — is [`docs/oss/lts-policy.md`](docs/oss/lts-policy.md).
+
+**Security fixes are free on every supported line, always.** Charter §7.3 Q3. Paid support
+(`GRVX-1504`) sells response time and advice; it does not sell patches, and there is no licence
+check anywhere in the backport path.
 
 ## No bounty
 

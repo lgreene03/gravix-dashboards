@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -58,15 +59,20 @@ func TestSpecStatusAuditCatchesAFalseDone(t *testing.T) {
 	if err := json.Unmarshal([]byte(repoFile(t, "docs", "oss", "spec-status.json")), &status); err != nil {
 		t.Fatalf("parse the status register: %v", err)
 	}
-	// GRVX-1501 writes docs/oss/lts-policy.md and scripts/backport.sh, neither of
-	// which exists. It has to be a spec whose files are outside ee/: `make
-	// test-oss` runs this suite with ee/ deleted, where ee/ paths are exempt for
-	// the same reason pkg/boundary exempts them, so an ee/ spec would prove
-	// nothing there.
-	if status["GRVX-1501"] == "done" {
-		t.Fatal("GRVX-1501 is already marked done; pick a spec that is not, or this proves nothing")
-	}
-	status["GRVX-1501"] = "done"
+	// The spec to falsely mark done is CHOSEN, not named.
+	//
+	// It used to be GRVX-1501, hard-coded, with a comment explaining that its
+	// files did not exist — and then GRVX-1501 was executed and this test
+	// stopped proving anything, because the "false" done had quietly become
+	// true. A fixture that is consumed by the work it describes is a fixture
+	// that expires, and the expiry looks like a real failure.
+	//
+	// It has to be a spec whose files are outside ee/: `make test-oss` runs
+	// this suite with ee/ deleted, where ee/ paths are exempt for the same
+	// reason pkg/boundary exempts them, so an ee/ spec would prove nothing
+	// there.
+	victim, missing := specWithAMissingCoreFile(t, status)
+	status[victim] = "done"
 
 	patched, err := json.MarshalIndent(status, "", "  ")
 	if err != nil {
@@ -81,12 +87,93 @@ func TestSpecStatusAuditCatchesAFalseDone(t *testing.T) {
 	if code != 1 {
 		t.Errorf("a false `done` exited %d; want 1\n%s", code, out)
 	}
-	if !strings.Contains(out, "GRVX-1501") {
-		t.Errorf("the audit does not name the offending spec:\n%s", out)
+	if !strings.Contains(out, victim) {
+		t.Errorf("the audit does not name the offending spec %s:\n%s", victim, out)
 	}
-	if !strings.Contains(out, "lts-policy.md") {
-		t.Errorf("the audit does not name a file that is missing:\n%s", out)
+	if !strings.Contains(out, missing) {
+		t.Errorf("the audit does not name %s, a file that is missing:\n%s", missing, out)
 	}
+}
+
+// specWithAMissingCoreFile returns a spec that is not marked done and one of
+// its §4.1 paths, outside ee/, that does not exist. It fails the test if there
+// is no such spec — which would mean every unexecuted spec's files are already
+// present, and the audit has nothing left to catch.
+func specWithAMissingCoreFile(t *testing.T, status map[string]string) (spec, path string) {
+	t.Helper()
+	root := repoRoot(t)
+
+	ids := make([]string, 0, len(status))
+	for id := range status {
+		ids = append(ids, id)
+	}
+	// Sorted, so the choice is the same on every run and a failure names the
+	// same spec twice running.
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		if status[id] == "done" {
+			continue
+		}
+		for _, p := range specFilesToCreate(t, root, id) {
+			if strings.HasPrefix(p, "ee/") {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); os.IsNotExist(err) {
+				return id, filepath.Base(p)
+			}
+		}
+	}
+
+	t.Fatal("no unexecuted spec has a missing core file; this test can no longer prove the " +
+		"audit is able to fail")
+	return "", ""
+}
+
+// specFilesToCreate returns the repository-relative paths in a spec's §4.1
+// table, the same way scripts/audit_spec_status.py reads them.
+func specFilesToCreate(t *testing.T, root, id string) []string {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(root, "docs", "oss", "specs", id+"-*.md"))
+	if err != nil || len(matches) == 0 {
+		return nil
+	}
+	raw, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("reading %s: %v", matches[0], err)
+	}
+
+	body := string(raw)
+	start := strings.Index(body, "### 4.1")
+	if start < 0 {
+		return nil
+	}
+	rest := body[start:]
+	if end := strings.Index(rest, "### 4.2"); end > 0 {
+		rest = rest[:end]
+	}
+
+	var out []string
+	for _, line := range strings.Split(rest, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") || strings.HasPrefix(line, "|---") || strings.HasPrefix(line, "| Path") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 2 {
+			continue
+		}
+		cell := strings.Trim(strings.TrimSpace(cells[1]), "`")
+		cell = strings.TrimSpace(cell)
+		// Prose, a glob or a directory note is not a path.
+		if cell == "" || !strings.Contains(cell, "/") ||
+			strings.HasPrefix(cell, "(") || strings.Contains(cell, "*") || strings.Contains(cell, " ") {
+			continue
+		}
+		out = append(out, cell)
+	}
+	return out
 }
 
 // Every waiver in the exceptions file names a reason. A waiver without one is
