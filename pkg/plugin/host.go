@@ -242,12 +242,19 @@ func (h *Host) Call(ctx context.Context, method string, params any) (json.RawMes
 
 	raw, err := h.callLocked(ctx, method, params)
 	if err != nil {
-		// A timeout or a dead pipe means the subprocess is not in a known
-		// state, so it is replaced rather than reused.
-		if errors.Is(err, ErrTimeout) || errors.Is(err, ErrCrashed) {
+		// A timeout, a dead pipe or a cancellation all leave the subprocess
+		// in an unknown state: a response may still be in flight on the pipe,
+		// and a reused stream would hand the next call this call's answer. So
+		// the process is replaced rather than reused.
+		cancelled := ctx.Err() != nil
+		if cancelled || errors.Is(err, ErrTimeout) || errors.Is(err, ErrCrashed) {
 			h.restartLocked()
 		}
-		h.recordFailureLocked()
+		// Cancellation is the host's own decision, not a plugin fault.
+		// Counting it would let a shutdown spend a healthy plugin's budget.
+		if !cancelled {
+			h.recordFailureLocked()
+		}
 		return nil, err
 	}
 
@@ -281,8 +288,13 @@ func (h *Host) callLocked(ctx context.Context, method string, params any) (json.
 		err  error
 	}
 	done := make(chan readResult, 1)
+	// The reader is captured before the goroutine starts. Once the call
+	// returns early — on a timeout or a cancellation — killLocked clears
+	// h.stdout while this goroutine is still blocked in Read, so reading the
+	// field from inside the goroutine would be a data race on the host.
+	reader := h.stdout
 	go func() {
-		line, err := h.stdout.ReadBytes('\n')
+		line, err := reader.ReadBytes('\n')
 		done <- readResult{line: line, err: err}
 	}()
 

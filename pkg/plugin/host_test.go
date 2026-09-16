@@ -480,6 +480,22 @@ func TestContextCancellationReturnsPromptly(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("cancellation took %s", elapsed)
 	}
+
+	// The abandoned request may still answer on the pipe, so the subprocess
+	// must be replaced. Reusing the stream would hand the next call this
+	// call's response — a silently wrong answer, which is worse than an error.
+	h.mu.Lock()
+	reused := h.cmd != nil
+	h.mu.Unlock()
+	if reused {
+		t.Error("the subprocess survived a cancelled call; the next call would read a stale response")
+	}
+
+	// Cancelling is the host's decision. If it spent the failure budget, a
+	// shutdown that cancels five calls would disable a healthy plugin.
+	if got := h.Failures(); got != 0 {
+		t.Errorf("Failures() = %d after a cancellation, want 0", got)
+	}
 }
 
 // AC-11: the guide's worked example builds and runs.
