@@ -2798,3 +2798,50 @@ those three months three lines are supported at once. The converse edge is state
 `docs/oss/lts-policy.md` rather than left to be discovered: an LTS superseded *early* gets three
 months from that point rather than the remainder of its year, because once it is the previous LTS
 it receives security fixes only.
+
+---
+
+## SD-045 — GRVX-1502 names eleven tests and creates no file to put them in
+
+**Found by:** `oss-steward` executing GRVX-1502
+**Affects:** GRVX-1502 §4.1, §7
+**Severity:** low — one file, in the package §8 already points at
+**Status:** file created, recorded here
+
+§7 names eleven tests, `TestEntrenchedClausesUnweakenable` through
+`TestGovernanceTiersPreserved`, and §8's first command is `go test ./tests/... -run '…'`. §4.1
+creates four markdown files and no Go file, so there is nowhere for those tests to live.
+
+They are in `tests/governance/council_test.go`, the package §8 already runs. This is the same class
+of omission as SD-043 (`cmd/incidentaudit`) and SD-044 (`pkg/version/cmd/gen`), and the same
+remedy: put it where the repository already puts that kind of thing, and say so here.
+
+### GRVX-1210 does not block this, and the spec knew that
+
+§2 lists the dependency as *"GRVX-1210 grants merge rights to ≥3 non-founder maintainers"*, which
+has not happened — GRVX-1210 is `partial` because four of its acceptance criteria need people who
+do not exist yet (SD-037).
+
+But GRVX-1502 is written to be executed before the council exists. §5.1 says *"Below three, the
+project operates under GRVX-706's founder-led rules and `MAINTAINERS.md` says so plainly"*, and
+AC-5 is `TestBelowQuorumFallbackStated`. The governance model is meant to be designed while nobody
+has a stake in the outcome; waiting until there are three maintainers would mean writing it while
+three people have one.
+
+So it was executed, and `docs/oss/council.md` opens by saying there is no council yet rather than
+describing a body that does not exist.
+
+### Two tests that had to be rewritten before they were right
+
+AC-3 and AC-4 ask for the absence of a tie-break and of a founder privilege. Written as regexes
+over prose, they flagged the sentences that **refuse** those things — "There is no casting vote, no
+founder veto" contains both phrases. A check that cannot tell a grant from a refusal will
+eventually fail a correct document, and the person who fixes it will fix the document.
+
+They now assert the disclaimers are present, which is both checkable and the thing that actually
+matters.
+
+Separately, every prose assertion normalises whitespace before matching. These files wrap at 100
+columns, a reader never experiences the line breaks, and three assertions failed the first time
+purely because a phrase spanned two lines. The verbatim tie statement is the one exception: that is
+a promise quoted exactly, newlines included.

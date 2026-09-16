@@ -24,6 +24,22 @@ Charter §7.1 (the core is Apache-2.0), §7.3 Q4 (once open, always open) and §
 are **entrenched**. They may be strengthened. They may never be weakened — not by majority, not by
 maintainer decision, not by a review that finds them inconvenient.
 
+**Who applies these tiers** is [`docs/oss/council.md`](docs/oss/council.md): every maintainer is a
+council member, a design decision needs a simple majority with a minimum of two approvals, a
+charter decision needs two-thirds plus the License & Boundary Auditor, and a tied vote fails. The
+council is bound by the entrenched clauses above exactly as everyone else is — no threshold in it
+unlocks them.
+
+The council acts only at three members or more. **Below three, these founder-led rules apply**, and
+[`MAINTAINERS.md`](MAINTAINERS.md) says so plainly rather than implying a body that does not exist.
+That is the state today.
+
+Disagreement that a discussion does not settle goes through
+[`docs/oss/conflict-resolution.md`](docs/oss/conflict-resolution.md): direct, then facilitated, then
+a council vote, then — only where the question is whether something violates the charter — a ruling
+by the License & Boundary Auditor, which is not put to a vote. Code-of-conduct matters skip all
+four.
+
 ## Who can block, and cannot be overruled in a sprint
 
 Three roles hold a veto:

@@ -1,8 +1,8 @@
 # Maintainers
 
-| Name | GitHub | Level | Subsystems | Since |
-|---|---|---|---|---|
-| Luke Greene | [@lgreene03](https://github.com/lgreene03) | Maintainer | all | 2026 |
+| Name | GitHub | Level | Subsystems | Council | Since |
+|---|---|---|---|---|---|
+| Luke Greene | [@lgreene03](https://github.com/lgreene03) | Maintainer | all | — (no council) | 2026 |
 
 Contact a maintainer through GitHub — an issue, a discussion, or a private vulnerability report.
 Personal contact details are deliberately not published here.
@@ -10,6 +10,13 @@ Personal contact details are deliberately not published here.
 ## Bus factor
 
 **The current bus factor is 1.**
+
+**There is no maintainer council.** [`docs/oss/council.md`](docs/oss/council.md) requires a minimum
+of three members for the council to act, and there is one maintainer — so the project operates under
+[`GOVERNANCE.md`](GOVERNANCE.md)'s founder-led rules. The `Council` column above says `—` for that
+reason, and will say `member` for everyone once there are three.
+
+`council: fewer than three members; GOVERNANCE.md founder-led rules apply`
 
 One person can merge, release, and administer this project. If they became unavailable, nobody else
 could ship a security fix.
