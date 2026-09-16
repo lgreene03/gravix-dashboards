@@ -54,6 +54,7 @@ cannot be checked.
 | GRVX-1308 | `ee/compliance/` — SIEM streaming, retention holds, SOC 2 evidence | 13 |
 | GRVX-1310 | `ee/whitelabel/` — branding, custom domains and embeds | 13 |
 | GRVX-1312 | Pro packaging, pricing, and the public page that lists what stays free | 13 |
+| GRVX-1407 | SOC 2 Type II engineering deliverables for Gravix Cloud | 14 |
 
 ## What is next
 
