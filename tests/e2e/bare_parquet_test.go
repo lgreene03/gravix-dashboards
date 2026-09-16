@@ -86,9 +86,7 @@ func writeBareFixture(t *testing.T) string {
 // AC-1: DuckDB reading the fixture Parquet partitions returns the exact
 // expected per-day sums.
 func TestBareParquetRead(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	dir := writeBareFixture(t)
 
@@ -107,9 +105,7 @@ func TestBareParquetRead(t *testing.T) {
 // AC-2: a DuckDB join across two independently-written partition trees returns
 // the expected row count.
 func TestBareParquetJoinAcrossPartitions(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	dir := writeBareFixture(t)
 
@@ -136,9 +132,7 @@ GROUP BY m.event_day ORDER BY m.event_day;`
 // while the query in AC-1 succeeds. This is what "bare" means: the files are
 // readable because of their layout, not because something is serving them.
 func TestBareParquetReadNoGravixProcessRequired(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	addrs := []string{
 		"127.0.0.1:8080", // dashboard
@@ -257,9 +251,7 @@ func TestWriteFixtureRejectsEmptyDays(t *testing.T) {
 // it renames the fixture files to the production shape and asserts the wider
 // glob still returns the same sums.
 func TestBareParquetProductionFilenameGlob(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	dir := writeBareFixture(t)
 
@@ -316,9 +308,7 @@ GROUP BY event_day ORDER BY event_day;`
 // keeps the fixture honest about the production struct, this one keeps the
 // published documentation honest about the fixture.
 func TestDocColumnTableMatchesDuckDB(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	dir := writeBareFixture(t)
 	out := runDuckDB(t, dir, `DESCRIBE SELECT * FROM read_parquet('request_metrics_minute/event_day=*/part-0.parquet', hive_partitioning=true);`)

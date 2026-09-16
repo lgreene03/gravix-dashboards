@@ -3302,3 +3302,103 @@ Routine wins, on precedent rather than on reading: `GRVX-804` added `influxdata/
 `GRVX-1102` added its own dependency, both the same way, both on this branch. Recorded here so the
 next implementer does not re-litigate it — and so that if the founder disagrees, there is one place
 to say so.
+
+---
+
+## SD-051 — GRVX-1104's entrypoint cannot live where §4.1 puts it, and its build command cannot run
+
+**Found by:** `frontend-engineer` executing GRVX-1104
+**Affects:** GRVX-1104 §4.1, §4.2, §6 step 7, §7 AC-4/AC-7, §8 step 1
+**Severity:** low — two mechanical errors and one scope gap; every buildable criterion passes
+**Status:** partial; 5 of 7 acceptance criteria proven, the two needing a stack are written and gated
+
+### `pkg/main.go` cannot be both
+
+§4.1 puts the backend entrypoint at `grafana-plugin/gravix-datasource/pkg/main.go` and §5.2 puts
+`Datasource` in the same directory as `package plugin`. A directory is one Go package: it cannot be
+`package main` and also be imported by anything.
+
+The entrypoint is at `cmd/main.go`, and `pkg/` stays the importable package the tests exercise.
+`plugin.json`'s `executable` field is unchanged, because Grafana names the binary, not its source
+path.
+
+### §8 step 1 and §6 step 7 build the wrong thing
+
+```bash
+go build -o dist/gpx_gravix_datasource ./pkg/...
+```
+
+`./pkg/...` matches more than one package, and `go build -o <file>` refuses that:
+
+```
+go: cannot write multiple packages to non-directory .../gpx_gravix_datasource
+```
+
+The working command is `go build -o dist/gpx_gravix_datasource ./cmd`, which is what
+`docs-site/docs/grafana-plugin.md` publishes and what `TestBuildIsCGOFree` and the new CI job run.
+Caught by AC-6's own test failing on its first run, which is the argument for AC-6 existing.
+
+### Two criteria need a stack this environment does not have
+
+| Criterion | State |
+|---|---|
+| AC-1 `fieldColumn` maps the six supported fields | **passing** |
+| AC-2 `fieldColumn` rejects anything else | **passing** |
+| AC-3 an empty service is refused before any query | **passing** |
+| AC-5 an unreachable Trino reports the exact health error | **passing** |
+| AC-6 the backend builds with `CGO_ENABLED=0` | **passing** |
+| AC-4 a healthy Trino reports `gravix: trino reachable` | **not run** — needs a live Trino |
+| AC-7 Grafana lists the plugin as installed | **not run** — needs a reachable Docker daemon |
+
+Both are written and gate themselves. `docs-site/docs/grafana-plugin.md` carries the same table, so
+a reader is told "Grafana loads it" is **built and not yet demonstrated** rather than left to assume
+it was tested.
+
+Three tests were added beyond §7. `TestOnlyAllowlistedColumnsReachTheStatement` asserts the property
+AC-1 and AC-2 exist to support — that the statement has exactly one format verb, that every
+allowlisted column is a bare identifier, and that the other seven values are bound parameters.
+`fmt.Sprintf` into SQL is a smell worth earning, and it is safe here only for as long as its one
+verb is fed exclusively from `fieldColumns`. `TestQueryDataRejectsUnsupportedFieldBeforeQuerying`
+and `TestNewDatasourceDefaults` cover the other two §6.1 rows.
+
+### The skip budget, again
+
+AC-7's test skips without Docker, which would have taken `skipBaseline` from 29 to 30 — the same
+collision SD-050 hit. `tests/e2e/gate_test.go` gained `requireDuckDB` and `requireDocker`, and the
+eight inline `t.Skip(duckDBMissing)` blocks in `bare_parquet_test.go` and `exit_path_test.go` call
+the first. **29 → 23.**
+
+`requireDocker` runs `docker info` rather than `exec.LookPath("docker")`. This environment has the
+binary and no reachable daemon, which is exactly the state where LookPath says yes and the test then
+hangs waiting for a container that will never start.
+
+### Files created and modified beyond §4
+
+§4.2 says "None — this is a new, isolated component." Four departures:
+
+- **`cmd/main.go`, `src/datasource.ts`, `webpack.config.js`, `tsconfig.json`** — the entrypoint per
+  above, the `DataSourceWithBackend` subclass `module.ts` registers, and the build `§6 step 7`
+  requires without naming its configuration.
+- **`docs-site/sidebars.js`** — an orphaned page fails `TestBoardIsInTheSidebar`.
+- **`.github/workflows/ci.yml`** — a new `isolated-modules` job, gated into `ci-summary`.
+
+The CI job is the one worth arguing for. `terraform-provider-gravix/` and this plugin each carry
+their own `go.mod`, so the root `go build ./...` and `go test ./...` never descend into them — the
+isolation that keeps their dependency trees out of `check-boundary` also meant **nothing in CI had
+ever compiled either one.** The plugin arrives with eight tests that would have run nowhere. A test
+suite that never runs is a liability rather than coverage, so the job builds the terraform provider
+(which has no tests at all — worth knowing) and vets, tests, cross-builds and npm-builds the plugin.
+
+### The dependency resolution had to be fixed rather than forced
+
+`npm install` first failed: `react-dom@18.3.1` arrives transitively and requires `react@^18.3.1`,
+against the pinned `react@18.2.0`. npm's own advice is `--force` or `--legacy-peer-deps`, and both
+were declined — a build that needs a flag to resolve is a build nobody else can reproduce cleanly,
+and the resulting tree is one npm itself describes as "incorrect (and potentially broken)".
+
+Pinning `react` and `react-dom` together at 18.3.1 resolves it properly. `npm install`,
+`npm run typecheck` and `npm run build` all exit 0, and `dist/` holds `module.js` and `plugin.json`.
+
+One more mechanical fix: `tsconfig.json` cannot set `noEmit` when `ts-loader` is the webpack loader
+— the build fails with *"TypeScript emitted no output"*. `npm run typecheck` passes `--noEmit` on the
+command line instead, which is where it belongs.

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "Gravix",
+  "id": "gravix-datasource",
+  "backend": true,
+  "executable": "gpx_gravix_datasource",
+  "metrics": true,
+  "info": {
+    "description": "Query Gravix request metrics via Trino.",
+    "version": "1.0.0",
+    "author": {
+      "name": "The Gravix Authors"
+    },
+    "keywords": ["gravix", "trino", "observability"],
+    "links": [
+      {
+        "name": "Documentation",
+        "url": "https://github.com/lgreene03/gravix-dashboards/blob/main/docs-site/docs/grafana-plugin.md"
+      },
+      {
+        "name": "License",
+        "url": "https://github.com/lgreene03/gravix-dashboards/blob/main/LICENSE"
+      }
+    ],
+    "updated": "2026-09-16"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=10.0.0",
+    "plugins": []
+  }
+}

@@ -43,6 +43,11 @@ const sidebars = {
         // fails TestBoardIsInTheSidebar, and a page nobody can navigate to is a
         // page that does not exist.
         'iceberg-tables',
+        // The Grafana datasource plugin (GRVX-1104) and the human procedure for
+        // publishing it. Same reason as the two entries above: an orphaned page
+        // fails TestBoardIsInTheSidebar.
+        'grafana-plugin',
+        'grafana-plugin-publishing',
         'migrating',
         // The exit path out of Gravix Cloud (GRVX-1403). Added here beyond that
         // spec's file list, because TestBoardIsInTheSidebar fails on any page in

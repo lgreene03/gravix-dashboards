@@ -211,9 +211,7 @@ func TestExportEverythingCompletes(t *testing.T) {
 // AC-2: the claim this spec exists to prove. Nothing Gravix is running, and
 // the data still reads.
 func TestExitPathReadableWithGravixStopped(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	dataRoot, dbPath, tenantID := seedExitFixture(t)
 	outDir := runExitPath(t, dataRoot, dbPath, tenantID)
@@ -235,9 +233,7 @@ func TestExitPathReadableWithGravixStopped(t *testing.T) {
 
 // AC-3
 func TestExportRowCountsMatchManifest(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	dataRoot, dbPath, tenantID := seedExitFixture(t)
 	outDir := runExitPath(t, dataRoot, dbPath, tenantID)
@@ -319,9 +315,7 @@ func TestConfigExportComplete(t *testing.T) {
 // AC-8: every command the generated README publishes is executed here. A
 // published instruction that does not run is worse than none.
 func TestReadmeCommandsRun(t *testing.T) {
-	if duckDBPath() == "" {
-		t.Skip(duckDBMissing)
-	}
+	requireDuckDB(t)
 
 	dataRoot, dbPath, tenantID := seedExitFixture(t)
 	outDir := runExitPath(t, dataRoot, dbPath, tenantID)

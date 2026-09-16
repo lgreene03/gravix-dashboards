@@ -6,8 +6,10 @@
 package e2e
 
 import (
+	"context"
 	"net/http"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -58,5 +60,33 @@ func requireLiveStack(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Trino answered %s at /v1/info; the stack is up but unhealthy, which is a "+
 			"failure rather than a reason to skip", resp.Status)
+	}
+}
+
+// requireDuckDB gates a test on the DuckDB CLI.
+//
+// DuckDB is how this suite proves the warehouse is readable by a foreign,
+// unmodified SQL engine. Without it those tests prove nothing, so they say so
+// and stop rather than passing vacuously.
+func requireDuckDB(t *testing.T) {
+	t.Helper()
+	if duckDBPath() == "" {
+		t.Skip(duckDBMissing)
+	}
+}
+
+// requireDocker gates a test on the Docker CLI being usable.
+//
+// LookPath is not enough: this environment has the binary and no reachable
+// daemon, which is the state that makes a test hang rather than fail. `docker
+// info` is the cheapest question that distinguishes them.
+func requireDocker(t *testing.T) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := exec.CommandContext(ctx, "docker", "info").Run(); err != nil {
+		t.Skip("no reachable Docker daemon; this test needs one to start a container")
 	}
 }
