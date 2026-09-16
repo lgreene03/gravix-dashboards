@@ -2561,3 +2561,62 @@ form rather than truth. A dependency graph is exactly the kind of thing a gate c
 mechanically — that every type a spec's §5 names is defined by a spec it declares a dependency on —
 and does not. That is the second time a Phase 13 spec has named something that does not exist
 (SD-039 named `license.Result`), which makes it a pattern rather than an incident.
+
+---
+
+## SD-041 — GRVX-1402's §9 asks for a docs delta that §4.1 leaves nowhere to put
+
+**Found by:** `pro-engineer` executing GRVX-1402
+**Affects:** GRVX-1402 §4.1, §9
+**Severity:** low — the code half of the spec is complete and unambiguous; this is the paperwork
+line
+**Status:** open; needs a maintainer, not an implementer
+
+### The contradiction
+
+§9 requires:
+
+> - [ ] `docs-engineer` delta merged (a "Bring your own bucket" setup guide), or
+>   `NO DOCS DELTA REQUIRED` accepted
+
+and, two lines above it:
+
+> - [ ] No file outside §4.1 modified (§4.2 is empty for this spec)
+
+§4.1 lists seven files, none of them documentation, and §4.2 is empty. So a setup guide has no
+legal home under this spec, and the only remaining option — `NO DOCS DELTA REQUIRED` — is
+explicitly something that must be *accepted*, which is a maintainer's act. An implementer who
+accepts their own waiver has not satisfied the criterion; they have removed it.
+
+Every other `ee/` package built in Phase 13 carries a `README.md` that its own spec listed in §4.1
+(`ee/fleet/README.md`, `ee/intelligence/README.md`, `ee/warehouse/README.md`,
+`ee/degrade/README.md`). GRVX-1402 is the first that does not, and the omission looks like an
+oversight rather than a decision — bring-your-own-bucket is the one feature in the paid tier whose
+whole value is the customer understanding exactly where their data goes.
+
+### What was done
+
+The code was built exactly to §4.1: seven files, nothing else created or modified. No README was
+written, because writing one would have been the implementer deciding a documentation question the
+spec reserves.
+
+### What a maintainer needs to decide
+
+Either:
+
+1. add `ee/tenancy/byob/README.md` to GRVX-1402 §4.1 — matching the four Phase 13 packages — and
+   the guide gets written; or
+2. accept `NO DOCS DELTA REQUIRED` on the record, on the basis that Cloud's customer-facing
+   documentation lives outside this repository.
+
+Option 1 is the one consistent with the rest of `ee/`.
+
+### A second, smaller gap found alongside it
+
+`docs/oss/boundary.yaml` has no capability id for bring-your-own-bucket. `pkg/license`'s
+`Features` field is documented as carrying "capability ids from `docs/oss/boundary.yaml`", so a
+licence cannot name this capability today. Nothing is broken — GRVX-1402 gates on
+`degrade.State`, not on `License.HasFeature` — and `make check-boundary` reports zero violations,
+because the `ee/tenancy/` tree is already covered by the `tenancy-fleet-console` entry's
+placement. But the id will be needed by whichever spec first gates a Cloud feature on a licence
+feature list, and `boundary.yaml` is a core file that §4.2 forbids this spec from touching.
