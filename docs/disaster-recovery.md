@@ -3,6 +3,15 @@
 This document covers recovery procedures for Gravix infrastructure failures.
 Follow these procedures in order of severity.
 
+**This runbook is about your data and your cluster.** It is not about the project's identity — the
+GitHub account, the domains, the registry accounts and the release signing identity. Those have no
+backups and no RTO, and losing access to one is not a failure you recover from by restoring a
+snapshot. Who can get them back is [`docs/oss/succession.md`](oss/succession.md), and the honest
+answer there is currently one person.
+
+The distinction matters when you are deciding whether to depend on Gravix: everything below tells
+you your data is recoverable, and it is. None of it tells you the project is.
+
 ---
 
 ## Quick Reference
@@ -289,3 +298,8 @@ aws s3 ls s3://gravix-prod/backups/LATEST/warehouse/ | head -5
 | Security team | Secret compromise, unauthorized access |
 
 Update this section with your team's actual contact information.
+
+For the *project's* custody — who can recover the GitHub account, the registries and the signing
+identity if the maintainer does not answer — see [`docs/oss/succession.md`](oss/succession.md) and
+the annual drill in [`docs/oss/succession-drill.md`](oss/succession-drill.md). Nothing in this
+runbook covers that, and no backup in it helps.

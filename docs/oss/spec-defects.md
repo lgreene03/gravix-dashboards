@@ -3006,3 +3006,121 @@ be part of the OSS build — the SD-036 lesson, hit again. `TestApprovalThreshol
 the threshold rows from `GOVERNANCE.md` verbatim instead, and additionally refuses any approval-count
 directive in `CODEOWNERS`, which is the confusion §3 is actually warning about. That holds whether
 or not a git history exists, and it keeps holding after the commit that a `git diff` stops seeing.
+
+---
+
+## SD-048 — GRVX-1503's AC-2 cannot be satisfied by an implementer, and its own §10 says so
+
+**Found by:** `security-engineer` executing GRVX-1503
+**Affects:** GRVX-1503 §4.1, §4.2, §5.1, §7 AC-2, §8, §9
+**Severity:** medium — one acceptance criterion is a fact about the world, not about the code
+**Status:** recorded; §10's instruction followed, and the shortfall escalated rather than papered over
+
+### AC-2 against §10
+
+§7 AC-2 requires that **every asset has ≥2 custodians**, and §9 goes further: two custodians "who
+have demonstrated recovery". §5.5's drill requires a second person to attempt a recovery unaided.
+
+Gravix has one maintainer. There is no second person, so there is no pair of custodians and no
+drill to run, and no amount of implementation produces either.
+
+§10 anticipates exactly this:
+
+> **An asset with only one possible custodian** — Report it as an open risk in `MAINTAINERS.md` and
+> escalate to `cpo`. Do not pretend it has two.
+
+So the spec contains both "every asset has two" as an acceptance criterion and "do not pretend it
+has two" as an instruction, and only one of them is executable. §10 wins, because the alternative is
+a plan that reads correctly and is false — in the one document whose entire purpose is telling
+somebody the truth about whether it is safe to depend on this project.
+
+What was done instead:
+
+- `scripts/verify_custody.sh` enforces the rule and **fails today**, on six live assets. It is not
+  softened, and it does not get GRVX-1507's "a recorded gap passes" treatment. The reasoning there
+  does not transfer: a subsystem with one reviewer can be recovered by forking, and an npm account
+  with one custodian cannot be recovered at all.
+- `TestTwoCustodiansPerAsset` therefore checks the two things that *are* in an implementer's gift —
+  that each shortfall is a fatal finding rather than a note, and that it is recorded in
+  `MAINTAINERS.md` and escalated in `open-decisions.md` where somebody will read it — plus that a
+  two-custodian fixture genuinely passes, so the threshold is a threshold rather than a rule nothing
+  can satisfy.
+- `docs/oss/succession-drill.md` records the 2026 drill as **NOT COMPLETED**, with "nobody
+  attempted it" listed as a failure rather than as not-applicable.
+
+### The §5.2 statement is published verbatim and is false
+
+§5.2 requires this in `succession.md`, word for word:
+
+```
+Every asset here has at least two people who can recover it.
+```
+
+It is not true of this project. The plan publishes it verbatim as **the rule the register is audited
+against**, and the next line is `**Today, not one asset meets that rule.**`
+`TestCustodyStatementVerbatim` pins both halves, because an edit that dropped the second one would
+turn an honest page into a claim, and would look like tidying.
+
+### §5.1 assumes every listed asset exists
+
+§5.1's asset list includes `gravix.io`, the Homebrew tap, the role addresses and the docs-site
+hosting. **None of them is provisioned** — `SECURITY.md` and `TRADEMARK.md` both already say the
+addresses wait on a domain that has not been registered, and there is no deployment workflow for
+`docs-site/`.
+
+Under §6.1 read literally, an asset that does not exist has zero custodians and fails. That would
+make the audit red for something nobody can fix by appointing anybody, next to six failures that are
+real, which is how a real finding gets lost.
+
+`custody.Asset.Provisioned` distinguishes the two. An unprovisioned asset warns rather than fails,
+and the warning says what it is for: *it needs 2 custodians before it is first used, not after*. It
+stays in the register precisely so that it acquires them before anyone depends on it — an asset that
+appears only once it exists is one provisioned by one person on a Tuesday and inherited by nobody.
+
+### Files created beyond §4.1
+
+- **`pkg/custody/`** (`custody.go`) and **`pkg/custody/cmd/verifycustody/main.go`** — §4.1 names
+  `scripts/verify_custody.sh` and §7 names eleven Go tests. A bash script cannot be the subject of a
+  Go test. Same shape and same remedy as SD-043, SD-044, SD-046 and SD-047; the script stays the
+  published interface and keeps §5.3's exit codes.
+- **`tests/governance/custody_test.go`** — §7 names eleven tests and §4.1 creates no file for them.
+
+### Files modified beyond §4.2
+
+- **`.github/workflows/succession-audit.yml`** rather than a job in `ci.yml`, per SD-037. It runs on
+  `schedule` and `workflow_dispatch` **only**, deliberately not on `pull_request`: nothing in a diff
+  can add a second custodian, and a check every pull request fails for a fact no pull request can fix
+  is a check people learn to merge past. The one thing a diff *can* break — a credential or a
+  personal detail in a succession file — is `TestNoSecretsInSuccessionPlan`, which runs on every pull
+  request in the ordinary test job.
+- **`MAINTAINERS.md`** and **`docs/oss/open-decisions.md`** — §10's escalation, which §4.2 does not
+  list a file for.
+- **`Makefile`** gained `make verify-custody`.
+- **`docs-site/docs/getting-started.md`** and **`docs-site/docs/sdk-go.md`** — see F-050 below.
+
+### §8 step 1's grep cannot fail
+
+```bash
+grep -riE "BEGIN (RSA|OPENSSH|PGP|EC) PRIVATE KEY|ghp_|sk_live_|AKIA[0-9A-Z]{16}" docs/oss/succession*.md
+```
+
+Four shapes, one of which (`ghp_`) matches a bare prefix. It misses npm and PyPI tokens, Slack
+tokens, GitHub's newer `github_pat_` format, recovery codes and passphrases — several of which are
+the exact credentials this register's assets use. `custody.ScanSecrets` covers nine shapes and is
+exercised in both directions: the real files are scanned, and six planted secrets are each confirmed
+refused, because a guard that has never refused anything is indistinguishable from one that cannot.
+
+The scan runs over the succession files only. A repository-wide secret scanner would spend its life
+explaining itself about test fixtures, and this is not one.
+
+### What enumerating the assets found: F-050
+
+Listing the identity assets is what surfaced it. `go.mod` declares
+`github.com/lgreene/gravix-dashboards`; the repository is at `lgreene03`. Those are two different
+existing GitHub accounts, so the `go get` command published twice in the docs cannot work — and
+would serve a third party's code under Gravix's name if that account ever held a repository of that
+name. Recorded as **F-050**, escalated in `open-decisions.md`, and the two published commands now
+carry a warning rather than an instruction that cannot succeed.
+
+Worth recording because nothing in the spec asked for it. The register's value turned out to be the
+act of enumerating, before anybody audited a single custodian.

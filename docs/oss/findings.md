@@ -3352,3 +3352,79 @@ reported the right thing in its output and the wrong thing in its exit code, so 
 that mattered — CI — read the wrong one.
 
 The output was accurate the whole time. Nobody was reading it.
+
+---
+
+## F-050 — the Go module path names somebody else's GitHub account
+
+**Found by:** `security-engineer` executing GRVX-1503, enumerating identity assets
+**Affects:** `go.mod`, `docs-site/docs/getting-started.md`, `docs-site/docs/sdk-go.md`, `sdk/go/`
+**Severity:** high — the published install command resolves to an account this project does not control
+**Status:** open; needs an owner decision, recorded in `open-decisions.md`
+
+### What is true
+
+```
+go.mod:1           module github.com/lgreene/gravix-dashboards
+the repository     github.com/lgreene03/gravix-dashboards
+```
+
+`lgreene` and `lgreene03` are **two different GitHub accounts** — user id 10656952 and 6113629
+respectively, both existing today. The module path is not a typo that resolves anyway through a
+redirect; it names a real, unrelated third party.
+
+The docs publish that path as the install command, twice:
+
+```
+docs-site/docs/getting-started.md:74   go get github.com/lgreene/gravix-dashboards/sdk/go
+docs-site/docs/sdk-go.md:13            go get github.com/lgreene/gravix-dashboards/sdk/go
+```
+
+### Why it is worse than a 404
+
+A user following the published instructions gets nothing today, which is a bug.
+
+What makes it a security finding rather than a broken link is what happens if the owner of
+`github.com/lgreene` ever creates a repository called `gravix-dashboards`. Go resolves a module
+path by fetching it — there is no registry entry to compare it against and no ownership check
+beyond "whoever controls that URL". At that moment `go get` on Gravix's own published command
+starts serving that account's code, under Gravix's name, to everyone who followed the docs. No
+compromise is needed and the other account's owner need not know Gravix exists.
+
+This is a name Gravix does not hold, printed in Gravix's documentation as the place to get Gravix.
+
+Two things limit it. The Go module proxy's checksum database pins a path to the content first
+published at it, so a *previously fetched* version cannot be swapped underneath an existing
+consumer. And no release has shipped under this module path yet, so there is no existing consumer
+to protect. Both of those are reasons it is cheap to fix now and expensive to fix later.
+
+### Why it was not caught
+
+Nothing verifies that `go.mod`'s module path matches the repository it lives in, and nothing could
+have: the repository URL is not knowable from the source tree, `scripts/build_oss.sh` copies the
+tree without `.git`, and a checkout can legitimately live anywhere. Every Go build in CI succeeds,
+because a module path is a name, not a fetch — the compiler never resolves it. The only thing that
+resolves it is a user typing the command in the docs, and no test does that.
+
+`sdk-codegen.yml` and `publish-sdks.yml` publish the Node and Python SDKs to registries that would
+have rejected a name the project does not own. The Go SDK has no registry to reject it. That is the
+whole difference.
+
+### What it would take to fix
+
+Not decidable by an implementer — it is a choice about the project's canonical name, and each
+option costs something different:
+
+1. **Rename the module to `github.com/lgreene03/gravix-dashboards`.** Mechanical, one `go.mod` line
+   plus every internal import path, and it makes the published command correct. It also bakes a
+   personal account into the import path of every consumer, which `succession.md` argues is the
+   thing to move away from.
+2. **Move the repository to an organisation first, then set the module path to it.** Better, and it
+   is item 1 of `succession.md`'s
+   [list](succession.md#what-it-would-take-to-make-this-page-true) anyway. It changes the import
+   path exactly once instead of twice.
+3. **Use a vanity path on `gravix.io`.** Independent of where the repository lives, so the import
+   path never changes again. Needs the domain, which is not provisioned.
+
+Until one is chosen, the two published `go get` commands are wrong, and the docs should say so
+rather than print a command that cannot work.

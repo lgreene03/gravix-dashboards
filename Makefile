@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check charter-evidence bus-factor
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check charter-evidence bus-factor verify-custody
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -200,6 +200,13 @@ supported-versions-check: ## Fail if SECURITY.md's supported-versions table is s
 # before the review is published.
 charter-evidence: ## Collect the measured evidence for the annual charter review
 	./scripts/charter_evidence.sh
+
+# --- Succession and custody (GRVX-1503) -----------------------------------
+# Whether anybody but the current maintainer could recover this project's
+# identity. It is RED today, on purpose: every live asset has one custodian.
+# docs/oss/succession.md's last section is the ordered list of what fixes it.
+verify-custody: ## Check every identity asset has two custodians, verified within a year
+	./scripts/verify_custody.sh
 
 # --- Bus factor (GRVX-1507) -----------------------------------------------
 # Declared ownership against effective ownership. The gap between the two is the

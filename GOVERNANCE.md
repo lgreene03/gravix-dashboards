@@ -98,11 +98,21 @@ The Gravix name and logo are reserved. Forks are welcome and may not use the nam
 
 ## Succession
 
-Where the project's identity lives — the organisation, domains, registries and signing identity —
-and who can recover each **is not yet written down**. `GRVX-1503` specifies `docs/oss/succession.md`
-and it has not been executed; the register said otherwise until F-044 checked it. Until it exists,
-succession depends on one person's accounts, which is the same bus factor
-[`MAINTAINERS.md`](MAINTAINERS.md) reports and no better for being mentioned here.
+Where the project's identity lives — the account, domains, registries and signing identity — and
+who can recover each is in [`docs/oss/succession.md`](docs/oss/succession.md), one row per asset,
+with locations and roles and no credentials.
+
+**Read it before depending on Gravix.** It does not say the succession plan is fine. It says that
+every live asset has exactly one custodian, that the repository sits under a personal GitHub account
+which by construction cannot have a second owner, and that
+[`scripts/verify_custody.sh`](scripts/verify_custody.sh) therefore fails today and will keep failing
+until that changes. [`docs/oss/succession-drill.md`](docs/oss/succession-drill.md) records the 2026
+recovery drill as **not completed**, because a drill needs a second person.
+
+That is the same bus factor [`MAINTAINERS.md`](MAINTAINERS.md) reports, and writing it down does not
+improve it. What writing it down does is let somebody evaluating this project see the risk in ten
+seconds instead of discovering it later, and give the work to fix it a named order —
+`succession.md`'s last section is that list.
 
 ## Transparency
 

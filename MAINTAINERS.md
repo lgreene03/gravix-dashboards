@@ -30,6 +30,21 @@ fails on an *unrecorded* one — the audit exists to stop a gap being invisible,
 existing. An audit that went red every month for a fact nobody can change this quarter is an audit
 people stop reading.
 
+**Open risk: no asset of this project's identity has a second custodian.**
+[`docs/oss/succession.md`](docs/oss/succession.md) enumerates twelve — the GitHub account, the
+release signing identity, the container images, npm, PyPI, the Go module path, and six that are not
+provisioned yet — and every live one has exactly one person who can reach it.
+
+The worst of it is structural rather than a matter of appointing somebody. The repository lives
+under a **personal** GitHub account, and a personal account cannot have a second owner: GitHub's
+recovery process returns access to the account holder, and no collaborator can inherit one. Keyless
+signing (`GRVX-709`) means there is no key to escrow, which is the right design and concentrates
+everything into that same account. `./scripts/verify_custody.sh` fails today and will keep failing
+until this changes, and the 2026 recovery drill is recorded as **not completed** because a drill
+needs a second person. Escalated to `cpo`; the ordered list of what would fix it is the last section
+of `succession.md`, and its first item — moving the repository to an organisation — needs nobody but
+the founder.
+
 One person can merge, release, and administer this project. If they became unavailable, nobody else
 could ship a security fix.
 
