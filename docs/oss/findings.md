@@ -2954,3 +2954,70 @@ plugin host's hang under `make test-oss`, the release-notes test that assumed a 
 now a register of completed work that no code read. Each was found by accident. The pattern worth
 naming is not "be more careful" — it is that a claim nothing can check is a claim that will
 eventually be wrong, and the cheapest moment to add the check is when writing the claim.
+
+---
+
+## F-045 — the roadmap generator silently dropped fifteen of eighty-eight specs
+
+**Found by:** `senior-engineer` recording SD-040, when marking six Phase 13 specs blocked added one
+row to the published board instead of seven
+**Affects:** `scripts/gen_roadmap_board.py`, `docs-site/docs/roadmap.md`
+**Severity:** medium — a published page that omits work, and a check that could not catch it
+**Status:** fixed; the generator now fails on a row it cannot read
+
+### What it did
+
+`parse_phases` read each spec row with one regular expression:
+
+```python
+row = re.compile(r"^\|\s*\[(GRVX-\d{3,4})\]\([^)]*\)\s*\|\s*(.+?)\s*\|\s*`?(\w+)`?\s*\|\s*([^|]*?)\s*\|")
+```
+
+`(.+?)` for the title can backtrack across a `|`, and `(\w+)` for the placement cannot match `ee/`
+because of the slash. Between them, a row whose placement is `` `ee/` `` either matched with the
+title absorbing two more cells, or did not match at all — and a row that does not match is not an
+error, it is a `continue`.
+
+Measured against the committed index: **88 spec rows, 73 read, 15 dropped.** The fifteen were
+`GRVX-1303` through `GRVX-1312` — every Phase 13 spec but `GRVX-1301` and `GRVX-1302` — plus
+`GRVX-1402`, `GRVX-1405`, `GRVX-1407`, `GRVX-1504` and `GRVX-1505`. Two more, `GRVX-1401` and
+`GRVX-1406`, were read with a title containing two extra cells and a placement of `none` taken from
+their "Depends on" column.
+
+A dropped spec cannot appear in the current-phase table and cannot appear in the blocked list. The
+published roadmap has a section that says, in as many words:
+
+> It is listed rather than quietly omitted, because a roadmap that shows only what is moving is a
+> roadmap that cannot be checked.
+
+Ten of the fifteen were the entirety of the paid tier's remaining work.
+
+### Why no check caught it
+
+`make roadmap-check` regenerates the board and diffs it against the committed one. Both sides come
+from the same parser, so a row the parser cannot read is absent from both and the diff is empty.
+The check answers "is the committed board what this code produces", which is a useful question and
+not the same question as "does the board describe the index".
+
+### What changed
+
+`parse_phases` now splits each row on the pipe and reads cells by position, so a cell boundary
+cannot be crossed. A row with fewer than four columns, or a first cell that is not a spec link,
+raises `GenerationError` instead of being skipped. At the end it counts the `GRVX-` rows in the
+index and fails if the number read is not the number present, naming the missing ids — a dropped
+row is now a red build.
+
+`TestEverySpecIndexRowIsWellFormed` checks the index independently of the generator: every row has
+at least four columns, a parsable link, a non-empty title, and a placement of `core`, `ee` or
+`boundary`. Independently, because the failure mode here was two things agreeing with each other
+and both being wrong.
+
+The regenerated board gained the seven blocked Phase 13 and 14 specs and lost the malformed
+`GRVX-1401` row.
+
+### The same shape, again
+
+F-044 was a hand-maintained register nothing read. This is a generated page whose only check
+compared it against itself. Both published something untrue for months. The common factor is not
+carelessness — it is that "generated" and "checked" are different properties, and a generator is
+not a check on its own input.

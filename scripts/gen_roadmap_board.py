@@ -102,35 +102,71 @@ def read(path: str) -> str:
 
 
 def parse_phases(text: str) -> list[Phase]:
-    """Reads the per-phase spec tables out of the generated spec index."""
+    """Reads the per-phase spec tables out of the generated spec index.
+
+    Cells are split on the pipe rather than matched with one expression, because
+    an expression that can backtrack across a cell boundary does not fail on a
+    row it cannot read — it silently reads the wrong thing. The earlier one did
+    both: it dropped fifteen of eighty-eight rows, every Phase 13 ee/ spec among
+    them, and gave five more a placement taken from the middle of their title
+    (F-045). Every row the index contains must end up in a phase, and the count
+    at the bottom of this function is what makes a dropped row a red build
+    instead of a spec nobody can see on the published roadmap.
+    """
     phases: list[Phase] = []
     current: Phase | None = None
 
     heading = re.compile(r"^## Phase (\d+) — (.+?)\s*$")
     goal_line = re.compile(r"^\*\*Goal:\*\*\s*(\S+)")
-    row = re.compile(r"^\|\s*\[(GRVX-\d{3,4})\]\([^)]*\)\s*\|\s*(.+?)\s*\|\s*`?(\w+)`?\s*\|\s*([^|]*?)\s*\|")
+    spec_cell = re.compile(r"^\[(GRVX-\d{3,4})\]\([^)]*\)$")
+    any_spec_row = re.compile(r"^\|\s*\[(GRVX-\d{3,4})\]", re.M)
 
+    seen: list[str] = []
     for line in text.splitlines():
         m = heading.match(line)
         if m:
             current = Phase(number=int(m.group(1)), theme=m.group(2).strip(), goal="")
             phases.append(current)
             continue
-        if current is None:
-            continue
+
         m = goal_line.match(line)
-        if m:
+        if m and current is not None:
             current.goal = m.group(1)
             continue
-        m = row.match(line)
-        if m:
-            current.specs.append(
-                Spec(spec_id=m.group(1), title=m.group(2).strip(),
-                     placement=m.group(3), goal=m.group(4).strip())
-            )
+
+        m = any_spec_row.match(line)
+        if not m:
+            continue
+        if current is None:
+            raise GenerationError(f"roadmap: {m.group(1)} appears before any phase heading")
+
+        # | [GRVX-nnnn](file.md) | title | placement | goal | depends | role | days |
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 4:
+            raise GenerationError(
+                f"roadmap: {m.group(1)} has {len(cells)} columns; the spec index needs at "
+                "least id, title, placement and goal")
+        link = spec_cell.match(cells[0])
+        if not link:
+            raise GenerationError(f"roadmap: cannot read the spec link in {cells[0]!r}")
+
+        current.specs.append(Spec(
+            spec_id=link.group(1),
+            title=cells[1],
+            placement=cells[2].strip("`").rstrip("/"),
+            goal=cells[3],
+        ))
+        seen.append(link.group(1))
 
     if not phases:
         raise GenerationError("roadmap: the spec index has no phase tables")
+
+    declared = any_spec_row.findall(text)
+    if len(seen) != len(declared):
+        lost = [s for s in declared if s not in seen]
+        raise GenerationError(
+            f"roadmap: the spec index has {len(declared)} specs but {len(seen)} were read; "
+            f"missing: {', '.join(lost)}")
     return phases
 
 

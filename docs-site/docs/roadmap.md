@@ -48,6 +48,13 @@ cannot be checked.
 | GRVX-1103 | SQL-vs-PromQL guide + verified Metabase/Superset connection | 11 |
 | GRVX-1104 | Grafana datasource plugin — keep Grafana, get Gravix correctness | 11 |
 | GRVX-1106 | Apache Iceberg table format, readable by Spark and Trino | 11 |
+| GRVX-1304 | `ee/tenancy/` — the multi-tenant control plane | 13 |
+| GRVX-1305 | `ee/billing/` — metering, Stripe, invoicing and overage | 13 |
+| GRVX-1306 | `ee/identity/` — SAML, SCIM and directory sync (single-org OIDC stays free) | 13 |
+| GRVX-1308 | `ee/compliance/` — SIEM streaming, retention holds, SOC 2 evidence | 13 |
+| GRVX-1310 | `ee/whitelabel/` — branding, custom domains and embeds | 13 |
+| GRVX-1312 | Pro packaging, pricing, and the public page that lists what stays free | 13 |
+| GRVX-1401 | Prove Gravix Cloud runs the unmodified OSS core, by build provenance | 14 |
 
 ## What is next
 

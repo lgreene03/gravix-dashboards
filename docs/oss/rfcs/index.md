@@ -9,12 +9,13 @@ See [README.md](README.md) for the process.
 | RFC | Title | Status | Tier | Opened | Comment closes | Decided | Approvals |
 |---|---|---|---|---|---|---|---|
 | [0001](0001-rfc-process.md) | Adopt a written RFC process and public decision log | accepted | design | 2026-09-01 | 2026-09-08 | 2026-09-16 | cpo, license-boundary-auditor |
+| [0002](0002-tenant-resolution-extension-point.md) | A tenant-resolution extension point in pkg/extpoint | draft | design | 2026-09-16 | 2026-09-23 | — | — |
 
 ## By status
 
 | Status | Count |
 |---|---|
-| draft | 0 |
+| draft | 1 |
 | comment | 0 |
 | accepted | 1 |
 | rejected | 0 |

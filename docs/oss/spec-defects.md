@@ -2461,3 +2461,81 @@ guard, so a live instance would demonstrate a licence expiring and nothing chang
 right outcome but not a demonstration of it. `TestCoreUnaffectedInEveryState` covers the same
 guarantee in process today. The live demonstration belongs to **GRVX-1304**, the first spec that
 puts a real capability behind the guard.
+
+---
+
+## SD-040 — `EXTENSION POINT REQUIRED`: GRVX-1302 forbids the extension point GRVX-1304 requires
+
+**Found by:** `pro-engineer` executing GRVX-1304
+**Affects:** GRVX-1304 §5.1, §6 step 1; GRVX-1302 §3; and through them GRVX-1305, GRVX-1306,
+GRVX-1308, GRVX-1310, GRVX-1312, GRVX-1401
+**Severity:** high — it blocks six specs, and neither spec can be executed without contradicting
+the other
+**Status:** escalated. RFC 0002 drafted; the decision is not an implementer's
+
+### The contradiction
+
+GRVX-1304 §6 step 1:
+
+> Confirm `GRVX-1302` exposes a **tenant-resolution** extension point with a single-tenant default.
+> If not, return `EXTENSION POINT REQUIRED`.
+
+GRVX-1302 §3:
+
+> Do NOT add a second interface type to `pkg/extpoint` beyond `Extension`. Every Phase 13 capability
+> that needs request-time behaviour mounts an `http.Handler` … A second interface here would be
+> unused surface — **the eight subsequent specs are designed against exactly this one.**
+
+They cannot both be followed. The bolded clause is the load-bearing one and it is false: GRVX-1304
+is one of those eight, and it is designed against a different interface. Its §5.1 signature,
+
+```go
+func (r *Resolver) Resolve(ctx context.Context, req extension.Request) (string, error)
+```
+
+names a package `extension` and a type `Request` that exist nowhere in this repository.
+
+### Why an `Extension` cannot do it
+
+`extpoint.Extension` mounts an `http.Handler` at a path prefix, and that handler sees only requests
+under its own prefix. Tenant resolution has to apply to ingestion, the public metrics API, the
+percentile endpoint and export — four **core** routes. A handler mounted at `/ee/tenancy/` never
+sees them. This is not a gap in GRVX-1302's implementation; it is what a path-prefix registry is.
+
+### What was returned
+
+`EXTENSION POINT REQUIRED`, with the proposed interface, per GRVX-1304 §10. No core file was
+touched. The proposal is in
+[`rfcs/0002-tenant-resolution-extension-point.md`](rfcs/0002-tenant-resolution-extension-point.md):
+a `TenantResolver` with one method, a `SingleTenant` constant equal to the empty string the core
+already uses, and `ResolveTenant` returning `(SingleTenant, nil)` when nothing is registered — so
+the OSS build is unchanged by construction rather than by a flag.
+
+### Why it is not simply implemented
+
+[`GOVERNANCE.md`](../../GOVERNANCE.md) puts "a new extension point" at **design tier**: an RFC, a
+seven-day public comment window, and **two maintainer approvals**. There is one maintainer
+(`MAINTAINERS.md`, bus factor 1), so this RFC cannot be accepted under its own rules today. That is
+the process telling the truth about the project's size rather than a reason to route around it —
+the alternative, an implementer quietly adding an extension point to the Apache-2.0 core so that a
+paid feature can attach to it, is the exact shape of change the process exists to make public.
+
+### What is blocked, and what is not
+
+| Spec | State |
+|---|---|
+| `GRVX-1304` tenancy | blocked on RFC 0002 |
+| `GRVX-1305` billing, `GRVX-1306` identity, `GRVX-1310` white-label | blocked — depend on 1304 |
+| `GRVX-1308` compliance | blocked — depends on 1306 |
+| `GRVX-1312` packaging | blocked — depends on 1305 |
+| `GRVX-1401` provenance | blocked — depends on 1304 |
+| `GRVX-1307` fleet, `GRVX-1309` intelligence, `GRVX-1311` warehouse sync | **not blocked** — they mount handlers, which `Extension` already does |
+
+### What this says about the Readiness Gate
+
+Both specs are marked **12/12 — PASS**. The gate checks that a spec's paths are well-formed and its
+sections present; it does not check that two specs agree, and F-042 already recorded that it checks
+form rather than truth. A dependency graph is exactly the kind of thing a gate could check
+mechanically — that every type a spec's §5 names is defined by a spec it declares a dependency on —
+and does not. That is the second time a Phase 13 spec has named something that does not exist
+(SD-039 named `license.Result`), which makes it a pattern rather than an incident.
