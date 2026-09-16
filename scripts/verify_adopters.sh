@@ -8,10 +8,28 @@
 # rather than merely stated. A row without one is an organisation we listed on
 # their behalf, which is the thing the page promises never happens.
 #
+# Exit codes:
+#   0  every row was checked and every one resolves
+#   1  at least one row is definitively bad — no reference, not a number, or a
+#      reference that does not exist
+#   3  nothing was found to be bad, but at least one row could NOT be checked
+#      because the tracker was unreachable
+#
+# 3 exists because 0 would be a lie. This script's whole purpose is to make the
+# opt-in claim checkable, and a run that checked nothing has not made it
+# checkable — it has only failed to disprove it. The caller decides what an
+# unverified run is worth: CI treats it as a warning on a pull request, because
+# a gate that goes red when GitHub has a bad minute is a gate people learn to
+# re-run (F-047). It is never silence.
+#
 # Usage: ./scripts/verify_adopters.sh [--file PATH]
 set -euo pipefail
 
 REPO="${ADOPTERS_REPO:-lgreene03/gravix-dashboards}"
+# API is overridable so a test can point at a local server and assert both the
+# resolves and the unreachable branch without depending on GitHub's rate
+# limiter — which is what made this check red at random (F-049).
+API="${ADOPTERS_API:-https://api.github.com}"
 FILE="ADOPTERS.md"
 
 while [[ $# -gt 0 ]]; do
@@ -45,7 +63,7 @@ UNRESOLVED=0
 # than one that says it could not run.
 resolves() {
   local ref="$1"
-  local url="https://api.github.com/repos/$REPO/issues/$ref"
+  local url="${API%/}/repos/$REPO/issues/$ref"
   local args=(-sS -o /dev/null -w '%{http_code}' -H "Accept: application/vnd.github+json")
   if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     args+=(-H "Authorization: Bearer $GITHUB_TOKEN")
@@ -115,4 +133,13 @@ echo "adopters: $ROWS row(s), $FAILED without a valid submission, $UNRESOLVED un
 if (( FAILED > 0 )); then
   exit 1
 fi
+
+# Not 0. The header explains why: a run that could not reach the tracker has
+# not verified anything, and saying "adopters verified" on the strength of it
+# would be the exact failure this script exists to prevent, one level up.
+if (( UNRESOLVED > 0 )); then
+  echo "adopters: $UNRESOLVED row(s) could not be checked; the opt-in claim is UNVERIFIED for them" >&2
+  exit 3
+fi
+
 exit 0

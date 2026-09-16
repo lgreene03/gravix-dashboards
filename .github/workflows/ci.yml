@@ -166,10 +166,25 @@ jobs:
       # ADOPTERS.md is that somebody at that organisation asked. The Submission
       # column records where, and this is what makes that opt-in claim
       # checkable rather than merely stated.
+      #
+      # Exit 3 means the tracker was unreachable and nothing was checked. That
+      # is reported loudly and does not fail the build: a fabricated row still
+      # exits 1 and still goes red, while a gate that turns red because GitHub
+      # had a bad minute is a gate people learn to re-run (F-047). What it must
+      # never be is silence, which it was until F-049.
       - name: Verify every adopter opted in
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./scripts/verify_adopters.sh
+        run: |
+          set +e
+          ./scripts/verify_adopters.sh
+          status=$?
+          set -e
+          if [ "$status" = "3" ]; then
+            echo "::warning::The issue tracker was unreachable, so the adopter opt-in claim was not verified on this run."
+            exit 0
+          fi
+          exit "$status"
 
       - name: Run tests with race detector
         # -tags=slow so this covers every suite. GRVX-1206 split the suites by

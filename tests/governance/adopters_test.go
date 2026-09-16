@@ -4,6 +4,8 @@
 package governance
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,14 @@ import (
 // verifyAdopters runs the real script against a file and returns output and code.
 func verifyAdopters(t *testing.T, args ...string) (string, int) {
 	t.Helper()
+	return verifyAdoptersEnv(t, nil, args...)
+}
+
+// verifyAdoptersEnv runs the script with extra environment entries, so a test
+// can point ADOPTERS_API at a local server rather than depending on GitHub's
+// rate limiter — which is what made this suite red at random (F-049).
+func verifyAdoptersEnv(t *testing.T, env []string, args ...string) (string, int) {
+	t.Helper()
 
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -21,6 +31,7 @@ func verifyAdopters(t *testing.T, args ...string) (string, int) {
 	}
 	cmd := exec.Command(filepath.Join(root, "scripts", "verify_adopters.sh"), args...)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 
 	code := 0
@@ -88,20 +99,70 @@ func TestAdopterWithoutSubmissionFails(t *testing.T) {
 		t.Errorf("output does not match §6.1:\n%s", out)
 	}
 
-	// And on one whose reference does not resolve.
+	// And on one whose reference does not resolve. Served locally, so this
+	// asserts the 404 branch rather than whatever GitHub's rate limiter felt
+	// like returning: an unauthenticated call from a shared CI runner gets a
+	// 403 often enough that this test was red at random before F-049.
 	bogus := adoptersFixture(t, "| Bogus Ltd | 2026-11 | self-hosted | ~1M/mo | | #99999999 |\n")
-	out, code = verifyAdopters(t, "--file", bogus)
-	if code == 0 {
-		t.Fatalf("a reference that does not exist was accepted:\n%s", out)
+
+	notFound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer notFound.Close()
+
+	out, code = verifyAdoptersEnv(t, []string{"ADOPTERS_API=" + notFound.URL}, "--file", bogus)
+	if code != 1 {
+		t.Fatalf("a reference that does not exist exited %d, want 1:\n%s", code, out)
 	}
-	if !strings.Contains(out, "which does not exist") && !strings.Contains(out, "was unreachable") {
-		t.Errorf("output neither rejected nor reported the unreachable tracker:\n%s", out)
+	if !strings.Contains(out, "which does not exist") {
+		t.Errorf("output does not match §6.1:\n%s", out)
 	}
 
 	// A reference that is not a number is refused rather than silently passed.
 	junk := adoptersFixture(t, "| Junk Ltd | 2026-11 | self-hosted | ~1M/mo | | somebody said so |\n")
 	if out, code := verifyAdopters(t, "--file", junk); code != 1 {
 		t.Errorf("a non-numeric reference exited %d:\n%s", code, out)
+	}
+}
+
+// TestUnreachableTrackerIsNotSuccess is F-049.
+//
+// The script counted unreachable rows and then exited 0 anyway, so the CI step
+// named "Verify every adopter opted in" passed without verifying anything — and
+// a fabricated Submission reference would have sailed through any time GitHub
+// was rate-limiting. The script's own header already said this was not
+// supposed to happen.
+//
+// Exit 3, not 1: a tracker that is briefly unreachable is not evidence that an
+// adopter is fake, and a gate that goes red for a network hiccup is a gate
+// people learn to re-run (F-047). It is a distinct code so the caller can tell
+// "this adopter is bogus" from "nobody checked", and it is never 0.
+func TestUnreachableTrackerIsNotSuccess(t *testing.T) {
+	unreachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// What an unauthenticated runner actually gets when it is over the
+		// hourly limit.
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer unreachable.Close()
+
+	path := adoptersFixture(t, "| Real Ltd | 2026-11 | self-hosted | ~1M/mo | | #42 |\n")
+	out, code := verifyAdoptersEnv(t, []string{"ADOPTERS_API=" + unreachable.URL}, "--file", path)
+
+	if code == 0 {
+		t.Fatalf("a run that checked nothing reported success:\n%s", out)
+	}
+	if code != 3 {
+		t.Errorf("exit = %d, want 3 — an unchecked row is not the same as a bad one:\n%s", code, out)
+	}
+	if !strings.Contains(out, "UNVERIFIED") {
+		t.Errorf("the output does not say the claim is unverified:\n%s", out)
+	}
+
+	// And a row that IS bad still exits 1, even in the same unreachable run:
+	// "not a number" needs no tracker to refuse.
+	bad := adoptersFixture(t, "| Junk Ltd | 2026-11 | self-hosted | ~1M/mo | | somebody said so |\n")
+	if out, code := verifyAdoptersEnv(t, []string{"ADOPTERS_API=" + unreachable.URL}, "--file", bad); code != 1 {
+		t.Errorf("a definitively bad row exited %d, want 1:\n%s", code, out)
 	}
 }
 

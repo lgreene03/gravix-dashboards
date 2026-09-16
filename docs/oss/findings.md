@@ -3267,3 +3267,88 @@ difference — so it reports the first and callers read it as the second.
 The tests that now guard this assert what a caller actually relies on: that the
 buffer directory is inert once `Close` returns, and that every accepted record
 is in the object store. Not that `Close` returned without error.
+
+---
+
+## F-049 — the adopter opt-in check exits 0 when it verified nothing
+
+**Found by:** `test (1.25)` failing on this branch while `test (1.24)` passed on the same commit
+**Affects:** `scripts/verify_adopters.sh`, `tests/governance/adopters_test.go`,
+`.github/workflows/ci.yml`, `GRVX-1208`
+**Severity:** medium — a public claim was being reported as verified by a run that verified nothing
+**Status:** fixed
+
+### The symptom
+
+```
+--- FAIL: TestAdopterWithoutSubmissionFails (0.10s)
+    adopters_test.go:95: a reference that does not exist was accepted:
+        adopters: row "Bogus Ltd" references #99999999; the tracker was unreachable, so it was not checked
+        adopters: 1 row(s), 0 without a valid submission, 1 unchecked
+```
+
+The test feeds the script a fabricated issue reference and expects a rejection. It got a pass.
+
+### Why one Go version failed and the other did not
+
+Nothing to do with Go. The `test` job runs a matrix, and the two versions run on different runners
+at the same time. The test shells out to `scripts/verify_adopters.sh`, which calls
+`api.github.com` — and `GITHUB_TOKEN` is set on the *`verify_adopters.sh` step*, not on the
+`go test` step, so the call the test makes is **unauthenticated**. Unauthenticated GitHub API is 60
+requests per hour per IP, shared across every Actions runner behind that address. Whichever matrix
+leg lost the race got a `403`, which the script maps to "unreachable".
+
+So the visible failure was a flaky test. The defect underneath it is not.
+
+### The defect
+
+`scripts/verify_adopters.sh` counted unresolved rows and then ignored the count:
+
+```bash
+echo "adopters: $ROWS row(s), $FAILED without a valid submission, $UNRESOLVED unchecked"
+
+if (( FAILED > 0 )); then
+  exit 1
+fi
+exit 0            # ← $UNRESOLVED is never consulted
+```
+
+Its own header already said this was not supposed to happen:
+
+> Without network access the check is reported as unperformed rather than passed: a check that
+> quietly does nothing is worse than one that says it could not run.
+
+It printed "unperformed" and returned "passed". The CI step is named **"Verify every adopter opted
+in"**, and it would have gone green with a fabricated `Submission` reference in `ADOPTERS.md` any
+time GitHub was rate-limiting — which, given the step runs unauthenticated from a shared runner, is
+not rare.
+
+`ADOPTERS.md` currently lists nobody, so nothing false was published. The check was simply not
+doing its job, and nothing would have said so.
+
+### What changed
+
+- **Exit 3 for an unverified run.** `0` would be a lie: a run that could not reach the tracker has
+  not made the claim checkable, it has only failed to disprove it. `1` would also be wrong — a
+  briefly unreachable tracker is not evidence that an adopter is fake. A third code lets the caller
+  tell "this adopter is bogus" from "nobody checked", and it is never silence.
+- **CI treats 3 as a warning**, and `1` still fails the build. A gate that goes red because GitHub
+  had a bad minute is a gate people learn to re-run — that is F-047's lesson, and applying it here
+  is why the fix is a distinct exit code rather than a hard failure.
+- **`ADOPTERS_API` is overridable**, so `TestAdopterWithoutSubmissionFails` now asserts the
+  `404` branch against a local `httptest.Server` and makes no network call at all. The flake is
+  gone because the test no longer depends on a rate limiter, not because the assertion was
+  loosened.
+- **`TestUnreachableTrackerIsNotSuccess`** pins the new behaviour from both sides: a `403` run
+  exits `3` and says `UNVERIFIED`, and a definitively bad row still exits `1` in that same
+  unreachable run — "not a number" needs no tracker to refuse. Against the unfixed exit logic it
+  fails with `a run that checked nothing reported success`.
+
+### The general shape of it
+
+F-044 named three things that passed only because nothing was looking. F-048 was one where
+something *was* looking and was told the wrong thing. This is the third variety: a check that
+reported the right thing in its output and the wrong thing in its exit code, so the only consumer
+that mattered — CI — read the wrong one.
+
+The output was accurate the whole time. Nobody was reading it.
