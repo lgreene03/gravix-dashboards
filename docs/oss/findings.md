@@ -2805,3 +2805,64 @@ Two mechanical checks, both scriptable in the spirit of `check-boundary`:
 
 Neither replaces check 12. Both convert "the Lead read it carefully" into something that fails a
 build, which is the difference this project already relies on everywhere else.
+
+---
+
+## F-043 — `pkg/tenantdb/postgres_test.go` has never run, in CI or anywhere else
+
+**Found by** `senior-engineer` executing GRVX-1206, from the AC-4 test that checks every test is in
+some suite.
+**Owner** `qa-engineer`, with `senior-engineering-lead` for the Postgres story.
+**Severity** medium — no defect is known to be hiding there, and nothing would have reported one.
+**Status** open. Not caused by GRVX-1206's partition; found by it.
+
+### What is true
+
+`pkg/tenantdb/postgres_test.go` opens with:
+
+```go
+//go:build postgres || all
+```
+
+Nothing in this repository passes either tag. Measured across `.github/workflows/`, `Makefile` and
+`scripts/`:
+
+```
+$ grep -rn "tags=postgres\|tags=all" .github/workflows/ Makefile scripts/
+(no matches)
+```
+
+`go test ./...`, `go test -tags=slow ./...`, `make test`, `make test-race`, the CI race job and the
+CI coverage job all exclude it. The file has been in the tree since the Postgres backend landed and
+has never been compiled by CI, let alone run.
+
+This is precisely GRVX-1206 §6.1's *"a test in neither the fast nor the full suite"* row — it just
+predates the suite partition rather than being caused by it. The partition is what surfaced it,
+because splitting suites forced the question "which suite is each test in?" to be asked mechanically
+for the first time.
+
+### Why it was not fixed here
+
+Adding `all` to `make test-full` would compile the file, and then every test in it would call
+`t.Skip` — `newPostgresTestDB` skips unless Docker is available and `DATABASE_TEST_URL` is set,
+neither of which CI provides. That would trade a test that does not run for a test that reports
+itself as skipped, which `.claude/agents/qa-engineer.md` treats as a defect report, and it would
+raise the skipped-test count that GRVX-1206 AC-5 pins. It would look like progress and be none.
+
+The real options are a decision, not an implementation detail:
+
+1. **Run it.** Give CI a Postgres service container and `DATABASE_TEST_URL`, and add `-tags=all` to
+   the full suite. Costs CI minutes; gives the Postgres backend actual coverage.
+2. **Delete it.** If the Postgres backend is not a supported configuration, a test suite for it that
+   nobody runs is worse than none, because it implies coverage that does not exist.
+3. **Say so.** Keep the file, and state in `docs-site/docs/deployment.md` that the Postgres backend
+   is untested in CI, so an adopter choosing it knows what they are choosing.
+
+Option 3 is the minimum. Doing nothing is the only option that leaves the tree implying a guarantee
+nobody checks.
+
+### What was done
+
+`tests/devenv/suite_test.go` names `postgres || all` as a known exception with this finding's
+number, and fails on any **new** build tag that no suite opts into. A second file drifting out of
+both suites is now a red build; this one is a recorded decision waiting on a person.

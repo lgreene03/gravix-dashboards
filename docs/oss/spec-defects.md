@@ -2028,3 +2028,79 @@ needs §5.5 and §10 amended first, in public — which is now what `docs/oss/rf
 `go test ./tests/...`. Same omission as SD-033 and the three before it; the tests were written at
 `tests/governance/gfi_test.go`, beside GRVX-1203's. **F-042**'s proposed check — every file named in
 §6/§7 must appear in §4 — would catch it.
+
+---
+
+## SD-035 — GRVX-1206 §4.3 forbids the edit §5.1 and §6 require
+
+**Found by:** `senior-engineer` executing GRVX-1206
+**Affects:** GRVX-1206 §4.3, §5.1, §6 step 2
+**Severity:** low — the intent is clear once both are read; it cost a decision, not a detour
+**Status:** resolved in favour of §5.1 and §6
+
+### What the spec says
+
+§5.1, on how the suites are selected:
+
+> Selection is by Go build tag: slow tests carry `//go:build slow`. `test-fast` omits the tag;
+> `test-full` passes `-tags=slow`.
+
+§6 step 2, in the imperative:
+
+> Partition by build tag: **add `//go:build slow` to `tests/e2e/` and `tests/correctness/`**, and to
+> any unit test over 5 seconds.
+
+§4.3, Files to NOT touch:
+
+> | Any `_test.go` file | This spec partitions the suites; it changes no test |
+
+A build tag lives inside the file it applies to. There is no way to add one to `tests/e2e/` without
+editing `tests/e2e/*_test.go`.
+
+### What was done
+
+§5.1 and §6 were followed. §4.3's stated reason — *"it changes no test"* — is the reconciling
+reading: the prohibition is on changing what a test does, not on the file's bytes being different.
+Fourteen files each gained exactly two lines at the top:
+
+```go
+//go:build slow
+
+```
+
+Nothing else in any of them changed. `TestNoTestWeakenedByPartition` pins that mechanically: every
+file in a slow-tagged package must open with exactly that tag, the repository-wide `t.Skip(` count
+may go down and never up from its measured baseline of 36, and the `func Test` count may never fall
+below its measured baseline of 1696.
+
+Files tagged, with the wall time each contributed to `go test ./...` before the split:
+
+| Package | Files | Before |
+|---|---|---|
+| `tests/correctness/` | 9 | 83.593s |
+| `bench/` | 2 | 49.247s |
+| `tests/e2e/` | 3 | 3.636s |
+
+`bench/` is not named in §6 step 2. It is covered by *"any unit test over 5 seconds"*:
+`TestBenchSmallScaleRuns` alone takes 31.49s, because it runs the benchmark harness. It is the
+second-largest cost in the suite and slow by dependency, which is exactly the criterion §5.1 gives.
+
+`tests/e2e/` at 3.6s is tagged because §6 names it, not because it was expensive.
+
+### A consequence worth recording
+
+Three things opted back into the tag rather than losing coverage:
+
+- `scripts/golden_path_test.sh` runs `go test -tags=slow ./tests/e2e/...`. It is the no-Docker smoke
+  test, it has always run those, and they cost about four seconds. Dropping them to make a number
+  look better would be weakening a suite rather than splitting one, which §3 forbids.
+- `scripts/correctness_test.sh` runs `go test -tags=slow ./tests/correctness/...`, so
+  `make test-correctness` means what it has always meant.
+- CI's race and coverage jobs run `go test -tags=slow ./...`. Without that, splitting the suites
+  would have silently stopped CI running `tests/correctness/` and `bench/` — the worst possible
+  outcome, and one nothing else would have reported.
+
+### Suggested correction
+
+Change §4.3's row to *"Any `_test.go` file, except to add the `slow` build tag — this spec
+partitions the suites; it changes no test"*.

@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli test test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check bench
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check bench
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -15,11 +15,32 @@ build:
 build-cli:
 	go build -o bin/gravix ./cmd/cli/
 
+# --- Test suites (GRVX-1206) ----------------------------------------------
+# The split is by speed and dependency, never by importance. The slow suites
+# carry the `slow` build tag; nothing is skipped, shortened or deleted, and
+# every test runs somewhere on every pull request.
+#
+#   test-fast   what you run before pushing. Budget 5 minutes. No Docker.
+#   test-full   everything, including tests/e2e, tests/correctness and bench.
+#   test        unchanged: the full run.
+
+setup: ## Check the toolchain, fetch modules, run the fast suite once
+	./scripts/dev_setup.sh
+
+test-fast: ## The contributor suite: unit tests, schemas coverage, boundary, golden path
+	./scripts/test_fast.sh
+
+test-full: ## Everything, including the slow-tagged suites and the OSS build gates
+	./scripts/test_fast.sh
+	go test -tags=slow ./... -count=1
+	$(MAKE) build-oss
+	$(MAKE) test-oss
+
 test:
-	go test ./... -v -cover
+	go test -tags=slow ./... -v -cover
 
 test-race:
-	go test ./... -v -race -count=1
+	go test -tags=slow ./... -v -race -count=1
 
 # The Cube model, the dashboard's query routing and the lineage panel are
 # JavaScript, so `go test` proves nothing about them. CI has always run these;

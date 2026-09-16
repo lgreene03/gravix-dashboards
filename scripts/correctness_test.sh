@@ -42,7 +42,9 @@ start=$(date +%s)
 # script printed "all seven properties hold" over a failing suite. Hence `set -o
 # pipefail` above and the explicit capture here.
 status=0
-go test ./tests/correctness/... -count=1 -v > /tmp/gravix-correctness.log 2>&1 || status=$?
+# -tags=slow: GRVX-1206 moved this suite behind that tag so `go test ./...` is
+# fast. Nothing here was skipped or shortened; it runs in full, here and in CI.
+go test -tags=slow ./tests/correctness/... -count=1 -v > /tmp/gravix-correctness.log 2>&1 || status=$?
 
 grep -E '^(--- (PASS|FAIL|SKIP)|ok|FAIL|PASS)|P[0-9] FAILED|AC-[0-9]+ FAILED|CD-[0-9]+' \
     /tmp/gravix-correctness.log || true

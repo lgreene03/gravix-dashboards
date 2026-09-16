@@ -22,6 +22,23 @@ at a tool that does it well. We would rather tell you that before you spend a we
 
 ## Development setup
 
+One command, from a fresh clone:
+
+```bash
+./scripts/dev_setup.sh
+```
+
+It checks your toolchain, fetches modules, and runs the fast suite once, so it is not finished until
+a test has passed on your machine. **It installs nothing** — where something is missing it prints
+the exact command for your platform and stops.
+
+There is a dev container in `.devcontainer/` if you would rather have the toolchain pinned for you.
+It is one supported path, never the only one: with Go installed you do not need Docker to work on
+Gravix. Both paths are written up in
+[`docs-site/docs/development-setup.md`](docs-site/docs/development-setup.md).
+
+For a running stack:
+
 ```bash
 cp .env.example .env          # change API_KEY and MINIO_ROOT_PASSWORD at minimum
 docker-compose up -d --build  # full stack
@@ -44,7 +61,26 @@ end to end without it:
 ## Running tests
 
 ```bash
-go test ./...                       # everything
+make test-fast                      # run this before you push. Budget: 5 minutes. No Docker.
+make test-full                      # everything, including the slow-tagged suites
+```
+
+`make test-fast` is unit tests for every package, `schemas/` at 100%, the open-core boundary check,
+and the golden path. It is the one to run while you work, and CI enforces the five-minute budget so
+it stays that way. `./scripts/test_fast.sh --timing` prints the slowest packages if it has crept up.
+
+**The split is by speed and dependency, never by importance.** No test was deleted, skipped, or
+shortened to make the fast suite fast: `tests/e2e/`, `tests/correctness/` and `bench/` carry a
+`//go:build slow` tag, and CI runs everything on every pull request.
+
+Exit code **4** from the fast suite means every test passed and the suite was over budget. That is a
+real regression and CI fails on it, but it is deliberately not the same code as a failing test.
+
+The individual commands, when you want one of them on its own:
+
+```bash
+go test ./...                       # the fast set
+go test -tags=slow ./...            # everything
 make test-correctness               # the properties Gravix's claims rest on — see below
 go test ./schemas/... -v -cover     # must stay at 100% — see below
 make lint                           # go vet and staticcheck, the same two CI runs

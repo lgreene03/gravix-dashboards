@@ -65,6 +65,28 @@ jobs:
       - name: Run govulncheck
         run: govulncheck ./...
 
+  # The suite a contributor runs before pushing, with its budget enforced here.
+  # A five-minute promise nobody measures becomes a fifteen-minute suite, and
+  # then it becomes a suite nobody runs — which is how a drive-by contributor
+  # is lost before they have written a line.
+  fast-suite-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Run the contributor suite and enforce the 5-minute budget
+        # Exit 4 means every test passed and the suite was over budget. That is
+        # a regression in its own right, and it is deliberately not the same
+        # exit code as a failing test: a contributor who cannot tell them apart
+        # fixes the wrong one.
+        run: ./scripts/test_fast.sh --timing
+
   test:
     runs-on: ubuntu-latest
     needs: lint
@@ -120,10 +142,12 @@ jobs:
         run: make rfc-check
 
       - name: Run tests with race detector
-        run: go test ./... -v -race -count=1
+        # -tags=slow so this covers every suite. GRVX-1206 split the suites by
+        # speed for contributors; CI still runs all of them on every pull request.
+        run: go test -tags=slow ./... -v -race -count=1
 
       - name: Run tests with coverage
-        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+        run: go test -tags=slow ./... -coverprofile=coverage.out -covermode=atomic
 
       - name: Check schema coverage >= 90%
         run: |
@@ -419,12 +443,12 @@ jobs:
       - name: Exit path — export everything and read it with Gravix stopped
         env:
           E2E_TEST: "1"
-        run: go test ./tests/e2e/... -run 'TestExportEverything|TestExitPath|TestExportRowCounts|TestNoSecretInExitPath|TestConfigExportComplete|TestReadmeCommandsRun|TestChecksumsVerify|TestNonEmptyDestinationRefused' -v -count=1 -timeout 300s
+        run: go test -tags=slow ./tests/e2e/... -run 'TestExportEverything|TestExitPath|TestExportRowCounts|TestNoSecretInExitPath|TestConfigExportComplete|TestReadmeCommandsRun|TestChecksumsVerify|TestNonEmptyDestinationRefused' -v -count=1 -timeout 300s
 
       - name: Run end-to-end tests
         env:
           E2E_TEST: "1"
-        run: go test ./tests/e2e/... -v -count=1 -timeout 300s
+        run: go test -tags=slow ./tests/e2e/... -v -count=1 -timeout 300s
 
   # ─── Correctness suite (GRVX-810) ───
   # Proves the Phase 8 properties hold together — determinism, late data,
@@ -598,13 +622,14 @@ jobs:
 
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding]
+    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding]
     if: always()
     steps:
       - name: Check job results
         run: |
           echo "Lint:          ${{ needs.lint.result }}"
           echo "Vuln:          ${{ needs.vuln.result }}"
+          echo "Fast suite:    ${{ needs.fast-suite-budget.result }}"
           echo "Test:          ${{ needs.test.result }}"
           echo "Build:         ${{ needs.build.result }}"
           echo "E2E:           ${{ needs.e2e.result }}"
@@ -619,6 +644,7 @@ jobs:
           if [[ "${{ needs.timed-onboarding.result }}" == "failure" ]] || \
              [[ "${{ needs.recipe-examples.result }}" == "failure" ]] || \
              [[ "${{ needs.lint.result }}" == "failure" ]] || \
+             [[ "${{ needs.fast-suite-budget.result }}" == "failure" ]] || \
              [[ "${{ needs.test.result }}" == "failure" ]] || \
              [[ "${{ needs.build.result }}" == "failure" ]] || \
              [[ "${{ needs.e2e.result }}" == "failure" ]] || \
