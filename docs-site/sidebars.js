@@ -38,6 +38,11 @@ const sidebars = {
       label: 'Your data',
       items: [
         'bare-parquet-access',
+        // Iceberg tables (GRVX-1106). Added here beyond that spec's file list
+        // for the same reason the migration guide below was: an orphaned page
+        // fails TestBoardIsInTheSidebar, and a page nobody can navigate to is a
+        // page that does not exist.
+        'iceberg-tables',
         'migrating',
         // The exit path out of Gravix Cloud (GRVX-1403). Added here beyond that
         // spec's file list, because TestBoardIsInTheSidebar fails on any page in

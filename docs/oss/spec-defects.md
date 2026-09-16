@@ -3211,3 +3211,94 @@ It now removes quoted spans — ASCII and typographic — before searching, and 
 directions that the stripping is doing real work: that it does not consume the whole string, and
 that it leaves unquoted text intact. Without those two assertions a stripper that removed everything
 would have passed silently, which is the failure mode of every guard that has never refused anything.
+
+---
+
+## SD-050 — GRVX-1106 is executable without Docker except for the three criteria that matter most
+
+**Found by:** `senior-engineer` executing GRVX-1106
+**Affects:** GRVX-1106 §4.2, §6 step 5, §7 AC-4/5/6, §8
+**Severity:** medium — the interoperability claim is designed and not yet demonstrated
+**Status:** partial; the buildable half is done and the unproven half is named here and in the published guide
+
+### What was executable, and what was not
+
+The spec reads as Docker-dependent and mostly is not. `iceberg_sync` writes no Iceberg metadata: it
+issues `CREATE TABLE`, `DELETE` and `INSERT ... SELECT`, and **Trino's Iceberg connector** produces
+the manifests and snapshots. So the job, its statements, the catalog properties, the Spark script,
+the docs and four of seven acceptance criteria needed no running stack at all.
+
+| Criterion | State |
+|---|---|
+| AC-1 `createTableSQL` exact statement | **passing** |
+| AC-2 `deleteDaySQL` exact statement | **passing** |
+| AC-3 `insertDaySQL` explicit column list | **passing** |
+| AC-7 `-days 0` refuses before any SQL | **passing** |
+| AC-4 row counts survive the copy | **not run** — needs a live stack |
+| AC-5 a second run does not double rows | **not run** — needs a live stack |
+| AC-6 Spark reads the Iceberg tables | **not run** — needs a live stack and Docker |
+
+The Docker daemon is unreachable in the environment this was executed in (`docker info` fails; the
+binary and compose plugin are present). The three tests are written, gate on Trino answering, and
+skip. `docs-site/docs/iceberg-tables.md` carries the same table, so a reader deciding whether to
+depend on the Spark path is told it is **designed and not yet demonstrated** rather than left to
+assume it was tested.
+
+AC-3 gained a companion the spec did not ask for, `TestInsertColumnsMatchTheTrinoTable`, which pins
+the column lists against `storage/trino/init.sql` rather than against themselves. A column added to
+the Hive table and not here would leave the Iceberg table valid, queryable and quietly incomplete,
+and no assertion about the generated SQL's own shape would notice.
+
+### §6 step 5's skip would have broken the repository's own guard
+
+§6 step 5 says `TestIcebergSync` "skips (`t.Skip`) if `http://localhost:8081/v1/info` is
+unreachable", and AC-6's test "skips if `docker` unavailable".
+
+`tests/devenv` counts every `t.Skip(` in the repository against `skipBaseline`, which **may go down
+and must never go up**. Writing the three tests as specified would have taken 36 to 39 and failed
+CI — the spec's own instruction breaking a guard added by a later spec.
+
+`tests/e2e/gate_test.go` now holds two shared gates, `requireE2E` and `requireLiveStack`, and the
+ten identical inline copies of the first one in `e2e_test.go` call it instead. **36 → 29**, and the
+baseline was ratcheted to 29 rather than left at 36 with slack: a budget with room in it is not a
+budget, it is permission for the next seven.
+
+`requireLiveStack` also draws a line the inline blocks did not. Trino unreachable is a skip; Trino
+answering with a non-200 is a **failure**, because a stack that is up and unhealthy is a defect, not
+an absent dependency.
+
+### §4.2's CI step has nothing to attach to
+
+> in the `e2e` job, add a step running `go test ./tests/e2e/... -run TestIcebergSync -v` after Trino
+> is confirmed healthy
+
+The `e2e` job never starts Trino. It installs the DuckDB CLI and runs the slow-tagged suite; there
+is no docker-compose stack in it and so no "after Trino is confirmed healthy" to add a step after.
+The existing `Run end-to-end tests` step already runs these tests, where they skip. A second step
+that also skipped would be noise implying coverage that does not exist, so none was added.
+
+This is the same gap as `docker-smoke` and `docker-build`, which are `skipped` on every run and are
+tracked as F-026.
+
+### Files created and modified beyond §4
+
+- **`services/rollup/Dockerfile`** gained an `iceberg-sync` build line. §6 step 6 requires a sidecar
+  modeled on `request-metrics-rollup`, which is built from that Dockerfile; the binary has to be in
+  the image the sidecar runs.
+- **`docs-site/sidebars.js`** gained the new page. An orphaned page fails
+  `TestBoardIsInTheSidebar`, and GRVX-1403's own entry three lines above records the same departure
+  for the same reason.
+- **`tests/e2e/gate_test.go`** — the shared gates above.
+- **`tests/e2e/e2e_test.go`** — ten inline gates replaced by a call. Not in §4.3's do-not-touch list.
+- **`tests/devenv`** — `skipBaseline` 36 → 29.
+
+### The dependency question, answered by precedent
+
+`GOVERNANCE.md` puts "new dependency" at design tier: an RFC, seven days, **two maintainer
+approvals**, which this project cannot produce. It also puts "implementing an approved spec" at
+routine tier, and GRVX-1106 §4.2 names `github.com/trinodb/trino-go-client v0.333.0` explicitly.
+
+Routine wins, on precedent rather than on reading: `GRVX-804` added `influxdata/tdigest` and
+`GRVX-1102` added its own dependency, both the same way, both on this branch. Recorded here so the
+next implementer does not re-litigate it — and so that if the founder disagrees, there is one place
+to say so.

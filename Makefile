@@ -10,6 +10,7 @@ build:
 	go build -o bin/service-events-detail-rollup ./transforms/service_events_detail/
 	go build -o bin/load-generator ./cmd/load_generator/
 	go build -o bin/purge ./cmd/purge/
+	go build -o bin/iceberg-sync ./transforms/iceberg_sync/
 	go build -o bin/gravix ./cmd/cli/
 
 build-cli:

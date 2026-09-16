@@ -37,7 +37,13 @@ var slowTagged = map[string]string{
 // same way this test counts them — occurrences, not matching lines, excluding
 // ee/. Splitting suites must not skip anything, so this may go down and must
 // never go up.
-const skipBaseline = 36
+//
+// 36 → 29 when GRVX-1106 needed a gate and found ten identical copies of one
+// already there: tests/e2e/gate_test.go now holds requireE2E and
+// requireLiveStack, and the ten inline blocks call the first. Ratcheted down
+// rather than left at 36 with slack, because a budget with room in it is not a
+// budget — it is permission for the next seven.
+const skipBaseline = 29
 
 // testFuncBaseline is the number of `func Test` declarations. A build tag must
 // move a test between suites; it must never remove one from the tree.

@@ -147,6 +147,11 @@ services:
             format = 'PARQUET',
             external_location = 's3a://gravix/warehouse/service_events_detail/'
           )"
+        # The Iceberg catalog's schema only. No CREATE TABLE here:
+        # iceberg-sync's createTableSQL makes the tables on its first run, and
+        # a hadoop-type catalog just needs the namespace directory to exist
+        # first. Creating a schema is idempotent and cheap at boot.
+        trino --server trino:8080 --execute "CREATE SCHEMA IF NOT EXISTS gravix_iceberg.raw"
         echo "Trino tables initialized."
     depends_on:
       trino:
@@ -164,6 +169,10 @@ services:
     environment:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:?S3_ACCESS_KEY is required - set it in .env}
       - S3_SECRET_KEY=${S3_SECRET_KEY:?S3_SECRET_KEY is required - set it in .env}
+      # gravix_iceberg.properties needs the bucket name to build its warehouse
+      # path. Defaulted rather than required: a stack without the Iceberg
+      # catalog should not fail to start over a variable it does not read.
+      - S3_BUCKET=${S3_BUCKET:-gravix}
     volumes:
       - ./storage/trino/config:/etc/trino
       - ./storage/trino/catalog:/etc/trino/catalog.tpl:ro
@@ -177,6 +186,7 @@ services:
         for f in /etc/trino/catalog.tpl/*; do
           sed -e "s|\$${S3_ACCESS_KEY}|$$S3_ACCESS_KEY|g" \
               -e "s|\$${S3_SECRET_KEY}|$$S3_SECRET_KEY|g" \
+              -e "s|\$${S3_BUCKET}|$$S3_BUCKET|g" \
               "$$f" > "/etc/trino/catalog/$$(basename $$f)"
         done
         exec /usr/lib/trino/bin/run-trino
@@ -431,6 +441,36 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
       minio:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.25
+    networks:
+      - backend
+
+  iceberg-sync:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-iceberg-sync
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Starting Iceberg sync cron (every 5 minutes)..."
+        while true; do
+          echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Syncing warehouse into Iceberg tables..."
+          ./iceberg-sync \
+            -iceberg-dsn "http://gravix@trino:8080?catalog=gravix_iceberg&schema=raw" \
+            -days 2 || echo "Iceberg sync failed, will retry next cycle"
+          sleep 300
+        done
+    environment:
+      # This job reads and writes only through Trino SQL — it never opens the
+      # warehouse files itself — so it needs no data volume and no S3
+      # credentials. Trino holds both.
+      - S3_BUCKET=${S3_BUCKET:-gravix}
+    depends_on:
+      trino:
         condition: service_healthy
     mem_limit: 256m
     cpus: 0.25

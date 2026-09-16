@@ -10,7 +10,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o request-metrics-rollup
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o service-events-rollup ./transforms/service_events_daily && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o service-events-detail-rollup ./transforms/service_events_detail && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o purge ./cmd/purge && \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bootstrap_seed ./cmd/bootstrap_seed
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bootstrap_seed ./cmd/bootstrap_seed && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o iceberg-sync ./transforms/iceberg_sync
 
 FROM alpine:3.21
 

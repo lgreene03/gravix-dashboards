@@ -24,7 +24,7 @@ planning, so they are not published.
 | GRVX-1103 | SQL-vs-PromQL guide + verified Metabase/Superset connection | `core` | blocked |
 | GRVX-1104 | Grafana datasource plugin — keep Grafana, get Gravix correctness | `core` | blocked |
 | GRVX-1105 | OTLP metrics-subset hardening — reject traces and logs at the receiver, accept a cardinality-budgeted metrics subset | `core` | done |
-| GRVX-1106 | Apache Iceberg table format, readable by Spark and Trino | `core` | blocked |
+| GRVX-1106 | Apache Iceberg table format, readable by Spark and Trino | `core` | partial |
 | GRVX-1107 | Data export in the free tier — Parquet, CSV, JSONL, manual and scheduled | `core` | partial |
 | GRVX-1108 | Import history from Prometheus TSDB and Datadog metric exports | `core` | partial |
 | GRVX-1109 | The documented exit path, executed in CI | `core` | done |
@@ -47,7 +47,6 @@ cannot be checked.
 | GRVX-1008 | A reproduction guide for running our benchmark on your own hardware | 10 |
 | GRVX-1103 | SQL-vs-PromQL guide + verified Metabase/Superset connection | 11 |
 | GRVX-1104 | Grafana datasource plugin — keep Grafana, get Gravix correctness | 11 |
-| GRVX-1106 | Apache Iceberg table format, readable by Spark and Trino | 11 |
 | GRVX-1304 | `ee/tenancy/` — the multi-tenant control plane | 13 |
 | GRVX-1305 | `ee/billing/` — metering, Stripe, invoicing and overage | 13 |
 | GRVX-1306 | `ee/identity/` — SAML, SCIM and directory sync (single-org OIDC stays free) | 13 |
