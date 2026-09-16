@@ -323,12 +323,31 @@ func TestGuardPassesThroughTheOperationsError(t *testing.T) {
 	}
 }
 
-// Every exported method under ee/ that mutates must route through Guard. Today
-// ee/ has one feature package and this is nearly vacuous; it starts earning its
-// keep with GRVX-1304, which is exactly when nobody will remember to check.
+// Every ee/ feature package must route at least one path through Guard.
+//
+// The check is per package rather than per file, and that is a correction: the
+// first version flagged any file containing an INSERT or a DELETE, which caught
+// ee/warehouse — a package whose whole job is to write to somebody ELSE's
+// warehouse. Those writes are correctly unguarded (GRVX-1311 §6 step 6: a sync
+// already scheduled keeps running when a licence lapses, because stopping it
+// mid-month puts a hole in a customer's data that renewing does not fill);
+// what is guarded there is the configuration that decides where to sync.
+//
+// So the property asserted is the one that can be asserted honestly: a feature
+// package that changes anything must know this guard exists. A package that
+// forgot entirely fails here, which is the mistake worth catching, and a
+// package that guards the wrong thing is a review question rather than a grep.
 func TestEveryEEMutationIsGuarded(t *testing.T) {
 	eeRoot := filepath.Join(repoRoot, "ee")
-	var unguarded []string
+
+	// Packages that are not features: this one is the guard, ee/cmd is an
+	// entrypoint, ee/placeholder is empty, and targets/ builds SQL strings
+	// without deciding anything.
+	skip := []string{"ee/degrade/", "ee/cmd/", "ee/placeholder/", "ee/warehouse/targets/"}
+
+	mutatesInPackage := map[string]bool{}
+	guardsInPackage := map[string]bool{}
+
 	err := filepath.Walk(eeRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -337,32 +356,49 @@ func TestEveryEEMutationIsGuarded(t *testing.T) {
 			return nil
 		}
 		rel, _ := filepath.Rel(repoRoot, path)
-		// ee/degrade is the guard; ee/cmd is an entrypoint; ee/placeholder is empty.
-		if strings.HasPrefix(filepath.ToSlash(rel), "ee/degrade/") ||
-			strings.HasPrefix(filepath.ToSlash(rel), "ee/cmd/") ||
-			strings.HasPrefix(filepath.ToSlash(rel), "ee/placeholder/") {
-			return nil
+		rel = filepath.ToSlash(rel)
+		for _, prefix := range skip {
+			if strings.HasPrefix(rel, prefix) {
+				return nil
+			}
 		}
+
+		pkg := filepath.ToSlash(filepath.Dir(rel))
 		src, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
 		text := string(src)
-		writes := strings.Contains(text, "db.Exec") || strings.Contains(text, "INSERT ") ||
+
+		if strings.Contains(text, "db.Exec") || strings.Contains(text, "INSERT ") ||
 			strings.Contains(text, "UPDATE ") || strings.Contains(text, "DELETE ") ||
-			strings.Contains(text, ").Create(") || strings.Contains(text, ").Update(")
-		if writes && !strings.Contains(text, "degrade.Guard(") {
-			unguarded = append(unguarded, rel)
+			strings.Contains(text, ").Create(") || strings.Contains(text, ").Update(") ||
+			strings.Contains(text, "func (") && strings.Contains(text, "Configure") {
+			mutatesInPackage[pkg] = true
+		}
+		if strings.Contains(text, "degrade.Guard(") || strings.Contains(text, "ConfigureGuard(") ||
+			strings.Contains(text, "degrade.WriteRefusal(") {
+			guardsInPackage[pkg] = true
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk ee/: %v", err)
 	}
+
+	var unguarded []string
+	for pkg := range mutatesInPackage {
+		if !guardsInPackage[pkg] {
+			unguarded = append(unguarded, pkg)
+		}
+	}
 	sort.Strings(unguarded)
 	if len(unguarded) > 0 {
-		t.Errorf("these ee/ files write without passing through degrade.Guard, so an expired "+
-			"licence would not stop them: %s", strings.Join(unguarded, ", "))
+		t.Errorf("these ee/ packages change things and never mention degrade.Guard, so an "+
+			"expired licence would not stop them: %s", strings.Join(unguarded, ", "))
+	}
+	if len(mutatesInPackage) == 0 {
+		t.Error("no ee/ package appears to change anything; check this test still means something")
 	}
 }
 

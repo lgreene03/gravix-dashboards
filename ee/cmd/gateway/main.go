@@ -19,6 +19,7 @@ import (
 	// gatewaycore.Run mounts whatever is registered. Nothing else changes.
 	_ "github.com/lgreene/gravix-dashboards/ee/fleet"        // GRVX-1307, mounted at /ee/fleet/
 	_ "github.com/lgreene/gravix-dashboards/ee/intelligence" // GRVX-1309, mounted at /ee/intelligence/
+	_ "github.com/lgreene/gravix-dashboards/ee/warehouse"    // GRVX-1311, mounted at /ee/warehouse/
 
 	"github.com/lgreene/gravix-dashboards/pkg/gatewaycore"
 )
