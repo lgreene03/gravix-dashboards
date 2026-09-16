@@ -1,0 +1,55 @@
+[
+  {
+    "verificationResult": {
+      "statement": {
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "subject": [
+          {
+            "name": "ghcr.io/lgreene/gravix-dashboards-ingestion",
+            "digest": {
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          }
+        ],
+        "predicate": {
+          "buildDefinition": {
+            "buildType": "https://actions.github.io/buildtypes/workflow/v1",
+            "externalParameters": {
+              "workflow": {
+                "ref": "refs/heads/main",
+                "repository": "https://github.com/lgreene/gravix-dashboards",
+                "path": ".github/workflows/ci.yml"
+              }
+            },
+            "internalParameters": {
+              "github": {
+                "event_name": "push",
+                "repository_id": "1",
+                "repository_owner_id": "6113629",
+                "event": {
+                  "head_commit": {
+                    "id": "GRAVIX_VALID_COMMIT"
+                  }
+                }
+              }
+            },
+            "resolvedDependencies": [
+              {
+                "uri": "git+https://github.com/lgreene/gravix-dashboards@refs/heads/main",
+                "digest": {
+                  "gitCommit": "GRAVIX_VALID_COMMIT"
+                }
+              }
+            ]
+          },
+          "runDetails": {
+            "builder": {
+              "id": "https://github.com/actions/runner/github-hosted"
+            }
+          }
+        }
+      }
+    }
+  }
+]
