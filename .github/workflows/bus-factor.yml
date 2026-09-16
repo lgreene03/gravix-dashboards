@@ -1,0 +1,82 @@
+name: bus factor
+
+# How many people could actually review each subsystem, and how that compares
+# with how many CODEOWNERS says could.
+#
+# The gap between those two numbers is the only interesting thing here. A
+# declared owner who has not worked in a subsystem in six months is a name in a
+# file, and a file that makes the risk look smaller than it is, is worse than an
+# honest one — it is the one that lets somebody stop worrying.
+#
+# This REPORTS. A recorded gap passes; only an unrecorded gap, an unowned path
+# or a team alias hiding a single person fails. Gravix has one maintainer, and
+# an audit that went red every month for a fact nobody can change this quarter
+# is an audit people stop reading — at which point the failures that ARE
+# actionable stop being seen too.
+#
+# It is its own workflow rather than a job in ci.yml because ci.yml has no
+# schedule, and giving it one would run the entire test matrix monthly to read
+# two text files. GRVX-1507 §4.2 named ci.yml; see SD-047, and SD-037 for the
+# same decision on the access audit.
+
+on:
+  schedule:
+    # The 1st of every month at 07:30 UTC, half an hour after Monday's access
+    # audit so the two reports arrive in the order a maintainer reads them:
+    # who holds rights, then whether that is enough people.
+    - cron: '30 7 1 * *'
+  workflow_dispatch:
+  # And on any change to the record itself, because that is the moment the
+  # record and reality are most likely to diverge.
+  pull_request:
+    paths:
+      - '.github/CODEOWNERS'
+      - 'MAINTAINERS.md'
+      - 'docs/oss/subsystems.md'
+      - 'pkg/busfactor/**'
+      - 'scripts/bus_factor.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Effective ownership is measured from 180 days of commits. A shallow
+          # clone would report everybody as inactive, which is a bus factor of
+          # zero that is an artefact of the checkout rather than a fact about
+          # the project — and somebody would eventually "fix" it by deleting
+          # the check.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Audit the bus factor
+        id: audit
+        run: |
+          set +e
+          ./scripts/bus_factor.sh | tee busfactor.txt
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the report
+        if: always()
+        run: |
+          {
+            echo "### Bus factor"
+            echo '```'
+            cat busfactor.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on an unrecorded gap
+        if: steps.audit.outputs.status != '0'
+        run: |
+          echo "::error::A subsystem is thin and nothing says so, a path has no owner, or an alias is standing in for a person."
+          echo "Record it in MAINTAINERS.md, or fix the ownership. See docs/oss/subsystems.md."
+          exit 1

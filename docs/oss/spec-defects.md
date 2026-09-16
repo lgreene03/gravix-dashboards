@@ -2923,3 +2923,86 @@ It now splits on a full stop only when followed by whitespace or the end of the 
 directions are pinned by test — four weakening proposals refused, five legitimate ones accepted —
 because a guard that matches everything gets weakened and a guard that matches nothing gets
 trusted.
+
+---
+
+## SD-047 — GRVX-1507 asks a shell script to do what only a Go package can, and names `tests/` for tests
+
+**Found by:** `oss-steward` executing GRVX-1507
+**Affects:** GRVX-1507 §4.1, §4.2, §8
+**Severity:** low — placement, not requirement; every §7 criterion was met
+**Status:** recorded; the requirement was met and the files placed as described below
+
+### Files created beyond §4.1
+
+§4.1 names exactly two files: `docs/oss/subsystems.md` and `scripts/bus_factor.sh`. §7 then names
+eleven Go tests, and §8 runs them with `go test ./tests/...`. A bash script cannot be the subject of
+a Go test, and reimplementing the rules in bash would put the audit's logic somewhere those eleven
+tests cannot reach — which is where a rule goes to stop being checked.
+
+- **`pkg/busfactor/`** (`busfactor.go`, `register.go`) — the audit itself: the CODEOWNERS parser, the
+  register parser, the activity measurement and the declared-versus-effective comparison.
+- **`pkg/busfactor/cmd/busfactor/main.go`** — the entry point `scripts/bus_factor.sh` execs, which is
+  now a nine-line wrapper that owns the exit codes and the `--json` flag §5.3 specifies.
+- **`tests/governance/busfactor_test.go`** — §7 names eleven tests and §4.1 creates no file to hold
+  them. `tests/governance/` is where the other governance criteria already live.
+
+Same shape as SD-043, SD-044 and SD-046, and the same remedy: the script stays the published
+interface and the exit codes stay exactly as §5.3 gives them.
+
+### Files modified beyond §4.2
+
+- **`.github/workflows/bus-factor.yml`** rather than a job in `ci.yml`. §4.2 says "run
+  `bus_factor.sh` monthly in the existing scheduled job", and `ci.yml` has no scheduled job: it runs
+  on push and pull request only. Giving it a monthly schedule would run the entire test matrix to
+  read two text files. This is SD-037's decision applied a third time, after `access-audit.yml` and
+  `charter-review.yml`.
+
+  The workflow checks out with `fetch-depth: 0`. Effective ownership is measured over 180 days of
+  commits, and Actions' default shallow clone would report every owner as inactive — a bus factor of
+  zero that is an artefact of the checkout rather than a fact about the project, and the kind of
+  wrong number somebody eventually "fixes" by deleting the check.
+
+- **`MAINTAINERS.md`**'s per-subsystem table gained the same four rows, because
+  `TestMaintainersStatesRealBusFactor` (GRVX-1210 AC-7) requires every directory rule in
+  `CODEOWNERS` to appear in it. Twenty-two rows now, all of them 1.
+
+- **`Makefile`** gained `make bus-factor`, alongside `make supported-versions` and
+  `make charter-evidence`. An audit nobody can find is an audit nobody runs.
+
+- **`.github/CODEOWNERS`** gained `/pkg/manifest/`, `/pkg/storage/`, `/cmd/cli/` and `/sdk/`. §5.2's
+  "complete coverage" is satisfiable by the `*` rule alone, which is how an unowned area hides: it
+  is covered by a rule that names nobody in particular. `TestCompleteOwnershipCoverage` therefore
+  requires a rule of its own for every subsystem in the register, and four were missing.
+
+### The bug the tests caught, which is the one worth recording
+
+`ActiveOwners` measured the 180-day window with `git log --since`. That is not a filter. It prunes
+traversal at the first commit older than the cutoff, on the assumption that commit dates decrease
+along the history — so a merge from a long-lived branch, a rebase, or a single skewed commit date
+truncates everything behind it.
+
+The synthetic fixture for AC-4 committed a recent change and then an old one, which is exactly that
+shape, and both declared owners scored as inactive: `declared 2 effective 0`, with the audit
+reporting an unrecorded gap that did not exist.
+
+It fails safe, in that it only ever understates a bus factor. It is still wrong, and an audit whose
+numbers depend on commit-date monotonicity is not an audit. The window is now applied in Go against
+each commit's `%ct`, which also removes the dependency on git 2.37's `--since-as-filter`.
+
+Worth recording because the fixture is what found it. A mocked history would have been generated in
+date order and the bug would have shipped, reporting an honest-looking number computed from a
+history git had stopped reading.
+
+### §8 step 5 cannot run as written
+
+```bash
+git diff --stat GOVERNANCE.md | tail -1
+# expect: no change
+```
+
+`scripts/build_oss.sh` copies the tree **without** `.git`, so nothing verified by a git command can
+be part of the OSS build — the SD-036 lesson, hit again. `TestApprovalThresholdsUnchanged` asserts
+the threshold rows from `GOVERNANCE.md` verbatim instead, and additionally refuses any approval-count
+directive in `CODEOWNERS`, which is the confusion §3 is actually warning about. That holds whether
+or not a git history exists, and it keeps holding after the commit that a `git diff` stops seeing.

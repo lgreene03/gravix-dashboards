@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check charter-evidence
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check charter-evidence bus-factor
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -200,6 +200,17 @@ supported-versions-check: ## Fail if SECURITY.md's supported-versions table is s
 # before the review is published.
 charter-evidence: ## Collect the measured evidence for the annual charter review
 	./scripts/charter_evidence.sh
+
+# --- Bus factor (GRVX-1507) -----------------------------------------------
+# Declared ownership against effective ownership. The gap between the two is the
+# whole point: a declared owner who has not worked in a subsystem in six months
+# is a name in a file, not a bus factor of one more.
+#
+# exit 1 means an unrecorded gap, an unowned path, or an alias standing in for a
+# person. A RECORDED gap passes — the audit exists to stop a gap being
+# invisible, not to stop one existing.
+bus-factor: ## Audit declared against effective ownership per subsystem
+	./scripts/bus_factor.sh
 
 # --- Release notes (GRVX-1209) --------------------------------------------
 # Crediting people is the part that must not depend on somebody remembering, so

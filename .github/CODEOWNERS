@@ -12,6 +12,13 @@
 #
 # When a second maintainer is granted rights, their subsystems are added here as
 # part of the onboarding checklist — see docs/oss/maintainer-onboarding.md.
+#
+# This file assigns REVIEWERS. It sets no approval threshold: GOVERNANCE.md does
+# that, and doubling it on a one-maintainer project would stall every change
+# rather than review any of it (GRVX-1507 §3).
+#
+# docs/oss/subsystems.md says which of these paths are critical and why, and
+# ./scripts/bus_factor.sh reports declared against effective ownership monthly.
 
 # Everything, unless a more specific rule below matches.
 *                        @lgreene03
@@ -21,6 +28,7 @@
 /pkg/recompute/          @lgreene03
 /pkg/sketch/             @lgreene03
 /pkg/lineage/            @lgreene03
+/pkg/manifest/           @lgreene03
 /contracts/              @lgreene03
 /tests/correctness/      @lgreene03
 
@@ -28,6 +36,7 @@
 /services/ingestion/     @lgreene03
 /transforms/             @lgreene03
 /proto/                  @lgreene03
+/pkg/storage/            @lgreene03
 
 # --- Query and presentation ----------------------------------------------
 /cube/                   @lgreene03
@@ -36,6 +45,15 @@
 # The gateway's implementation, moved out of services/gateway/ by GRVX-1302 so a
 # second entrypoint can compose with it. services/gateway/ is now five lines.
 /pkg/gatewaycore/        @lgreene03
+
+# --- What users drive Gravix with ----------------------------------------
+#
+# Not critical by docs/oss/subsystems.md's test: a defect here is visible
+# immediately to the person running the command, which is the opposite of the
+# four failures that test is for. Still owned — an unowned path is a path
+# nobody is accountable for.
+/cmd/cli/                @lgreene03
+/sdk/                    @lgreene03
 
 # --- Operations -----------------------------------------------------------
 /deploy/                 @lgreene03

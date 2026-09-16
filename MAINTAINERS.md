@@ -18,6 +18,18 @@ reason, and will say `member` for everyone once there are three.
 
 `council: fewer than three members; GOVERNANCE.md founder-led rules apply`
 
+**Every subsystem is at bus factor 1, and every one of those gaps is recorded here deliberately.**
+[`docs/oss/subsystems.md`](docs/oss/subsystems.md) applies a four-part criticality test and marks
+twelve subsystems critical: `/schemas/`, `/services/ingestion/`, `/transforms/`, `/pkg/recompute/`,
+`/pkg/sketch/`, `/pkg/manifest/`, `/pkg/storage/`, `/services/gateway/`, `/pkg/gatewaycore/`,
+`/cube/`, `/deploy/` and `/ee/`. G9.3 targets two owners on each; the real number is one on all of
+them, including `/ee/`, which is a recorded gap rather than an exemption.
+
+`./scripts/bus_factor.sh` reports this every month and **passes**, because the gap is recorded. It
+fails on an *unrecorded* one — the audit exists to stop a gap being invisible, not to stop one
+existing. An audit that went red every month for a fact nobody can change this quarter is an audit
+people stop reading.
+
 One person can merge, release, and administer this project. If they became unavailable, nobody else
 could ship a security fix.
 
@@ -42,25 +54,34 @@ account holding merge rights that is not listed above, and anyone listed above h
 | Recompute | `/pkg/recompute/` | @lgreene03 | 1 |
 | Sketches | `/pkg/sketch/` | @lgreene03 | 1 |
 | Lineage | `/pkg/lineage/` | @lgreene03 | 1 |
+| Run manifests | `/pkg/manifest/` | @lgreene03 | 1 |
 | Metric contracts | `/contracts/` | @lgreene03 | 1 |
 | Correctness suite | `/tests/correctness/` | @lgreene03 | 1 |
 | Ingestion | `/services/ingestion/` | @lgreene03 | 1 |
 | Transforms | `/transforms/` | @lgreene03 | 1 |
 | Wire contracts | `/proto/` | @lgreene03 | 1 |
+| Object storage | `/pkg/storage/` | @lgreene03 | 1 |
 | Semantic layer | `/cube/` | @lgreene03 | 1 |
 | Dashboard | `/dashboards/` | @lgreene03 | 1 |
 | Gateway entrypoint | `/services/gateway/` | @lgreene03 | 1 |
 | Gateway implementation | `/pkg/gatewaycore/` | @lgreene03 | 1 |
 | Deployment | `/deploy/` | @lgreene03 | 1 |
+| CLI | `/cmd/cli/` | @lgreene03 | 1 |
+| Client SDKs | `/sdk/` | @lgreene03 | 1 |
 | Tooling | `/scripts/` | @lgreene03 | 1 |
 | CI and templates | `/.github/` | @lgreene03 | 1 |
 | Governance | `/docs/oss/` | @lgreene03 | 1 |
 | Commercial tier | `/ee/` | @lgreene03 | 1 |
 
 **Every row is 1.** That is the real number, not a placeholder, and the table lists the subsystems
-separately anyway — because "everything: 1" and eighteen rows of 1 look the same in a summary and
-different to somebody deciding whether to depend on this. Eighteen places where one person's
+separately anyway — because "everything: 1" and twenty-two rows of 1 look the same in a summary and
+different to somebody deciding whether to depend on this. Twenty-two places where one person's
 absence stops the work is a more useful thing to know.
+
+Which of them would actually hurt is a separate question, and
+[`docs/oss/subsystems.md`](docs/oss/subsystems.md) answers it: twelve are critical by a four-part
+test, and the rest are important without being critical. A register where every row is red is a
+register nobody reads.
 
 `/ee/` deliberately keeps a single owner while the paid tier is small. A second owner there is a
 licence and revenue question as much as a code one, and it is recorded here rather than papered
