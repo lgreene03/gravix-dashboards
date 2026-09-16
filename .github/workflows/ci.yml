@@ -381,6 +381,15 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/duckdb" --version
 
+      # Exit path (GRVX-1109). The claim is that a user can leave with
+      # everything, in formats readable with no Gravix component running. That
+      # is only true while this passes, so it runs on every commit rather than
+      # living in a document nobody executes.
+      - name: Exit path — export everything and read it with Gravix stopped
+        env:
+          E2E_TEST: "1"
+        run: go test ./tests/e2e/... -run 'TestExportEverything|TestExitPath|TestExportRowCounts|TestNoSecretInExitPath|TestConfigExportComplete|TestReadmeCommandsRun|TestChecksumsVerify|TestNonEmptyDestinationRefused' -v -count=1 -timeout 300s
+
       - name: Run end-to-end tests
         env:
           E2E_TEST: "1"

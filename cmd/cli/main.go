@@ -19,6 +19,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 )
@@ -68,6 +69,8 @@ func main() {
 		runRecompute(os.Args[2:])
 	case "import":
 		runImport(os.Args[2:])
+	case "export":
+		os.Exit(exportMain(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
 	case "evolve":
 		runEvolve(os.Args[2:])
 	case "explain":

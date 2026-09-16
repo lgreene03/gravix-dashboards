@@ -239,3 +239,136 @@ make check-boundary && make build-oss && make test-oss
 | Any exported file unreadable without Gravix | STOP. `CORRECTNESS DEFECT` — this breaks thesis Axis 3 and the feature's purpose. |
 | A secret in the output | STOP. `SECURITY DEFECT: <field> in <file>`. Do not ship; an export is a file people email. |
 | Pressure to gate, delay, or charge for the exit path | Refuse, citing charter §2.3. Route to `license-boundary-auditor`. |
+
+---
+
+## 11. Implementation report
+
+All twelve acceptance criteria pass.
+
+```
+--- PASS: TestExportEverythingCompletes
+--- PASS: TestExitPathReadableWithGravixStopped
+--- PASS: TestExportRowCountsMatchManifest
+--- PASS: TestNoSecretInExitPath
+--- PASS: TestConfigExportComplete
+--- PASS: TestReadmeCommandsRun
+--- PASS: TestChecksumsVerify
+--- PASS: TestNonEmptyDestinationRefused
+--- PASS: TestExitPathWorksWithoutEE
+--- PASS: TestExitPathRunsInCI
+--- PASS: TestAllSecretFieldsRedacted        (pkg/export)
+--- PASS: TestSecretLeakAborts               (pkg/export)
+boundary: 0 violations
+build-oss exit=0
+test-oss exit=0
+```
+
+`go test ./...` passes with no failures. `staticcheck ./pkg/export/ ./cmd/cli/ ./tests/e2e/` is clean.
+
+The script run by hand, per §8 step 1:
+
+```
+$ GRAVIX_DATA_ROOT=$DR ./scripts/export_everything.sh --out $OUT --from 2026-01-01 --to 2026-01-02
+exported everything to /tmp/…/exit
+  metrics  0 rows
+  events   0 rows
+  facts    1 rows
+
+start with /tmp/…/exit/README.md — it has a runnable command for every file here.
+
+$ ls $OUT
+MANIFEST.json  README.md  checksums.txt  events  facts  metrics
+
+$ cd $OUT && sha256sum -c checksums.txt
+facts/manifest.json: OK
+MANIFEST.json: OK
+README.md: OK
+```
+
+### 11.1 The one file modified outside §4, and why
+
+`cmd/cli/main.go` gained one line:
+
+```go
+case "export":
+    os.Exit(exportMain(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+```
+
+§4.2 does not list it. Three things make this different from the omissions recorded as SD-029 and
+SD-030, where the work was returned rather than widened:
+
+1. **Without it this spec cannot exist.** `scripts/export_everything.sh` invokes `gravix export
+   --everything`. Subcommands dispatch from a hard-coded switch in `main.go`, so with no `case`, the
+   script — this spec's primary deliverable — fails at the first command. AC-1, AC-2, AC-3, AC-8,
+   AC-9, AC-11 and AC-12 all depend on it.
+2. **This spec's §9 has no exhaustivity clause.** GRVX-1102 and GRVX-1107 both list "No file outside
+   §4.1/§4.2 modified" in their Definition of Done. GRVX-1109 does not, and §4.3 does not name
+   `main.go`. The prohibition SD-029 respected is absent here.
+3. **Every sibling spec agrees the line should exist.** GRVX-1107 §5.3 documents `gravix export`'s
+   flags as a shipped command, and GRVX-1108 §4.2 explicitly includes `cmd/cli/main.go` to register
+   `gravix import` — the identical line for the sibling command.
+
+It also incidentally unblocks GRVX-1107's CLI, which SD-029 left unreachable. That is a consequence,
+not the reason; if the owner disagrees, reverting is one line.
+
+### 11.2 The test runs the script, and stops Gravix before reading
+
+§5.4 step 3 is what separates a test from a demonstration.
+`TestExitPathReadableWithGravixStopped` dials 8080, 8081, 8090 and 8091, requires every dial to fail,
+and only then hands the directory to a stock DuckDB CLI. The tests drive
+`scripts/export_everything.sh` through `bash`, not a Go shortcut around it, so the published command
+is the one under test.
+
+`TestReadmeCommandsRun` extracts every `duckdb` and `sha256sum` line from the **generated** README,
+runs each in the export directory with an environment of exactly `PATH`, `HOME` and `TMPDIR`, and
+fails if any returns nothing. The README is generated rather than hand-written for the same reason:
+it cannot describe a layout the exporter stopped producing.
+
+### 11.3 Redaction is enforced twice, and the second pass found a real gap
+
+§5.2 asks for a post-write scan as well as field selection. Writing it surfaced a leak the field list
+alone would have missed.
+
+`pkg/tenantdb.NotificationChannel.Config` is a **string holding JSON**, and a webhook auth header
+lives inside it. A scan that walks decoded structure steps straight past a secret nested in a string
+value. Both the redactor and the scanner now descend into a string that parses as a JSON object or
+array, redact within it, and re-serialise — leaving the rest of the blob intact.
+`TestSecretScanDescendsIntoJSONHeldInAString` and `TestRedactionReachesIntoJSONHeldInAString` pin it,
+and `TestRedactionLeavesNonJSONStringsAlone` stops the descent mangling ordinary text.
+
+A second gap came out of the same work: the rule `webhook_auth_header` did not match the field
+actually named `auth_header`, because matching only asked whether the *field* contained the *rule*.
+Matching is now bidirectional, with a five-character floor so a short innocuous name cannot match a
+long rule by accident. `TestRedactionMatchesRulesInBothDirections` pins both directions and the
+floor.
+
+Matching also normalises case and underscores, because `pkg/tenantdb`'s structs carry no json tags —
+the key in the output is the Go field name, so a snake_case rule list would otherwise have matched
+nothing at all. `TestRedactionMatchesGoFieldNames` covers that, and
+`TestEveryRedactionRuleIsLive` fails if any rule stops matching its own name: a rule people trust
+and that does not fire is worse than no rule.
+
+### 11.4 Two fixture bugs the tests caught, both mine
+
+The exit-path fixture first seeded facts in the single-tenant layout while creating configuration
+under tenant `acme`, so `TestConfigExportComplete` exported zero alert rules — the config was there,
+under a tenant the export was not asked about. And it seeded no warehouse metrics, so the README's
+`metrics/**/*.parquet` command failed with `No files found`. Both were real inconsistencies in what
+the test claimed to be exercising, not test flakiness: the fixture now uses one tenant throughout and
+seeds all three datasets.
+
+### 11.5 What AC-10 actually proves
+
+`TestExitPathWorksWithoutEE` checks that the exit path's own files carry no `ee/` import. The
+repository-wide guarantee — that everything builds with `ee/` deleted — is enforced by
+`make build-oss`, which the `oss-integrity` CI job runs on every commit. The test pins the exit
+path's files specifically so a future `ee/` import fails with a message naming the reason, rather
+than only as a build error in another job.
+
+### 11.6 Scope
+
+`pkg/tenantdb/**` is read, never modified. `pkg/export/export.go` is untouched — §4.3 settles data
+export as GRVX-1107's. `ee/**` is untouched. No plan gate, volume cap, rate limit or delay exists
+anywhere on this path, and `TestExportHasNoVolumeCapOrPlanGate` (GRVX-1107) already fails the build
+if one appears in `pkg/export`.
