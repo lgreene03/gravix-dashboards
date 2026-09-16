@@ -366,32 +366,41 @@ is not actually wanted — say so; that is our bug, not yours.
 
 ---
 
-## GFI-11 — Fill in the empty [Unreleased] section of the changelog
+## GFI-11 — Test the release-notes kind classifier against this repository's real subjects
 
 **Status:** unclaimed  
 **Opened:** 2026-09-16
 
 ### The file
 
-`CHANGELOG.md`
+`pkg/relnotes/relnotes.go`
 
 ### The change
 
-`[Unreleased]` is empty, while Horizon 2 has landed phases 7 through 12. Finding F-041 records this.
+`classify` guesses a change's kind from its commit subject, and its heuristics were written against
+a handful of examples. Run it over every subject in this repository's history and find the ones it
+gets wrong.
 
-Add entries under `Added`, `Changed` and `Fixed` for the work in `docs/oss/20-roadmap-horizon-2.md` that is actually merged — one line per user-visible change, not per commit. `git log --oneline` on the default branch is the source; the roadmap says what each GRVX id was for.
+Add a table-driven case to `TestKindClassification` for each real subject that is misclassified, and
+adjust `classify` until they pass — without breaking the cases already there. `SPEC DEFECT:` and
+`F-nnn:` prefixes are the interesting ones: some are internal, some are genuine fixes.
+
+Where a subject is genuinely ambiguous, the answer is not a cleverer heuristic; it is that the commit
+should have carried a `Release-Kind:` trailer. Say so in a comment rather than adding a rule that
+guesses.
 
 ### How to verify
 
 ```bash
-grep -c 'GRVX-' CHANGELOG.md
+go test ./pkg/relnotes/ -run TestKindClassification -v
 ```
 
 Expected: the command succeeds and reports the new coverage or the new count.
 
 ### Why this matters
 
-Charter §6 requires a changelog entry for a charter amendment, and an adopter deciding whether to upgrade reads this file first. An empty one says nothing has happened, which is false.
+A change filed under the wrong heading in release notes is a change the reader does not see. The
+Security section in particular is the one people scan to decide whether to upgrade today.
 
 ### If you get stuck
 

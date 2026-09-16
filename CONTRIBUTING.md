@@ -214,6 +214,20 @@ complete answer and usually turns into us improving the issue.
 [`docs/oss/good-first-issue-inventory.md`](docs/oss/good-first-issue-inventory.md) is the source
 list every entry is checked against in CI.
 
+## Credit
+
+Release notes name everyone whose work is in a release — author and co-author, alphabetically, with
+no ranking and no tiers. A one-line fix and a subsystem count the same, because they are worth the
+same amount of thank you. A first contribution is marked separately, because merging somebody's
+first pull request is worth marking.
+
+Your email address never appears. It is in your commit's `Signed-off-by` trailer because the DCO is
+a legal record, and `pkg/relnotes` fails the build rather than publishing it.
+
+If you would rather not be credited at all, add yourself to
+[`docs/oss/no-credit.md`](docs/oss/no-credit.md) and you will appear as `an anonymous contributor`.
+**No reason is required**, nobody will ask, and CI enforces it rather than somebody remembering.
+
 ## The contribution ladder
 
 Contributor → Reviewer → Maintainer, with published, mechanical criteria — no discretionary

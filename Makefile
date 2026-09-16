@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check bench
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check relnotes bench
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -147,6 +147,20 @@ rfc-index: ## Regenerate docs/oss/rfcs/index.md from docs/oss/rfcs/
 rfc-check: ## Validate every RFC and fail if the decision log is stale
 	go run ./pkg/rfc/cmd/gen -in docs/oss/rfcs -out /tmp/rfc-index.check.md
 	diff -u docs/oss/rfcs/index.md /tmp/rfc-index.check.md
+
+# --- Release notes (GRVX-1209) --------------------------------------------
+# Crediting people is the part that must not depend on somebody remembering, so
+# it is the part that is generated. The narrative is the opposite: write
+# .release-summary.md yourself; the generator refuses to invent it.
+#
+#   make relnotes VERSION=v1.1.0 PREV=v1.0.0
+
+relnotes: ## Assemble release notes for VERSION since PREV
+	@test -n "$(VERSION)" || { echo "usage: make relnotes VERSION=v1.1.0 [PREV=v1.0.0]" >&2; exit 2; }
+	go run ./pkg/relnotes/cmd/gen \
+	  -prev "$(or $(PREV),$(shell git tag --sort=-creatordate | head -1))" \
+	  -version "$(VERSION)" \
+	  -out "$(or $(OUT),/tmp/relnotes.md)"
 
 # --- Supply chain (GRVX-709) ----------------------------------------------
 # A signature says who built an artefact. Reproducibility says it matches the
