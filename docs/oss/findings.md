@@ -3160,3 +3160,110 @@ something you re-run.
 
 Nothing is skipped, and the skip and test-function baselines in `tests/devenv`
 are unchanged.
+
+---
+
+## F-048 — nine untracked goroutines could outlive `DurableSink.Close`, losing DLQ records
+
+**Found by:** driving this branch's own pull request, when `test (1.24)` failed
+on `375cdea` in a test whose own assertions had all passed
+**Affects:** `services/ingestion/main.go`
+**Severity:** high — silent loss of dead-letter records on every shutdown
+**Status:** fixed
+
+### The symptom
+
+```
+=== RUN   TestFactsEndpointStillRejectsNonPathViolations
+2026/09/16 06:58:37 INFO all uploads completed before shutdown
+    testing.go:1267: TempDir RemoveAll cleanup: unlinkat /tmp/Test…: directory not empty
+--- FAIL: TestFactsEndpointStillRejectsNonPathViolations (0.01s)
+```
+
+The test posts a fact with `status_code: 999`, asserts the 400 and returns. Its
+body never writes to the sink, and every assertion in it passed. The failure is
+the testing package's own cleanup, and the line above it is `Close` reporting
+that shutdown finished cleanly.
+
+That combination is the whole finding: `Close` said it was done, and it was not.
+
+### What was actually happening
+
+`DurableSink` was starting goroutines in two places and tracking neither.
+
+1. `NewDurableSink` launched `startupScan`, `backgroundRotationLoop` and
+   `retryLoop` as bare `go` statements. `Close` waited on `uploadWg`, which
+   tracks *uploads*, not the loops that start them. `startupScan` held no
+   reference to `ds.ctx` at all, so cancelling it did nothing.
+2. Rejecting a fact spawns a DLQ write — six `go writeDLQEntries(...)` and
+   `go writeUnprocessableEntries(...)` call sites in the handlers, each holding
+   a `*DurableSink`, none of them tracked by anything.
+
+So `Close` cancelled the context, ran the final `rotateAll`, drained the uploads
+it knew about, logged `all uploads completed before shutdown`, and returned
+while up to nine goroutines were still writing through the sink.
+
+There was also an ordering bug underneath that: `uploadWg.Wait()` ran while the
+rotation loop could still call `uploadWg.Add(1)`. Adding to a `WaitGroup` whose
+counter has reached zero while another goroutine is waiting on it is precisely
+the case the `sync` documentation forbids.
+
+### Why the dirty temp directory is the least of it
+
+The test failure is cosmetic. The defect is not.
+
+A DLQ record written after `rotateAll` has already run stays in `current.jsonl`.
+Nothing rotates it, so nothing uploads it, so it is gone at the next start —
+`startupScan` skips `current.jsonl` by design. That is silent loss on the one
+path whose entire job is to account for facts that were refused.
+
+The regression test measures it. Against the unfixed code, on three consecutive
+runs of fifty rejected facts:
+
+| Run | Reached the DLQ in storage | Lost |
+|---|---|---|
+| 1 | 49 / 50 | 1 |
+| 2 | 47 / 50 | 3 |
+| 3 | 1 / 50 | **49** |
+
+The third run is the shape of the real failure: shutdown arrives while the
+writes are still queued on the sink's mutex, and almost none of them survive.
+
+### What changed
+
+- `DurableSink.loopWg` tracks the three background loops. `Close` waits for it.
+- `DurableSink.Go(fn) bool` runs handler-spawned work on a tracked goroutine.
+  The `closing` flag it checks is guarded by the same mutex as the `Add`, so
+  the decision to start new work and the decision to stop accepting it are one
+  decision. After `Close` begins it returns `false` and runs nothing — a
+  deliberate, counted drop (`ingestion_shutdown_dropped_tasks_total`), because
+  a write accepted after shutdown has no rotation left to carry it.
+- All six DLQ call sites now go through `Go`. Their arguments are built at the
+  call site, so a record's timestamp is still when the fact was rejected, not
+  when the goroutine happened to be scheduled.
+- `Close` now drains in a defensible order: stop accepting work → cancel →
+  wait for handler writes → **then** `rotateAll` → wait for loops → wait for
+  uploads. Handler writes have to finish before the final rotation or their
+  records are still in `current.jsonl` when it runs. Loops have to stop before
+  uploads are drained or a loop can add another upload afterwards.
+- `startupScan` checks `ds.ctx` on every walk entry and returns
+  `filepath.SkipAll` once cancelled, so `Close` does not wait out a sweep of a
+  directory that is about to be deleted.
+
+### The general shape of it
+
+F-044 named three things on this branch that passed only because nothing was
+looking: the plugin host's hang under `make test-oss`, the release-notes test
+that assumed a deep clone, and a register of completed work that no code read.
+This is the same family with a sharper edge, because here something *was*
+looking and was told the wrong thing.
+
+`Close` could truthfully say that every upload it had been told about was
+finished. It logged exactly that, one line above the failure. The gap is
+between "the work I know about is done" and "no work is in progress", and a
+component that starts goroutines without tracking them cannot tell the
+difference — so it reports the first and callers read it as the second.
+
+The tests that now guard this assert what a caller actually relies on: that the
+buffer directory is inert once `Close` returns, and that every accepted record
+is in the object store. Not that `Close` returned without error.

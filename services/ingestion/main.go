@@ -264,6 +264,17 @@ var (
 			Help: "Total storage upload failures.",
 		},
 	)
+	// A non-zero value here is a real, if small, loss of records: background
+	// work offered to the sink after Close began, which is declined rather than
+	// accepted and abandoned. Worth an alert if it is ever more than a handful
+	// per shutdown, because it means handlers were still being served after
+	// shutdown started.
+	ingestionShutdownDroppedTasksTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ingestion_shutdown_dropped_tasks_total",
+			Help: "Total background sink writes declined because shutdown had already begun.",
+		},
+	)
 	ingestionOverageEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ingestion_overage_events_total",
@@ -324,6 +335,7 @@ func init() {
 	prometheus.MustRegister(collectors.NewBuildInfoCollector())
 	prometheus.MustRegister(ingestionFsyncDurationSeconds)
 	prometheus.MustRegister(ingestionDLQWriteErrorsTotal)
+	prometheus.MustRegister(ingestionShutdownDroppedTasksTotal)
 	prometheus.MustRegister(ingestionUploadErrorsTotal)
 	prometheus.MustRegister(ingestionOverageEventsTotal)
 	prometheus.MustRegister(ingestionQuotaRejectedTotal)
@@ -354,6 +366,20 @@ type DurableSink struct {
 	activeFiles map[string]*os.File
 	mu          sync.Mutex
 	uploadWg    sync.WaitGroup // tracks in-flight upload goroutines
+	// loopWg tracks the three background loops themselves, not the uploads
+	// they start. Close waits for both: an upload that has finished is not the
+	// same as a loop that has stopped, and a loop still running after Close
+	// returned can still write into a directory the caller believes it owns.
+	loopWg sync.WaitGroup
+
+	// taskWg tracks background work handlers hand to the sink — today, the DLQ
+	// writes that a rejected fact triggers. closing, guarded by taskMu, is what
+	// makes Go safe against Close: a WaitGroup may not be Added to while
+	// another goroutine is Waiting on it at zero, so the decision to start new
+	// work and the decision to stop accepting it have to be the same decision.
+	taskMu  sync.Mutex
+	closing bool
+	taskWg  sync.WaitGroup
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -378,14 +404,24 @@ func NewDurableSink(bufferDir string, store storage.ObjectStore, cb *circuitbrea
 		maxBufferBytes: maxBufferBytes,
 	}
 
-	// Startup: Check for any previously rotated but not uploaded files
-	go ds.startupScan()
-
-	// Background: File Rotation & Upload Loop
-	go ds.backgroundRotationLoop()
-
-	// Background: Periodic retry for failed uploads
-	go ds.retryLoop()
+	// Three background loops, each tracked so Close can wait for it.
+	//
+	// They were untracked, and startupScan in particular walks the buffer
+	// directory and uploads what it finds with no reference to ds.ctx at all.
+	// Close cancelled the context, waited for in-flight uploads, and returned
+	// while that walk was still going — so a caller that deleted the buffer
+	// directory after Close could have it written into underneath them. It
+	// surfaced as a CI failure on a test whose own body had passed:
+	//
+	//   TempDir RemoveAll cleanup: unlinkat /tmp/Test…: directory not empty
+	//
+	// In a test that is a confusing red. In production it is a shutdown that
+	// can leave a half-written file behind, on the path whose entire job is
+	// not losing data.
+	ds.loopWg.Add(3)
+	go func() { defer ds.loopWg.Done(); ds.startupScan() }()
+	go func() { defer ds.loopWg.Done(); ds.backgroundRotationLoop() }()
+	go func() { defer ds.loopWg.Done(); ds.retryLoop() }()
 
 	return ds, nil
 }
@@ -474,22 +510,103 @@ func (ds *DurableSink) WriteBatch(topic string, records [][]byte) error {
 	return nil
 }
 
-func (ds *DurableSink) Close() error {
-	ds.cancel()
-	// Final rotation to flush any buffered data before shutdown
-	ds.rotateAll()
-	// Wait for all in-flight uploads to finish (with timeout)
+// Go runs fn in a goroutine that Close will wait for, and reports whether it
+// was started.
+//
+// It exists because the handlers spawn background writes — a rejected fact
+// becomes a DLQ record on a goroutine, so that a caller posting bad data is
+// not made to wait for the record of it. Those goroutines were bare `go`
+// statements holding a *DurableSink, which meant Close could cancel, drain
+// everything it knew about, log "all uploads completed before shutdown" and
+// return while one of them was still creating directories under the buffer
+// root. In a test that is a TempDir cleanup failing with "directory not
+// empty" after the test body has already passed; in production it is a DLQ
+// entry half-written across a restart, on the one path whose job is to make
+// sure a rejected fact is still accounted for.
+//
+// After Close has begun, Go returns false and runs nothing. That is deliberate
+// and it is a drop: a write accepted once shutdown has started has no rotation
+// left to reach it and no upload left to carry it, so pretending to accept it
+// would be worse than declining. Callers that must not drop should write
+// synchronously before Close is reachable.
+func (ds *DurableSink) Go(fn func()) bool {
+	ds.taskMu.Lock()
+	if ds.closing {
+		ds.taskMu.Unlock()
+		ingestionShutdownDroppedTasksTotal.Inc()
+		return false
+	}
+	ds.taskWg.Add(1)
+	ds.taskMu.Unlock()
+
+	go func() {
+		defer ds.taskWg.Done()
+		fn()
+	}()
+	return true
+}
+
+// waitBounded waits for wg, giving up after limit. It reports whether the wait
+// completed rather than timing out.
+//
+// The goroutine it leaks on a timeout is deliberate and bounded: it is parked
+// on a WaitGroup that a stuck upload will eventually release, and the
+// alternative — blocking shutdown indefinitely on a hung object store — is the
+// worse failure.
+func waitBounded(wg *sync.WaitGroup, limit time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
-		ds.uploadWg.Wait()
+		wg.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
+		return true
+	case <-time.After(limit):
+		return false
+	}
+}
+
+func (ds *DurableSink) Close() error {
+	// Stop accepting handler-spawned work before anything else. Every wait
+	// below is only meaningful if nothing can add to it afterwards.
+	ds.taskMu.Lock()
+	ds.closing = true
+	ds.taskMu.Unlock()
+
+	ds.cancel()
+
+	// Handler tasks first: they write through Write, so they have to be done
+	// before the final rotation, or their records are still in current.jsonl
+	// when rotateAll runs and never get uploaded at all.
+	if !waitBounded(&ds.taskWg, 15*time.Second) {
+		slog.Warn("timed out waiting for background writes to finish during shutdown")
+	}
+
+	// Final rotation to flush any buffered data before shutdown
+	ds.rotateAll()
+
+	// The loops come first, and the order matters. Each of them can still
+	// start an upload: the rotation loop through rotate, startupScan by
+	// calling uploadFile directly. Draining uploadWg while a loop was still
+	// running would only prove that the uploads started SO FAR had finished,
+	// and the next line of the loop could add another one.
+	//
+	// Waiting here also stops Close returning while startupScan is still
+	// walking the buffer directory, which is what a caller that deletes that
+	// directory next — every test using t.TempDir(), and every operator
+	// tearing down a node — is entitled to assume cannot happen.
+	if !waitBounded(&ds.loopWg, 15*time.Second) {
+		slog.Warn("timed out waiting for background loops to stop during shutdown")
+	}
+
+	// Now nothing new can be started, so this drains what is left.
+	if waitBounded(&ds.uploadWg, 15*time.Second) {
 		slog.Info("all uploads completed before shutdown")
-	case <-time.After(15 * time.Second):
+	} else {
 		slog.Warn("timed out waiting for uploads to finish during shutdown")
 	}
+
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	for _, f := range ds.activeFiles {
@@ -667,7 +784,18 @@ func (ds *DurableSink) startupScan() {
 	// Walk buffer dir
 	err := filepath.Walk(ds.bufferDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// A directory that vanished mid-walk is not a fault: Close has
+			// cancelled and the caller is tearing the buffer down. Anything
+			// else is reported as before.
+			if ds.ctx.Err() != nil && errors.Is(err, os.ErrNotExist) {
+				return filepath.SkipAll
+			}
 			return err
+		}
+		// Stop promptly on shutdown rather than making Close wait out a walk
+		// of a directory that is about to be deleted.
+		if ds.ctx.Err() != nil {
+			return filepath.SkipAll
 		}
 		if info.IsDir() {
 			return nil
@@ -711,7 +839,7 @@ func (ds *DurableSink) startupScan() {
 		ds.uploadFile(topic, path, info.ModTime().UTC())
 		return nil
 	})
-	if err != nil {
+	if err != nil && ds.ctx.Err() == nil {
 		slog.Error("startup scan error", "error", err)
 	}
 }
@@ -1149,28 +1277,30 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, le
 		// rather than silently sent to the DLQ.
 		fact, err := schemas.UnmarshalRequestFactUnvalidated(body)
 		if err != nil {
-			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
+			entries := []DLQEntry{{
 				Timestamp: time.Now().UTC(),
 				TenantID:  tenantID,
 				RequestID: reqID,
 				FactType:  "request_fact",
 				Error:     err.Error(),
 				RawJSON:   json.RawMessage(body),
-			}})
+			}}
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", entries) })
 			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid RequestFact: %v", err))
 			return
 		}
 
 		decision := learner.Learn(fact.Service, fact.Method, fact.PathTemplate)
 		if !decision.Accepted {
-			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
+			entries := []DLQEntry{{
 				Timestamp: time.Now().UTC(),
 				TenantID:  tenantID,
 				RequestID: reqID,
 				FactType:  "request_fact",
 				Error:     decision.Reason,
 				RawJSON:   json.RawMessage(body),
-			}})
+			}}
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", entries) })
 			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "400", tenantID).Inc()
 			writeErrorJSON(w, http.StatusBadRequest, decision.Reason)
 			return
@@ -1178,14 +1308,15 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, le
 		fact.PathTemplate = decision.Template
 
 		if err := schemas.ValidateRequestFact(fact); err != nil {
-			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
+			entries := []DLQEntry{{
 				Timestamp: time.Now().UTC(),
 				TenantID:  tenantID,
 				RequestID: reqID,
 				FactType:  "request_fact",
 				Error:     err.Error(),
 				RawJSON:   json.RawMessage(body),
-			}})
+			}}
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", entries) })
 			writeErrorJSON(w, http.StatusBadRequest,
 				fmt.Sprintf("invalid RequestFact: validation error: %v", err))
 			return
@@ -1221,8 +1352,8 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, le
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
 
 		if class == lateness.ClassUnprocessable {
-			go writeUnprocessableEntries(sink, tenantID,
-				[]DLQEntry{unprocessableEntry(tenantID, reqID, time.Now().UTC(), body)})
+			entries := []DLQEntry{unprocessableEntry(tenantID, reqID, time.Now().UTC(), body)}
+			sink.Go(func() { writeUnprocessableEntries(sink, tenantID, entries) })
 
 			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "202", tenantID).Inc()
 			w.Header().Set("Content-Type", "application/json")
@@ -1588,14 +1719,14 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registr
 
 		// Write rejected facts to DLQ (async, non-blocking)
 		if len(dlqEntries) > 0 {
-			go writeDLQEntries(sink, tenantID, "request_fact", dlqEntries)
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", dlqEntries) })
 		}
 
 		// Unprocessable facts were accepted and stored above. They are copied into
 		// their own DLQ prefix as well, so an operator can find data that will
 		// never reach a metric.
 		if len(unprocessable) > 0 {
-			go writeUnprocessableEntries(sink, tenantID, unprocessable)
+			sink.Go(func() { writeUnprocessableEntries(sink, tenantID, unprocessable) })
 		}
 
 		accepted := len(validRecords)
