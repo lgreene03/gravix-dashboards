@@ -3021,3 +3021,79 @@ F-044 was a hand-maintained register nothing read. This is a generated page whos
 compared it against itself. Both published something untrue for months. The common factor is not
 carelessness — it is that "generated" and "checked" are different properties, and a generator is
 not a check on its own input.
+
+---
+
+## F-046 — `gravix export --dataset metrics` has never worked on a real warehouse
+
+**Found by:** `pro-engineer` executing GRVX-1311, writing the test that compares the paid sync's
+rows against the free export's
+**Affects:** `pkg/export/export.go`, `GRVX-1107`, `GRVX-1109`, charter §7.3 Q5
+**Severity:** high — the free export is the anti-lock-in guarantee, and this is the dataset a
+leaving customer most needs
+**Status:** fixed, with a regression test proven to fail against the old code
+
+### What happens
+
+```
+export: warehouse/request_metrics_minute/event_day=2026-03-02/request_metrics_minute_20260302.manifest.json:
+export: open parquet: invalid magic header of parquet file: "{\n  "
+```
+
+`partitionKeysFor` listed **every** key under a day's prefix and handed each to the dataset's
+decoder. Since `GRVX-802` the rollup writes a `.manifest.json` beside every Parquet partition, so
+the Parquet decoder was handed a JSON document and refused it — correctly. The export then returned
+the error and wrote nothing.
+
+This is not a partial failure. `export.Run` returns on the first decode error, so a metrics export
+over any range containing a manifested partition produces **no output at all**. Every partition the
+rollup has written since Phase 8 has a manifest beside it.
+
+### Why nothing caught it
+
+`pkg/export`'s own fixtures write a Parquet file into a partition directory and nothing else. No
+real warehouse looks like that. The tests exercised a shape that exists only in the tests, which is
+the same failure as F-044 and F-045 wearing different clothes: the check and the thing checked were
+built from the same wrong picture.
+
+`GRVX-1109` runs the exit path in CI on every commit, and it passes — because it exports
+**facts**, from `raw/`, where no sidecar is written. The one dataset that is derived, and therefore
+the one that carries a manifest, is the one nothing exercised end to end.
+
+### What it cost
+
+Charter §7.3 Q5 places export in the free core because *"gating it is hostage-taking"*.
+`docs-site/docs/leaving-gravix.md` tells a departing customer to run this command. An export that
+is free and does not work is worse than one that is gated, because the customer finds out at the
+moment they have already decided to leave.
+
+The defect was found by the paid feature that replaces this path. `ee/warehouse`'s AC-10 compares
+what the sync would send against what the free export produces, and it could not run because the
+free side returned an error. A paid feature's test is a strange place to discover that the free
+alternative is broken, and it is the reason GRVX-1311 §5.1 requires the paid README to name the
+free path: writing that sentence honestly means checking that the sentence is true.
+
+### The fix
+
+`partitionKeysFor` now takes the dataset's own extension — `.parquet` for metrics, `.jsonl` for
+facts and events — and filters the listing to keys that end with it, `.gz` allowed. An allow-list
+rather than a deny-list of known sidecars, because the next sidecar will arrive without anybody
+remembering to exclude it and the failure mode of forgetting is feeding it to a decoder.
+
+`TestExportIgnoresSidecarsBesideAPartition` writes a partition with a manifest, a `_SUCCESS` marker
+and a stray text file beside it, and asserts the export produces exactly the one real row. It was
+run against the unfixed code and fails there:
+
+```
+--- FAIL: TestExportIgnoresSidecarsBesideAPartition
+    export: .../_SUCCESS: export: open parquet: reading magic header of parquet file: EOF
+```
+
+`TestIsSourceKey` pins the classification itself, including the `.gz` case.
+
+### What this says about the exit-path proof
+
+`GRVX-1109` proves the exit path runs. It does not prove every dataset the exit path documents
+runs, and the gap between those two sentences hid this for a horizon. The suggested follow-up is to
+extend that CI job to export **each** dataset against a warehouse that has been rolled up — which
+is the state every real deployment is in and the state no test was in.

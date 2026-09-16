@@ -163,11 +163,11 @@ func Run(ctx context.Context, store storage.ObjectStore, req Request) (*Result, 
 	var res *Result
 	switch req.Dataset {
 	case DatasetFacts:
-		res, err = runDataset[FactRow](ctx, store, req, dest, rawPrefix(req.TenantID, "request_facts"), decodeJSONL[FactRow])
+		res, err = runDataset[FactRow](ctx, store, req, dest, rawPrefix(req.TenantID, "request_facts"), ".jsonl", decodeJSONL[FactRow])
 	case DatasetEvents:
-		res, err = runDataset[EventRow](ctx, store, req, dest, rawPrefix(req.TenantID, "service_events"), decodeJSONL[EventRow])
+		res, err = runDataset[EventRow](ctx, store, req, dest, rawPrefix(req.TenantID, "service_events"), ".jsonl", decodeJSONL[EventRow])
 	case DatasetMetrics:
-		res, err = runDataset[MetricRow](ctx, store, req, dest, warehousePrefix(req.TenantID, "request_metrics_minute"), decodeParquet[MetricRow])
+		res, err = runDataset[MetricRow](ctx, store, req, dest, warehousePrefix(req.TenantID, "request_metrics_minute"), ".parquet", decodeParquet[MetricRow])
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownDataset, req.Dataset)
 	}
@@ -244,8 +244,17 @@ func warehousePrefix(tenantID, metric string) string {
 	return "warehouse/" + tenantID + "/" + metric
 }
 
-// partitionKeysFor returns the keys belonging to one day, for either layout.
-func partitionKeysFor(ctx context.Context, store storage.ObjectStore, prefix, day string, hive bool) ([]string, error) {
+// partitionKeysFor returns the data keys belonging to one day, for either
+// layout.
+//
+// The extension filter is load-bearing, not tidiness. Since GRVX-802 the rollup
+// writes a `.manifest.json` beside every Parquet partition, and a listing that
+// returned it fed a JSON document to the Parquet decoder — so `gravix export
+// --dataset metrics` failed with "invalid magic header of parquet file" on
+// every warehouse the rollup had ever written. See F-046. Nothing caught it
+// because this package's own fixtures wrote partitions with no manifest beside
+// them, which no real warehouse looks like.
+func partitionKeysFor(ctx context.Context, store storage.ObjectStore, prefix, day, sourceExt string, hive bool) ([]string, error) {
 	p := prefix + "/" + day
 	if hive {
 		p = prefix + "/event_day=" + day
@@ -254,7 +263,25 @@ func partitionKeysFor(ctx context.Context, store storage.ObjectStore, prefix, da
 	if err != nil {
 		return nil, fmt.Errorf("export: list %s: %w", p, err)
 	}
-	return keys, nil
+
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if isSourceKey(key, sourceExt) {
+			out = append(out, key)
+		}
+	}
+	return out, nil
+}
+
+// isSourceKey reports whether a key is data this dataset reads, rather than
+// something written beside it.
+//
+// An allow-list rather than a deny-list of known sidecars: a future sidecar
+// arrives without anyone remembering to exclude it, and the failure mode of
+// forgetting is feeding it to a decoder.
+func isSourceKey(key, sourceExt string) bool {
+	base := strings.TrimSuffix(key, ".gz")
+	return strings.HasSuffix(base, sourceExt)
 }
 
 // decoder turns one source object's bytes into rows.
@@ -297,7 +324,7 @@ func decodeParquet[T any](data []byte) ([]T, error) {
 // runDataset walks the range one day at a time. Only one partition's rows are
 // held at once, which is what makes the memory bound the partition rather than
 // the range.
-func runDataset[T any](ctx context.Context, store storage.ObjectStore, req Request, dest destination, prefix string, dec decoder[T]) (*Result, error) {
+func runDataset[T any](ctx context.Context, store storage.ObjectStore, req Request, dest destination, prefix, sourceExt string, dec decoder[T]) (*Result, error) {
 	hive := req.Dataset == DatasetMetrics
 
 	res := &Result{}
@@ -322,7 +349,7 @@ func runDataset[T any](ctx context.Context, store storage.ObjectStore, req Reque
 		}
 		dayStr := day.Format("2006-01-02")
 
-		keys, err := partitionKeysFor(ctx, store, prefix, dayStr, hive)
+		keys, err := partitionKeysFor(ctx, store, prefix, dayStr, sourceExt, hive)
 		if err != nil {
 			return nil, err
 		}

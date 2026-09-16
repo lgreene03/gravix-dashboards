@@ -643,3 +643,82 @@ func TestExportedMetricsCarryTheLatencySketch(t *testing.T) {
 		}
 	}
 }
+
+// A real warehouse has a manifest beside every partition (GRVX-802), and this
+// package's fixtures did not — so `gravix export --dataset metrics` failed on
+// every warehouse the rollup had ever written, with "invalid magic header of
+// parquet file", and nothing noticed for a whole horizon. See F-046.
+//
+// The fixture here writes the sidecar, because a test that exercises a shape no
+// real deployment has is a test that proves the shape no real deployment has.
+func TestExportIgnoresSidecarsBesideAPartition(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := storage.NewLocalStore(dir)
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	day := time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
+	partition := "warehouse/request_metrics_minute/event_day=2026-03-02/request_metrics_minute_20260302.parquet"
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[MetricRow](&buf)
+	if _, err := w.Write([]MetricRow{{
+		TenantID: "", BucketStart: "2026-03-02 00:00:00", Service: "checkout",
+		Method: "GET", PathTemplate: "/orders/{id}", RequestCount: 10, ErrorCount: 1,
+		ErrorRate: 0.1, P50LatencyMs: 12, P95LatencyMs: 40, P99LatencyMs: 90,
+	}}); err != nil {
+		t.Fatalf("write parquet: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	if err := store.Put(ctx, partition, bytes.NewReader(buf.Bytes())); err != nil {
+		t.Fatalf("put partition: %v", err)
+	}
+
+	// Everything the rollup and compaction write beside a partition.
+	sidecars := map[string]string{
+		"warehouse/request_metrics_minute/event_day=2026-03-02/request_metrics_minute_20260302.manifest.json": `{"schema_version":3,"metric":"request_metrics_minute"}`,
+		"warehouse/request_metrics_minute/event_day=2026-03-02/_SUCCESS":                                      "",
+		"warehouse/request_metrics_minute/event_day=2026-03-02/notes.txt":                                     "somebody left this here",
+	}
+	for key, body := range sidecars {
+		if err := store.Put(ctx, key, strings.NewReader(body)); err != nil {
+			t.Fatalf("put %s: %v", key, err)
+		}
+	}
+
+	out := filepath.Join(t.TempDir(), "export")
+	res, err := Run(ctx, store, Request{
+		Dataset: DatasetMetrics, Format: FormatJSONL,
+		From: day, To: day.AddDate(0, 0, 1), Destination: "file://" + out,
+	})
+	if err != nil {
+		t.Fatalf("export with a manifest beside the partition: %v", err)
+	}
+	if res.Rows != 1 {
+		t.Errorf("exported %d rows; want the one real row", res.Rows)
+	}
+}
+
+func TestIsSourceKey(t *testing.T) {
+	cases := []struct {
+		key, ext string
+		want     bool
+	}{
+		{"a/b/part-0.parquet", ".parquet", true},
+		{"a/b/part-0.manifest.json", ".parquet", false},
+		{"a/b/_SUCCESS", ".parquet", false},
+		{"raw/request_facts/2026-03-02/00/part-0.jsonl", ".jsonl", true},
+		{"raw/request_facts/2026-03-02/00/part-0.jsonl.gz", ".jsonl", true},
+		{"raw/request_facts/2026-03-02/00/part-0.manifest.json", ".jsonl", false},
+		{"a/b/part-0.parquet", ".jsonl", false},
+	}
+	for _, tc := range cases {
+		if got := isSourceKey(tc.key, tc.ext); got != tc.want {
+			t.Errorf("isSourceKey(%q, %q) = %v; want %v", tc.key, tc.ext, got, tc.want)
+		}
+	}
+}
