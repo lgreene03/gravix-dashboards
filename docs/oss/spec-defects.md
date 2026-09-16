@@ -1802,3 +1802,52 @@ and AC-12 do not depend on it.
 
 Which input Prometheus importing accepts, stated as a format rather than a directory, and with the
 dependency question answered explicitly given GRVX-1102 §3's precedent.
+
+---
+
+## SD-031 — GRVX-1201 §4.2 names two `pkg/notify` files that do not exist
+
+**Found by:** `senior-engineer` executing GRVX-1201
+**Affects:** GRVX-1201 §4.2
+**Severity:** low — the intent is unambiguous and the work was completed; recorded because it is the
+fourth instance of the pattern F-042 describes
+**Status:** open; returned as `SPEC DEFECT: §4.2 — pkg/notify/slack.go and pkg/notify/webhook.go do
+not exist`.
+
+### What the spec says
+
+§4.2 lists four files to modify so the built-in notifiers implement `plugin.Notifier`:
+
+> `pkg/notify/slack.go`, `webhook.go`, `pagerduty.go`, `opsgenie.go`
+
+### What is actually there
+
+```
+pkg/notify/
+  notify.go      notify_test.go
+  opsgenie.go    opsgenie_test.go
+  pagerduty.go   pagerduty_test.go
+```
+
+There is no `slack.go` and no `webhook.go`. The Slack and webhook senders are methods on
+`Dispatcher` — `sendSlack` and `sendWebhook` — inside `notify.go`, which §4.2 does not list. Two of
+the four files named do not exist, and the file actually holding two of the four notifiers is absent
+from the list.
+
+### What was done
+
+`notify.go` was modified. §4.3's do-not-touch list is the ingestion hot path, `pkg/recompute`,
+`pkg/sketch` and `ee/`; `notify.go` is on none of them, and this spec's §9 — like GRVX-1109's, and
+unlike GRVX-1102's and GRVX-1107's — carries no "No file outside §4.1/§4.2 modified" clause. The
+intent of §4.2 is plain: make the four existing notifiers implement the interface. They do, with
+`DispatcherNotifier` serving both Slack and webhook, and the PagerDuty and OpsGenie adapters beside
+their senders in the files §4.2 does name.
+
+### Why it is recorded despite being harmless here
+
+Four Phase 11–12 specs have now named a file that does not exist or omitted one they require:
+SD-029 (`enterprise.go` holds no export code; `cmd/cli/main.go` omitted), SD-030 (`cmd_recompute.go`
+and `cmd_explain.go` omitted; golden fixture omitted), GRVX-1109 (`cmd/cli/main.go` omitted), and now
+this one. **F-042** proposes the two mechanical checks that would catch all four before dispatch:
+every repo-relative path in §2/§4.2 must resolve, and every file named in §6 or §7 must appear in §4.
+This entry is the fourth data point for it.

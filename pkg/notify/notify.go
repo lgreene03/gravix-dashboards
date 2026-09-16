@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/lgreene/gravix-dashboards/pkg/plugin"
 )
 
 // AlertPayload contains the information about a triggered alert.
@@ -256,4 +258,111 @@ func (d *Dispatcher) postJSON(ctx context.Context, url, authHeader string, paylo
 		return fmt.Errorf("notification endpoint returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ─── plugin.Notifier adapters (GRVX-1201) ───
+//
+// The four built-in notifiers implement the same interface third-party
+// notifiers do, but in-process: they are first-party code and need no
+// subprocess. The interface is what is shared; the transport is not mandatory
+// for built-ins.
+//
+// Each adapter is a thin wrapper rather than a rewrite, so the existing
+// senders and their tests are untouched.
+
+// Compile-time proof that every built-in notifier satisfies the same interface
+// a third-party plugin does. If one drifts, the build fails here rather than at
+// the call site.
+var (
+	_ plugin.Notifier = (*DispatcherNotifier)(nil)
+	_ plugin.Notifier = (*PagerDutyPluginNotifier)(nil)
+	_ plugin.Notifier = (*OpsGeniePluginNotifier)(nil)
+)
+
+// DispatcherNotifier adapts a Dispatcher channel to plugin.Notifier. It serves
+// the Slack and webhook senders, which are both reached through Send.
+type DispatcherNotifier struct {
+	dispatcher  *Dispatcher
+	channelType string
+	config      ChannelConfig
+}
+
+// NewDispatcherNotifier returns a plugin.Notifier for a Dispatcher channel
+// type — "slack" or "webhook".
+func NewDispatcherNotifier(d *Dispatcher, channelType string, config ChannelConfig) *DispatcherNotifier {
+	return &DispatcherNotifier{dispatcher: d, channelType: channelType, config: config}
+}
+
+func (n *DispatcherNotifier) Notify(ctx context.Context, alert plugin.Alert) error {
+	return n.dispatcher.Send(ctx, n.channelType, n.config, alertPayloadFrom(alert))
+}
+
+// PagerDutyPluginNotifier adapts PagerDutyNotifier to plugin.Notifier.
+type PagerDutyPluginNotifier struct{ inner *PagerDutyNotifier }
+
+// NewPagerDutyPluginNotifier wraps a PagerDutyNotifier.
+func NewPagerDutyPluginNotifier(inner *PagerDutyNotifier) *PagerDutyPluginNotifier {
+	return &PagerDutyPluginNotifier{inner: inner}
+}
+
+func (n *PagerDutyPluginNotifier) Notify(ctx context.Context, alert plugin.Alert) error {
+	// AlertID becomes the dedup key, which is what makes Notify idempotent:
+	// PagerDuty collapses repeats of a key into one incident, so a retry pages
+	// nobody twice.
+	severity := alert.Severity
+	if severity == "" {
+		severity = "error"
+	}
+	return n.inner.Trigger(ctx, alert.AlertID, alertSummary(alert), alert.Service, severity, map[string]interface{}{
+		"metric":         alert.Metric,
+		"threshold":      alert.Threshold,
+		"actual_value":   alert.ActualValue,
+		"window_minutes": alert.WindowMinutes,
+		"path_template":  alert.PathTemplate,
+		"dashboard_url":  alert.DashboardURL,
+	})
+}
+
+// OpsGeniePluginNotifier adapts OpsGenieNotifier to plugin.Notifier.
+type OpsGeniePluginNotifier struct{ inner *OpsGenieNotifier }
+
+// NewOpsGeniePluginNotifier wraps an OpsGenieNotifier.
+func NewOpsGeniePluginNotifier(inner *OpsGenieNotifier) *OpsGeniePluginNotifier {
+	return &OpsGeniePluginNotifier{inner: inner}
+}
+
+func (n *OpsGeniePluginNotifier) Notify(ctx context.Context, alert plugin.Alert) error {
+	priority := "P3"
+	if alert.Severity == "critical" {
+		priority = "P1"
+	}
+	// The alias is the AlertID for the same reason PagerDuty uses a dedup key.
+	return n.inner.Create(ctx, alert.AlertID, alertSummary(alert), alert.DashboardURL, priority, map[string]string{
+		"metric":        alert.Metric,
+		"service":       alert.Service,
+		"path_template": alert.PathTemplate,
+	})
+}
+
+// alertSummary is the one-line description every channel shows first.
+func alertSummary(alert plugin.Alert) string {
+	return fmt.Sprintf("%s: %s %s %.2f (actual %.2f)",
+		alert.RuleName, alert.Metric, alert.Operator, alert.Threshold, alert.ActualValue)
+}
+
+// alertPayloadFrom converts the ABI's Alert into the internal payload the
+// existing senders already take.
+func alertPayloadFrom(alert plugin.Alert) AlertPayload {
+	return AlertPayload{
+		RuleName:      alert.RuleName,
+		Metric:        alert.Metric,
+		Operator:      alert.Operator,
+		Threshold:     alert.Threshold,
+		ActualValue:   alert.ActualValue,
+		WindowMinutes: alert.WindowMinutes,
+		Service:       alert.Service,
+		PathTemplate:  alert.PathTemplate,
+		FiredAt:       alert.FiredAt,
+		DashboardURL:  alert.DashboardURL,
+	}
 }

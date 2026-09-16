@@ -266,3 +266,129 @@ make check-boundary && make build-oss && make test-oss
 | A plugin kind needing the ingestion hot path | Return `SPEC DEFECT: §3`. Route to `senior-engineering-lead`. A plugin between a request and its fsync would put third-party code inside the durability guarantee. |
 | GRVX-1302's registry overlapping this one | Return `SPEC DEFECT: §3 — two registries`. One mechanism, two kinds of consumer. |
 | Pressure to use Go's `plugin` package for speed | Refuse, citing §5.1. Every plugin breaking on every release costs more than JSON encoding ever will. |
+
+---
+
+## 11. Implementation report
+
+All twelve acceptance criteria pass. `pkg/plugin` is at **91.5%** statement coverage, above the 90%
+§8 requires.
+
+```
+ok  github.com/lgreene/gravix-dashboards/pkg/plugin   coverage: 91.5% of statements
+ok  github.com/lgreene/gravix-dashboards/pkg/notify
+staticcheck ./pkg/plugin/ ./pkg/notify/   (no findings)
+boundary: 0 violations
+build-oss exit=0
+test-oss exit=0
+```
+
+`go test ./...` passes with no failures. Twenty-nine tests in `pkg/plugin`.
+
+### 11.1 §9 — `docs/plugin-system.md`: kept, changed, superseded
+
+v1 described in-process, compile-time Go interfaces registered at startup, across four extension
+points. The rewritten document records the delta in full; the summary:
+
+| v1 | v2 | Why |
+|---|---|---|
+| Build-time in-process loading | **Superseded** by subprocess JSON-RPC | Go's `plugin` package couples every plugin to the host's toolchain and dependency versions and cannot isolate a crash |
+| Notification Channel plugins | **Kept** as `Notifier` | The one v1 point that was both safe and wanted |
+| Transform plugins (`etl.Transform`) | **Removed** | Sits inside the derivation of metrics from facts; third-party code there makes "recomputable" unprovable |
+| Storage Backend plugins (`ObjectStore`) | **Removed** | On the write path for every fact — the one place a third party's latency must never appear |
+| Auth Provider plugins | **Removed** | A pluggable authenticator is a pluggable way to be wrong about who someone is |
+| — | **New**: `Exporter`, `Adapter` | The common integration requests, both safely outside the correctness path |
+
+Three extension points were removed. That is a deliberate narrowing: each sat either inside the
+correctness path or on the ingestion hot path, and refusing to extend there is what lets the rest of
+the ABI be stable. The document says so rather than letting them disappear quietly.
+
+### 11.2 The test binary is the plugin
+
+Crash isolation, timeouts and restart backoff cannot be tested honestly against a mocked transport —
+a mock cannot hang or die. `TestMain` re-executes the test binary with `GRAVIX_PLUGIN_MODE` set, so
+every test drives a **real subprocess over real pipes** speaking real JSON-RPC. The modes cover a
+well-behaved plugin, an ABI mismatch, a malformed manifest, a crash on start, a crash mid-call, a
+hang, a plugin that always returns an error, and one that answers with garbage.
+
+One thing that had to change to make the hang real: `select {}` in the fake plugin triggers Go's
+deadlock detector, which aborts the process — so the host saw EOF and the timeout never fired. A
+long sleep models a hung plugin; the runtime does not intervene.
+
+### 11.3 AC-11 — the guide's example is compiled and run, not eyeballed
+
+`TestPluginGuideExampleWorks` extracts the first Go block from
+`docs-site/docs/writing-a-plugin.md`, writes it into a temporary module, **compiles it**, launches
+the binary as a plugin, and drives the handshake and a notify call. A guide whose example does not
+work is worse than no guide, because a reader assumes their own code is at fault.
+
+It clears `GOFLAGS` for the build: a parent `-mod=vendor` would fail in a throwaway module with no
+vendor directory, which would have looked like the example being broken.
+
+### 11.4 AC-8 is structural, not an inspection
+
+`TestNoPluginOnIngestHotPath` runs `go list -deps` over `services/ingestion` and fails if
+`pkg/plugin` appears anywhere in its transitive dependencies. Grepping for call sites would prove
+only that today's code does not call a plugin; the dependency check proves it *cannot*, because the
+package is not reachable from that binary at all.
+
+### 11.5 §8 step 4's grep over-matches; AC-12 is the accurate check
+
+The verification command
+
+```bash
+grep -rn '"plugin"' --include=*.go pkg/ services/ | grep -v "gravix-dashboards/pkg/plugin" | grep -c .
+```
+
+returns **3**, not 0. All three are false positives: one is the literal inside `TestNoGoPluginPackage`
+itself, and two are `"plugin"` used as a **slog attribute key** in `host.go`. The precise check —
+
+```bash
+grep -rnE '^\s+(_\s+)?"plugin"$' --include=*.go . | grep -v _test.go
+```
+
+— returns nothing, and `TestNoGoPluginPackage` (AC-12) walks every Go file checking import lines
+rather than any occurrence of the word. The spec's grep is a reasonable smoke test that cannot
+distinguish an import from a log key; it is not a defect in the code.
+
+### 11.6 SD-031 — §4.2 names two files that do not exist
+
+§4.2 lists `pkg/notify/slack.go` and `pkg/notify/webhook.go`. Neither exists. `pkg/notify` contains
+`notify.go`, `opsgenie.go` and `pagerduty.go`; the Slack and webhook senders are methods on
+`Dispatcher` inside `notify.go`, which §4.2 does **not** list.
+
+So the four adapters live where their implementations do: `DispatcherNotifier` (serving both Slack
+and webhook) in `notify.go`, and the PagerDuty and OpsGenie adapters beside their senders. Modifying
+`notify.go` is not forbidden — §4.3's do-not-touch list is the ingestion hot path, `pkg/recompute`,
+`pkg/sketch` and `ee/`, and this spec's §9, like GRVX-1109's, carries no "no file outside §4" clause.
+The same reasoning is recorded there. Registered as **SD-031**; it is the fourth instance of the
+pattern F-042 describes.
+
+### 11.7 Two guards worth naming
+
+**An adapter cannot be constructed without a cardinality check.** `Host.Impl` returns an error if an
+adapter is built with a nil `admitFact`, so the budget cannot be skipped by forgetting to pass one.
+`TestAdapterRequiresACardinalityCheck` pins it, and `TestAdapterCannotExceedCardinality` drives a
+plugin that returns one templated path and one raw UUID, requiring the second to be dropped. A
+plugin's promise to respect `docs/04-non-goals.md` §5 is not evidence that it did.
+
+**A secret never reaches a log or an error.** `TestSecretConfigNeverLogged` drives a plugin past its
+failure budget — the path that logs the most — and asserts the configured token appears in neither
+the log nor any error text, while the non-secret field and the `[redacted]` marker both do. Dropping
+the config entirely would pass a weaker test and leave an operator unable to see what the plugin was
+configured with.
+
+### 11.8 Scope
+
+`services/ingestion`, `pkg/recompute`, `pkg/sketch` and `ee/**` are untouched (§4.3). Go's `plugin`
+package is imported nowhere. No plugin marketplace or registry service was built (§3 — that is
+GRVX-1202), and there is one registry, not two: GRVX-1302 will build on `pkg/plugin.Registry` rather
+than beside it.
+
+### 11.9 A test that scribbled in the repository
+
+The guide's example writes `alerts.log` to its working directory, and a plugin inherits the host's
+(§5.4). The first run of `TestPluginGuideExampleWorks` therefore left `pkg/plugin/alerts.log` in the
+checkout — the same class of problem as F-018, caught here by `git status` before it was committed.
+The test now runs from its temp directory via `t.Chdir`, with the guide path resolved to an absolute
+one first. The behaviour under test is unchanged; only where it lands is.

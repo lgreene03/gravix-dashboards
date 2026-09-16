@@ -1,203 +1,83 @@
-# Plugin System Design
+# Plugin System Design (v2)
 
-## Overview
+Gravix supports extensibility through a stable, versioned ABI. Plugins run as **subprocesses
+speaking JSON-RPC 2.0 over stdio**, so a plugin built against one Gravix release keeps working
+against the next.
 
-Gravix supports extensibility through a plugin interface that allows custom transforms, notification channels, and storage backends to be added without modifying core code. Plugins are loaded at startup and registered with the appropriate subsystem.
+The contributor-facing guide, with a complete worked example, is
+[Writing a plugin](../docs-site/docs/writing-a-plugin.md). This document records the design and what
+changed from v1.
 
-## Plugin Types
+## What changed from v1
 
-### 1. Transform Plugins
+v1 (Horizon 1) described in-process, compile-time Go interfaces registered with `Register*` calls at
+startup. v2 replaces the loading model entirely and narrows the extension points.
 
-Transform plugins process raw facts or events into derived data. They implement the `etl.Transform` interface:
+| v1 | Status in v2 | Why |
+|---|---|---|
+| **Loading**: build-time, in-process, `plugin.Open` or compiled-in registration | **Superseded** | Go's `plugin` package couples every plugin to the host's exact toolchain and dependency versions, is ELF-only, and cannot isolate a crash. Every Gravix release would break every plugin. |
+| **Notification Channel** plugins (`notify.RegisterChannel`) | **Kept**, as `Notifier` | The one v1 extension point that was both safe and wanted. The four built-in senders now implement the same interface, in-process. |
+| **Transform** plugins (`etl.Transform`) | **Removed** | A transform sits inside the derivation of metrics from facts. Correctness code takes no plugins: `pkg/recompute` and `pkg/sketch` are what make a number reproducible, and third-party code in that path would make "recomputable" unprovable. |
+| **Storage Backend** plugins (`storage.ObjectStore`) | **Removed** | `ObjectStore` is core infrastructure on the write path for every fact. A plugin there sits between a request and its durable write, which is the one place a third party's latency must never appear. |
+| **Auth Provider** plugins | **Removed** | Authentication is served natively by SSO/OIDC and API keys. A pluggable authenticator is a pluggable way to be wrong about who someone is. |
+| — | **New**: `Exporter` | Writing batches to an external destination is the common integration request and is safely outside the correctness path. |
+| — | **New**: `Adapter` | Converting a foreign payload into facts, at batch boundaries only, with the cardinality budget enforced on the Gravix side. |
 
-```go
-type Transform interface {
-    Process(ctx context.Context, store storage.ObjectStore, cfg Config, day time.Time, files []InputFile) (*ProcessResult, error)
-}
-```
+Three extension points were removed. That is a deliberate narrowing, not an oversight: each sat
+either inside the correctness path or on the ingestion hot path, and an ABI that cannot be extended
+there is what lets the rest of the ABI be stable.
 
-**Use cases:**
-- Custom metric aggregations (e.g., percentile bucketing by user agent family)
-- Business-specific rollups (e.g., revenue per endpoint)
-- Data quality checks (e.g., anomaly detection on ingested facts)
+## The three kinds
 
-**Registration:**
-```go
-// In your plugin's init():
-etl.RegisterTransform("my-custom-rollup", myTransformFunc)
-```
+| Kind | Interface | Invoked |
+|---|---|---|
+| `notifier` | `Notify(ctx, Alert) error` | when an alert fires |
+| `exporter` | `Export(ctx, Batch) (ExportResult, error)` | at batch boundaries |
+| `adapter` | `Convert(ctx, payload, contentType) ([]RequestFact, error)` | at batch boundaries |
 
-### 2. Notification Channel Plugins
+`pkg/plugin` defines all three. `pkg/notify` provides the reference notifiers; `pkg/export` provides
+the reference export formats.
 
-Notification plugins extend the alerting system to deliver alerts to custom destinations beyond Slack and webhooks.
+## Transport
 
-```go
-type ChannelPlugin interface {
-    Type() string
-    Send(ctx context.Context, payload AlertPayload, config json.RawMessage) error
-    ValidateConfig(config json.RawMessage) error
-}
-```
+JSON-RPC 2.0, one request per line on stdin, one response per line on stdout. Three methods:
 
-**Use cases:**
-- Microsoft Teams notifications
-- SMS via Twilio
-- Custom incident management systems
-- Email digests
+- `gravix.describe` → `Manifest` (the startup handshake)
+- `gravix.notify` / `gravix.export` / `gravix.convert` → the kind's single operation
 
-**Registration:**
-```go
-notify.RegisterChannel("teams", &TeamsPlugin{})
-```
+`ABIVersion` is `"1"`. It changes only when an existing method's request or response shape changes;
+adding a method does not change it. A plugin declaring a different version is refused at the
+handshake, before it is ever called.
 
-### 3. Storage Backend Plugins
+## Isolation
 
-Storage plugins add support for additional object stores beyond local filesystem and S3.
+| Property | Rule |
+|---|---|
+| Timeout | 30s per call by default, configurable, hard-killed after |
+| Crash | Restarted with exponential backoff to 5 minutes; the host continues |
+| Failure budget | 5 consecutive failures disable the plugin and log it; it never blocks the pipeline |
+| Memory | 256 MB RSS by default, read from `/proc`; a no-op on platforms without it |
+| Filesystem | Inherits the host's working directory |
+| Network | **Unrestricted.** A notifier must reach Slack. |
 
-```go
-// Implement the existing storage.ObjectStore interface:
-type ObjectStore interface {
-    List(ctx context.Context, prefix string) ([]string, error)
-    Get(ctx context.Context, key string) (io.ReadCloser, error)
-    Put(ctx context.Context, key string, r io.Reader) error
-    Delete(ctx context.Context, key string) error
-}
-```
+The network rule is a genuine trust boundary and the contributor guide states it directly:
+installing a third-party plugin is installing third-party code with network access, exactly like any
+other dependency.
 
-**Use cases:**
-- Google Cloud Storage
-- Azure Blob Storage
-- HDFS for on-premise deployments
+## What a plugin cannot do
 
-### 4. Auth Provider Plugins
+- **Sit on the ingestion hot path.** Adapters run at batch boundaries. `services/ingestion` does not
+  import `pkg/plugin`, and a test enforces it.
+- **Bypass the cardinality budget.** An adapter's facts are checked on the Gravix side.
+  `docs/04-non-goals.md` §5 is not waived by installing something.
+- **Reach Gravix internals.** A plugin sees the ABI and nothing else. There is no shared memory, no
+  shared process, and no import.
+- **Leak a configured secret into a log.** Config fields typed `secret` are redacted everywhere the
+  host reports on a plugin.
 
-Auth plugins add custom authentication and SSO providers.
+## Registry
 
-```go
-type AuthProvider interface {
-    Name() string
-    InitiateLogin(w http.ResponseWriter, r *http.Request, state string)
-    HandleCallback(r *http.Request) (*AuthResult, error)
-    ValidateConfig(config json.RawMessage) error
-}
-```
-
-**Use cases:**
-- Okta, Auth0, Azure AD (beyond standard OIDC)
-- LDAP/Active Directory
-- Custom corporate SSO
-
-## Plugin Loading
-
-### Build-time Plugins (Recommended)
-
-Plugins are Go packages imported in a custom `main.go`:
-
-```go
-package main
-
-import (
-    "github.com/lgreene/gravix-dashboards/services/gateway"
-    _ "github.com/myorg/gravix-plugin-teams"     // auto-registers on import
-    _ "github.com/myorg/gravix-plugin-gcs"        // auto-registers on import
-)
-
-func main() {
-    gateway.Run()
-}
-```
-
-### Configuration
-
-Plugin-specific configuration lives in environment variables or the tenant database:
-
-```yaml
-# Helm values for plugin configuration
-gateway:
-  plugins:
-    teams:
-      enabled: true
-      webhook_url: "https://outlook.office.com/webhook/..."
-    gcs:
-      enabled: true
-      bucket: "gravix-prod"
-      credentials_file: "/secrets/gcp-sa.json"
-```
-
-## Plugin Development Guide
-
-### 1. Create a new Go module
-
-```bash
-mkdir gravix-plugin-teams && cd gravix-plugin-teams
-go mod init github.com/myorg/gravix-plugin-teams
-go get github.com/lgreene/gravix-dashboards
-```
-
-### 2. Implement the interface
-
-```go
-package teams
-
-import (
-    "context"
-    "encoding/json"
-    "net/http"
-
-    "github.com/lgreene/gravix-dashboards/pkg/notify"
-)
-
-type TeamsPlugin struct{}
-
-func (p *TeamsPlugin) Type() string { return "teams" }
-
-func (p *TeamsPlugin) Send(ctx context.Context, payload notify.AlertPayload, config json.RawMessage) error {
-    var cfg struct {
-        WebhookURL string `json:"webhook_url"`
-    }
-    json.Unmarshal(config, &cfg)
-    // Send adaptive card to Teams webhook...
-    return nil
-}
-
-func (p *TeamsPlugin) ValidateConfig(config json.RawMessage) error {
-    var cfg struct {
-        WebhookURL string `json:"webhook_url"`
-    }
-    return json.Unmarshal(config, &cfg)
-}
-
-func init() {
-    notify.RegisterChannel("teams", &TeamsPlugin{})
-}
-```
-
-### 3. Test
-
-```go
-func TestTeamsSend(t *testing.T) {
-    p := &TeamsPlugin{}
-    err := p.Send(context.Background(), notify.AlertPayload{
-        RuleName: "High Error Rate",
-        Metric:   "error_rate",
-        Value:    0.15,
-    }, json.RawMessage(`{"webhook_url":"https://test.example.com"}`))
-    if err != nil {
-        t.Fatal(err)
-    }
-}
-```
-
-## Security Considerations
-
-- Plugins run in-process with full access to the gateway's resources
-- Plugin configurations containing secrets should use Kubernetes Secrets or external secret managers
-- Notification plugins must not log alert payload contents (may contain service names/paths)
-- Storage plugins must respect the ObjectStore interface contract including context cancellation
-
-## Future Directions
-
-- **Plugin registry**: Searchable catalog of community plugins
-- **Runtime loading**: Support for plugins loaded from shared libraries (`.so` files) without recompilation
-- **Plugin versioning**: Compatibility matrix between Gravix versions and plugin versions
-- **Sandboxing**: WASM-based plugin execution for untrusted plugins
+One registry (`pkg/plugin.Registry`), not one per kind. Charter §7.2 has `ee/` register against core
+extension points, and two registries would mean two answers to "what is installed". Registration
+validates the manifest, refuses an ABI mismatch and a duplicate name, and checks that a plugin
+implements the kind it claims.
