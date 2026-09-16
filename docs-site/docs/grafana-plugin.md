@@ -105,7 +105,7 @@ no Gravix-shaped layer in between that could disagree.
 | An unreachable Trino reports a health error, not a crash | **Tested** |
 | The backend builds with `CGO_ENABLED=0` | **Tested** — it has to be cross-buildable for whatever runs Grafana |
 | `npm install && npm run build` produce a loadable `dist/` | **Run** — `module.js` and `plugin.json` emitted, typecheck clean |
-| Grafana loads the plugin and starts its backend | **Runs in CI** — `TestGrafanaLoadsPlugin`, `isolated-modules` job. It failed on its first run and the fix is not yet confirmed green |
+| Grafana loads the plugin and starts its backend | **Tested in CI** — `TestGrafanaLoadsPlugin`, `isolated-modules` job. It failed on its first run; see below |
 | The documented build command produces a name Grafana can exec | **Tested** — and it did not, at first |
 | A healthy Trino reports `gravix: trino reachable` | Needs a running Trino — `TestCheckHealthOK` |
 
@@ -114,7 +114,6 @@ The first time `TestGrafanaLoadsPlugin` ran, it failed: the build command on thi
 none of them started Grafana. If you read this page before that fix, the plugin you built did not
 work, and the note above the compose snippet is why.
 
-So treat "Grafana loads it" as **fixed and awaiting confirmation**, not as proven — this page will say
-so plainly when a run has passed. The Trino health check is separately unproven; it needs a running
-warehouse.
+That is fixed and the test now passes in CI, so "Grafana loads it" is **demonstrated**, not assumed.
+The Trino health check is the one thing on this page still unproven — it needs a running warehouse.
 `docs/oss/spec-defects.md` SD-051 records both.

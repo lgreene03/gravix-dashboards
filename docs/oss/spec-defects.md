@@ -3309,10 +3309,12 @@ to say so.
 
 **Found by:** `frontend-engineer` executing GRVX-1104
 **Affects:** GRVX-1104 §4.1, §4.2, §6 step 7, §7 AC-4/AC-7, §8 step 1
-**Severity:** low — two mechanical errors and one scope gap; every buildable criterion passes
-**Status:** partial; 5 of 7 acceptance criteria proven. AC-7 now runs in CI, where it found a real
-defect (see below) — the fix is pushed and **not yet confirmed green**, so AC-7 is not claimed as
-passing here until a run says so. AC-4 needs a live Trino and remains unproven.
+**Severity:** medium — raised from low after AC-7 ran. Two mechanical spec errors and a scope gap are
+low; a published install guide whose build command produces a plugin Grafana cannot start is not.
+**Status:** partial; 6 of 7 acceptance criteria proven. AC-7 passed in CI on 1cf88b4 (run
+35161250004, `isolated-modules` step 9, 52s) after failing on its first run and finding a real defect
+— see the two sections at the end. AC-4 needs a live Trino and remains the one unproven criterion,
+which is why this stays `partial` rather than `done`.
 
 ### `pkg/main.go` cannot be both
 
@@ -3349,8 +3351,8 @@ Caught by AC-6's own test failing on its first run, which is the argument for AC
 | AC-3 an empty service is refused before any query | **passing** |
 | AC-5 an unreachable Trino reports the exact health error | **passing** |
 | AC-6 the backend builds with `CGO_ENABLED=0` | **passing** |
-| AC-4 a healthy Trino reports `gravix: trino reachable` | **not run** — needs a live Trino |
-| AC-7 Grafana lists the plugin as installed | **ran, failed, fix pushed** — awaiting a green run; see below |
+| AC-4 a healthy Trino reports `gravix: trino reachable` | **not run** — needs a live Trino; the one criterion still unproven |
+| AC-7 Grafana lists the plugin as installed | **passing** — failed first and caught a real defect; see below |
 
 Both are written and gate themselves. AC-7 has since run — see the two sections at the end of this
 entry — and the proof table in `docs-site/docs/grafana-plugin.md` is kept in step with this one,
