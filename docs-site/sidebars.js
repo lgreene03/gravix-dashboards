@@ -39,6 +39,11 @@ const sidebars = {
       items: [
         'bare-parquet-access',
         'migrating',
+        // The exit path out of Gravix Cloud (GRVX-1403). Added here beyond that
+        // spec's file list, because TestBoardIsInTheSidebar fails on any page in
+        // docs-site/docs/ that cannot be navigated to — and an unreachable
+        // migration guide is the one page that must never be hard to find.
+        'cloud-to-selfhost-migration',
         'leaving-gravix',
         'prove-it',
       ],

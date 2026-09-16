@@ -2620,3 +2620,58 @@ licence cannot name this capability today. Nothing is broken — GRVX-1402 gates
 because the `ee/tenancy/` tree is already covered by the `tenancy-fleet-console` entry's
 placement. But the id will be needed by whichever spec first gates a Cloud feature on a licence
 feature list, and `boundary.yaml` is a core file that §4.2 forbids this spec from touching.
+
+---
+
+## SD-042 — GRVX-1403 publishes a docs page its §4.2 leaves unreachable
+
+**Found by:** `senior-engineer` executing GRVX-1403
+**Affects:** GRVX-1403 §4.2
+**Severity:** low — one line, but the spec as written cannot pass its own suite
+**Status:** file added beyond §4.2, recorded here
+
+### The omission
+
+§4.1 creates `docs-site/docs/cloud-to-selfhost-migration.md`. §4.2 lists exactly one file to
+modify, `cmd/cli/main.go`. `docs-site/sidebars.js` appears in neither, nor on §4.3's do-not-touch
+list.
+
+`TestBoardIsInTheSidebar` in `tests/governance/roadmap_test.go` fails on **any** `.md` under
+`docs-site/docs/` that the sidebar does not name:
+
+> A page nobody can navigate to is a page that does not exist, and eight of them were orphaned
+> from this sidebar before this.
+
+So GRVX-1403 as written creates a page, leaves it orphaned, and turns the governance suite red. The
+spec's §9 also requires "Zero new skipped or quarantined tests", which a red governance test is
+not — it is simply a red build.
+
+### What was done
+
+`docs-site/sidebars.js` gained one entry, `'cloud-to-selfhost-migration'`, in the "Your data"
+category beside `migrating` and `leaving-gravix`. This follows the precedent set in SD-036, where
+GRVX-1207 added seven pages to the same file beyond its own §4.2 for the same reason.
+
+Of all the pages in this repository, the migration guide is the one that must not be hard to find.
+It is read once, at the worst possible moment, by somebody who has already decided to leave.
+
+### Two smaller notes from the same execution, neither a defect
+
+**§2's line references are stale, its facts are not.** §2 cites `services/gateway/main.go:1251`
+for `handleExport`. GRVX-1302 moved the gateway's implementation to `pkg/gatewaycore/` (SD-038), so
+that handler now lives at `pkg/gatewaycore/main.go:1295`. §10 asks for a defect only if the
+*response shape* changed, and it has not: the request body is still
+`{start_date,end_date,data_type}`, the cap is still 30 days with the message
+`export range cannot exceed 30 days`, an empty range is still `404`
+`no data found for the specified date range`, and `hdr.Name` is still set to the object-store key
+with no transformation. Every §2 claim this spec depends on was re-verified against the moved file
+before implementing.
+
+**AC-7 cannot be met with a `t.Skip`.** The DuckDB CLI is installed only in the `e2e` CI job, while
+the `test` job runs `go test -tags=slow ./...` without it. The existing convention is to skip when
+`duckdb` is absent — but `tests/devenv`'s `skipBaseline` is pinned at 36 and documented as a number
+that "may go down and must never go up", and GRVX-1403 §9 requires zero new skipped tests. So
+`TestMigrationOutputReadableByDuckDB` does not skip: it reads the recomputed Parquet with DuckDB
+where DuckDB exists and with `parquet-go` otherwise, asserting the same row and request counts
+either way. It is therefore a real assertion in every suite, and `TestMigrationE2EJobInstallsDuckDB`
+fails if the `e2e` job ever stops installing the foreign engine that makes the stronger half true.

@@ -12,6 +12,7 @@
 //	gravix recompute   --from=2026-09-01 --to=2026-09-08
 //	gravix evolve      add-percentile --quantile=0.999 --from=2026-08-12 --to=2026-09-11
 //	gravix plugin new  --name=gravix-notifier-demo --kind=notifier
+//	gravix migrate export-cloud --tenant-id=ten_abc --since=2026-01-01
 //
 // Environment variables:
 //
@@ -70,6 +71,18 @@ func main() {
 		runRecompute(os.Args[2:])
 	case "import":
 		runImport(os.Args[2:])
+	case "migrate":
+		if len(os.Args) < 3 {
+			fmt.Fprintf(os.Stderr, "Usage: gravix migrate <export-cloud> [flags]\n")
+			os.Exit(1)
+		}
+		switch os.Args[2] {
+		case "export-cloud":
+			runMigrateExportCloud(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown migrate subcommand: %s\nUsage: gravix migrate <export-cloud> [flags]\n", os.Args[2])
+			os.Exit(1)
+		}
 	case "export":
 		os.Exit(exportMain(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
 	case "plugin":
@@ -104,6 +117,7 @@ Usage:
   gravix explain      Show where a number came from
   gravix import       Import history from Prometheus or Datadog
   gravix export       Export facts, metrics or events out of Gravix
+  gravix migrate      Move a Gravix Cloud tenant to a self-hosted install
   gravix plugin       Scaffold, list and validate plugins
   gravix version      Print version
   gravix help         Show this help
