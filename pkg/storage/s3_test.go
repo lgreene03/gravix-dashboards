@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package storage
 
 import (
@@ -65,9 +68,9 @@ type mockAPIError struct {
 	message string
 }
 
-func (e *mockAPIError) Error() string   { return e.message }
-func (e *mockAPIError) ErrorCode() string   { return e.code }
-func (e *mockAPIError) ErrorMessage() string { return e.message }
+func (e *mockAPIError) Error() string                 { return e.message }
+func (e *mockAPIError) ErrorCode() string             { return e.code }
+func (e *mockAPIError) ErrorMessage() string          { return e.message }
 func (e *mockAPIError) ErrorFault() smithy.ErrorFault { return smithy.FaultServer }
 
 // ─── Put Tests ───

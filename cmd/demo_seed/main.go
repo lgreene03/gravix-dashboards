@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command demo_seed generates 30 days of realistic request data across
 // 5 services for demo/evaluation purposes.
 package main

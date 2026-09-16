@@ -129,6 +129,7 @@
         <nav aria-label="Main navigation" role="navigation">
             <a href="#" class="nav-link active" data-page="overview" aria-current="page">Overview</a>
             <a href="#" class="nav-link" data-page="endpoints">Endpoints</a>
+            <a href="#" class="nav-link" data-page="slo">SLO</a>
             <a href="#" class="nav-link" data-page="alerts" id="nav-alerts">Alerts</a>
             <a href="#" class="nav-link" data-page="ingestion">Ingestion</a>
             <a href="#" class="nav-link" data-page="traces" id="nav-traces">Traces</a>
@@ -204,23 +205,21 @@
                 <button id="resetFiltersBtn" style="margin-top:12px;padding:8px 20px;border:1px solid var(--border-color);border-radius:8px;background:var(--card-bg);color:var(--text-primary);cursor:pointer;font-size:0.9rem;">Reset Filters</button>
             </div>
             <div id="emptyOnboard" style="display:none;">
-                <div id="waiting-for-data" class="waiting-for-data">
+                <!-- Two mutually exclusive sub-states. Showing "send your first event"
+                     to someone who has already sent one is why this split exists. -->
+                <div id="onboard-waiting" class="waiting-for-data">
                     <div class="waiting-spinner"></div>
                     <h3>Waiting for your first events...</h3>
                     <p>No data received yet. Send your first event using the command below:</p>
-                    <pre>curl -X POST http://localhost:8090/api/v1/facts \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{
-    "event_id": "'$(uuidgen | tr A-F a-f)'",
-    "event_time": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-    "service": "my-service",
-    "method": "GET",
-    "path_template": "/api/v1/health",
-    "status_code": 200,
-    "latency_ms": 42
-  }'</pre>
+                    <!-- Filled at render time from the dashboard's own config, so on the
+                         bootstrap stack this pastes and runs with no edits. -->
+                    <pre id="onboard-curl"></pre>
                     <p style="margin-top: 12px;">Then wait for the rollup job to aggregate metrics (runs every 5 minutes).</p>
+                </div>
+                <div id="onboard-countdown" class="waiting-for-data" style="display:none;">
+                    <div class="waiting-spinner"></div>
+                    <h3>Traffic received — building your first chart</h3>
+                    <p id="onboard-countdown-text">First rollup completes in ~4:00</p>
                 </div>
             </div>
         </div>
@@ -261,6 +260,18 @@
                     <div class="chart-wrapper">
                         <canvas id="latencyChart"></canvas>
                     </div>
+                    <!-- A canvas is not keyboard-reachable, so every point is also
+                         addressable from this control. Both routes open the same
+                         panel. GRVX-809 §5.3, AC-8. -->
+                    <div class="lineage-picker">
+                        <label for="lineage-bucket">Explain a point</label>
+                        <select id="lineage-bucket"></select>
+                        <button type="button" id="lineage-explain" class="lineage-value">Explain</button>
+                    </div>
+                    <!-- Provenance for the clicked point. Non-modal and below the
+                         chart, so it is read alongside the number rather than
+                         instead of it. GRVX-809 §5.3. -->
+                    <div id="lineage-panel" hidden></div>
                 </div>
             </div>
 
@@ -347,6 +358,7 @@
                             <a href="https://docs.gravix.io/getting-started/service-events" target="_blank">read the docs</a>
                             to integrate your CI/CD or runtime.
                         </p>
+                        <pre id="events-empty-curl"></pre>
                     </div>
                     <!-- Timeline stacked bar chart -->
                     <div id="events-timeline-wrapper" class="chart-wrapper" style="display: none;">
@@ -443,9 +455,14 @@
                                 <th class="sortable-header sort-desc" data-sort="requests">Requests</th>
                                 <th class="sortable-header" data-sort="errors">Errors</th>
                                 <th class="sortable-header" data-sort="errorRate">Error Rate</th>
-                                <th class="sortable-header" data-sort="p50">P50 (ms)</th>
-                                <th class="sortable-header" data-sort="p95">P95 (ms)</th>
-                                <th class="sortable-header" data-sort="p99">P99 (ms)</th>
+                                <!-- Not sortable: per-endpoint percentiles over a
+                                     window need a group-by the percentile endpoint
+                                     does not have yet, so these cells are blank.
+                                     A sort control over blank cells is a control
+                                     that does nothing. See SD-009. -->
+                                <th title="Per-endpoint percentiles over a window are not available yet">P50 (ms)</th>
+                                <th title="Per-endpoint percentiles over a window are not available yet">P95 (ms)</th>
+                                <th title="Per-endpoint percentiles over a window are not available yet">P99 (ms)</th>
                             </tr>
                         </thead>
                         <tbody id="all-endpoints-body"></tbody>
@@ -456,6 +473,14 @@
         </div><!-- end page-endpoints -->
 
         <!-- ===== ALERTS PAGE ===== -->
+        <div id="page-slo" class="page-content" style="display: none;">
+            <div id="slo-empty" class="empty-state">
+                <p>No services discovered yet. Send traffic to see SLO cards appear automatically.</p>
+                <pre id="slo-empty-curl"></pre>
+            </div>
+            <div id="slo-grid" class="slo-grid"></div>
+        </div>
+
         <div id="page-alerts" class="page-content" style="display: none;">
             <!-- Sub-tabs -->
             <div style="display: flex; gap: 8px; margin-bottom: 24px;">
@@ -1163,10 +1188,7 @@
         </div>
     </div>
 
-    <script src="lib/utils.js"></script>
-    <script src="lib/cube-client.js"></script>
-    <script src="lib/chart-helpers.js"></script>
-    <script src="app.js"></script>
+
 
 
     <!-- Quick-Start Wizard -->
@@ -1282,6 +1304,63 @@
         </div>
     </div>
 
+    <!-- Scripts run last, after every element they wire up.
+         They used to sit above the quick-start wizard, the feedback panel and the
+         cookie banner, so `document.getElementById('wizardClose')` was null at
+         parse time and the resulting TypeError aborted the rest of the file.
+         A classic script blocks the parser where it sits; put it at the end and
+         the DOM it addresses exists. -->
+    <script src="lib/utils.js"></script>
+    <script src="lib/cube-client.js"></script>
+    <script src="lib/chart-helpers.js"></script>
+    <!-- Generated at first boot by bootstrap-init; sets window.GRAVIX_CONFIG,
+         which app.js merges over its defaults. Absent outside the bootstrap
+         stack, where the 404 is harmless and the defaults apply unchanged. -->
+    <script src="dashboard_config.js"></script>
+    <script src="app.js"></script>
+    <!-- The lineage panel is an ES module, so it is deferred and runs after
+         app.js. It publishes itself on window for app.js to open, which is why
+         app.js never imports it and needs no module of its own. -->
+    <script type="module">
+        import { LineagePanel, renderLineage, renderLoading, toBucketISO } from './lib/lineage-panel.js';
+
+        const container = document.getElementById('lineage-panel');
+        if (container) {
+            window.GravixLineage = new LineagePanel(container, {
+                endpoint: (window.GRAVIX_CONFIG && window.GRAVIX_CONFIG.percentileApiUrl
+                    || window.GRAVIX_CONFIG && window.GRAVIX_CONFIG.gatewayUrl
+                    || 'http://localhost:8091') + '/api/v1/lineage',
+                headers: () => {
+                    const h = {};
+                    const key = localStorage.getItem('gravix_api_key');
+                    if (key) h['X-Gravix-Key'] = key;
+                    return h;
+                },
+                locale: navigator.language,
+                clickedGranularity: 'hour'
+            });
+            window.GravixLineageRender = { renderLineage, renderLoading, toBucketISO };
+        }
+    </script>
+
+    <script type="module">
+        // app.js is a classic script and cannot import, so the SLO module
+        // publishes itself the same way the lineage panel does.
+        import { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY } from './lib/slo-cards.js';
+        window.GravixSLO = { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY };
+
+        import { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE } from './lib/empty-states.js';
+        window.GravixEmptyStates = { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE };
+
+        import {
+            checkFirstRunState, startCountdown, computeCountdownText, formatCountdown,
+            FIRST_ROLLUP_ESTIMATE_SECONDS, ALMOST_THERE_TEXT
+        } from './lib/first-run.js';
+        window.GravixFirstRun = {
+            checkFirstRunState, startCountdown, computeCountdownText, formatCountdown,
+            FIRST_ROLLUP_ESTIMATE_SECONDS, ALMOST_THERE_TEXT
+        };
+    </script>
 </body>
 
 </html>

@@ -1,0 +1,8 @@
+version: 1
+capabilities:
+  - id: no-test-recorded
+    name: ee placement with no Crippleware Test
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: Nobody ran the test.
+    paths: [ee/placeholder/]

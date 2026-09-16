@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -338,7 +341,7 @@ func TestProcessDay_PropertiesPreserved(t *testing.T) {
 		EntityId:  "deploy-42",
 		Message:   "Deployed version 2.1.0",
 		Properties: map[string]string{
-			"version":   "2.1.0",
+			"version":    "2.1.0",
 			"commit_sha": "abc123",
 		},
 	}

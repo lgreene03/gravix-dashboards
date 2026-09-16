@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command status_page polls health endpoints and serves a public status page
 // showing service availability and 90-day uptime history.
 //

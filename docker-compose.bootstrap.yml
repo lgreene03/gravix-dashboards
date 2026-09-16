@@ -19,8 +19,6 @@
 # switch to docker-compose.yml (adds Trino, MinIO, monitoring) or deploy
 # to AWS EKS with the Helm chart.
 
-version: '3.8'
-
 networks:
   frontend:
     driver: bridge
@@ -28,6 +26,49 @@ networks:
     driver: bridge
 
 services:
+  # Runs to completion before anything else starts, and is why this stack needs
+  # no .env edits: it creates the single local tenant, mints one API key,
+  # generates the dashboard login, and writes the dashboard's runtime config.
+  # Idempotent — on every boot after the first it finds the key file and exits 0
+  # without touching anything.
+  #
+  # The generated password is printed to this container's log and written to
+  # data/login.txt. It is needed: the dashboard authenticates to Cube with a JWT
+  # that only a gateway login mints, so a stack seeded without a user shows
+  # empty charts forever (F-016).
+  bootstrap-init:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-bootstrap-init
+    # The one privileged container in the stack, and only because of the bind
+    # mount: ./data is gitignored, so on a fresh clone it does not exist, and
+    # Docker creates the mount target as root:root. Every image here runs as the
+    # non-root `gravix` user, so nothing could write it and the whole stack
+    # failed on the first container (F-021). This one-shot init container fixes
+    # the ownership once and exits; the long-running services stay non-root.
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        chown -R gravix:gravix /app/data
+        ./bootstrap_seed \
+          -db=/app/data/gravix.db \
+          -api-key-file=/app/data/api_key.txt \
+          -dashboard-config=/app/data/dashboard_config.js \
+          -login-file=/app/data/login.txt \
+          -jwt-secret-file=/app/data/jwt_secret.txt
+        status=$$?
+        # Again after seeding: the files were created by root and the services
+        # that read them are not. synthetic-traffic reads api_key.txt at 0600,
+        # so a root-owned key means it cannot start.
+        chown -R gravix:gravix /app/data
+        exit $$status
+    volumes:
+      - ./data:/app/data
+    networks:
+      - backend
+
   gateway:
     build:
       context: .
@@ -38,9 +79,21 @@ services:
       - "8091:8091"
     volumes:
       - ./data:/app/data
-    command: [ "./gateway", "--tenant-db", "/app/data/gravix.db" ]
+    # Flags only. The image's ENTRYPOINT is already ["./gateway"], and Compose
+    # appends `command` to it — so naming the binary here ran
+    # `./gateway ./gateway --tenant-db ...`, where Go's flag package stops at the
+    # first positional argument and silently ignored every flag after it (F-032).
+    command: [ "--tenant-db", "/app/data/gravix.db" ]
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     environment:
-      - JWT_SECRET=supersecretjwtkey12345!
+      # bootstrap_seed generates this at first boot; cube reads the same file, so
+      # the signer and the verifier agree without a secret committed to this file.
+      # The literal that was here was 23 characters and the gateway rejects
+      # anything under 32, so it crash-looped on every boot — which is why the
+      # dashboard's login could never succeed (F-032, F-029).
+      - JWT_SECRET_FILE=/app/data/jwt_secret.txt
       - TENANT_DB_PATH=/app/data/gravix.db
       - CUBE_API_URL=http://cube:4000/cubejs-api/v1/load
     healthcheck:
@@ -65,7 +118,12 @@ services:
       - "8090:8080"
     volumes:
       - ./data:/app/data
-    command: [ "./ingestion-service", "--base-dir", "/app/data" ]
+    # Flags only — see the gateway above. `--base-dir` was being dropped for the
+    # same reason; it happened to match the built-in default, so nothing broke.
+    command: [ "--base-dir", "/app/data" ]
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     environment:
       - TENANT_DB_PATH=/app/data/gravix.db
       # No S3_ENDPOINT → ingestion auto-falls back to LocalStore (local disk)
@@ -87,13 +145,41 @@ services:
       - "4000:4000"
     environment:
       - CUBEJS_DB_TYPE=duckdb
-      - CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:
+      # Quoted: the value ends in a colon, so unquoted YAML reads the whole
+      # entry as a mapping key and Compose rejects the file. See F-010.
+      - "CUBEJS_DB_DUCKDB_DATABASE_PATH=:memory:"
       - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
+      # Without this, Cube runs in production mode and defaults its queue/cache
+      # driver to Cube Store — a separate service this stack does not run and will
+      # not add. EVERY query then fails, including ad-hoc ones: the poll's own
+      # authenticated request came back
+      #   {"error":"Cube Store was specified as queue/cache driver. Please set
+      #     CUBEJS_CUBESTORE_HOST and CUBEJS_CUBESTORE_PORT variables."}
+      # `memory` is the documented single-node driver and costs no container, no
+      # RAM against the ~800MB budget, and nothing against the $20/mo figure.
+      #
+      # The trade-off, stated: pre-aggregations need Cube Store to hold their
+      # rollup tables, so the three declared in cube/model/schema/ will not build
+      # here. That is the right call for this stack — DuckDB reads the Parquet
+      # directly and a rollup buys a single-node demo nothing — but it is a real
+      # difference from the full stack. See F-035.
+      - CUBEJS_CACHE_AND_QUEUE_DRIVER=memory
+      # Nothing to refresh once pre-aggregations are not building, and the refresh
+      # scheduler is what filled the logs with the error above every 300s.
+      - CUBEJS_SCHEDULED_REFRESH_TIMER=false
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
       - TENANT_DB_PATH=/cube/data/gravix.db
-      - JWT_SECRET=supersecretjwtkey12345!
+      # The same file the gateway reads, through the ./data:/cube/data mount.
+      - JWT_SECRET_FILE=/cube/data/jwt_secret.txt
     volumes:
       - ./cube/cube.js:/cube/conf/cube.js
+      # Beside cube.js and deliberately OUTSIDE /cube/conf/model: Cube evaluates
+      # everything under the model directory in a vm sandbox with no `process`,
+      # so the models reach their environment-derived SQL through Node's own
+      # require of this file instead. A file inside the model directory would be
+      # sandboxed too. Without this mount the require throws and the cubes fail
+      # to register — loudly, which is the point. See F-037.
+      - ./cube/model_flags.js:/cube/conf/model_flags.js
       - ./cube/model:/cube/conf/model
       - ./data:/cube/data:ro
     depends_on:
@@ -118,6 +204,10 @@ services:
       - "8000:8000"
     volumes:
       - ./dashboards:/usr/share/nginx/html:ro
+      # One file, not the ./data directory: mounting the directory would serve
+      # api_key.txt over HTTP. bootstrap-init writes this before the dashboard
+      # container is created, which is what depends_on above guarantees.
+      - ./data/dashboard_config.js:/usr/share/nginx/html/dashboard_config.js:ro
       - ./storage/dashboard/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8000/healthz"]
@@ -127,6 +217,8 @@ services:
     depends_on:
       cube:
         condition: service_healthy
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 64m
     cpus: 0.25
     networks:
@@ -151,7 +243,22 @@ services:
         done
     volumes:
       - ./data:/app/data
-    # No S3 env vars → rollup uses local disk only
+    # TENANT_DB_PATH is what makes this job agree with the rest of the stack about
+    # where data lives. Ingestion authenticates against this same database, so it
+    # files facts under raw/<tenant-id>/request_facts/, and Cube globs
+    # warehouse/*/request_metrics_minute/. Without the variable this job takes its
+    # single-tenant branch: it reads raw/request_facts/, which nothing writes, and
+    # would write warehouse/request_metrics_minute/, which Cube does not read. Two
+    # severances in one pipeline, and every container still reports healthy (F-027).
+    #
+    # It also makes the -input-dir/-output-dir flags above inert — multi-tenant mode
+    # derives both per tenant. They are kept as the single-tenant defaults.
+    # Still no S3 variables: local disk only.
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 256m
     cpus: 0.5
     networks:
@@ -176,7 +283,16 @@ services:
         done
     volumes:
       - ./data:/app/data
-    # No S3 env vars → rollup uses local disk only
+    # Same reason as the request-metrics rollup above: ingestion files events under
+    # raw/<tenant-id>/service_events/, and without TENANT_DB_PATH this job reads
+    # raw/service_events/ instead and finds nothing, forever (F-027). The
+    # -input-dir/-output-dir flags above are inert in this mode.
+    # Still no S3 variables: local disk only.
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 256m
     cpus: 0.5
     networks:
@@ -203,8 +319,52 @@ services:
         done
     volumes:
       - ./data:/app/data
-    # No S3 env vars → purge operates on local disk only
+    # Retention depends on tenancy mode too, and fails quietly rather than loudly.
+    # Ingestion writes under raw/<tenant-id>/, so without TENANT_DB_PATH purge walks
+    # the non-tenant prefixes, finds nothing to delete, and reports success. The disk
+    # then grows past the 30-day retention this project promises, with no error
+    # anywhere (F-027). With the database it also honours any per-tenant custom
+    # retention policy; the plan-derived retention needs --mode auto, which this
+    # single-tenant stack deliberately does not pass.
+    # Still no S3 variables: local disk only.
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
     mem_limit: 128m
+    cpus: 0.25
+    networks:
+      - backend
+
+  # Synthetic traffic so the dashboard has something to show in the first
+  # minute rather than an empty chart. Visible and stoppable:
+  #   docker compose -f docker-compose.bootstrap.yml stop synthetic-traffic
+  synthetic-traffic:
+    build:
+      context: .
+      dockerfile: services/load_generator/Dockerfile
+    container_name: gravix-synthetic-traffic
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -r /app/data/api_key.txt ]; then
+          echo "synthetic-traffic: cannot read /app/data/api_key.txt." >&2
+          echo "  The key is written 0600 by bootstrap-init and read here as the" >&2
+          echo "  same user. Check that bootstrap-init completed:" >&2
+          echo "    docker compose -f docker-compose.bootstrap.yml logs bootstrap-init" >&2
+          exit 1
+        fi
+        API_KEY="$$(cat /app/data/api_key.txt)" exec ./load-generator \
+          --target http://ingestion:8080/api/v1/facts \
+          --qps 5 --concurrency 2
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      ingestion:
+        condition: service_healthy
+    mem_limit: 64m
     cpus: 0.25
     networks:
       - backend

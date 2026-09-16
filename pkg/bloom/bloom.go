@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package bloom provides a memory-efficient probabilistic set for
 // deduplication during rollup ETL jobs. It replaces map[string]struct{}
 // which consumes ~640MB for 10M UUIDs with a bloom filter using ~14MB.

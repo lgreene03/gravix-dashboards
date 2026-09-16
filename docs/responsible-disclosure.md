@@ -1,54 +1,20 @@
-# Responsible Disclosure Policy
+# Responsible disclosure policy
 
-## Reporting Security Vulnerabilities
+**This policy now lives in [`SECURITY.md`](../SECURITY.md) at the repository root**, where GitHub
+surfaces it automatically and where researchers look first.
 
-Gravix takes security seriously. If you discover a vulnerability, please report it responsibly.
+Everything that was here has moved there, including the safe-harbour commitment, the disclosure
+timing, and the scope list. Two things changed rather than moved:
 
-### How to Report
+1. **The contact channel.** This document advertised `security@gravix.io`. That domain does not
+   resolve, so no report sent to it was ever delivered. Reports now go through
+   [GitHub private vulnerability reporting](https://github.com/lgreene03/gravix-dashboards/security/advisories/new),
+   which works today. See [`oss/spec-defects.md`](oss/spec-defects.md) SD-003.
 
-- **Email:** security@gravix.io
-- **Encrypt** your report using our PGP key (available at `/.well-known/pgp-key.txt`)
-- Include a detailed description, reproduction steps, and potential impact
+2. **The PGP key.** This document referenced a key at `/.well-known/pgp-key.txt`. No such file
+   exists in this repository and no `.well-known` directory is served. The reference is removed
+   rather than left dangling — GitHub's private reporting channel is already encrypted in transit
+   and at rest, so it covers the need the key was there to serve.
 
-### What to Include
-
-1. Type of vulnerability (e.g., injection, authentication bypass, data exposure)
-2. Steps to reproduce
-3. Affected endpoints or components
-4. Potential impact assessment
-5. Any suggested fix (optional)
-
-### Our Commitment
-
-- **Acknowledgment:** Within 2 business days
-- **Triage:** Within 5 business days
-- **Resolution:** Critical issues within 7 days, others within 30 days
-- **Disclosure:** Coordinated disclosure after fix is deployed (90-day maximum)
-
-### Scope
-
-**In scope:**
-- Gravix API endpoints (ingestion, gateway)
-- Dashboard web application
-- SDK libraries (Go, Node, Python, Java)
-- Authentication and authorization
-- Data handling and storage
-
-**Out of scope:**
-- Denial of service attacks
-- Social engineering
-- Physical attacks
-- Third-party services (Stripe, cloud providers)
-- Self-hosted instances with modified code
-
-### Safe Harbor
-
-We will not pursue legal action against researchers who:
-- Act in good faith and follow this policy
-- Do not access, modify, or delete data belonging to other users
-- Report findings promptly and do not publicly disclose before coordinated disclosure
-- Do not use automated scanning tools that generate excessive traffic
-
-### Recognition
-
-With your permission, we will acknowledge your contribution on our Security Hall of Fame page.
+The response commitments are now **stricter** than they were here: acknowledgement within 24 hours
+rather than 2 business days, and triage within 72 hours rather than 5 business days.

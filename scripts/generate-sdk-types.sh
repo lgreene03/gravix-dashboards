@@ -72,6 +72,12 @@ def ts_type(schema, indent=0):
         return "{\n" + pad + inner + "\n" + "  " * indent + "}"
     return "unknown"
 
+# The licence header is emitted here rather than added afterwards. GRVX-701
+# requires every source file to carry one, and a generated file that acquires its
+# header from a separate pass drifts the moment it is regenerated.
+print("// Copyright 2026 The Gravix Authors")
+print("// SPDX-License-Identifier: Apache-2.0")
+print()
 print("// Auto-generated from services/gateway/openapi.json")
 print("// Do not edit manually — run scripts/generate-sdk-types.sh")
 print(f"// Generated from OpenAPI spec v{spec['info']['version']}")
@@ -123,6 +129,10 @@ def py_type(schema):
         return "dict[str, Any]"
     return "Any"
 
+# As above: the licence header belongs to the generator, not to a later pass.
+print("# Copyright 2026 The Gravix Authors")
+print("# SPDX-License-Identifier: Apache-2.0")
+print()
 print('"""')
 print("Auto-generated from services/gateway/openapi.json")
 print("Do not edit manually — run scripts/generate-sdk-types.sh")

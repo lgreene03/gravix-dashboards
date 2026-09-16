@@ -115,3 +115,72 @@ A `ServiceEvent` represents a significant business or state change event.
   "event_type": "Error: NullPointerException at Service.java:50"
 }
 ```
+
+## 3. Late-arriving facts
+
+A fact's `event_time` is the only source of truth for ordering
+([`00-system-truth.md`](00-system-truth.md) §5). A fact that arrives an hour after it happened belongs
+to the bucket its `event_time` names, never to the bucket it turned up in — and the batch it arrived
+in may well be filed under a different day, because a delivery just after midnight describes the day
+before.
+
+Late is not invalid. Every fact below is accepted and stored; lateness only decides what has to happen
+to the derivatives.
+
+### 3.1 Lateness classes
+
+| Class | When | What happens to derivatives |
+|---|---|---|
+| `on_time` | within one rollup interval (default 5m) of `event_time` | nothing — the bucket has not been built yet |
+| `late` | after its bucket was rolled up, within retention | the partition is rebuilt and its revision increments |
+| `very_late` | more than 24h after `event_time`, within retention | same as `late`; the separate band exists because a sustained rise here usually means a sender is buffering or a clock is wrong |
+| `unprocessable` | `event_time` precedes the 30-day retention window | **none can be built** — see §3.3 |
+
+A fact whose `event_time` is in the *future* is classified `on_time`: its bucket has not been built
+either. If it is more than one rollup interval ahead, the ingestion service logs a wrong-clock warning
+at most once a minute. The warning never changes the classification or the acceptance.
+
+The counter `gravix_facts_received_by_lateness_total{class,service}` reports the split. Both labels are
+bounded — `class` has exactly the four values above — and nothing per-fact may be added to it.
+[`04-non-goals.md`](04-non-goals.md) forbids high cardinality in Gravix's own telemetry as firmly as in
+the product.
+
+### 3.2 Revisions
+
+When a late fact changes a partition's rows, that partition's manifest records the change:
+
+| Field | Meaning |
+|---|---|
+| `revision` | increments by one each time the published rows change; `0` means never revised |
+| `previous_digest` | the content digest this partition held before the most recent revision |
+| `revised_at` | RFC3339 UTC time of that revision |
+
+A non-zero `revision` is a factual statement that a number changed after it was first published. It is
+not an error and is not logged as one: late data is the system working as designed. What would be a
+defect is a value that changed with nothing to show for it.
+
+`revised_at` is the only wall-clock value in a manifest and is deliberately **excluded from
+`content_digest`**, which covers row content only. Recording *when* a revision happened must not make
+the output non-reproducible.
+
+The superseded value stays reproducible in the sense that matters: rebuild from the facts as they were
+— without the late arrival — and the original digest comes back. Gravix does not archive old bytes; it
+keeps the facts that produced them.
+
+### 3.3 Unprocessable facts
+
+A fact whose `event_time` falls before the retention window cannot reach any metric: the partition it
+belongs to has already been purged, and facts are never edited to fit ([`00-system-truth.md`](00-system-truth.md) §2).
+
+It is still **accepted and stored** — it is a valid, immutable fact and storage is cheap — and it is
+also copied to `dlq/<tenant>/unprocessable/` so an operator can find it. The response says so plainly:
+
+```
+202 Accepted
+{"accepted":1,"note":"event_time precedes the retention window; stored but not aggregated"}
+```
+
+A batch containing any such fact returns `202` rather than `200`, with an `unprocessable` count.
+
+Accepting data that will never appear in a metric, and saying nothing, would be the worst option
+available: the sender would have no way of knowing its data had vanished.

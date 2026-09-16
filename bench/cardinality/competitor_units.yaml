@@ -1,0 +1,86 @@
+# Competitor billing units, for the cardinality comparison in bench/cardinality.
+#
+# EVERY entry here starts verified: false, and a false entry may never be printed
+# as a number — the demo prints the withheld-comparison placeholder instead.
+#
+# `verified: true` is set only by a market-analyst CLAIM AUDIT (Loop L11), never
+# by the implementer, and only against the VENDOR'S OWN pricing page. The figures
+# below came from third-party trackers, recorded in provisional_source; those
+# trackers are why these are provisional and not why they would be publishable.
+#
+# See docs/oss/01-competitive-thesis.md §0.
+version: 1
+units:
+  - vendor: datadog
+    product: custom metrics
+    # A unique metric-name x tag-value combination, counted hourly and averaged
+    # monthly account-wide. One new tag value is one new timeseries.
+    unit: indexed custom metric
+    price_usd: 5.00
+    unit_quantity: 100
+    cardinality_driven: true
+    source_url: https://docs.datadoghq.com/account_management/billing/custom_metrics/
+    provisional_source: https://signoz.io/blog/datadog-pricing/ (third-party, retrieved 2026-09-09)
+    retrieved: "2026-09-09"
+    verified: false
+    verified_by: ""
+    concession: >-
+      Datadog ships Metrics-without-Limits and ingest-versus-index controls, so a
+      team can tag liberally and index selectively. That is a real mitigation of
+      the same problem. The narrower true difference is that their control is
+      manual, per-metric and applied after the fact, where the Gravix constraint
+      is structural and applied before ingestion.
+
+  - vendor: datadog
+    product: APM
+    unit: indexed span
+    price_usd: 1.70
+    unit_quantity: 1000000
+    cardinality_driven: true
+    source_url: https://docs.datadoghq.com/account_management/billing/apm_tracing_profiler/
+    provisional_source: https://signoz.io/blog/datadog-pricing/ (third-party, retrieved 2026-09-09)
+    retrieved: "2026-09-09"
+    verified: false
+    verified_by: ""
+    concession: >-
+      Retention tiering means the 15-day rate is not the only rate, and
+      Metrics-without-Limits plus ingest-versus-index controls let a team keep
+      the indexed volume well below what they emit. Gravix does not do tracing
+      at all, so this row is a comparison of billing units, not of products.
+
+  - vendor: datadog
+    product: log management
+    unit: indexed log event
+    price_usd: 1.70
+    unit_quantity: 1000000
+    cardinality_driven: false
+    source_url: https://docs.datadoghq.com/account_management/billing/log_management/
+    provisional_source: https://signoz.io/blog/datadog-pricing/ (third-party, retrieved 2026-09-09)
+    retrieved: "2026-09-09"
+    verified: false
+    verified_by: ""
+    concession: >-
+      This unit is volume-driven rather than cardinality-driven, so it does not
+      support the cardinality claim and is recorded here only for completeness.
+      Datadog also ships Metrics-without-Limits and ingest-versus-index controls
+      elsewhere in the product. Gravix has no logs platform, so there is no
+      like-for-like comparison to make.
+
+  - vendor: grafana_cloud
+    product: metrics
+    # A unique series with at least one sample in the window. One new label value
+    # is one new active series.
+    unit: active series
+    price_usd: 6.50
+    unit_quantity: 1000
+    cardinality_driven: true
+    source_url: https://grafana.com/pricing/
+    provisional_source: https://www.cloudzero.com/blog/grafana-cloud-pricing/ (third-party, retrieved 2026-09-09)
+    retrieved: "2026-09-09"
+    verified: false
+    verified_by: ""
+    concession: >-
+      Grafana Cloud includes a free active-series allowance before this rate
+      applies, and Prometheus-side relabelling can drop high-cardinality labels
+      before they are written. As with Datadog, that is a control someone has to
+      configure rather than a cost that cannot occur.

@@ -1,5 +1,8 @@
 # Gravix Operations Runbook (Kubernetes)
 
+> For a **local `docker-compose`** stack, see [`06-operations.md`](06-operations.md) instead.
+> This runbook covers a Kubernetes production deployment.
+
 Day-to-day operational procedures for managing the Gravix observability platform in Kubernetes.
 
 > **Local operations**: For Docker Compose local development operations, see [06-operations.md](06-operations.md).

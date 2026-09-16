@@ -103,6 +103,17 @@ After sending a few events, the rollup ETL job (runs every minute) will aggregat
 
 The dashboard auto-refreshes every 30 seconds. No login is required in local mode.
 
+### The SLO tab
+
+The **SLO** tab needs no setup at all. It lists every service Gravix has seen send a fact, with one
+card each showing availability, P95 latency, request volume and how much of the error budget is
+left against a 99.9% target.
+
+There is nothing to configure and nothing saved: services appear because they sent data, and the
+page is rebuilt from live data each time you open it. A service you started sending from a minute
+ago shows a card with zeros until the first rollup covers it — that is "not aggregated yet", not an
+error.
+
 ## Next Steps
 
 - Set up [alerting rules](/alerting) to get notified on error rate spikes

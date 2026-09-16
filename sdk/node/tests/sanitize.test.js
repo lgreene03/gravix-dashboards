@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { sanitizePath } from "../dist/sanitize.js";

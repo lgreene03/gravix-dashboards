@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package config provides typed, centralized configuration loaded from
 // environment variables. All services read config through this package
 // instead of calling os.Getenv directly.
@@ -147,15 +150,15 @@ func Load() *Config {
 		},
 		Stripe: StripeConfig{
 			SecretKey:             os.Getenv("STRIPE_SECRET_KEY"),
-			WebhookSecret:        os.Getenv("STRIPE_WEBHOOK_SECRET"),
-			PriceFree:            os.Getenv("STRIPE_PRICE_FREE"),
-			PriceTeam:            os.Getenv("STRIPE_PRICE_TEAM"),
-			PriceBusiness:        os.Getenv("STRIPE_PRICE_BUSINESS"),
-			PriceScale:           os.Getenv("STRIPE_PRICE_SCALE"),
-			PriceEnterprise:      os.Getenv("STRIPE_PRICE_ENTERPRISE"),
-			PriceTeamAnnual:      os.Getenv("STRIPE_PRICE_TEAM_ANNUAL"),
-			PriceBusinessAnnual:  os.Getenv("STRIPE_PRICE_BUSINESS_ANNUAL"),
-			PriceScaleAnnual:     os.Getenv("STRIPE_PRICE_SCALE_ANNUAL"),
+			WebhookSecret:         os.Getenv("STRIPE_WEBHOOK_SECRET"),
+			PriceFree:             os.Getenv("STRIPE_PRICE_FREE"),
+			PriceTeam:             os.Getenv("STRIPE_PRICE_TEAM"),
+			PriceBusiness:         os.Getenv("STRIPE_PRICE_BUSINESS"),
+			PriceScale:            os.Getenv("STRIPE_PRICE_SCALE"),
+			PriceEnterprise:       os.Getenv("STRIPE_PRICE_ENTERPRISE"),
+			PriceTeamAnnual:       os.Getenv("STRIPE_PRICE_TEAM_ANNUAL"),
+			PriceBusinessAnnual:   os.Getenv("STRIPE_PRICE_BUSINESS_ANNUAL"),
+			PriceScaleAnnual:      os.Getenv("STRIPE_PRICE_SCALE_ANNUAL"),
 			PriceEnterpriseAnnual: os.Getenv("STRIPE_PRICE_ENTERPRISE_ANNUAL"),
 		},
 		Email: EmailConfig{

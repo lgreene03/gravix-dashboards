@@ -11,6 +11,23 @@ env:
   IMAGE_PREFIX: ${{ github.repository }}
 
 jobs:
+  # Charter §7.1: the Apache-2.0 core must build and test with ee/ deleted, and
+  # no core package may import ee/. A failure here is a charter violation, not a
+  # build error to work around, so this job is never continue-on-error.
+  oss-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Enforce the open-core boundary
+        run: make check-boundary
+      - name: Build the core with ee/ absent
+        run: make build-oss
+      - name: Test the core with ee/ absent
+        run: make test-oss
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -67,6 +84,9 @@ jobs:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-${{ matrix.go-version }}-
+
+      - name: Check the generated metric docs are current
+        run: make contracts-check
 
       - name: Run tests with race detector
         run: go test ./... -v -race -count=1
@@ -195,6 +215,36 @@ jobs:
         with:
           dockerfile: services/gateway/Dockerfile
 
+      # The bootstrap stack had never parsed — one unquoted YAML value ending in
+      # a colon made Compose reject the whole file, so no service started and
+      # the error named a type rather than a line (F-010). Nothing ran this
+      # command in CI, which is why it survived. Now something does.
+      - name: Validate the bootstrap compose file
+        run: docker compose -f docker-compose.bootstrap.yml config >/dev/null
+
+      # The full stack, added here now that the duplicate `gateway:` key is gone
+      # (F-011). It was left out deliberately while that fault stood, with the
+      # note that it should join in the same change that fixes it — this is that
+      # change. Nothing in CI had ever loaded this file, which is how a file that
+      # Compose rejects outright survived from May to September.
+      - name: Validate the full-stack compose file
+        run: docker compose -f docker-compose.yml config >/dev/null
+        env:
+          # config resolves ${VAR:?msg} interpolation and fails the parse if such
+          # a variable is unset, so every one of them needs a value here. These
+          # are parse-time placeholders in a lint job that starts no container,
+          # not credentials.
+          #
+          # Do not maintain this list by hand — two attempts got it wrong, the
+          # second because the grep used to find the names excluded digits and so
+          # skipped both S3_ variables. TestComposeValidationStepSuppliesEvery
+          # RequiredVariable in cmd/onboarding_gate derives the list from the
+          # compose file and fails if this one falls behind.
+          JWT_SECRET: ci-compose-validation-placeholder
+          MINIO_ROOT_PASSWORD: ci-compose-validation-placeholder
+          S3_ACCESS_KEY: ci-compose-validation-placeholder
+          S3_SECRET_KEY: ci-compose-validation-placeholder
+
   # ─── Container Image Pipeline (runs only on main branch push) ───
   docker-build:
     runs-on: ubuntu-latest
@@ -308,10 +358,70 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-
 
+      # Bare-Parquet access (GRVX-1101). The DuckDB CLI is a foreign, unmodified
+      # SQL engine, and tests/e2e/bare_parquet_test.go shells out to it to prove
+      # the warehouse layout is readable by a generic engine with no Gravix
+      # process running. Without it those tests skip, so the proof is only real
+      # while this step succeeds.
+      #
+      # The version is pinned: an unpinned installer would let a DuckDB release
+      # turn this build red with no change to Gravix, and would make the proof
+      # unreproducible for anyone re-running it later. Bump it deliberately, and
+      # run `go test ./tests/e2e/ -run TestBareParquet -v` against the new
+      # version first.
+      - name: Install DuckDB CLI
+        env:
+          DUCKDB_VERSION: v1.1.3
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$RUNNER_TEMP/duckdb.zip" \
+            "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
+          unzip -o -d "$HOME/.local/bin" "$RUNNER_TEMP/duckdb.zip" duckdb
+          chmod +x "$HOME/.local/bin/duckdb"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/duckdb" --version
+
+      # Exit path (GRVX-1109). The claim is that a user can leave with
+      # everything, in formats readable with no Gravix component running. That
+      # is only true while this passes, so it runs on every commit rather than
+      # living in a document nobody executes.
+      - name: Exit path — export everything and read it with Gravix stopped
+        env:
+          E2E_TEST: "1"
+        run: go test ./tests/e2e/... -run 'TestExportEverything|TestExitPath|TestExportRowCounts|TestNoSecretInExitPath|TestConfigExportComplete|TestReadmeCommandsRun|TestChecksumsVerify|TestNonEmptyDestinationRefused' -v -count=1 -timeout 300s
+
       - name: Run end-to-end tests
         env:
           E2E_TEST: "1"
         run: go test ./tests/e2e/... -v -count=1 -timeout 300s
+
+  # ─── Correctness suite (GRVX-810) ───
+  # Proves the Phase 8 properties hold together — determinism, late data,
+  # retroactive backfill, mergeability, lineage, contract coverage — rather than
+  # one spec at a time. No Docker, and budgeted at five minutes.
+  #
+  # A failure here is a defect report against the spec that owns the property.
+  # It is never fixed by softening the assertion, and this job is never
+  # continue-on-error.
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Run the correctness suite
+        run: make test-correctness
+
+      # The public demonstration, run for real. It is the proof artefact for
+      # claim C2 in the competitive thesis, and a demo that breaks silently is
+      # worse than no demo because the docs keep claiming it works.
+      - name: Run the prove-it demonstration
+        run: ./scripts/prove_it.sh
 
   # ─── SDK Tests (Node + Python) ───
   sdk-tests:
@@ -332,6 +442,16 @@ jobs:
         run: |
           npm ci
           npx tsc --noEmit
+
+      - name: Node SDK tests
+        working-directory: sdk/node
+        run: npm test
+
+      # The Cube model, the dashboard's query routing and the lineage panel are
+      # JavaScript, so their correctness cannot be proven by `go test`.
+      # GRVX-808 AC-9/AC-11 and GRVX-809 AC-1/4/5/6/7/8/9/10/11/12/13/14 live here.
+      - name: Cube model and dashboard tests
+        run: node --test tests/cube/*.test.js dashboards/lib/*.test.js
 
       - name: Python SDK tests
         working-directory: sdk/python
@@ -376,10 +496,78 @@ jobs:
           name: docker-compose-logs
           path: /tmp/docker-compose-logs.txt
 
+  # ─── Timed onboarding budget (GRVX-910) ───
+  # G3.1: the time from `docker compose up` to a dashboard showing real, rolled-up
+  # data must stay under ten minutes. This runs on pull_request as well as push,
+  # because a budget that only gates main gates nothing — by the time it fails there
+  # the regression is already merged. Never continue-on-error: a budget that can
+  # silently pass is not a gate.
+  timed-onboarding:
+    runs-on: ubuntu-latest
+    needs: [build]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      # No .env is created on purpose. The whole claim under test is that this
+      # stack needs no configuration, so supplying any would measure a path no
+      # first-time user takes.
+      - name: Measure time to a populated dashboard
+        run: bash scripts/timed_onboarding_test.sh
+
+      - name: Upload stack logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-logs
+          path: /tmp/gravix-onboarding-logs.txt
+
   # ─── CI Summary Gate ───
+  # ─── Framework recipe examples ───
+  # Every recipe is executed for real against a stub ingestion server, and the
+  # path_template it sends is asserted. A recipe that documents /users/{id} and
+  # sends /users/1234 is worse than no recipe, and only running it catches that.
+  recipe-examples:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The SDKs are consumed from this checkout, not from a registry: a recipe
+      # must work against the code in the pull request, not the last release.
+      - name: Build the Node SDK
+        working-directory: sdk/node
+        run: npm ci && npm run build
+
+      - name: Install the Express recipe's dependencies
+        working-directory: examples/recipes/express
+        run: npm install express && npm install --install-links ../../../sdk/node
+
+      - name: Install the Python SDK and framework dependencies
+        run: python -m pip install --quiet ./sdk/python flask fastapi uvicorn django
+
+      - name: Run the recipe tests
+        run: go test ./examples/recipes/... -v -timeout 300s
+
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint]
+    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding]
     if: always()
     steps:
       - name: Check job results
@@ -392,13 +580,19 @@ jobs:
           echo "SDK Tests:     ${{ needs.sdk-tests.result }}"
           echo "Helm Validate: ${{ needs.helm-validate.result }}"
           echo "Docker Lint:   ${{ needs.docker-lint.result }}"
+          echo "Correctness:   ${{ needs.correctness.result }}"
+          echo "Recipes:       ${{ needs.recipe-examples.result }}"
+          echo "Onboarding:    ${{ needs.timed-onboarding.result }}"
 
           # Fail if any required job failed
-          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
+          if [[ "${{ needs.timed-onboarding.result }}" == "failure" ]] || \
+             [[ "${{ needs.recipe-examples.result }}" == "failure" ]] || \
+             [[ "${{ needs.lint.result }}" == "failure" ]] || \
              [[ "${{ needs.test.result }}" == "failure" ]] || \
              [[ "${{ needs.build.result }}" == "failure" ]] || \
              [[ "${{ needs.e2e.result }}" == "failure" ]] || \
-             [[ "${{ needs.sdk-tests.result }}" == "failure" ]]; then
+             [[ "${{ needs.sdk-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.correctness.result }}" == "failure" ]]; then
             echo "::error::One or more required CI jobs failed"
             exit 1
           fi

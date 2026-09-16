@@ -1,9 +1,14 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
@@ -723,9 +728,18 @@ func TestPublicMetricsInvalidKey(t *testing.T) {
 	}
 }
 
-func TestPublicMetricsFreePlanRejected(t *testing.T) {
+// TestPublicMetricsFreePlanAccepted is a REGRESSION TEST, not merely a unit test.
+//
+// This endpoint used to return 402 to a free-plan tenant. GRVX-710 removed that
+// gate because reading your own data is not a premium feature: the Crippleware
+// Test (charter §7.3) answers YES to Q5, which forces core placement, and §7.3
+// Q4 then makes the ruling permanent.
+//
+// If this test ever fails with 402 again, someone has re-gated a capability the
+// charter says is free. That is a charter violation, not a product decision.
+func TestPublicMetricsFreePlanAccepted(t *testing.T) {
 	gw := newTestGateway(t)
-	_, _, plainKey, _ := createTestTenantWithUser(t, gw)
+	_, _, plainKey, _ := createTestTenantWithUser(t, gw) // created on the "free" plan
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics?metric=error_rate", nil)
 	req.Header.Set("X-Gravix-Key", plainKey)
@@ -733,9 +747,43 @@ func TestPublicMetricsFreePlanRejected(t *testing.T) {
 
 	gw.handlePublicMetrics(rr, req)
 
-	// Free plan doesn't have access to public metrics API.
-	if rr.Code != http.StatusPaymentRequired {
-		t.Fatalf("status = %d, want 402", rr.Code)
+	if rr.Code == http.StatusPaymentRequired {
+		t.Fatalf("free plan got 402: the public metrics API has been re-gated, which charter §7.3 Q4 forbids")
+	}
+	if rr.Code == http.StatusForbidden {
+		t.Fatalf("free plan got 403: the public metrics API has been re-gated, which charter §7.3 Q4 forbids")
+	}
+	// Any other status is acceptable here: this test is about ENTITLEMENT, not
+	// about whether Cube.js is reachable in a unit-test environment.
+}
+
+// TestNoPlanGatingInGateway asserts the plan-tier machinery stays out of the
+// Apache-2.0 core. Plan and tier are billing concepts; charter §2.2 places them
+// in ee/, and GRVX-1312 resolves entitlements there instead.
+func TestNoPlanGatingInGateway(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			// Production sources only. A test cannot reintroduce planRank
+			// without it existing in production code, so this is the whole
+			// surface — and scanning test files would match this test's own
+			// source, which names the symbols in order to forbid them.
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(raw)
+		for _, banned := range []string{"planRank", "requirePlan"} {
+			if strings.Contains(body, banned) {
+				t.Errorf("%s references %q; plan tiers belong in ee/, not the Apache-2.0 core (charter §2.2)", name, banned)
+			}
+		}
 	}
 }
 

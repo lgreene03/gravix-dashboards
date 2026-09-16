@@ -1,14 +1,19 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
 	"time"
 
+	"github.com/lgreene/gravix-dashboards/pkg/manifest"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
@@ -461,4 +466,263 @@ func TestEventDetailCompaction(t *testing.T) {
 	if exists1 || exists2 {
 		t.Error("original duplicate parquet files were not deleted")
 	}
+}
+
+// ─── GRVX-802: manifests survive compaction ───
+
+// orderRecordingStore records the sequence of deletes, so the data-before-manifest
+// ordering can be asserted rather than assumed.
+type orderRecordingStore struct {
+	storage.ObjectStore
+	deletes []string
+}
+
+func (o *orderRecordingStore) Delete(ctx context.Context, key string) error {
+	o.deletes = append(o.deletes, key)
+	return o.ObjectStore.Delete(ctx, key)
+}
+
+func seedManifest(t *testing.T, store storage.ObjectStore, dataFile, tenantID, day string, m manifest.Manifest) {
+	t.Helper()
+	m.SchemaVersion = manifest.SchemaVersion
+	m.Metric = "request_metrics_minute"
+	m.MetricVersion = "v1"
+	m.TenantID = tenantID
+	m.EventDay = day
+	m.DataFile = dataFile
+	m.IdempotencyKey = manifest.IdempotencyKey(m.Metric, m.MetricVersion, tenantID, mustDay(t, day))
+	if err := manifest.Write(context.Background(), store, &m); err != nil {
+		t.Fatalf("seed manifest for %s: %v", dataFile, err)
+	}
+}
+
+func mustDay(t *testing.T, s string) time.Time {
+	t.Helper()
+	d, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		t.Fatalf("parse day %q: %v", s, err)
+	}
+	return d.UTC()
+}
+
+func metricRowFor(day, service string, count int64) MetricRow {
+	return MetricRow{
+		TenantID:     "t1",
+		BucketStart:  day + " 10:00:00",
+		Service:      service,
+		Method:       "GET",
+		PathTemplate: "/users/{id}",
+		RequestCount: count,
+		ErrorCount:   1,
+		ErrorRate:    float64(1) / float64(count),
+		P50LatencyMs: 50,
+		P95LatencyMs: 150,
+		P99LatencyMs: 250,
+		EventDay:     day,
+	}
+}
+
+// AC-12: compaction unions source fact keys and takes the max revision.
+func TestCompactionMergesManifests(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	const day = "2026-05-21"
+	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
+	key2 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_xyz_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+
+	seedParquetFile(t, store, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
+	seedParquetFile(t, store, key2, []MetricRow{metricRowFor(day, "billing-service", 20)})
+
+	seedManifest(t, store, key1, "t1", day, manifest.Manifest{
+		ContentDigest:  "sha256:aaa",
+		RowCount:       1,
+		FactCount:      10,
+		SourceFactKeys: []string{"raw/t1/request_facts/2026-05-21/10/b.jsonl", "raw/t1/request_facts/2026-05-21/10/a.jsonl"},
+		Revision:       2,
+	})
+	seedManifest(t, store, key2, "t1", day, manifest.Manifest{
+		ContentDigest:  "sha256:bbb",
+		RowCount:       1,
+		FactCount:      20,
+		SourceFactKeys: []string{"raw/t1/request_facts/2026-05-21/11/c.jsonl", "raw/t1/request_facts/2026-05-21/10/a.jsonl"},
+		Revision:       5,
+	})
+
+	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, false); err != nil {
+		t.Fatalf("compaction failed: %v", err)
+	}
+
+	m, err := manifest.Read(ctx, store, destKey)
+	if err != nil {
+		t.Fatalf("read merged manifest: %v", err)
+	}
+
+	wantKeys := []string{
+		"raw/t1/request_facts/2026-05-21/10/a.jsonl",
+		"raw/t1/request_facts/2026-05-21/10/b.jsonl",
+		"raw/t1/request_facts/2026-05-21/11/c.jsonl",
+	}
+	if len(m.SourceFactKeys) != len(wantKeys) {
+		t.Fatalf("SourceFactKeys = %v, want %v", m.SourceFactKeys, wantKeys)
+	}
+	for i, want := range wantKeys {
+		if m.SourceFactKeys[i] != want {
+			t.Errorf("SourceFactKeys[%d] = %q, want %q", i, m.SourceFactKeys[i], want)
+		}
+	}
+	if m.FactCount != 30 {
+		t.Errorf("FactCount = %d, want 30 (sum of sources)", m.FactCount)
+	}
+	if m.Revision != 5 {
+		t.Errorf("Revision = %d, want 5 (max of sources)", m.Revision)
+	}
+	if want := manifest.IdempotencyKey("request_metrics_minute", "v1", "t1", mustDay(t, day)); m.IdempotencyKey != want {
+		t.Errorf("IdempotencyKey = %q, want %q (the merged file's own identity)", m.IdempotencyKey, want)
+	}
+	if m.DataFile != destKey {
+		t.Errorf("DataFile = %q, want %q", m.DataFile, destKey)
+	}
+
+	// The digest must describe the merged rows, not either source's.
+	merged := readParquetRows[MetricRow](t, store, destKey)
+	if m.RowCount != int64(len(merged)) {
+		t.Errorf("RowCount = %d, want %d", m.RowCount, len(merged))
+	}
+	if err := manifest.Verify(ctx, store, destKey, merged); err != nil {
+		t.Errorf("merged manifest does not describe the merged file: %v", err)
+	}
+
+	// Source manifests go with their data files.
+	for _, k := range []string{key1, key2} {
+		if exists, _ := store.Exists(ctx, manifest.Path(k)); exists {
+			t.Errorf("source manifest for %s survived compaction", k)
+		}
+	}
+}
+
+// AC-13: compaction deletes the data file before its manifest.
+func TestCompactionDeleteOrder(t *testing.T) {
+	ctx := context.Background()
+	backing, err := storage.NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	const day = "2026-05-21"
+	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
+	key2 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_xyz_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+
+	seedParquetFile(t, backing, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
+	seedParquetFile(t, backing, key2, []MetricRow{metricRowFor(day, "billing-service", 20)})
+	seedManifest(t, backing, key1, "t1", day, manifest.Manifest{ContentDigest: "sha256:aaa", FactCount: 10})
+	seedManifest(t, backing, key2, "t1", day, manifest.Manifest{ContentDigest: "sha256:bbb", FactCount: 20})
+
+	store := &orderRecordingStore{ObjectStore: backing}
+	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, false); err != nil {
+		t.Fatalf("compaction failed: %v", err)
+	}
+
+	for _, key := range []string{key1, key2} {
+		dataAt, manifestAt := indexOf(store.deletes, key), indexOf(store.deletes, manifest.Path(key))
+		if dataAt < 0 {
+			t.Errorf("%s was never deleted; deletes were %v", key, store.deletes)
+			continue
+		}
+		if manifestAt < 0 {
+			t.Errorf("manifest for %s was never deleted; deletes were %v", key, store.deletes)
+			continue
+		}
+		if dataAt > manifestAt {
+			t.Errorf("manifest for %s deleted before its data file: %v\n"+
+				"A manifest without its data file is detectable; the reverse is not.", key, store.deletes)
+		}
+	}
+}
+
+func TestCompactionWritesNoManifestWhenSourcesHaveNone(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	const day = "2026-05-21"
+	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
+	key2 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_xyz_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+
+	seedParquetFile(t, store, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
+	seedParquetFile(t, store, key2, []MetricRow{metricRowFor(day, "billing-service", 20)})
+
+	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, false); err != nil {
+		t.Fatalf("compaction failed: %v", err)
+	}
+
+	// Sources predate manifests, so the merged file claims no lineage rather than
+	// claiming it was derived from nothing.
+	if _, err := manifest.Read(ctx, store, destKey); !errors.Is(err, manifest.ErrNoManifest) {
+		t.Errorf("err = %v, want ErrNoManifest — a merged file must not invent lineage", err)
+	}
+}
+
+func TestCompactionDryRunLeavesManifestsAlone(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	const day = "2026-05-21"
+	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+
+	seedParquetFile(t, store, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
+	seedManifest(t, store, key1, "t1", day, manifest.Manifest{ContentDigest: "sha256:aaa", FactCount: 10})
+
+	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1}, destKey, true); err != nil {
+		t.Fatalf("dry run failed: %v", err)
+	}
+
+	if exists, _ := store.Exists(ctx, manifest.Path(key1)); !exists {
+		t.Error("dry run deleted a source manifest")
+	}
+	if exists, _ := store.Exists(ctx, manifest.Path(destKey)); exists {
+		t.Error("dry run wrote a merged manifest")
+	}
+}
+
+// TestWarehouseKeysAreFlatLayoutOnly records what parseWarehouseKey actually
+// accepts. The rollup writes Hive-partitioned keys, which this does not match, so
+// compaction never reaches current rollup output. See findings.md F-003.
+func TestWarehouseKeysAreFlatLayoutOnly(t *testing.T) {
+	tests := []struct {
+		key string
+		ok  bool
+	}{
+		{"warehouse/request_metrics_minute/metrics_abc_2026-05-21.parquet", true},
+		{"warehouse/t1/request_metrics_minute/metrics_abc_2026-05-21.parquet", true},
+		{"warehouse/request_metrics_minute/event_day=2026-05-21/request_metrics_minute_20260521.parquet", false},
+		{"warehouse/t1/request_metrics_minute/event_day=2026-05-21/request_metrics_minute_20260521.parquet", false},
+	}
+	for _, tc := range tests {
+		_, _, _, _, ok := parseWarehouseKey(tc.key)
+		if ok != tc.ok {
+			t.Errorf("parseWarehouseKey(%q) ok = %v, want %v", tc.key, ok, tc.ok)
+		}
+	}
+}
+
+func indexOf(keys []string, want string) int {
+	for i, k := range keys {
+		if k == want {
+			return i
+		}
+	}
+	return -1
 }

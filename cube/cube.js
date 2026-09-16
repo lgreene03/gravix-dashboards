@@ -1,7 +1,31 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
+
+// The signing secret, read from a file when one is named. bootstrap_seed
+// generates it at first boot and the gateway reads the same file, which is what
+// keeps the signer and the verifier in agreement without a literal secret in a
+// compose file that anyone can read (F-029). An unreadable file is not silently
+// tolerated: falling back would leave Cube verifying with a different value than
+// the gateway signs with, which presents as an empty dashboard rather than as an
+// error.
+function signingSecret() {
+    const file = process.env.JWT_SECRET_FILE;
+    if (file) {
+        return fs.readFileSync(file, 'utf8').trim();
+    }
+    return process.env.JWT_SECRET;
+}
 
 module.exports = {
-    scheduledRefreshTimer: 300,
+    // A literal here overrides the environment, so the bootstrap stack could not
+    // turn the scheduler off. It has to: without Cube Store there are no
+    // pre-aggregations to refresh, and the scheduler's only output was the same
+    // Cube Store error every 300s (F-035).
+    scheduledRefreshTimer:
+        process.env.CUBEJS_SCHEDULED_REFRESH_TIMER === 'false' ? false : 300,
 
     // Isolate each tenant into its own Cube app context so pre-aggregation
     // namespaces and connection pool partitions don't bleed across tenants.
@@ -21,7 +45,7 @@ module.exports = {
     },
 
     checkAuth: (req, auth) => {
-        const jwtSecret = process.env.JWT_SECRET;
+        const jwtSecret = signingSecret();
         const apiSecret = process.env.CUBEJS_API_SECRET;
 
         // Multi-tenant mode: validate JWT and extract tenant context

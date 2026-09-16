@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -327,9 +330,9 @@ func TestHandleBadge_DefaultMetricIsStatus(t *testing.T) {
 
 func TestFetchMetric_P95Colors(t *testing.T) {
 	tests := []struct {
-		name     string
-		p95      float64
-		wantVal  string
+		name      string
+		p95       float64
+		wantVal   string
 		wantColor string
 	}{
 		{"green", 50, "50ms", colorGreen},

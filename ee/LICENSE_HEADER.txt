@@ -1,0 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: BUSL-1.1
+//
+// This file is part of Gravix Enterprise Edition and is NOT open source.
+// Licensed under the Business Source License 1.1. See ee/LICENSE.
+// Change Date: two years from this version's publication. Change License: Apache-2.0.

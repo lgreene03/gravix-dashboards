@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Gateway service provides tenant management, user login, API key management,
 // and Stripe billing for multi-tenant Gravix deployments.
 //
@@ -192,12 +195,25 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]interface{}{"error": msg, "code": code})
 }
 
+// jwtSecretSource names where the secret was read from, so a rejected value can
+// be traced to the thing that set it.
+func jwtSecretSource(file string) string {
+	if file != "" {
+		return "file " + file
+	}
+	if os.Getenv("JWT_SECRET") != "" {
+		return "JWT_SECRET environment variable"
+	}
+	return "--jwt-secret flag"
+}
+
 func main() {
 	logging.Init("gateway")
 
 	port := flag.Int("port", 8091, "HTTP port")
 	tenantDBPath := flag.String("tenant-db", "", "Path to tenant SQLite database")
 	jwtSecret := flag.String("jwt-secret", "", "JWT signing secret")
+	jwtSecretFile := flag.String("jwt-secret-file", "", "Path to a file holding the JWT signing secret (overrides JWT_SECRET)")
 	flag.Parse()
 
 	if *tenantDBPath == "" {
@@ -205,6 +221,23 @@ func main() {
 	}
 	if *jwtSecret == "" {
 		*jwtSecret = os.Getenv("JWT_SECRET")
+	}
+	// A file, rather than an environment variable, so the bootstrap stack can
+	// generate the secret at first boot instead of shipping one in a compose file
+	// that anyone can read. bootstrap_seed writes it; cube/cube.js reads the same
+	// file, which is what keeps the signer and the verifier in agreement (F-029).
+	if *jwtSecretFile == "" {
+		*jwtSecretFile = os.Getenv("JWT_SECRET_FILE")
+	}
+	if *jwtSecretFile != "" {
+		b, err := os.ReadFile(*jwtSecretFile)
+		if err != nil {
+			slog.Error("cannot read the JWT secret file", "path", *jwtSecretFile, "error", err)
+			os.Exit(1)
+		}
+		if t := strings.TrimSpace(string(b)); t != "" {
+			*jwtSecret = t
+		}
 	}
 
 	if *tenantDBPath == "" && os.Getenv("DB_DRIVER") == "" {
@@ -216,7 +249,12 @@ func main() {
 		os.Exit(1)
 	}
 	if len(*jwtSecret) < 32 {
-		slog.Error("JWT_SECRET must be at least 32 characters")
+		// The length is reported. The bootstrap stack shipped a 23-character
+		// literal and this check rejected it on every boot, but the message named
+		// only the rule, so the crash loop said nothing about which value was
+		// wrong or where it came from (F-032).
+		slog.Error("JWT_SECRET must be at least 32 characters",
+			"length", len(*jwtSecret), "source", jwtSecretSource(*jwtSecretFile))
 		os.Exit(1)
 	}
 
@@ -275,6 +313,16 @@ func main() {
 		slog.Info("DLQ store initialized", "dir", rawDir)
 	}
 
+	// Metric partitions live under the data root, written by the rollup with keys
+	// like warehouse/request_metrics_minute/event_day=.../. The percentile
+	// endpoint reads them with the same keys, so it needs a store rooted the same
+	// way the rollup roots its own — which is not RAW_DATA_DIR.
+	metricStore, err := newMetricStore()
+	if err != nil {
+		metricStore = nil
+		slog.Warn("metric store init failed, GET /api/v1/percentile will be unavailable", "error", err)
+	}
+
 	// Per-tenant rate limiting (fallback 100/s for legacy mode)
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
@@ -293,6 +341,7 @@ func main() {
 	}
 
 	gw := &gateway{
+		metricStore:     metricStore,
 		db:              db,
 		tokens:          tokens,
 		notifier:        notify.NewDispatcher(),
@@ -425,6 +474,17 @@ func main() {
 	mux.HandleFunc("/api/gateway/exports/scheduled", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleScheduledExports))))
 	mux.HandleFunc("/api/gateway/exports/scheduled/", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleScheduledExportByID))))
 	mux.HandleFunc("/api/v1/metrics", gw.ipRateLimitMiddleware(gw.handlePublicMetrics))
+	// Windowed percentiles merge t-digest sketches in Go, because a percentile
+	// over many buckets cannot be computed correctly any other way. See
+	// services/gateway/percentile_handler.go.
+	mux.HandleFunc("/api/v1/percentile", gw.ipRateLimitMiddleware(gw.handleWindowPercentile))
+	// Provenance over HTTP, so the dashboard can show where a number came from.
+	// See services/gateway/lineage_handler.go.
+	mux.HandleFunc("/api/v1/lineage", gw.ipRateLimitMiddleware(gw.handleLineage))
+	// SLOs and error-budget burn rates. No plan gate on any of these: charter
+	// §7.3 Q1 rules SLOs core, and docs/oss/boundary.yaml has no entry for them.
+	mux.HandleFunc("/api/gateway/slos", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleSLOs))))
+	mux.HandleFunc("/api/gateway/slos/", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleSLOByID))))
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("up"))
@@ -588,10 +648,18 @@ type gateway struct {
 	cubeAPIURL      string
 	cubeAPISecret   string // sent as Bearer token to Cube.js (CUBE_API_SECRET)
 	jwtSecret       string
-	baseURL         string // for email links (e.g., https://app.gravix.io)
-	totpKey         []byte   // separate encryption key for TOTP secrets
+	baseURL         string          // for email links (e.g., https://app.gravix.io)
+	totpKey         []byte          // separate encryption key for TOTP secrets
 	activeExports   map[string]bool // tracks in-progress exports per tenant
 	activeExportsMu sync.Mutex
+	// metricStore reads metric partitions for GET /api/v1/percentile. It is a
+	// separate store from `store` because that one is rooted at RAW_DATA_DIR for
+	// the DLQ, while metric partitions are written by the rollup under the data
+	// root. nil means the percentile endpoint is unavailable.
+	metricStore storage.ObjectStore
+	// metricWarehouseDir is where metric partitions live, expressed the way the
+	// rollup expresses it. Empty means the default ./data/warehouse.
+	metricWarehouseDir string
 }
 
 // ipRateLimitMiddleware applies per-IP rate limiting. Returns 429 with Retry-After header when exceeded.
@@ -938,38 +1006,6 @@ func (gw *gateway) requireRole(roles ...string) func(http.HandlerFunc) http.Hand
 	}
 }
 
-// planRank maps plan names to a numeric rank for comparison.
-var planRank = map[string]int{
-	"free":    0,
-	"starter": 1,
-	"pro":     2,
-}
-
-// requirePlan returns middleware that checks if the tenant's plan meets the minimum.
-// Must be used inside requireAuth.
-func (gw *gateway) requirePlan(minPlan string) func(http.HandlerFunc) http.HandlerFunc {
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			claims := auth.ClaimsFromContext(r.Context())
-			if claims == nil {
-				writeError(w, http.StatusUnauthorized, "authentication required")
-				return
-			}
-			tenant, err := gw.db.Tenants().GetByID(r.Context(), claims.TenantID)
-			if err != nil {
-				writeError(w, http.StatusNotFound, "tenant not found")
-				return
-			}
-			if planRank[tenant.Plan] < planRank[minPlan] {
-				writeError(w, http.StatusForbidden,
-					fmt.Sprintf("upgrade required: %s plan needed (current: %s)", minPlan, tenant.Plan))
-				return
-			}
-			next(w, r)
-		}
-	}
-}
-
 // rateLimitMiddleware checks tenant-specific rate limits on API requests.
 // Must be used inside requireAuth (assumes claims are in context).
 // Returns 429 with standard X-RateLimit headers when exceeded.
@@ -1146,9 +1182,9 @@ func (gw *gateway) handleRetention(w http.ResponseWriter, r *http.Request) {
 		}
 
 		resp := map[string]interface{}{
-			"plan":        tenant.Plan,
-			"min_days":    planMinRetentionDays(tenant.Plan),
-			"max_days":    planMaxRetentionDays(tenant.Plan),
+			"plan":                    tenant.Plan,
+			"min_days":                planMinRetentionDays(tenant.Plan),
+			"max_days":                planMaxRetentionDays(tenant.Plan),
 			"plan_default_facts_days": planDefaultFactsDays(tenant.Plan),
 		}
 		if policy != nil {
@@ -1535,8 +1571,6 @@ func (gw *gateway) handleAPIKeysExpiring(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"keys": keys})
 }
-
-
 
 // --- Dead Letter Queue API ---
 

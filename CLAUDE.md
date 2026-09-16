@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Gravix is a low-cost, data-first observability system for HTTP service health monitoring. It ingests raw request events (facts), aggregates them into metrics, and visualizes them on a live dashboard. It is **not** a Datadog replacement and must not attempt feature parity.
 
+**As of Horizon 2, Gravix is an open-core project.** The core is Apache-2.0 and free forever; a
+paid tier lives under `ee/` (BUSL-1.1, source-available). Feature parity with Datadog remains
+forbidden. What changed is that Gravix now claims superiority on four specific axes — correctness,
+recomputability, data ownership, and billing predictability — each of which must be *provable*.
+Read `docs/oss/00-open-core-charter.md` before proposing any feature, and
+`docs/oss/01-competitive-thesis.md` before making any public claim.
+
 ## Core Philosophy (Non-Negotiable)
 
 - Store **facts** (immutable, append-only), not metrics
@@ -14,6 +21,11 @@ Gravix is a low-cost, data-first observability system for HTTP service health mo
 - No agents, no distributed tracing, no logs platform, no per-request querying, no high-cardinality dimensions (`user_id`, `request_id`), no custom query language
 
 These constraints live in `docs/00-system-truth.md` and `AGENTS.md`.
+
+**Open-core invariant (charter §7.1):** the core MUST build, test and run with the `ee/` directory
+physically deleted. `make build-oss`, `make test-oss` and `make check-boundary` enforce this on every
+pull request. A feature may only live in `ee/` if it passes the five-question Crippleware Test in
+charter §7.3 — and "people would pay for it" is never sufficient.
 
 ## Commands
 
@@ -122,7 +134,32 @@ go test ./schemas/... -v -cover
 
 ## Agent Roles (for multi-agent workflows)
 
-The project uses three agent personas defined in `AGENTS.md`:
+Eighteen roles are defined in `docs/oss/10-agent-roster.md`, each dispatchable from
+`.claude/agents/`. The original three remain:
 - **CPO**: Strategy and product direction — invoke with the CPO prompt trigger
 - **Senior Engineering Lead**: Architecture and sprint planning — invoke with the Lead prompt trigger
 - **Senior Engineer**: Implementation — invoke with the Engineer prompt trigger
+
+Three of the newer roles hold a veto the CPO cannot overrule inside a sprint:
+- **license-boundary-auditor**: `ee/` placement, and any release where `make build-oss` fails
+- **security-engineer**: releasing a known-exploitable vulnerability
+- **qa-engineer**: shipping with an unproven acceptance criterion
+
+## Horizon 2: Open Core
+
+| Document | What it is |
+|---|---|
+| `docs/oss/00-open-core-charter.md` | The licence boundary and the Crippleware Test. Read before proposing a feature. |
+| `docs/oss/01-competitive-thesis.md` | The five superiority axes, their scope limits, and the claim register. No public claim ships before its proof artefact exists. |
+| `docs/oss/10-agent-roster.md` | The eighteen roles, their vetoes, and the handoff matrix. |
+| `docs/oss/11-agent-loops.md` | Loops L0-L12, including the 12-check Spec Readiness Gate. |
+| `docs/oss/12-goal-tree.md` | G1-G9 with numeric key results and named measurement sources. |
+| `docs/oss/20-roadmap-horizon-2.md` | Phases 7-15. Phases 7-12 are entirely Apache-2.0. |
+| `docs/oss/specs/` | 88 executable specifications. One spec is one work order. |
+| `docs/oss/correctness-defects.md` | Where a published number or claim failed a test. Read before making any accuracy claim. |
+| `docs/oss/open-decisions.md` | The subset of the registers that needs a person, not an implementer — decisions, permissions, and external checks. Start here when picking the work back up. |
+
+**Implementing a spec:** read exactly one spec file and the files it names in §4. Not the roadmap,
+not the charter, not the issue thread. If the spec is insufficient to execute, return
+`SPEC DEFECT: §<n> — <what is ambiguous>` rather than improvising. That constraint is what keeps
+product decisions out of implementation code.

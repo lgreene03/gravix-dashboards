@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -413,6 +416,7 @@ func (gw *gateway) usageMeteringLoop(ctx context.Context) {
 		}
 	}
 }
+
 // reportUsageToStripe reads event counters, calculates overage, and reports to Stripe.
 func (gw *gateway) reportUsageToStripe(ctx context.Context) {
 	if gw.billing == nil {

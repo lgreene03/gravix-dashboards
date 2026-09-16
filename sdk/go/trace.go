@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package gravix
 
 import (
@@ -15,9 +18,9 @@ import (
 
 // Trace context header names.
 const (
-	TraceIDHeader     = "X-Trace-Id"
-	SpanIDHeader      = "X-Span-Id"
-	ParentSpanHeader  = "X-Parent-Span-Id"
+	TraceIDHeader    = "X-Trace-Id"
+	SpanIDHeader     = "X-Span-Id"
+	ParentSpanHeader = "X-Parent-Span-Id"
 )
 
 // TraceSample represents a single span in a distributed trace.

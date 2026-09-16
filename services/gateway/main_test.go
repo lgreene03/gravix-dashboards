@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -1890,69 +1893,6 @@ func TestRequireRoleEditorAndAdminBlocksViewer(t *testing.T) {
 	}
 }
 
-func TestRequirePlanFreePasses(t *testing.T) {
-	gw := newTestGateway(t)
-	tenant, user, _, _ := createTestTenantWithUser(t, gw)
-
-	wrapped := gw.requirePlan("free")(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: auth.RoleAdmin}
-	req = req.WithContext(auth.WithClaims(req.Context(), claims))
-	rr := httptest.NewRecorder()
-
-	wrapped(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rr.Code)
-	}
-}
-
-func TestRequirePlanProBlocksFree(t *testing.T) {
-	gw := newTestGateway(t)
-	tenant, user, _, _ := createTestTenantWithUser(t, gw) // free plan
-
-	wrapped := gw.requirePlan("pro")(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("handler should not be called for free plan")
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: auth.RoleAdmin}
-	req = req.WithContext(auth.WithClaims(req.Context(), claims))
-	rr := httptest.NewRecorder()
-
-	wrapped(rr, req)
-
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", rr.Code)
-	}
-}
-
-func TestRequirePlanProPassesPro(t *testing.T) {
-	gw := newTestGateway(t)
-	tenant, user, _, _ := createTestTenantWithUser(t, gw)
-
-	// Upgrade to pro
-	gw.db.Tenants().UpdatePlan(context.Background(), tenant.ID, "pro")
-
-	wrapped := gw.requirePlan("pro")(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	claims := &auth.Claims{TenantID: tenant.ID, UserID: user.ID, Email: user.Email, Role: auth.RoleAdmin}
-	req = req.WithContext(auth.WithClaims(req.Context(), claims))
-	rr := httptest.NewRecorder()
-
-	wrapped(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rr.Code)
-	}
-}
-
 // Test that editor can create alert rules but not API keys
 func TestEditorCanCreateAlertRules(t *testing.T) {
 	gw := newTestGateway(t)
@@ -2122,8 +2062,8 @@ func TestSecurityHeadersPresent(t *testing.T) {
 
 	checks := map[string]string{
 		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":       "DENY",
-		"Cache-Control":         "no-store",
+		"X-Frame-Options":        "DENY",
+		"Cache-Control":          "no-store",
 	}
 	for header, want := range checks {
 		if got := rr.Header().Get(header); got != want {

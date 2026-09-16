@@ -1,0 +1,32 @@
+{
+  "a billion events, where the fixed-cost ratio collapses": {
+    "aws_multi": 805.56,
+    "aws_single": 260.82,
+    "bootstrap_vps": 58.75
+  },
+  "a small team, default retention": {
+    "aws_multi": 646.78,
+    "aws_single": 215.59,
+    "bootstrap_vps": 5
+  },
+  "long retention pushes storage past the VPS allowance": {
+    "aws_multi": 682.8,
+    "aws_single": 226.06,
+    "bootstrap_vps": 12.55
+  },
+  "one service, one viewer, seven days": {
+    "aws_multi": 641.61,
+    "aws_single": 213.87,
+    "bootstrap_vps": 5
+  },
+  "the GRVX-1003 target, had it been met": {
+    "aws_multi": 660.34,
+    "aws_single": 220.04,
+    "bootstrap_vps": 5
+  },
+  "the spec's worked example": {
+    "aws_multi": 660.77,
+    "aws_single": 220.13,
+    "bootstrap_vps": 5
+  }
+}

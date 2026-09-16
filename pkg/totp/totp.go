@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package totp provides TOTP two-factor authentication with encrypted secret storage.
 package totp
 

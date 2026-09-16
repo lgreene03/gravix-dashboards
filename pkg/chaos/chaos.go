@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package chaos provides fault injection helpers for testing error paths
 // in Gravix services. These are test utilities, not a chaos engineering framework.
 package chaos
@@ -26,11 +29,11 @@ var ErrFaultInjected = errors.New("chaos: fault injected")
 type FaultyStore struct {
 	inner    storage.ObjectStore
 	mu       sync.RWMutex
-	errRate  float64            // probability [0,1] of random failure
-	latency  time.Duration      // added delay before each operation
-	keyErrs  map[string]error   // deterministic errors for specific keys
-	opErrs   map[string]error   // deterministic errors for specific operations (Put, Get, Delete, List, Exists)
-	disabled bool               // kill switch: all ops fail when true
+	errRate  float64          // probability [0,1] of random failure
+	latency  time.Duration    // added delay before each operation
+	keyErrs  map[string]error // deterministic errors for specific keys
+	opErrs   map[string]error // deterministic errors for specific operations (Put, Get, Delete, List, Exists)
+	disabled bool             // kill switch: all ops fail when true
 }
 
 // NewFaultyStore wraps an existing ObjectStore with fault injection.
@@ -175,9 +178,9 @@ func (f *FaultyStore) Exists(ctx context.Context, key string) (bool, error) {
 // By default it delegates everything to the inner DB. Set repo-level overrides
 // via the SetXxxError methods to make specific repo accessor methods fail.
 type FaultyDB struct {
-	inner          tenantdb.DB
-	mu             sync.RWMutex
-	repoErrs       map[string]error // keyed by repo name: "Tenants", "Users", etc.
+	inner    tenantdb.DB
+	mu       sync.RWMutex
+	repoErrs map[string]error // keyed by repo name: "Tenants", "Users", etc.
 }
 
 // NewFaultyDB wraps an existing tenantdb.DB with fault injection.
@@ -214,33 +217,51 @@ type faultyTenantRepo struct {
 	err error
 }
 
-func (r *faultyTenantRepo) Create(_ context.Context, _ *tenantdb.Tenant) error            { return r.err }
-func (r *faultyTenantRepo) GetByID(_ context.Context, _ string) (*tenantdb.Tenant, error)  { return nil, r.err }
-func (r *faultyTenantRepo) GetByEmail(_ context.Context, _ string) (*tenantdb.Tenant, error) { return nil, r.err }
-func (r *faultyTenantRepo) UpdatePlan(_ context.Context, _, _ string) error                 { return r.err }
-func (r *faultyTenantRepo) UpdateStatus(_ context.Context, _, _ string) error               { return r.err }
-func (r *faultyTenantRepo) UpdateStripe(_ context.Context, _, _, _ string) error            { return r.err }
-func (r *faultyTenantRepo) UpdateTrial(_ context.Context, _ string, _, _ *time.Time) error  { return r.err }
-func (r *faultyTenantRepo) UpdateParentTenant(_ context.Context, _, _ string) error         { return r.err }
-func (r *faultyTenantRepo) ListChildren(_ context.Context, _ string) ([]*tenantdb.Tenant, error) { return nil, r.err }
-func (r *faultyTenantRepo) List(_ context.Context) ([]*tenantdb.Tenant, error)              { return nil, r.err }
+func (r *faultyTenantRepo) Create(_ context.Context, _ *tenantdb.Tenant) error { return r.err }
+func (r *faultyTenantRepo) GetByID(_ context.Context, _ string) (*tenantdb.Tenant, error) {
+	return nil, r.err
+}
+func (r *faultyTenantRepo) GetByEmail(_ context.Context, _ string) (*tenantdb.Tenant, error) {
+	return nil, r.err
+}
+func (r *faultyTenantRepo) UpdatePlan(_ context.Context, _, _ string) error      { return r.err }
+func (r *faultyTenantRepo) UpdateStatus(_ context.Context, _, _ string) error    { return r.err }
+func (r *faultyTenantRepo) UpdateStripe(_ context.Context, _, _, _ string) error { return r.err }
+func (r *faultyTenantRepo) UpdateTrial(_ context.Context, _ string, _, _ *time.Time) error {
+	return r.err
+}
+func (r *faultyTenantRepo) UpdateParentTenant(_ context.Context, _, _ string) error { return r.err }
+func (r *faultyTenantRepo) ListChildren(_ context.Context, _ string) ([]*tenantdb.Tenant, error) {
+	return nil, r.err
+}
+func (r *faultyTenantRepo) List(_ context.Context) ([]*tenantdb.Tenant, error) { return nil, r.err }
 
 // faultyUserRepo wraps UserRepo and fails all calls with a configured error.
 type faultyUserRepo struct {
 	err error
 }
 
-func (r *faultyUserRepo) Create(_ context.Context, _ *tenantdb.User) error                 { return r.err }
-func (r *faultyUserRepo) GetByEmail(_ context.Context, _ string) (*tenantdb.User, error)   { return nil, r.err }
-func (r *faultyUserRepo) GetByID(_ context.Context, _ string) (*tenantdb.User, error)      { return nil, r.err }
-func (r *faultyUserRepo) ListByTenant(_ context.Context, _ string) ([]*tenantdb.User, error) { return nil, r.err }
-func (r *faultyUserRepo) UpdatePassword(_ context.Context, _, _ string) error               { return r.err }
-func (r *faultyUserRepo) UpdateEmailVerified(_ context.Context, _ string, _ bool) error     { return r.err }
-func (r *faultyUserRepo) UpdateLastLogin(_ context.Context, _ string, _ time.Time) error    { return r.err }
-func (r *faultyUserRepo) UpdateRole(_ context.Context, _, _ string) error                   { return r.err }
-func (r *faultyUserRepo) UpdateStatus(_ context.Context, _, _ string) error                 { return r.err }
-func (r *faultyUserRepo) UpdateTwoFactor(_ context.Context, _ string, _ bool, _ string) error { return r.err }
-func (r *faultyUserRepo) CountByTenant(_ context.Context, _ string) (int, error)            { return 0, r.err }
+func (r *faultyUserRepo) Create(_ context.Context, _ *tenantdb.User) error { return r.err }
+func (r *faultyUserRepo) GetByEmail(_ context.Context, _ string) (*tenantdb.User, error) {
+	return nil, r.err
+}
+func (r *faultyUserRepo) GetByID(_ context.Context, _ string) (*tenantdb.User, error) {
+	return nil, r.err
+}
+func (r *faultyUserRepo) ListByTenant(_ context.Context, _ string) ([]*tenantdb.User, error) {
+	return nil, r.err
+}
+func (r *faultyUserRepo) UpdatePassword(_ context.Context, _, _ string) error           { return r.err }
+func (r *faultyUserRepo) UpdateEmailVerified(_ context.Context, _ string, _ bool) error { return r.err }
+func (r *faultyUserRepo) UpdateLastLogin(_ context.Context, _ string, _ time.Time) error {
+	return r.err
+}
+func (r *faultyUserRepo) UpdateRole(_ context.Context, _, _ string) error   { return r.err }
+func (r *faultyUserRepo) UpdateStatus(_ context.Context, _, _ string) error { return r.err }
+func (r *faultyUserRepo) UpdateTwoFactor(_ context.Context, _ string, _ bool, _ string) error {
+	return r.err
+}
+func (r *faultyUserRepo) CountByTenant(_ context.Context, _ string) (int, error) { return 0, r.err }
 
 func (f *FaultyDB) Tenants() tenantdb.TenantRepo {
 	if err := f.repoErr("Tenants"); err != nil {
@@ -260,26 +281,32 @@ func (f *FaultyDB) Users() tenantdb.UserRepo {
 // extended to any repo that needs fault injection. For brevity, the rest
 // just pass through.
 
-func (f *FaultyDB) APIKeys() tenantdb.APIKeyRepo                       { return f.inner.APIKeys() }
-func (f *FaultyDB) EventCounters() tenantdb.EventCounterRepo           { return f.inner.EventCounters() }
-func (f *FaultyDB) MonthlyUsage() tenantdb.MonthlyUsageRepo            { return f.inner.MonthlyUsage() }
-func (f *FaultyDB) NotificationChannels() tenantdb.NotificationChannelRepo { return f.inner.NotificationChannels() }
-func (f *FaultyDB) AlertRules() tenantdb.AlertRuleRepo                 { return f.inner.AlertRules() }
-func (f *FaultyDB) AlertHistory() tenantdb.AlertHistoryRepo            { return f.inner.AlertHistory() }
-func (f *FaultyDB) AuditLog() tenantdb.AuditRepo                      { return f.inner.AuditLog() }
-func (f *FaultyDB) RetentionPolicies() tenantdb.RetentionPolicyRepo    { return f.inner.RetentionPolicies() }
-func (f *FaultyDB) PasswordResets() tenantdb.PasswordResetRepo         { return f.inner.PasswordResets() }
-func (f *FaultyDB) EmailVerifications() tenantdb.EmailVerificationRepo { return f.inner.EmailVerifications() }
-func (f *FaultyDB) Invitations() tenantdb.InvitationRepo               { return f.inner.Invitations() }
-func (f *FaultyDB) ConsentRecords() tenantdb.ConsentRecordRepo         { return f.inner.ConsentRecords() }
-func (f *FaultyDB) DeletionRequests() tenantdb.DeletionRequestRepo     { return f.inner.DeletionRequests() }
-func (f *FaultyDB) SSOConfigs() tenantdb.SSOConfigRepo                 { return f.inner.SSOConfigs() }
-func (f *FaultyDB) Sessions() tenantdb.SessionRepo                     { return f.inner.Sessions() }
-func (f *FaultyDB) RecoveryCodes() tenantdb.RecoveryCodeRepo           { return f.inner.RecoveryCodes() }
-func (f *FaultyDB) RevokedTokens() tenantdb.RevokedTokenRepo           { return f.inner.RevokedTokens() }
-func (f *FaultyDB) SSOStates() tenantdb.SSOStateRepo                   { return f.inner.SSOStates() }
-func (f *FaultyDB) Referrals() referral.ReferralRepo                   { return f.inner.Referrals() }
-func (f *FaultyDB) Close() error                                       { return f.inner.Close() }
+func (f *FaultyDB) APIKeys() tenantdb.APIKeyRepo             { return f.inner.APIKeys() }
+func (f *FaultyDB) EventCounters() tenantdb.EventCounterRepo { return f.inner.EventCounters() }
+func (f *FaultyDB) MonthlyUsage() tenantdb.MonthlyUsageRepo  { return f.inner.MonthlyUsage() }
+func (f *FaultyDB) NotificationChannels() tenantdb.NotificationChannelRepo {
+	return f.inner.NotificationChannels()
+}
+func (f *FaultyDB) AlertRules() tenantdb.AlertRuleRepo      { return f.inner.AlertRules() }
+func (f *FaultyDB) AlertHistory() tenantdb.AlertHistoryRepo { return f.inner.AlertHistory() }
+func (f *FaultyDB) AuditLog() tenantdb.AuditRepo            { return f.inner.AuditLog() }
+func (f *FaultyDB) RetentionPolicies() tenantdb.RetentionPolicyRepo {
+	return f.inner.RetentionPolicies()
+}
+func (f *FaultyDB) PasswordResets() tenantdb.PasswordResetRepo { return f.inner.PasswordResets() }
+func (f *FaultyDB) EmailVerifications() tenantdb.EmailVerificationRepo {
+	return f.inner.EmailVerifications()
+}
+func (f *FaultyDB) Invitations() tenantdb.InvitationRepo           { return f.inner.Invitations() }
+func (f *FaultyDB) ConsentRecords() tenantdb.ConsentRecordRepo     { return f.inner.ConsentRecords() }
+func (f *FaultyDB) DeletionRequests() tenantdb.DeletionRequestRepo { return f.inner.DeletionRequests() }
+func (f *FaultyDB) SSOConfigs() tenantdb.SSOConfigRepo             { return f.inner.SSOConfigs() }
+func (f *FaultyDB) Sessions() tenantdb.SessionRepo                 { return f.inner.Sessions() }
+func (f *FaultyDB) RecoveryCodes() tenantdb.RecoveryCodeRepo       { return f.inner.RecoveryCodes() }
+func (f *FaultyDB) RevokedTokens() tenantdb.RevokedTokenRepo       { return f.inner.RevokedTokens() }
+func (f *FaultyDB) SSOStates() tenantdb.SSOStateRepo               { return f.inner.SSOStates() }
+func (f *FaultyDB) Referrals() referral.ReferralRepo               { return f.inner.Referrals() }
+func (f *FaultyDB) Close() error                                   { return f.inner.Close() }
 
 // ------------------- SlowReader -------------------
 
@@ -323,9 +350,9 @@ func (s *SlowReader) Read(p []byte) (int, error) {
 type NetworkPartition struct {
 	inner      http.RoundTripper
 	mu         sync.RWMutex
-	blocked    bool          // all requests fail when true
-	errRate    float64       // probability [0,1] of random failure
-	latency    time.Duration // added latency to every request
+	blocked    bool             // all requests fail when true
+	errRate    float64          // probability [0,1] of random failure
+	latency    time.Duration    // added latency to every request
 	hostErrors map[string]error // per-host errors
 }
 

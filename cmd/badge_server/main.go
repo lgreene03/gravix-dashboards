@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command badge_server serves status badges for services.
 //
 // GET /badge/:tenant/:service.svg returns an SVG badge showing the service's
@@ -135,9 +138,9 @@ func renderBadge(label, value, color string) string {
 
 // cubeQuery represents a Cube.js query payload.
 type cubeQuery struct {
-	Measures       []string          `json:"measures"`
-	Filters        []cubeFilter      `json:"filters,omitempty"`
-	TimeDimensions []cubeTimeDim     `json:"timeDimensions,omitempty"`
+	Measures       []string      `json:"measures"`
+	Filters        []cubeFilter  `json:"filters,omitempty"`
+	TimeDimensions []cubeTimeDim `json:"timeDimensions,omitempty"`
 }
 
 type cubeFilter struct {

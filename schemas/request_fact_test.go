@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package schemas
 
 import (
@@ -409,4 +412,60 @@ func FuzzValidateRequestFact(f *testing.F) {
 		// Must not panic — errors are fine
 		ParseRequestFact(data)
 	})
+}
+
+// ─── GRVX-905 AC-7 ───
+
+// TestUnmarshalRequestFactUnvalidated proves the seam it exists to create: a
+// fact whose path_template the validator would reject must decode, so that a
+// caller can rewrite it and then validate.
+func TestUnmarshalRequestFactUnvalidated(t *testing.T) {
+	raw := []byte(`{
+		"event_id": "018f3a3b-3d7f-7b2e-9c5a-1a2b3c4d5e6f",
+		"event_time": "2026-09-11T14:23:00Z",
+		"service": "api",
+		"method": "GET",
+		"path_template": "/users/42",
+		"status_code": 200,
+		"latency_ms": 12
+	}`)
+
+	fact, err := UnmarshalRequestFactUnvalidated(raw)
+	if err != nil {
+		t.Fatalf("AC-7 FAILED: %v", err)
+	}
+	if fact.PathTemplate != "/users/42" {
+		t.Errorf("AC-7 FAILED: path_template is %q; the decoder must not rewrite it",
+			fact.PathTemplate)
+	}
+	if fact.Service != "api" || fact.StatusCode != 200 || fact.LatencyMs != 12 {
+		t.Errorf("AC-7 FAILED: fields did not decode: %+v", fact)
+	}
+
+	// It is a seam, not a bypass: the rules still reject what they always did.
+	badPath := []byte(`{
+		"event_id": "018f3a3b-3d7f-7b2e-9c5a-1a2b3c4d5e6f",
+		"event_time": "2026-09-11T14:23:00Z",
+		"service": "api", "method": "GET",
+		"path_template": "/users/123456",
+		"status_code": 200, "latency_ms": 12
+	}`)
+	fact, err = UnmarshalRequestFactUnvalidated(badPath)
+	if err != nil {
+		t.Fatalf("AC-7 FAILED: decoding must not validate: %v", err)
+	}
+	if err := ValidateRequestFact(fact); err == nil {
+		t.Error("AC-7 FAILED: a raw numeric id passed validation. This function must not " +
+			"weaken the rules, only defer them")
+	}
+
+	// A malformed body still fails, with the same wrapped text ParseRequestFact
+	// produces for a decode failure.
+	_, err = UnmarshalRequestFactUnvalidated([]byte(`{not json`))
+	if err == nil {
+		t.Fatal("AC-7 FAILED: malformed JSON decoded successfully")
+	}
+	if !strings.Contains(err.Error(), "protojson unmarshal error") {
+		t.Errorf("AC-7 FAILED: decode error text changed: %v", err)
+	}
 }

@@ -1,0 +1,14 @@
+version: 1
+capabilities:
+  - id: core-with-test
+    name: Core capability carrying a Crippleware Test
+    placement: core
+    charter_ref: "§2.1"
+    rationale: The test belongs only on ee entries.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths: [pkg/boundary/]

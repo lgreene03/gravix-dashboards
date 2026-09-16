@@ -1,9 +1,13 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -15,6 +19,8 @@ import (
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/notify"
 	"github.com/lgreene/gravix-dashboards/pkg/pagination"
+	"github.com/lgreene/gravix-dashboards/pkg/recompute"
+	"github.com/lgreene/gravix-dashboards/pkg/slo"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/montanaflynn/stats"
 )
@@ -159,6 +165,9 @@ func (gw *gateway) handleChannelByID(w http.ResponseWriter, r *http.Request) {
 // --- Alert Rule handlers ---
 
 var validMetrics = map[string]bool{
+	// An error-budget burn rate, evaluated against the service's SLO rather than
+	// against a threshold on this rule. See evaluateBurnRateRule.
+	"burn_rate":   true,
 	"error_rate":  true,
 	"p50_latency": true,
 	"p95_latency": true,
@@ -375,7 +384,7 @@ func validateAlertRule(name, metric, operator string, threshold float64, windowM
 		return "name is required"
 	}
 	if !validMetrics[metric] {
-		return "metric must be one of: error_rate, p50_latency, p95_latency, p99_latency, throughput"
+		return "metric must be one of: error_rate, p50_latency, p95_latency, p99_latency, throughput, burn_rate"
 	}
 	if operator != "gt" && operator != "lt" && operator != "anomaly" {
 		return "operator must be gt, lt, or anomaly"
@@ -447,11 +456,142 @@ func (gw *gateway) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 // --- Alert Evaluator ---
 
 var metricToCubeMeasure = map[string]string{
-	"error_rate":  "RequestMetricsMinute.errorRate",
-	"p50_latency": "RequestMetricsMinute.p50Latency",
-	"p95_latency": "RequestMetricsMinute.p95Latency",
-	"p99_latency": "RequestMetricsMinute.p99Latency",
-	"throughput":  "RequestMetricsMinute.requestCount",
+	"error_rate": "RequestMetricsMinute.errorRate",
+	"throughput": "RequestMetricsMinute.requestCount",
+}
+
+// percentileAlertQuantile holds the metrics Cube cannot answer.
+//
+// An alert window is many minute-buckets, and a percentile has no correct
+// aggregation across buckets (GRVX-808). Asking Cube for `p95_latency` over a
+// fifteen-minute window used to return the maximum of fifteen per-minute p95s,
+// which on heavy-tailed latency measured 94% above the true value — so a latency
+// alert fired on a number that was nearly double the real one. These metrics are
+// answered by merging the stored sketches instead, in-process, with the same code
+// that serves GET /api/v1/percentile.
+var percentileAlertQuantile = map[string]float64{
+	"p50_latency": 0.5,
+	"p95_latency": 0.95,
+	"p99_latency": 0.99,
+}
+
+// alertMetricKey is the map key a percentile alert's rows are stored under, so
+// the evaluator's existing row-reading code needs no special case.
+func alertMetricKey(metric string) string {
+	if measure, ok := metricToCubeMeasure[metric]; ok {
+		return measure
+	}
+	return "RequestMetricsMinute." + metric
+}
+
+// knownAlertMetric reports whether a rule's metric can be evaluated at all.
+//
+// Three routes now: Cube for the counts and rates, the sketch merge for the
+// percentiles, and the SLO engine for a burn rate. A metric that passes rule
+// validation but matches none of them is a rule that silently never fires,
+// which is worse than one that fails loudly.
+func knownAlertMetric(metric string) bool {
+	_, cube := metricToCubeMeasure[metric]
+	_, pct := percentileAlertQuantile[metric]
+	return cube || pct || metric == burnRateMetric
+}
+
+// alertPercentileRows answers a percentile rule by merging sketches, returning
+// rows shaped like a Cube response so both evaluators read them unchanged.
+func (gw *gateway) alertPercentileRows(ctx context.Context, rule *tenantdb.AlertRule, quantile float64, from, to time.Time, granularity string) ([]map[string]interface{}, string, error) {
+	filters := map[string]string{}
+	if rule.Service != "" {
+		filters["service"] = rule.Service
+	}
+	if rule.PathTemplate != "" {
+		filters["path_template"] = rule.PathTemplate
+	}
+
+	resp, code, msg := gw.computeWindowPercentile(ctx, percentileRequest{
+		metric:      recompute.MetricRequestMinute,
+		quantile:    quantile,
+		from:        from,
+		to:          to,
+		granularity: granularity,
+		filters:     filters,
+		tenantID:    rule.TenantID,
+	})
+	if code != 0 {
+		return nil, "", fmt.Errorf("percentile merge: %s", msg)
+	}
+
+	key := alertMetricKey(rule.Metric)
+	timeKey := "RequestMetricsMinute.bucketStart"
+	if granularity == "hour" {
+		timeKey = "RequestMetricsMinute.bucketStart.hour"
+	}
+
+	rows := make([]map[string]interface{}, 0, len(resp.Buckets))
+	for _, b := range resp.Buckets {
+		ts, err := time.Parse(time.RFC3339, b.BucketStart)
+		if err != nil {
+			continue
+		}
+		rows = append(rows, map[string]interface{}{
+			// Zone-less, because that is the shape Cube returns and the evaluator's
+			// parser accepts. Every value here is UTC, as is the `now` it is
+			// compared against.
+			timeKey: ts.UTC().Format("2006-01-02T15:04:05"),
+			key:     b.Value,
+		})
+	}
+	return rows, key, nil
+}
+
+// burnRateMetric is the rule metric that selects error-budget burn-rate
+// evaluation. It is a metric name rather than an operator because a burn-rate
+// rule has no threshold of its own: the thresholds come from the SLO's tier
+// table, and a rule carrying its own would be a second opinion nobody asked for.
+const burnRateMetric = "burn_rate"
+
+// evaluateBurnRateRule finds the SLO a rule points at and returns the
+// highest-severity tier currently firing, or nil.
+//
+// The rule's Service names the SLO's service; its PathTemplate field, unused by
+// burn-rate rules, is reused to carry the SLO kind so no schema change is needed
+// for a rule type this spec adds beside the existing ones. That is a compromise
+// and it is recorded as such in SD-011.
+func (gw *gateway) evaluateBurnRateRule(ctx context.Context, rule *tenantdb.AlertRule) (*slo.Firing, error) {
+	if gw.metricStore == nil {
+		return nil, errors.New("metric storage is not configured")
+	}
+
+	kind := strings.TrimSpace(rule.PathTemplate)
+	if kind == "" {
+		kind = string(slo.KindAvailability)
+	}
+
+	records, err := gw.db.SLOs().ListByTenant(ctx, rule.TenantID)
+	if err != nil {
+		return nil, fmt.Errorf("listing SLOs: %w", err)
+	}
+
+	var target *tenantdb.SLORecord
+	for _, r := range records {
+		if r.Enabled && r.Service == rule.Service && r.Kind == kind {
+			target = r
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("no enabled %s SLO for service %q", kind, rule.Service)
+	}
+
+	firings, err := slo.EvaluateAllTiers(ctx, warehouseQuerier{gw}, recordToSLO(target), time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	for i := range firings {
+		if firings[i].Firing {
+			return &firings[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (gw *gateway) alertEvaluatorLoop(ctx context.Context) {
@@ -517,7 +657,27 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 			var message string
 			var anomalyRes *anomalyResult
 
-			if rule.Operator == "anomaly" {
+			if rule.Metric == burnRateMetric {
+				// An error-budget burn-rate rule. It reuses this loop's cron, its
+				// cooldown, its channel dispatch and its history — GRVX-811 adds a
+				// rule TYPE, not a second alerting system, because two alerting
+				// systems is how a team ends up with two places to silence a page.
+				firing, err := gw.evaluateBurnRateRule(ctx, rule)
+				if err != nil {
+					slog.Error("alert evaluator burn rate error", "tenant_id", tenantID,
+						"rule_id", rule.ID, "error", err)
+					gatewayAlertEvalErrorsTotal.Inc()
+					continue
+				}
+				if firing == nil {
+					continue
+				}
+				value = firing.LongBurnRate
+				triggered = true
+				message = fmt.Sprintf("%s: error budget burning at %.2fx over %s (%s severity) — %s",
+					rule.Name, firing.LongBurnRate, firing.Tier.LongWindow, firing.Tier.Severity,
+					firing.Reason)
+			} else if rule.Operator == "anomaly" {
 				// Anomaly detection: compare current value against historical baseline
 				var err error
 				anomalyRes, err = gw.evaluateAnomalyRule(ctx, token, rule)
@@ -569,7 +729,10 @@ func (gw *gateway) evaluateAlerts(ctx context.Context) {
 				continue
 			}
 
-			cfg, err := notify.ParseChannelConfig(ch.Config)
+			// By type: a "log" channel has no webhook URL, and the plain parser
+			// requires one. Without this the evaluator would skip every
+			// auto-armed rule here and the rule would never fire.
+			cfg, err := notify.ParseChannelConfigForType(ch.Type, ch.Config)
 			if err != nil {
 				slog.Error("alert evaluator invalid config for channel", "channel_id", ch.ID, "error", err)
 				continue
@@ -651,8 +814,7 @@ type anomalyResult struct {
 // baseline for the same hour-of-day and day-of-week. Returns nil if there
 // isn't enough historical data (< 3 data points).
 func (gw *gateway) evaluateAnomalyRule(ctx context.Context, token string, rule *tenantdb.AlertRule) (*anomalyResult, error) {
-	measure, ok := metricToCubeMeasure[rule.Metric]
-	if !ok {
+	if !knownAlertMetric(rule.Metric) {
 		return nil, fmt.Errorf("unknown metric: %s", rule.Metric)
 	}
 
@@ -661,6 +823,21 @@ func (gw *gateway) evaluateAnomalyRule(ctx context.Context, token string, rule *
 	if lookbackDays < 1 {
 		lookbackDays = 7
 	}
+
+	// A percentile baseline compares one hour against the same hour on previous
+	// days, so every point in it is an hour wide and none of them can come from
+	// Cube. Merge the sketches per hour instead.
+	if quantile, ok := percentileAlertQuantile[rule.Metric]; ok {
+		now := time.Now().UTC()
+		rows, key, err := gw.alertPercentileRows(ctx, rule, quantile,
+			now.AddDate(0, 0, -lookbackDays), now, "hour")
+		if err != nil {
+			return nil, err
+		}
+		return gw.anomalyFromRows(ctx, token, rule, rows, key, now)
+	}
+
+	measure := metricToCubeMeasure[rule.Metric]
 
 	// Build filters for historical data query
 	filters := []map[string]interface{}{}
@@ -740,6 +917,148 @@ func (gw *gateway) evaluateAnomalyRule(ctx context.Context, token string, rule *
 		return nil, nil // No data at all
 	}
 
+	return gw.anomalyFromRows(ctx, token, rule, data, measure, now)
+}
+
+// extractFloat extracts a float64 value from a Cube.js data row.
+func extractFloat(row map[string]interface{}, key string) float64 {
+	val, ok := row[key]
+	if !ok {
+		return 0
+	}
+	switch v := val.(type) {
+	case float64:
+		return v
+	case string:
+		var f float64
+		fmt.Sscanf(v, "%f", &f)
+		return f
+	default:
+		return 0
+	}
+}
+
+func (gw *gateway) queryCubeMetric(ctx context.Context, token string, rule *tenantdb.AlertRule) (float64, error) {
+	// A percentile over the alert window cannot come from Cube. Merge the
+	// sketches instead; see percentileAlertQuantile.
+	if quantile, ok := percentileAlertQuantile[rule.Metric]; ok {
+		to := time.Now().UTC()
+		from := to.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
+		rows, key, err := gw.alertPercentileRows(ctx, rule, quantile, from, to, "all")
+		if err != nil {
+			return 0, err
+		}
+		if len(rows) == 0 {
+			return 0, nil // No data for this window
+		}
+		return extractFloat(rows[0], key), nil
+	}
+
+	measure, ok := metricToCubeMeasure[rule.Metric]
+	if !ok {
+		return 0, fmt.Errorf("unknown metric: %s", rule.Metric)
+	}
+
+	filters := []map[string]interface{}{}
+	if rule.Service != "" {
+		filters = append(filters, map[string]interface{}{
+			"member":   "RequestMetricsMinute.service",
+			"operator": "equals",
+			"values":   []string{rule.Service},
+		})
+	}
+	if rule.PathTemplate != "" {
+		filters = append(filters, map[string]interface{}{
+			"member":   "RequestMetricsMinute.pathTemplate",
+			"operator": "equals",
+			"values":   []string{rule.PathTemplate},
+		})
+	}
+
+	cutoff := time.Now().UTC().Add(-time.Duration(rule.WindowMinutes) * time.Minute)
+	filters = append(filters, map[string]interface{}{
+		"member":   "RequestMetricsMinute.bucketStart",
+		"operator": "gte",
+		"values":   []string{cutoff.Format("2006-01-02T15:04:05")},
+	})
+
+	query := map[string]interface{}{
+		"measures": []string{measure},
+		"filters":  filters,
+	}
+
+	body, err := json.Marshal(map[string]interface{}{"query": query})
+	if err != nil {
+		return 0, fmt.Errorf("marshal query: %w", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", gw.cubeAPIURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("cube query: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return 0, fmt.Errorf("cube returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Results []struct {
+			Data []map[string]interface{} `json:"data"`
+		} `json:"results"`
+		Data []map[string]interface{} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("decode response: %w", err)
+	}
+
+	var data []map[string]interface{}
+	if len(result.Results) > 0 {
+		data = result.Results[0].Data
+	} else {
+		data = result.Data
+	}
+
+	if len(data) == 0 {
+		return 0, nil // No data for this window
+	}
+
+	val, ok := data[0][measure]
+	if !ok {
+		return 0, nil
+	}
+
+	switch v := val.(type) {
+	case float64:
+		return v, nil
+	case string:
+		var f float64
+		fmt.Sscanf(v, "%f", &f)
+		return f, nil
+	default:
+		return 0, fmt.Errorf("unexpected value type for %s: %T", measure, val)
+	}
+}
+
+// anomalyFromRows turns a metric series into a baseline comparison: the current
+// hour against the same hour on previous days. It is shared by the Cube path and
+// the sketch-merge path so a percentile anomaly is judged by exactly the same
+// statistics as an error-rate one.
+func (gw *gateway) anomalyFromRows(ctx context.Context, token string, rule *tenantdb.AlertRule, data []map[string]interface{}, measure string, now time.Time) (*anomalyResult, error) {
+	if len(data) == 0 {
+		return nil, nil // No data at all
+	}
+	var err error
 	// Find the time key in the response
 	timeKey := "RequestMetricsMinute.bucketStart"
 	if _, ok := data[0]["RequestMetricsMinute.bucketStart.hour"]; ok {
@@ -840,119 +1159,3 @@ func (gw *gateway) evaluateAnomalyRule(ctx context.Context, token string, rule *
 		triggered:      triggered,
 	}, nil
 }
-
-// extractFloat extracts a float64 value from a Cube.js data row.
-func extractFloat(row map[string]interface{}, key string) float64 {
-	val, ok := row[key]
-	if !ok {
-		return 0
-	}
-	switch v := val.(type) {
-	case float64:
-		return v
-	case string:
-		var f float64
-		fmt.Sscanf(v, "%f", &f)
-		return f
-	default:
-		return 0
-	}
-}
-
-func (gw *gateway) queryCubeMetric(ctx context.Context, token string, rule *tenantdb.AlertRule) (float64, error) {
-	measure, ok := metricToCubeMeasure[rule.Metric]
-	if !ok {
-		return 0, fmt.Errorf("unknown metric: %s", rule.Metric)
-	}
-
-	filters := []map[string]interface{}{}
-	if rule.Service != "" {
-		filters = append(filters, map[string]interface{}{
-			"member":   "RequestMetricsMinute.service",
-			"operator": "equals",
-			"values":   []string{rule.Service},
-		})
-	}
-	if rule.PathTemplate != "" {
-		filters = append(filters, map[string]interface{}{
-			"member":   "RequestMetricsMinute.pathTemplate",
-			"operator": "equals",
-			"values":   []string{rule.PathTemplate},
-		})
-	}
-
-	cutoff := time.Now().UTC().Add(-time.Duration(rule.WindowMinutes) * time.Minute)
-	filters = append(filters, map[string]interface{}{
-		"member":   "RequestMetricsMinute.bucketStart",
-		"operator": "gte",
-		"values":   []string{cutoff.Format("2006-01-02T15:04:05")},
-	})
-
-	query := map[string]interface{}{
-		"measures": []string{measure},
-		"filters":  filters,
-	}
-
-	body, err := json.Marshal(map[string]interface{}{"query": query})
-	if err != nil {
-		return 0, fmt.Errorf("marshal query: %w", err)
-	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, "POST", gw.cubeAPIURL, bytes.NewReader(body))
-	if err != nil {
-		return 0, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("cube query: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return 0, fmt.Errorf("cube returned %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Results []struct {
-			Data []map[string]interface{} `json:"data"`
-		} `json:"results"`
-		Data []map[string]interface{} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, fmt.Errorf("decode response: %w", err)
-	}
-
-	var data []map[string]interface{}
-	if len(result.Results) > 0 {
-		data = result.Results[0].Data
-	} else {
-		data = result.Data
-	}
-
-	if len(data) == 0 {
-		return 0, nil // No data for this window
-	}
-
-	val, ok := data[0][measure]
-	if !ok {
-		return 0, nil
-	}
-
-	switch v := val.(type) {
-	case float64:
-		return v, nil
-	case string:
-		var f float64
-		fmt.Sscanf(v, "%f", &f)
-		return f, nil
-	default:
-		return 0, fmt.Errorf("unexpected value type for %s: %T", measure, val)
-	}
-}
-

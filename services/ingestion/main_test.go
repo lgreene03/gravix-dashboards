@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -6,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +21,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/discovery"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
+	"github.com/lgreene/gravix-dashboards/pkg/pathlearn"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -25,6 +31,27 @@ import (
 
 	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
 )
+
+// testLearner gives a handler a path learner with production budgets. Tests
+// that exercise a budget construct their own with smaller ones.
+func testLearner() *pathlearn.Learner {
+	return pathlearn.NewLearner(
+		pathlearn.DefaultSegmentDistinctBudget,
+		pathlearn.DefaultTemplateBudgetPerService)
+}
+
+// testRegistry gives a handler a real, isolated discovery registry. Tests that
+// assert on discovery use their own; for everyone else this is the cheapest way
+// to satisfy the parameter without a nil that would hide a missing call.
+func testRegistry(t testing.TB) *discovery.Registry {
+	t.Helper()
+	reg, err := discovery.OpenInMemory()
+	if err != nil {
+		t.Fatalf("discovery.OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { reg.Close() })
+	return reg
+}
 
 // failingStore is a mock ObjectStore where Put always returns an error.
 type failingStore struct{}
@@ -128,7 +155,7 @@ func setupSink(t *testing.T) *DurableSink {
 
 func TestHandleFacts_ValidPost(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -144,7 +171,7 @@ func TestHandleFacts_ValidPost(t *testing.T) {
 
 func TestHandleFacts_InvalidJSON(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(`{"bad json`))
 	req = withMockTenant(req)
@@ -166,7 +193,7 @@ func TestHandleFacts_InvalidJSON(t *testing.T) {
 
 func TestHandleFacts_MissingContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -182,7 +209,7 @@ func TestHandleFacts_MissingContentType(t *testing.T) {
 
 func TestHandleFacts_WrongContentType(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -198,7 +225,7 @@ func TestHandleFacts_WrongContentType(t *testing.T) {
 
 func TestHandleFacts_MethodNotAllowed(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/facts", nil)
 	req = withMockTenant(req)
@@ -383,7 +410,7 @@ func TestWriteErrorJSON(t *testing.T) {
 
 func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	line1 := validFactJSON(t)
 	line2 := validFactJSON(t)
@@ -413,7 +440,7 @@ func TestHandleBatchFacts_ValidBatch(t *testing.T) {
 
 func TestHandleBatchFacts_MixedValid(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	validLine := validFactJSON(t)
 	body := validLine + "\n{bad json}\n"
@@ -440,7 +467,7 @@ func TestHandleBatchFacts_MixedValid(t *testing.T) {
 
 func TestHandleBatchFacts_EmptyBody(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/batch", strings.NewReader(""))
 	req = withMockTenant(req)
@@ -570,8 +597,8 @@ func TestSecurityHeadersPresent(t *testing.T) {
 
 	checks := map[string]string{
 		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":       "DENY",
-		"Cache-Control":         "no-store",
+		"X-Frame-Options":        "DENY",
+		"Cache-Control":          "no-store",
 	}
 	for header, want := range checks {
 		if got := rr.Header().Get(header); got != want {
@@ -605,7 +632,7 @@ func TestSecurityHeadersHSTSOnHTTPS(t *testing.T) {
 
 func TestHandleFacts_BodyTooLarge(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	// Create a body >1MB
 	bigBody := strings.Repeat("x", 1<<20+100)
@@ -621,7 +648,7 @@ func TestHandleFacts_BodyTooLarge(t *testing.T) {
 
 func TestHandleBatchFacts_PartialSuccess(t *testing.T) {
 	sink := setupSink(t)
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(t), testLearner())
 
 	validLine := validFactJSON(t)
 	body := validLine + "\n{\"bad\":\"json\",\"missing_fields\":true}\n" + validLine + "\n"
@@ -679,7 +706,7 @@ func TestHandleFacts_DLQEntryWritten(t *testing.T) {
 	}
 	defer sink.Close()
 
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(t), testLearner())
 
 	// Send an invalid fact (missing required fields)
 	invalidJSON := `{"event_id": "not-a-uuid", "service": ""}`
@@ -723,7 +750,7 @@ func TestHandleFacts_DLQEntryWritten(t *testing.T) {
 
 func TestHandleFacts_RequestIDInResponse(t *testing.T) {
 	sink := setupSink(t)
-	handler := logging.RequestIDMiddleware(http.HandlerFunc(handleFacts(sink, nil)))
+	handler := logging.RequestIDMiddleware(http.HandlerFunc(handleFacts(sink, nil, testRegistry(t), testLearner())))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -764,7 +791,7 @@ func TestMultiTenantAuth_ExpiredKeyRejected(t *testing.T) {
 	}
 
 	sink := setupSink(t)
-	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb))
+	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t), testLearner()))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -801,7 +828,7 @@ func TestMultiTenantAuth_ValidKeyAccepted(t *testing.T) {
 	}
 
 	sink := setupSink(t)
-	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb))
+	handler := multiTenantAuthMiddleware(tdb.APIKeys(), handleFacts(sink, tdb, testRegistry(t), testLearner()))
 
 	body := validFactJSON(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts", strings.NewReader(body))
@@ -848,7 +875,7 @@ func BenchmarkHandleFacts(b *testing.B) {
 	}
 	defer sink.Close()
 
-	handler := handleFacts(sink, nil)
+	handler := handleFacts(sink, nil, testRegistry(b), testLearner())
 	body := benchmarkFactJSON(b)
 
 	b.ResetTimer()
@@ -888,7 +915,7 @@ func BenchmarkHandleBatchFacts(b *testing.B) {
 	}
 	defer sink.Close()
 
-	handler := handleBatchFacts(sink, nil)
+	handler := handleBatchFacts(sink, nil, testRegistry(b), testLearner())
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -1067,5 +1094,207 @@ func TestShouldSampleTrace_Distribution(t *testing.T) {
 	ratio := float64(sampled) / float64(total)
 	if ratio < 0.3 || ratio > 0.7 {
 		t.Errorf("expected ~50%% sampling, got %.1f%% (%d/%d)", ratio*100, sampled, total)
+	}
+}
+
+// TestUploadedFactsLandWhereTheRollupReads is the regression guard for F-015.
+//
+// The bootstrap stack ran ingestion with --base-dir /app/data and the rollup
+// with -input-dir ./data/raw/request_facts, and produced no metrics at all,
+// because the local object store was rooted at <base-dir>/raw while the
+// destination key already began with "raw/". Facts went to
+// <base-dir>/raw/raw/request_facts/ and nothing read that path. Every service
+// reported healthy throughout.
+//
+// This test wires the store exactly as main() does and asserts the uploaded
+// bytes are readable at the path the rollup's own default flag points at, so
+// the two halves cannot drift apart again without a failure here.
+func TestUploadedFactsLandWhereTheRollupReads(t *testing.T) {
+	baseDir := t.TempDir()
+
+	store, err := storage.NewLocalStore(localStoreRoot(baseDir))
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bufferDir := filepath.Join(baseDir, "buffer")
+	ds := &DurableSink{
+		bufferDir:   bufferDir,
+		store:       store,
+		activeFiles: make(map[string]*os.File),
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+
+	topicDir := filepath.Join(bufferDir, "request_facts")
+	if err := os.MkdirAll(topicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	batchPath := filepath.Join(topicDir, "batch_f015.jsonl")
+	payload := []byte(`{"event_id":"0192f9a0-0000-7000-8000-000000000000"}` + "\n")
+	if err := os.WriteFile(batchPath, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadedAt := time.Date(2026, 9, 11, 14, 0, 0, 0, time.UTC)
+	ds.uploadFile("request_facts", batchPath, uploadedAt)
+
+	// The rollup's -input-dir default, resolved against this base directory.
+	rollupInputDir := filepath.Join(baseDir, "raw", "request_facts")
+
+	var found []string
+	err = filepath.WalkDir(rollupInputDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			found = append(found, path)
+		}
+		return nil
+	})
+	if err != nil {
+		// Report where the bytes actually went, so a failure names the bug
+		// instead of only saying the directory is missing.
+		var elsewhere []string
+		_ = filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+				rel, _ := filepath.Rel(baseDir, path)
+				elsewhere = append(elsewhere, rel)
+			}
+			return nil
+		})
+		t.Fatalf("rollup input dir %s unreadable: %v\n.jsonl files actually written under base dir: %v",
+			rollupInputDir, err, elsewhere)
+	}
+
+	if len(found) != 1 {
+		t.Fatalf("want exactly 1 uploaded fact file under %s, got %d: %v", rollupInputDir, len(found), found)
+	}
+
+	got, err := os.ReadFile(found[0])
+	if err != nil {
+		t.Fatalf("read uploaded file: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("uploaded content = %q, want %q", got, payload)
+	}
+
+	// The double-nested path is the specific shape of F-015. Assert it is gone
+	// rather than only asserting the correct path is present: a store rooted
+	// one level too deep still satisfies a "file exists somewhere" check.
+	doubled := filepath.Join(baseDir, "raw", "raw")
+	if _, err := os.Stat(doubled); err == nil {
+		t.Errorf("F-015 regression: %s exists; the object store is rooted one level too deep", doubled)
+	}
+}
+
+// ─── F-033: the orphan sweep must preserve the tenant prefix ───────────────
+
+// startupScan recovers batch files left in the buffer — the crash-recovery path.
+// It inferred the topic as filepath.Base of the parent directory, which yields
+// "request_facts" for a buffer laid out as buffer/<tenant-id>/request_facts/ and
+// silently drops the tenant.
+//
+// Two consequences, and the second is why this is not merely wasteful:
+//
+//  1. a file still on disk when the 5-minute sweep runs is uploaded twice, under
+//     two different keys, inflating any bytes-per-event figure measured from disk
+//     (GRVX-1003, GRVX-1004);
+//  2. a file that ONLY the sweep recovers lands under a prefix the multi-tenant
+//     rollup never scans, so those facts are durably stored and never read again.
+//     Silent loss, on the path that exists to prevent loss.
+//
+// The assertion is on the destination key, because that is the property: the
+// recovered object has to be somewhere the reader looks.
+func TestStartupScanRecoversUnderTheTenantPrefix(t *testing.T) {
+	bufDir := t.TempDir()
+	rawDir := t.TempDir()
+	store, err := storage.NewLocalStore(rawDir)
+	if err != nil {
+		t.Fatalf("local store: %v", err)
+	}
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
+	if err != nil {
+		t.Fatalf("NewDurableSink: %v", err)
+	}
+	t.Cleanup(func() { sink.Close() })
+
+	const tenant = "7ffced1b-b947-41c1-a484-3b5d8f736bd2"
+	// Exactly the layout rotation produces: bufferDir/<topicForTenant(...)>/
+	topicDir := filepath.Join(bufDir, topicForTenant(tenant, "request_facts"))
+	if err := os.MkdirAll(topicDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	orphan := filepath.Join(topicDir, "batch_20260912024509_orphan.jsonl")
+	if err := os.WriteFile(orphan, []byte("{\"event_id\":\"x\"}\n"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+
+	sink.startupScan()
+
+	keys, err := store.List(context.Background(), "raw")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("the sweep uploaded nothing; it is supposed to recover orphaned batches")
+	}
+
+	for _, k := range keys {
+		if !strings.Contains(k, tenant) {
+			t.Errorf("F-033 REGRESSION: the sweep recovered an orphaned batch to %q, which does\n"+
+				"not carry the tenant id %s.\n"+
+				"The multi-tenant rollup scans raw/<tenant-id>/request_facts/ only, so a fact\n"+
+				"recovered to this key is durably stored and never read again — silent loss on\n"+
+				"the crash-recovery path. The topic must be resolved relative to the buffer root,\n"+
+				"not as the parent directory's base name.", k, tenant)
+		}
+	}
+
+	// And exactly one copy: the duplicate-write half of F-033.
+	if len(keys) != 1 {
+		t.Errorf("F-033 REGRESSION: one orphaned file produced %d objects (%v); it must be\n"+
+			"uploaded once. Two keys for one batch is duplicate storage and it inflates every\n"+
+			"bytes-per-event figure measured from disk.", len(keys), keys)
+	}
+}
+
+// TestStartupScanStillWorksWithoutATenant covers the legacy single-tenant layout,
+// where the buffer is buffer/<topic>/ with no tenant segment. The relative
+// resolution must yield the bare topic there, not break it.
+func TestStartupScanStillWorksWithoutATenant(t *testing.T) {
+	bufDir := t.TempDir()
+	rawDir := t.TempDir()
+	store, err := storage.NewLocalStore(rawDir)
+	if err != nil {
+		t.Fatalf("local store: %v", err)
+	}
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
+	if err != nil {
+		t.Fatalf("NewDurableSink: %v", err)
+	}
+	t.Cleanup(func() { sink.Close() })
+
+	topicDir := filepath.Join(bufDir, topicForTenant("", "request_facts"))
+	if err := os.MkdirAll(topicDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(topicDir, "batch_legacy.jsonl"),
+		[]byte("{\"event_id\":\"x\"}\n"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+
+	sink.startupScan()
+
+	keys, err := store.List(context.Background(), "raw/request_facts")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Errorf("legacy single-tenant recovery produced %d objects under raw/request_facts (%v),"+
+			" want 1", len(keys), keys)
 	}
 }

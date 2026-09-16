@@ -1,0 +1,20 @@
+version: 1
+capabilities:
+  - id: free-thing
+    name: A free capability
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Everyone needs it.
+    paths: [pkg/boundary/]
+  - id: paid-thing
+    name: A paid capability
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: Only matters at organisational scale.
+    crippleware_test:
+      q1_team_of_ten_notices: false
+      q2_affects_accuracy: false
+      q3_worse_security: false
+      q4_previously_open: false
+      q5_only_reason_is_money: false
+    paths: [ee/placeholder/]

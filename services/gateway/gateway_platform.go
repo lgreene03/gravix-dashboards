@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -125,11 +128,6 @@ func (gw *gateway) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or revoked API key")
 		return
 	}
-	if planRank[info.Plan] < planRank["pro"] {
-		writeError(w, http.StatusPaymentRequired, "Public Metrics API requires Pro plan or above")
-		return
-	}
-
 	q := r.URL.Query()
 	metric := q.Get("metric")
 	fromStr := q.Get("from")
@@ -143,11 +141,11 @@ func (gw *gateway) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	validMetrics := map[string]string{
-		"error_rate":   "RequestMetricsMinute.errorRate",
-		"p50_latency":  "RequestMetricsMinute.p50LatencyMs",
-		"p95_latency":  "RequestMetricsMinute.p95LatencyMs",
-		"p99_latency":  "RequestMetricsMinute.p99LatencyMs",
-		"throughput":   "RequestMetricsMinute.requestCount",
+		"error_rate":  "RequestMetricsMinute.errorRate",
+		"p50_latency": "RequestMetricsMinute.p50LatencyMs",
+		"p95_latency": "RequestMetricsMinute.p95LatencyMs",
+		"p99_latency": "RequestMetricsMinute.p99LatencyMs",
+		"throughput":  "RequestMetricsMinute.requestCount",
 	}
 	cubeMeasure, ok := validMetrics[metric]
 	if !ok {
@@ -182,7 +180,7 @@ func (gw *gateway) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 
 	// Build a Cube.js REST API query.
 	cubeQuery := map[string]any{
-		"measures":    []string{cubeMeasure},
+		"measures": []string{cubeMeasure},
 		"timeDimensions": []map[string]any{{
 			"dimension":   "RequestMetricsMinute.timestamp",
 			"granularity": granularity,

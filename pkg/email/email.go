@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package email provides transactional email sending for Gravix.
 //
 // It defines a Sender interface with SMTP and no-op implementations.

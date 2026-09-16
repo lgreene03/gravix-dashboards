@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Chart.js helpers for consistent chart creation across dashboard pages.
 // Loaded before app.js — provides ChartHelpers global.
 

@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -27,7 +30,7 @@ import (
 var loginAttemptTracker sync.Map // email -> *loginAttempts
 
 const (
-	maxLoginAttempts    = 5
+	maxLoginAttempts   = 5
 	loginLockoutWindow = 15 * time.Minute
 )
 
@@ -445,12 +448,12 @@ func (gw *gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf(`{"name":%q,"email":%q}`, req.Name, req.Email), r.RemoteAddr)
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"token":                      token,
-		"tenant_id":                  tenant.ID,
-		"user_id":                    user.ID,
-		"email":                      user.Email,
-		"role":                       user.Role,
-		"plan":                       tenant.Plan,
+		"token":                       token,
+		"tenant_id":                   tenant.ID,
+		"user_id":                     user.ID,
+		"email":                       user.Email,
+		"role":                        user.Role,
+		"plan":                        tenant.Plan,
 		"email_verification_required": true,
 	})
 }

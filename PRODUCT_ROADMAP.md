@@ -1,8 +1,38 @@
-# Product Roadmap: Gravix
+# Product Roadmap: Gravix — Horizon 1 (Phases 0-6, complete)
 
 **Mission:** Provide the most reliable, low-cost service health observability platform for engineering teams.
 
-**Business model:** SaaS managed service — customers send HTTP request events via API, Gravix handles storage, aggregation, alerting, and dashboards.
+**Business model (Horizon 1):** SaaS managed service — customers send HTTP request events via API, Gravix handles storage, aggregation, alerting, and dashboards.
+
+> ## ⟶ Horizon 2 supersedes this document's business model
+>
+> **Current roadmap: [`docs/oss/20-roadmap-horizon-2.md`](docs/oss/20-roadmap-horizon-2.md)**
+>
+> Gravix is now an **open-core** project. The core is Apache-2.0 and free forever; a paid tier lives
+> under `ee/` (BUSL-1.1, source-available, converting to Apache-2.0 two years after each release).
+>
+> Everything below shipped and stands as the record of Horizon 1. Two things about it are now out
+> of date:
+>
+> 1. **The business model.** Horizon 2 gives the product away and sells organisational scale.
+>    Phases 7-12 are entirely Apache-2.0; the first line of paid code is written in month 12,
+>    after the free product is complete, proven and adopted.
+> 2. **Five features listed here as paid are becoming free.** The public metrics API, custom
+>    dashboards, scheduled exports, per-tenant rate limiting and the audit log each fail the
+>    Crippleware Test in [charter §7.3](docs/oss/00-open-core-charter.md) and return to the free
+>    tier under `GRVX-710`. Charging for the ability to read your own data, export it, or not be
+>    breached is the pattern the charter exists to prevent.
+>
+> **Accuracy note (SD-001).** Verification during Horizon 2 found that this document's Phase 4 and
+> Phase 6 entries describe plan gating that was never implemented. Only the public metrics API is
+> actually plan-gated in code; custom dashboards, scheduled exports, the audit log and rate
+> limiting are not, and `requirePlan` has no non-test callers. Read the gating claims below as
+> intent, not as description. See [`docs/oss/spec-defects.md`](docs/oss/spec-defects.md).
+>
+> Governing documents: [charter](docs/oss/00-open-core-charter.md) ·
+> [competitive thesis](docs/oss/01-competitive-thesis.md) ·
+> [agent roster](docs/oss/10-agent-roster.md) · [loops](docs/oss/11-agent-loops.md) ·
+> [goal tree](docs/oss/12-goal-tree.md) · [specs](docs/oss/specs/SPEC-INDEX.md)
 
 ---
 
@@ -451,3 +481,12 @@ Phase 2 (alerting for integration channels), Phase 4 (Enterprise tier, RBAC for 
 | 18 | Phase 6 complete | $25,000-40,000 | $200-530/mo | AWS EKS (± regions) |
 
 *Bootstrap stack (Phase 0-3) runs on a cheap VPS with DuckDB. Migrate to AWS EKS at ~Phase 4 when Enterprise customers justify the cost (~$3K+ MRR). All infra costs are single-region unless noted.*
+
+---
+
+## What comes next
+
+Horizon 1 ended here. Horizon 2 (Phases 7-15) is in
+**[`docs/oss/20-roadmap-horizon-2.md`](docs/oss/20-roadmap-horizon-2.md)** — roughly 67 person-weeks
+across nine phases, starting with the fact that this repository currently has **no LICENSE file**
+and is therefore legally unusable by anyone. That is `GRVX-701`, and everything else is blocked on it.

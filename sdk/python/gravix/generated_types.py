@@ -1,3 +1,6 @@
+# Copyright 2026 The Gravix Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Auto-generated from services/gateway/openapi.json
 Do not edit manually — run scripts/generate-sdk-types.sh

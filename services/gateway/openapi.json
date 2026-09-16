@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "HTTP observability platform — ingestion and gateway APIs",
     "contact": { "email": "support@gravix.io" },
-    "license": { "name": "MIT" }
+    "license": { "name": "Apache-2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0" }
   },
   "servers": [
     { "url": "http://localhost:8090", "description": "Ingestion (local)" },

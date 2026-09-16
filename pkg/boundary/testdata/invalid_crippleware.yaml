@@ -1,0 +1,14 @@
+version: 1
+capabilities:
+  - id: should-be-core
+    name: Gated despite failing the test
+    placement: ee
+    charter_ref: "§2.2"
+    rationale: Someone wanted to sell it.
+    crippleware_test:
+      q1_team_of_ten_notices: true
+      q2_affects_accuracy: false
+      q3_worse_security: true
+      q4_previously_open: false
+      q5_only_reason_is_money: true
+    paths: [ee/placeholder/]

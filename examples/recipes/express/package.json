@@ -1,0 +1,15 @@
+{
+  "name": "gravix-recipe-express",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gravix instrumentation recipe for Express",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@gravix/sdk": "file:../../../sdk/node",
+    "express": "^4.21.2"
+  }
+}
