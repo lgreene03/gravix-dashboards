@@ -3497,3 +3497,111 @@ the aggregate. One wrong gate, three red checks.
 `go test -tags=slow ./... -race -count=1` on go1.24.9 — the exact failing version — passes clean
 locally in 6m0s, no failures and no data races. The opt-in fix covers both jobs, because it stops the
 test running anywhere that did not ask for it.
+
+---
+
+## SD-052 — GRVX-1103's mandated table is wrong twice, and one of the errors is 144×
+
+**Found by:** `senior-engineer` executing GRVX-1103
+**Affects:** GRVX-1103 §5.1, §6 step 1, §2, §7 AC-4
+**Severity:** high — §6 step 1 requires publishing the table "verbatim", and verbatim is a guide
+whose queries do not run and whose headline number is wrong by two orders of magnitude
+**Status:** partial; AC-3 and AC-4 proven plus two guards beyond them, AC-1 and AC-2 need Docker and
+a live Trino
+
+### The spec was not published verbatim, on purpose
+
+§6 step 1 says `sql-vs-promql.md` "contains the table from §5.1 verbatim". It does not. The table as
+written has two independent defects, and this project's central claim is correctness — a guide that
+teaches PromQL users the wrong SQL would undermine the thing it exists to support.
+
+### Defect 1: every query fails to run
+
+All four SQL examples filter `WHERE event_day = CURRENT_DATE`. `event_day` is declared
+`VARCHAR` (`storage/trino/init.sql:44`), and Trino does not implicitly cast a varchar to a date in a
+comparison — it raises a type error. None of the four queries execute as written.
+
+The project's own working Trino SQL already had the right idiom:
+`transforms/iceberg_sync/main_test.go:61` asserts
+`DELETE FROM ... WHERE event_day = '2026-09-16'` — a quoted string literal. The guide now uses
+`CAST(current_date AS varchar)`, which gets the same shape without hardcoding a date.
+
+### Defect 2: a `[5m]` rate computed over the whole day, measured at 144×
+
+The request-rate row pairs `rate(http_requests_total[5m])` with:
+
+```sql
+SELECT service, SUM(request_count) / 300.0 AS rps
+FROM gravix.raw.request_metrics_minute
+WHERE event_day = CURRENT_DATE GROUP BY service
+```
+
+That sums **every minute bucket of the day** and divides by 300 seconds. A `[5m]` window is a
+filter, and there is no filter here. The result is the day's total inflated by
+elapsed-minutes-over-five.
+
+Measured rather than asserted — 720 one-minute buckets of 60 requests each, a true rate of 1 rps:
+
+| | rps |
+|---|---|
+| The spec's query | **144.0** |
+| The true 5-minute rate | 1.0 |
+| Actual | 1.0 |
+
+144× at midday, 288× by end of day. Same units, same shape, plausible-looking, wrong. The
+per-endpoint row has the identical error.
+
+The correction filters `bucket_start` to the window. §6 step 1 already required a paragraph
+explaining that `bucket_start` is a `VARCHAR` so range filters compare against strings in that exact
+format — the spec explained the mechanism the fix needs and then did not use it in its own examples.
+
+### Two more corrections the spec did not ask for
+
+**The error-ratio row returned per-minute rows, not a ratio.** It selected the `error_rate` column
+for every bucket in the day. The guide computes `SUM(error_count) / NULLIF(SUM(request_count), 0)`
+instead, because averaging per-minute rates weights a quiet minute with one failure out of two as
+heavily as a busy minute with a thousand successes. That is the same unweighted-mean error the
+project documents for percentiles, in a second place.
+
+**`bucket_start` is UTC; `current_timestamp` is not.** A window filter without
+`AT TIME ZONE 'UTC'` runs happily and is wrong by the reader's offset — worse than an error, because
+nothing announces it. Every example converts explicitly.
+
+### AC-4 was implemented against the corrected table
+
+`TestSQLPromQLGuideHasAllRows` asserts all five intents and their PromQL, which is what AC-4 asks.
+It also guards both defects, and the guards are scoped to the `<pre>` blocks — the page *documents*
+`event_day = current_date` as the thing not to do, and a check that cannot tell an example from a
+warning about that example would forbid explaining it.
+
+**The first version of the window guard was unsound.** It counted `/ 300.0` and `bucket_start >=`
+across the whole page and compared totals. Two divisions against three filters passes even after a
+query that needs a window loses one, because another query has a spare. Reintroducing the defect to
+test the guard is what exposed it; it now checks each query independently. A guard that has not been
+run against the defect it describes is a guess.
+
+### What is not proven
+
+AC-1 and AC-2 boot Metabase and Superset and query through each tool's own API. Both need Docker and
+a running Trino, and both gate themselves — behind `BI_CONNECTIONS_E2E=1` as well as a Docker probe,
+per SD-051, where a Docker-only gate let a container test into a 120-second budget.
+
+The corrected SQL is reasoned from the declared column types and the project's own working queries.
+It has **not** been executed against a live Trino, and `sql-vs-promql.md` says so in its own proof
+table rather than leaving a reader to assume otherwise. The 144× figure, by contrast, is measured.
+
+### Minor: §2's line references are stale
+
+§2 cites `transforms/request_metrics_minute/main.go:75-87` for the pre-computed percentile fields.
+Those lines are `acquireLock`. The columns are real and declared in `storage/trino/init.sql:36-48`;
+only the pointer is wrong.
+
+### Note: the skip ratchet is now fully tight at 29
+
+SD-051 cut `skipBaseline` from 29 to 23 by collapsing eight inline DuckDB gates into one helper. This
+spec spent that headroom and more: the count is back to **29 against a baseline of 29**, so the gate
+passes with nothing to spare and the next skip added anywhere in the repository fails it.
+
+That is the ratchet working, not a problem to route around. But it does mean whoever adds the next
+Docker- or stack-gated test has to create headroom first, the way SD-051 did, rather than nudging the
+constant up. The constant going up is the one outcome the gate exists to prevent.

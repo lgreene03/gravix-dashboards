@@ -538,3 +538,70 @@ func TestPluginBuildCommandProducesAnExecutableGrafanaCanFind(t *testing.T) {
 		}
 	}
 }
+
+// GRVX-1103 AC-4. The guide has to carry all five PromQL intents with a SQL
+// equivalent each, and — added beyond AC-4 — must not reintroduce either defect
+// the spec's own draft table shipped with. See SD-052.
+func TestSQLPromQLGuideHasAllRows(t *testing.T) {
+	guide := repoFile(t, "docs-site", "docs", "sql-vs-promql.md")
+
+	// AC-4: the five intents from §5.1, each with its PromQL.
+	for _, row := range []struct{ intent, promql string }{
+		{"Request rate", "rate(http_requests_total[5m])"},
+		{"p95 latency", "histogram_quantile(0.95,"},
+		{"Error ratio", `status=~"5.."`},
+		{"Per-endpoint breakdown", "sum by (path)"},
+		{"Raw request inspection", "request_facts"},
+	} {
+		if !strings.Contains(guide, row.intent) {
+			t.Errorf("guide is missing the %q row", row.intent)
+		}
+		if !strings.Contains(guide, row.promql) {
+			t.Errorf("guide is missing the PromQL for %q: %s", row.intent, row.promql)
+		}
+	}
+
+	// Only the SQL, not the prose. The guide explains the type error below as
+	// the thing not to do, and a check that cannot tell an example from a
+	// warning about that example would forbid documenting it.
+	var blocks []string
+	for _, m := range regexp.MustCompile(`(?s)<pre>(.*?)</pre>`).FindAllStringSubmatch(guide, -1) {
+		blocks = append(blocks, m[1])
+	}
+	queries := strings.Join(blocks, "\n")
+	if queries == "" {
+		t.Fatal("no <pre> SQL blocks found in the guide; if the table format changed, " +
+			"move these checks with it")
+	}
+
+	// Defect 1: event_day is a VARCHAR. Comparing it to a bare current_date is
+	// a type error Trino rejects, so a query written that way does not run at
+	// all. The project's own working SQL quotes the literal
+	// (transforms/iceberg_sync/main_test.go:61).
+	if regexp.MustCompile(`event_day\s*=\s*(?i:current_date)\b`).MatchString(queries) {
+		t.Error("a query compares event_day directly to current_date; event_day is a VARCHAR " +
+			"and Trino rejects the comparison. Cast it: CAST(current_date AS varchar)")
+	}
+
+	// Defect 2: a PromQL [5m] window is a filter. Dividing by 300 without one
+	// reports the day's total inflated by elapsed-minutes-over-five — measured
+	// at 144x by midday.
+	//
+	// Checked per query, not by counting both across the page. Counting passes
+	// when a query that needs a window loses one while some other query still
+	// has a spare — which is exactly what happened when this guard was first
+	// written and then tested by reintroducing the defect.
+	for i, q := range blocks {
+		if strings.Contains(q, "/ 300.0") && !strings.Contains(q, "bucket_start >=") {
+			t.Errorf("query %d divides by 300.0 with no bucket_start lower bound; a rate without "+
+				"a window is the day's total, not a rate:\n%s", i+1, q)
+		}
+	}
+
+	// The column is UTC and current_timestamp is not. Dropping the conversion
+	// leaves a query that runs and is wrong by the reader's offset.
+	if strings.Contains(queries, "bucket_start >=") && !strings.Contains(queries, "AT TIME ZONE 'UTC'") {
+		t.Error("the guide filters bucket_start without converting to UTC; bucket_start is UTC " +
+			"and current_timestamp carries the session time zone")
+	}
+}

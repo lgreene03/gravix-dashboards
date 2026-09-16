@@ -48,6 +48,10 @@ const sidebars = {
         // fails TestBoardIsInTheSidebar.
         'grafana-plugin',
         'grafana-plugin-publishing',
+        // GRVX-1103: the PromQL translation table and the BI-tool connection
+        // guide. Orphaned pages fail TestBoardIsInTheSidebar.
+        'sql-vs-promql',
+        'connect-bi-tools',
         'migrating',
         // The exit path out of Gravix Cloud (GRVX-1403). Added here beyond that
         // spec's file list, because TestBoardIsInTheSidebar fails on any page in
