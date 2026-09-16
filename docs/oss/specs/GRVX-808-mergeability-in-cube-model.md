@@ -51,9 +51,9 @@ correctly aggregated as non-aggregatable rather than silently approximating it.
 
 | Path | Purpose |
 |---|---|
-| `services/gateway/percentile_handler.go` | HTTP endpoint merging sketches for a window |
-| `services/gateway/percentile_handler_test.go` | Tests |
-| `cube/model/schema/RequestMetricsMinute.test.js` | Model assertions |
+| `pkg/gatewaycore/percentile_handler.go` | HTTP endpoint merging sketches for a window |
+| `pkg/gatewaycore/percentile_handler_test.go` | Tests |
+| `tests/cube/RequestMetricsMinute.test.js` | Model assertions |
 
 ### 4.2 Files to modify
 
@@ -265,7 +265,7 @@ no max over percentiles
 
 # 5. All four Cube configurations
 --- PASS: TestAllFourCubeConfigs (0.00s)
-$ node --test cube/model/schema/RequestMetricsMinute.test.js
+$ node --test tests/cube/RequestMetricsMinute.test.js
 # tests 14 / # pass 14 / # fail 0
 
 # 6. Latency budget

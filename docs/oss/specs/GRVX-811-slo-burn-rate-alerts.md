@@ -58,8 +58,8 @@ evaluable from batch-aggregated facts on a ≥1-minute cadence.
 | `pkg/slo/slo_test.go` | Tests |
 | `pkg/slo/window.go` | Multi-window burn-rate evaluation |
 | `pkg/slo/window_test.go` | Tests |
-| `services/gateway/slo_handler.go` | SLO CRUD and status endpoints |
-| `services/gateway/slo_handler_test.go` | Tests |
+| `pkg/gatewaycore/slo_handler.go` | SLO CRUD and status endpoints |
+| `pkg/gatewaycore/slo_handler_test.go` | Tests |
 | `pkg/tenantdb/migrations/sqlite/000008_slo.up.sql` | `slos` table |
 | `pkg/tenantdb/migrations/postgres/000008_slo.up.sql` | Same for Postgres |
 
@@ -282,7 +282,7 @@ go test ./pkg/slo/... -run 'TestLatencySLODisclosesExactness|TestAvailabilitySLO
 
 # 4. Charter: SLOs are free
 go test ./services/gateway/... -run TestSLORoutesHaveNoPlanGate -v
-grep -n "requirePlan" services/gateway/slo_handler.go || echo "no plan gate on SLO routes"
+grep -n "requirePlan" pkg/gatewaycore/slo_handler.go || echo "no plan gate on SLO routes"
 # expect: PASS; no plan gate on SLO routes
 
 # 5. Migrations both engines
@@ -332,7 +332,7 @@ coverage: 96.4% of statements          # spec asks for >= 95%
 # 4. Charter: SLOs are free
 --- PASS: TestSLORoutesHaveNoPlanGate
 --- PASS: TestNoPlanGatingInGateway
-$ grep -n "requirePlan" services/gateway/slo_handler.go || echo "no plan gate on SLO routes"
+$ grep -n "requirePlan" pkg/gatewaycore/slo_handler.go || echo "no plan gate on SLO routes"
 no plan gate on SLO routes
 
 # 5. Migrations

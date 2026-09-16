@@ -48,8 +48,8 @@ state, and a copyable recompute command.
 
 | Path | Purpose |
 |---|---|
-| `services/gateway/lineage_handler.go` | `GET /api/v1/lineage` |
-| `services/gateway/lineage_handler_test.go` | Tests |
+| `pkg/gatewaycore/lineage_handler.go` | `GET /api/v1/lineage` |
+| `pkg/gatewaycore/lineage_handler_test.go` | Tests |
 | `dashboards/lib/lineage-panel.js` | The panel component |
 | `dashboards/lib/lineage-panel.test.js` | Tests |
 

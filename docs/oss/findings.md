@@ -2866,3 +2866,91 @@ nobody checks.
 `tests/devenv/suite_test.go` names `postgres || all` as a known exception with this finding's
 number, and fails on any **new** build tag that no suite opts into. A second file drifting out of
 both suites is now a red build; this one is a recorded decision waiting on a person.
+
+---
+
+## F-044 — nine specs were marked `done` in a register nothing was checking
+
+**Found by:** `senior-engineer` executing GRVX-1303, when a routine `sed` to mark the spec done
+did not match — because it was already marked `partial`, before a line of it had been written
+**Affects:** `docs/oss/spec-status.json`, `docs-site/docs/roadmap.md`, `GOVERNANCE.md`
+**Severity:** high — it is a published claim that work happened
+**Status:** corrected, and now audited on every commit
+
+### What the register said
+
+`docs/oss/spec-status.json` is described in `scripts/gen_roadmap_board.py` as "the register of what
+has actually been executed". It listed **57** specs as `done`. Nine of them had no implementation
+at all:
+
+| Spec | What it claims was done | What exists |
+|---|---|---|
+| `GRVX-1306` | SCIM v2 provisioning and directory sync | `ee/identity/` — 8 of 8 §4.1 files absent |
+| `GRVX-1309` | Seasonal forecasting and capacity projection | `ee/intelligence/` — 8 of 8 absent |
+| `GRVX-1310` | Custom domains and signed embeds | `ee/whitelabel/` — 8 of 8 absent |
+| `GRVX-1311` | Continuous warehouse sync | `ee/warehouse/` — 9 of 9 absent |
+| `GRVX-1312` | Pro packaging and the free-tier page | `ee/packaging/` — 6 of 6 absent |
+| `GRVX-1401` | Build provenance and attestation | `ee/cloud/provenance/` — 8 of 8 absent |
+| `GRVX-1407` | SOC2 control mapping and evidence | `ee/soc2/` — 7 of 7 absent |
+| `GRVX-1501` | LTS branches and the backport tool | `docs/oss/lts-policy.md`, `scripts/backport.sh`, `pkg/version/` — 5 of 5 absent |
+| `GRVX-1503` | Succession and custody | `docs/oss/succession.md` — 3 of 3 absent |
+
+Until this commit, `ee/` contained a licence, a licence header, a README and one empty placeholder
+package. Five of those nine specs claim to have put code in it.
+
+`GRVX-1303` was marked `partial` before it was started, which is what surfaced this: an attempt to
+change its status from `planned` found no `planned` to change.
+
+### What it cost
+
+`GOVERNANCE.md` told a reader that *"Where the project's identity lives … and who can recover each
+is recorded in `docs/oss/succession.md` (GRVX-1503)"*. There is no such file. Somebody evaluating
+whether it is safe to depend on this project was being pointed at a succession plan that does not
+exist — the single most consequential place to be wrong, given the bus factor is 1.
+
+`gen_roadmap_board.py` renders each spec's status onto the published roadmap for whichever phase is
+current. Phase 13 had not yet become current, so the false statuses had not reached the docs site
+when this was found. That is luck, not a control.
+
+### Why it happened
+
+Nothing was checking. The register is maintained by hand — the generator's own docstring says so,
+and gives a good reason: reading status from git would make the board depend on a clone with
+history, which the OSS build copy does not have. A hand-maintained register drifts. That is not a
+character flaw in whoever maintained it; it is what hand-maintained registers do, and the only fix
+that works is a machine that reads it.
+
+### What changed
+
+`scripts/audit_spec_status.py` checks the register against the tree. For every spec marked `done`,
+every path in its §4.1 "Files to create" table must exist. It also fails when a spec has a status
+but no spec file, or a spec file but no status — an omission defaults to `planned` on the board,
+which hides it.
+
+- The nine statuses are now `planned`, which is what they are.
+- `GRVX-808`, `GRVX-809` and `GRVX-811` were genuinely done but named
+  `services/gateway/*_handler.go`, which `GRVX-1302` moved to `pkg/gatewaycore/` earlier in this
+  same branch; their §4.1 tables now name where the code is. `GRVX-808` also named
+  `cube/model/schema/RequestMetricsMinute.test.js` for a file that has always been at
+  `tests/cube/`.
+- `GRVX-710` and `GRVX-806` were executed differently from their file lists for reasons already on
+  record. They have entries in `docs/oss/spec-status-exceptions.json`, each naming the exact paths
+  and a reason. The audit fails on an exception with no reason, on a waived path that now exists,
+  and on one the spec does not actually list, so the file cannot quietly become the place
+  inconvenient findings go.
+- `make spec-status-check` runs in CI beside `make roadmap-check`.
+- `TestEverySpecMarkedDoneHasItsFiles` runs it in the Go suite, and
+  `TestSpecStatusAuditCatchesAFalseDone` proves the audit can fail — against a copy of the
+  register, never the committed one.
+- `GOVERNANCE.md` now says the succession plan is not written yet, and names the spec that would
+  write it.
+
+The honest count is **48** specs done, not 57.
+
+### The general shape of it
+
+This is the third time on this branch that something passed only because nothing was looking: the
+plugin host's hang under `make test-oss`, the release-notes test that assumed a deep clone, and
+now a register of completed work that no code read. Each was found by accident. The pattern worth
+naming is not "be more careful" — it is that a claim nothing can check is a claim that will
+eventually be wrong, and the cheapest moment to add the check is when writing the claim.

@@ -82,8 +82,11 @@ The Gravix name and logo are reserved. Forks are welcome and may not use the nam
 
 ## Succession
 
-Where the project's identity lives — the organisation, domains, registries, signing identity — and
-who can recover each is recorded in `docs/oss/succession.md` (`GRVX-1503`).
+Where the project's identity lives — the organisation, domains, registries and signing identity —
+and who can recover each **is not yet written down**. `GRVX-1503` specifies `docs/oss/succession.md`
+and it has not been executed; the register said otherwise until F-044 checked it. Until it exists,
+succession depends on one person's accounts, which is the same bus factor
+[`MAINTAINERS.md`](MAINTAINERS.md) reports and no better for being mentioned here.
 
 ## Transparency
 

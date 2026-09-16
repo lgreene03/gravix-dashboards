@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check relnotes bench build-ee spec-status-check
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -164,6 +164,11 @@ roadmap-board: ## Regenerate docs-site/docs/roadmap.md
 
 roadmap-check: ## Fail if the published roadmap is stale
 	python3 scripts/gen_roadmap_board.py --check
+
+# A spec marked done whose files do not exist is a published claim that work
+# happened. The register is maintained by hand, so it is checked by machine.
+spec-status-check: ## Verify every spec marked done has the files its §4.1 names
+	python3 scripts/audit_spec_status.py
 
 # --- Release notes (GRVX-1209) --------------------------------------------
 # Crediting people is the part that must not depend on somebody remembering, so

@@ -2344,3 +2344,120 @@ Each is a consequence of the move rather than a decision:
 
 `docker-compose.yml`, every `Dockerfile` and `deploy/gravix/**` show zero diff, as §4.3 requires:
 `go build -o bin/gateway ./services/gateway/` still produces the same binary from the same path.
+
+---
+
+## SD-039 — GRVX-1303 names a core type that does not exist, and a route that does not either
+
+**Found by:** `pro-engineer` executing GRVX-1303
+**Affects:** GRVX-1303 §5.1, §5.2, §5.3, §6.1, §8 command 6, AC-10, AC-11, §9
+**Severity:** low — none of it touches the guarantee the spec exists for; every gap resolved
+without editing a core file, which §4.3 forbids
+**Status:** executed; one DoD item outstanding and named below
+
+### `license.Result` is not a type
+
+§5.1's signature is `Evaluate(v license.Result, now time.Time) State`. `pkg/license`
+(`GRVX-1301`) has no `Result`: verification returns `(*License, error)`. Adding one would be an
+edit to core, which §4.3 forbids this spec from making and §10 says to escalate rather than do.
+
+**Resolution:** `degrade.Result{License *license.License; Err error}` carries the pair. `Evaluate`
+keeps §5.1's shape, core keeps its API, and nothing was escalated because nothing was missing —
+the spec named a type that was never specified rather than a capability that is absent.
+
+### `StateAbsent` is not "n/a" for an `ee/` write
+
+§5.2's table marks every `ee/` row "n/a" in `StateAbsent`, reasoning that an OSS build has no `ee/`
+configuration to read or write. The case it does not cover is the one this spec creates: the
+**Enterprise binary started with no licence at all**. It has `ee/` code and no entitlement, and it
+must not be more permissive than an expired licence.
+
+**Resolution:** `Guard` refuses writes in `StateAbsent` as well, with `ErrUnlicensed` rather than
+`ErrReadOnly`. §5.3's text says "licence expired", which in this state would be false, and an error
+message that misstates why it fired is worse than a second variable. Everything else about
+`StateAbsent` is unchanged: silent, readable, exportable, scheduled jobs continue.
+
+### `/api/gateway/exports` is not a registered route
+
+§5.3's payload names `"export_endpoint": "/api/gateway/exports"`. The gateway registers
+`/api/gateway/export`; the plural appears only with a further segment
+(`/api/gateway/exports/scheduled`). A refusal that says "your configuration is exportable" and then
+points at a 404 undoes the sentence it appears in.
+
+**Resolution:** `degrade.ExportEndpoint = "/api/gateway/export"`, the route that exists, pinned by
+`TestExportEndpointIsRegistered` which reads the gateway's own mux registrations. The collision
+between the two spellings is **SD-029**, which is open and needs an owner rather than an
+implementer; this does not resolve it, it just refuses to publish a dead link while it is open.
+
+### §6.1's clock-skew row is ambiguous
+
+> Licence clock skew beyond 24h | treat as valid, log once in `ee/` only | `licence expiry is <d> in
+> the past relative to system clock; check NTP`
+
+"Treat as valid" and "expiry in the past" describe different conditions, and the row does not say
+which observation triggers it. Three readings are available and the spec does not choose.
+
+**Resolution:** the reading under which the message is literally true and the customer is never the
+one who pays for an ambiguity. `ClockSkewTolerance = 24h`: a licence whose expiry is less than a day
+in the past is still `StateLicensed`, with no notice. Past that, `SkewWarning` returns the §6.1
+message for the caller to log — `Reporter` logs it at most once per process, because a licence
+checked on a timer would otherwise produce that line every minute forever. The tolerance moves only
+the `licensed`→`grace` boundary; `read_only` still begins exactly `GracePeriod` after the recorded
+expiry, so AC-6's fourteen days are fourteen days.
+
+### §8's sixth command cannot return 0
+
+```bash
+grep -rniE "upgrade now|go pro|unlock|start free trial" ee/ dashboards/ | grep -c .
+# expect: 0
+```
+
+It returns **4** on a tree that contains no upsell whatsoever:
+
+| Hit | What it is |
+|---|---|
+| `ee/degrade/degrade_test.go` ×2 | `TestNoNagUI`'s own pattern — the assertion is the match |
+| `dashboards/lib/lineage-panel.test.js` | the dashboard's existing `TestNoUpsellInDashboard` pattern list |
+| `dashboards/lib/tco.test.js` | `"Go produced no ..."`, a benchmark assertion that contains "go pro" as a substring |
+
+A check phrased so that naming the forbidden phrase is itself a violation can only be satisfied by
+not checking. And the bare terms are too crude: charter §7.4 forbids the *invitation* to pay, not
+every occurrence of the word "unlock".
+
+**Resolution:** `TestNoNagUI` uses the call-to-action patterns the dashboard's own test already
+uses — `upgrade (to|now|your)`, `go pro\b`, `unlock (this|these|with|by)`, `premium feature`,
+`start (your) free trial`, `available on (the) (pro|scale|enterprise)` — over every file in `ee/`
+and `dashboards/` rather than the five the dashboard test lists, with the two self-referential
+files named and excused. The corrected command, which does return 0:
+
+```bash
+grep -rniE "upgrade now|go pro\b|unlock (this|these|with|by)|start free trial" ee/ dashboards/ \
+  | grep -v -e 'degrade_test.go' -e 'lineage-panel.test.js' | grep -c .
+```
+
+### AC-10 and AC-11 as literally written
+
+**AC-10** is `git diff --name-only` showing nothing outside `ee/`. That is true of any committed
+tree, so as a test it asserts nothing a day later. It was *also* verified as stated before the
+commit — `git status --porcelain | grep -v '^ee/'` returned 0, and the spec's commit contains only
+`ee/degrade/` — and `TestNoCoreFilesModified` now asserts the durable form: no Go file outside `ee/`
+names `ee/degrade`, which is the property that would actually break `make build-oss`.
+
+**AC-11** is "core builds and tests green with `ee/` deleted". Running `build_oss.sh` from inside a
+unit test would put a minute of tree-copying and a full rebuild into the fast suite, whose budget is
+five minutes and whose current time is 2m39s. `TestCoreBuildsWithoutEE` instead runs `go list -deps`
+over the OSS binaries and fails if any dependency is under `ee/`, and asserts that CI still runs
+`make build-oss` and `make test-oss` — which do prove it by deletion, on every commit.
+
+### Files, and the one DoD item that is not done
+
+§4.1 lists two test files. AC-1's proof runs the entire core pipeline five ways and is large enough
+to be its own file, `ee/degrade/core_unaffected_test.go`. Everything is still under `ee/degrade/`.
+
+§9's *"Expiry demonstrated against a live instance with ingestion running throughout"* is **not
+done**, and cannot be yet: there is no `ee/` feature that degrades. `GRVX-1302` shipped the
+extension-point skeleton with zero registrants and `GRVX-1303` ships the guard with nothing to
+guard, so a live instance would demonstrate a licence expiring and nothing changing — which is the
+right outcome but not a demonstration of it. `TestCoreUnaffectedInEveryState` covers the same
+guarantee in process today. The live demonstration belongs to **GRVX-1304**, the first spec that
+puts a real capability behind the guard.
