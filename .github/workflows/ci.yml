@@ -338,6 +338,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Build provenance (GRVX-1401). id-token mints the OIDC token the
+      # attestation is signed with; attestations writes it. Both are scoped to
+      # this job, so nothing else in the workflow can sign anything.
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -377,6 +382,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -386,6 +392,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Signed, public evidence of what this image was built from: which commit,
+      # which workflow, which repository. G8.1 — "Cloud runs the same OSS core,
+      # no private fork" — stops being an assertion anybody has to take on trust
+      # and becomes `gh attestation verify oci://<image> --owner lgreene`, which
+      # a stranger can run.
+      #
+      # This is a core change, not a commercial one: every self-hoster pulling
+      # these images gets the same evidence, and it keeps working with ee/
+      # deleted. Only the tooling Gravix Cloud runs against its own images is
+      # in ee/ (GRVX-1401 §4.1a).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   # ─── Trivy Vulnerability Scanning ───
   image-scan:
