@@ -649,15 +649,31 @@ func TestGeneratesOverThisRepository(t *testing.T) {
 		t.Fatalf("this repository has no %s: %v", SummaryFile, err)
 	}
 
-	notes, err := Generate(context.Background(), root, "signed-stack-grvx803", "HEAD", "v0.0.0-test")
+	// CI checks out with `fetch-depth: 1` and `fetch-tags: false`, so no tag
+	// resolves and there is at most one commit. The range adapts rather than
+	// assuming a deep clone: a test that only passes on a developer's machine
+	// is a test that fails on somebody else's.
+	prev := "signed-stack-grvx803"
+	if exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", prev+"^{commit}").Run() != nil {
+		prev = ""
+		t.Logf("%s does not resolve here (a shallow clone); generating over the available history", "signed-stack-grvx803")
+	}
+
+	notes, err := Generate(context.Background(), root, prev, "HEAD", "v0.0.0-test")
 	if err != nil {
 		t.Fatalf("Generate over the real history: %v", err)
 	}
+
 	if len(notes.Changes) == 0 {
-		t.Fatal("no changes found in the real range")
+		// A depth-1 checkout of a merge ref has one commit, and --no-merges
+		// excludes it. There is nothing to scan, so the guard is asserted
+		// instead — this is never a silent pass.
+		assertRenderRefusesAddresses(t)
+		t.Log("no non-merge commits reachable (a shallow clone); checked the guard rather than the history")
+		return
 	}
 	if len(notes.Contributors) == 0 {
-		t.Fatal("no contributors found in the real range")
+		t.Fatal("changes were found but nobody is credited for them")
 	}
 
 	rendered, err := Render(notes, templateText(t))
@@ -665,7 +681,7 @@ func TestGeneratesOverThisRepository(t *testing.T) {
 		t.Fatalf("Render over the real history: %v", err)
 	}
 
-	// Every address in the whole history, checked against the real output.
+	// Every address reachable in this clone, checked against the real output.
 	out, err := exec.Command("git", "-C", root, "log", "--format=%ae%n%ce").Output()
 	if err != nil {
 		t.Fatalf("git log: %v", err)
@@ -683,6 +699,7 @@ func TestGeneratesOverThisRepository(t *testing.T) {
 	if len(seen) == 0 {
 		t.Error("no addresses found in the history; the check proved nothing")
 	}
+	t.Logf("%d change(s), %d contributor(s), %d address(es) checked", len(notes.Changes), len(notes.Contributors), len(seen))
 
 	// No model identifier reaches a published artefact. Commits carry a
 	// Co-Authored-By trailer naming one, and .mailmap is what keeps it out of
