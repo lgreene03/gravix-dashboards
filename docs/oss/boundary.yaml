@@ -558,8 +558,11 @@ capabilities:
       q4_previously_open: false
       q5_only_reason_is_money: false
     paths:
-      - ee/placeholder/
+      - ee/warehouse/
     note: >-
-      Not yet implemented. GRVX-1311 builds it under ee/warehouse/; path updates
-      then. Q5 is `no` because one-shot export stays core and complete
-      (data-export): what is sold is the scheduling, not the data.
+      Built by GRVX-1311. Q5 is `no` because one-shot export stays core and
+      complete (data-export): what is sold is the scheduling and the revision
+      reconciliation, not the data. The package's own README opens by naming the
+      free alternative, and its acceptance test compares what it would send
+      against what `gravix export` produces, row for row — which is how F-046 was
+      found.
