@@ -26,9 +26,9 @@ const repoRoot = "../../.."
 // than in review.
 //
 // GRVX-1304 through GRVX-1311 each raise wantEEImports by exactly one.
-// ee/fleet (GRVX-1307) is the first.
+// ee/fleet (GRVX-1307) and ee/intelligence (GRVX-1309) are the first two.
 func TestEEGatewayBuildsWithNoExtensions(t *testing.T) {
-	const wantEEImports = 1
+	const wantEEImports = 2
 
 	bin := filepath.Join(t.TempDir(), "gateway-ee")
 	build := exec.Command("go", "build", "-o", bin, "./ee/cmd/gateway/")

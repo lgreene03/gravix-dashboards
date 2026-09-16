@@ -17,7 +17,8 @@ import (
 	// ee/ feature imports go here, one per shipped capability. Each is a blank
 	// import: the package's init() registers an Extension with pkg/extpoint, and
 	// gatewaycore.Run mounts whatever is registered. Nothing else changes.
-	_ "github.com/lgreene/gravix-dashboards/ee/fleet" // GRVX-1307, mounted at /ee/fleet/
+	_ "github.com/lgreene/gravix-dashboards/ee/fleet"        // GRVX-1307, mounted at /ee/fleet/
+	_ "github.com/lgreene/gravix-dashboards/ee/intelligence" // GRVX-1309, mounted at /ee/intelligence/
 
 	"github.com/lgreene/gravix-dashboards/pkg/gatewaycore"
 )
