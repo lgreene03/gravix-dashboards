@@ -3124,3 +3124,90 @@ carry a warning rather than an instruction that cannot succeed.
 
 Worth recording because nothing in the spec asked for it. The register's value turned out to be the
 act of enumerating, before anybody audited a single custodian.
+
+---
+
+## SD-049 — GRVX-1506 names twelve tests and creates no file for them, and two sources were unreachable
+
+**Found by:** `cpo` executing GRVX-1506
+**Affects:** GRVX-1506 §4.1, §5.1, §6 step 1, §6 step 7, §7
+**Severity:** low — placement and environment, not the deliverable. A verdict was reached.
+**Status:** recorded; the evaluation is written, `NOT YET`, with its conditions measurable
+
+### Files created beyond §4.1
+
+§4.1 names one file: `docs/oss/foundation-evaluation.md`. §7 then names twelve Go tests and §8 runs
+them with `go test ./tests/...`.
+
+- **`tests/governance/foundation_test.go`** — nowhere else to put them. Same shape as SD-045, SD-047
+  and SD-048.
+
+No new package this time. The criteria are all assertions about one document, and the one piece of
+logic worth reusing already existed: `charterreview.CheckAmendment` (GRVX-1508) is exactly the check
+AC-10 needs, so `TestEntrenchedClausesPreserved` runs the evaluation through the same guard the
+annual charter review uses on an amendment proposal.
+
+### Two candidate foundations could not be read at source
+
+§6 step 1 requires citing each foundation's own documents with retrieval dates, and §6.1 makes an
+unsourced requirement a rejection. Two of the five could not be retrieved from this environment on
+2026-09-16:
+
+- `linuxfoundation.org` — blocked by the network egress proxy.
+- `commonsconservancy.org` and `dracc.commonsconservancy.org` — both blocked by the same proxy.
+
+Search results summarising both were available and were **not** used as citations. A search summary
+is not a primary source, and passing one off as a retrieval would be the F-049 failure in document
+form: reporting a verified claim from a check that could not ask.
+
+Both rows are marked **UNVERIFIED** with the reason and the date. `TestFoundationClaimsSourced`
+requires exactly that — an UNVERIFIED row needs a date and a stated reason, and the section must
+state that the verdict does not rest on any of them, which it does not. The Commons Conservancy row
+is the one that would most change the analysis if its reported position is accurate, and it is
+flagged in the document as a lead for somebody with working access to follow.
+
+The two rows the verdict actually turns on were both retrieved in full: the ASF's Category X policy
+(which prohibits BUSL-1.1 outright) and the CNCF charter §11 (which requires OSI-approved licences
+and trademark transfer to the Linux Foundation, and mandates the DCO while making a CLA optional).
+
+### §6 step 7's comment window is opened, not announced
+
+§6 step 7 requires the evaluation be opened for 14 days of public comment. The window is recorded in
+the document — opened 2026-09-16, closes 2026-09-30 — with where to comment and a status line saying
+it is not final until then, and `TestCommentWindowOpened` checks the dates are exactly 14 apart.
+
+Announcing it beyond the repository was not done, for the same reason `GRVX-1205`'s sixteen issues
+were not opened: it is outward-facing, and the owner decides when the project solicits public comment.
+Recorded in `open-decisions.md`.
+
+### §8's greps are weaker than the criteria they stand in for
+
+```bash
+grep -cE "^## Recommendation" docs/oss/foundation-evaluation.md   # expect: 1
+grep -c "charter §3" docs/oss/foundation-evaluation.md            # expect: >= 1
+```
+
+Both pass. Both would also pass on a document that contained a Recommendation heading with no verdict
+under it, and a single passing mention of charter §3 in a sentence about something else — which is
+precisely the survey-shaped failure §1 and §3 are written to prevent.
+
+`TestExactlyOneVerdict` parses the one `**Verdict: ...**` line rather than searching for the three
+verdict names, because the document discusses all three: a survey mentioning each would otherwise
+read as three verdicts, and a document reaching none would read as whichever it mentioned first.
+`TestCLAProblemAddressed` requires charter §3's actual words, the foundation-versus-company
+asymmetry, and the concession that the asymmetry does not make a reversal free.
+
+### The check that had to be rewritten, which is the one worth recording
+
+`TestNotYetConditionsMeasurable` refuses an unfalsifiable deferral — "when the time is right", "when
+we are ready". The evaluation **quotes both**, as examples of what not to write, which is what a
+document arguing for measurable conditions would naturally do.
+
+The first version checked the character immediately before the phrase for a quotation mark. That
+fails on `"we will know when we are ready"`, where the opening quote is four words earlier, so the
+check flagged the document for the one thing it was arguing against.
+
+It now removes quoted spans — ASCII and typographic — before searching, and asserts in both
+directions that the stripping is doing real work: that it does not consume the whole string, and
+that it leaves unquoted text intact. Without those two assertions a stripper that removed everything
+would have passed silently, which is the failure mode of every guard that has never refused anything.
