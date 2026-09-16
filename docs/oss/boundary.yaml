@@ -516,11 +516,13 @@ capabilities:
       q4_previously_open: false
       q5_only_reason_is_money: false
     paths:
-      - ee/placeholder/
+      - ee/intelligence/
     note: >-
-      Not yet implemented. GRVX-1309 builds it under ee/intelligence/; path updates
-      then. Q2 is `no` only because forecasting adds a projection alongside the
-      measured numbers; if it ever changed a displayed measurement, it would be core.
+      Built by GRVX-1309. Q2 is `no` only because forecasting adds a projection
+      alongside the measured numbers; if it ever changed a displayed measurement,
+      it would be core. The free 2σ anomaly detector stays in the core untouched
+      (§7.3 Q4), and ee/intelligence asserts that its evaluator and tests are
+      still there.
 
   - id: whitelabel-custom-domains
     name: Custom domains and signed embeddable dashboards
