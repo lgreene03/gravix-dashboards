@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli test test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check bench
+.PHONY: build build-cli test test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check bench
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -114,6 +114,18 @@ contracts: ## Regenerate docs/02-derived-metrics.md from contracts/
 contracts-check: ## Fail if the generated doc is stale
 	go run ./pkg/metriccontract/cmd/gen -in contracts -out /tmp/derived-metrics.check.md
 	diff -u docs/02-derived-metrics.md /tmp/derived-metrics.check.md
+
+# --- RFCs and the decision log (GRVX-1204) --------------------------------
+# docs/oss/rfcs/index.md is generated from the RFCs. rfc-check is what stops the
+# decision log drifting from the decisions it claims to record, and what enforces
+# the comment window and approval count charter §6 requires.
+
+rfc-index: ## Regenerate docs/oss/rfcs/index.md from docs/oss/rfcs/
+	go run ./pkg/rfc/cmd/gen -in docs/oss/rfcs -out docs/oss/rfcs/index.md
+
+rfc-check: ## Validate every RFC and fail if the decision log is stale
+	go run ./pkg/rfc/cmd/gen -in docs/oss/rfcs -out /tmp/rfc-index.check.md
+	diff -u docs/oss/rfcs/index.md /tmp/rfc-index.check.md
 
 # --- Supply chain (GRVX-709) ----------------------------------------------
 # A signature says who built an artefact. Reproducibility says it matches the

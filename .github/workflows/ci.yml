@@ -111,6 +111,14 @@ jobs:
           print(f"registry: {len(registry['plugins'])} entries valid against schema.json")
           PY
 
+      # Charter §6 requires an RFC, a 14-day comment window and two named
+      # approvals before the charter can be amended. This is what makes that
+      # procedure executable rather than aspirational: the window length, the
+      # approval count and the entrenchment question are checked here, not by
+      # whoever happens to be reviewing.
+      - name: Validate the RFCs and the decision log
+        run: make rfc-check
+
       - name: Run tests with race detector
         run: go test ./... -v -race -count=1
 

@@ -12,6 +12,14 @@ Three tiers. The tier is set by what the change touches, not by how large the di
 | **Design** | New public API, schema change, new dependency, new extension point | An RFC in `docs/oss/rfcs/`, 7 days' comment, two maintainer approvals |
 | **Charter** | Anything altering `docs/oss/00-open-core-charter.md` | The charter's own §6 procedure: an RFC, **14 days**' public comment, approval from the CPO **and** the License & Boundary Auditor, and a changelog entry |
 
+Design and charter tiers both go through the RFC process in
+[`docs/oss/rfcs/`](docs/oss/rfcs/): a written proposal with eight required sections, a comment window
+whose length CI checks against the tier, and named approvals. Every RFC ever opened is in the
+[decision log](docs/oss/rfcs/index.md), including the rejected and the withdrawn — a log that
+records only what was accepted tells you nothing about what this project refuses.
+
+Routine changes need no RFC. A process applied to a typo fix is a process people route around.
+
 Charter §7.1 (the core is Apache-2.0), §7.3 Q4 (once open, always open) and §7.4 (no dark patterns)
 are **entrenched**. They may be strengthened. They may never be weakened — not by majority, not by
 maintainer decision, not by a review that finds them inconvenient.
