@@ -3845,3 +3845,92 @@ correctness defect — it is why that design was chosen. But §6 step 3 requires
 take their settings from one shared place "so they cannot drift", and on compression level they have
 already drifted. Left unchanged here because changing it rewrites files for no measured benefit, and
 this spec's own evidence says the storage gain would be nil.
+
+---
+
+## SD-056 — GRVX-1005's group-commit batcher is implemented, tested, and connected to nothing
+
+**Found by:** `senior-engineer` executing GRVX-1005
+**Affects:** GRVX-1005 §4.1, §4.2, §7 AC-1/AC-7
+**Severity:** medium — 761 lines of implemented and tested code are not on the production path, and
+five acceptance criteria pass against it there
+**Status:** partial; AC-2…AC-9 have tests, AC-1 needs the reference machine, and the batcher is not
+wired in
+
+### `NewBatcher` is never constructed outside its own tests
+
+`services/ingestion/batch.go` (272 lines) implements cross-request group commit, and
+`batch_test.go` (489 lines) proves its durability properties — AC-2 through AC-6. §4.2 then requires
+`main.go` and `otlp.go` to "route the durable write through the group-commit batcher", and
+**neither does**. `main.go` calls `DurableSink.WriteBatch`; `otlp.go` calls `DurableSink.Write`.
+`grep NewBatcher` finds no production caller.
+
+So five criteria pass against a component ingestion does not use. They are true statements about
+`batch.go` and say nothing about what happens when a fact arrives.
+
+### Durability is not broken — the throughput mechanism is missing
+
+This is the part worth being precise about, because "the batcher is unused" sounds worse than it is.
+`DurableSink.Write` and `WriteBatch` both fsync before returning, so `docs/00-system-truth.md` §6
+holds: no fact is acknowledged before it is on disk. Nothing here is a correctness defect.
+
+What is absent is group commit *across concurrent requests*. Both paths fsync per call while holding
+a single mutex, which serialises every request behind one syscall — the exact bottleneck GRVX-1005
+exists to remove. `batch.go`'s own doc comment carries the measurement, taken on the machine that
+wrote it:
+
+> one fsync per fact gives ~4,500 facts/sec/core, one fsync per eight gives ~43,000, and one per 512
+> gives ~500,000. A bare fsync costs 0.157 ms against 0.221 ms for the whole single-fact write, so
+> roughly 70% of the cost of ingesting one fact is the syscall, not Gravix.
+
+Against AC-1's target of ≥20,000 events/sec/core, the unbatched path is on the wrong side of that
+table for single-fact requests. AC-1 cannot have been met, and nothing measured it either way.
+
+### Why it is not wired in here
+
+Routing through the batcher is genuinely §4.2's task, and the component is well tested. It is left
+undone deliberately:
+
+- `DurableSink` keys an open file per topic, so this needs a batcher per topic, each holding a file
+  handle that **rotation replaces**. That interaction is where the bug would be.
+- There is no way to verify it here. AC-1 needs the reference machine, and there is no load test in
+  this environment — so the change would be an unmeasurable edit to the most correctness-critical
+  path in the system.
+- This repository already has **F-048**: a DLQ record-loss bug on `Close`, where 49 of 50 records
+  were lost. That is the same class of defect this change could introduce, in the same file.
+
+A change that cannot be measured, in the path where a mistake loses data, is one to hand to whoever
+can run the benchmark. The finding is the deliverable; the wiring is not.
+
+### AC-7 is scoped to what it actually proves
+
+§4.2's stated purpose is that both paths "share one durability guarantee".
+`TestBothPathsShareBatcher` proves exactly that: neither path opens its own file handle, both reach
+disk through `DurableSink`, and both of that type's write methods call `Sync` before returning —
+checked through the AST, not by grep. It deliberately does **not** assert they share the `Batcher`,
+because they do not, and it is written so that wiring the batcher in later keeps it passing rather
+than needing a rewrite.
+
+### A file beyond §4.1
+
+§4.1 lists `batch.go`, `batch_test.go` and `bench/ingest/ingest.go`. AC-7, AC-8 and AC-9 are
+properties of the ingestion package rather than of the batcher, so they are in a new
+`services/ingestion/ingest_criteria_test.go` instead of being wedged into the batcher's suite.
+`bench/ingest/ingest.go` is not written: a load driver with no reference machine to drive measures
+nothing.
+
+### Two corrections to this entry's own work
+
+**The first version of AC-8 was too weak to be worth having.** It asserted
+`strings.Contains(src, "Validate")` — which passes on a comment mentioning validation, on a variable
+named `ValidateLater`, on anything containing the word. It proved nothing about validation being
+called. It is now an AST search for a call to a `Validate*` function, and mutation-tested by
+replacing the real call with `error(nil)`, which compiles and which the strengthened test catches.
+
+**Two of the three guards were reported as mutation-tested before they had been.** The
+`services/ingestion` test binary takes **~94 seconds to compile**, and the first mutation round ran
+under a 120-second limit that the compile exhausted, so two greps matched nothing and were read as
+"no failure" rather than "no result". Re-run with room, all three fail on their injected defect:
+removing an fsync fails AC-7's test, adding a plan branch to the write path fails AC-9's, and
+removing the validation call fails AC-8's. A test whose failure has not been observed is a test
+nobody has checked, and that includes the case where the checking itself timed out.
