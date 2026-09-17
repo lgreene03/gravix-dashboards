@@ -38,11 +38,17 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 These need an edit to the spec (and in one case the thesis), not to the code. The implementations
 already work around them and say so.
 
-| Item | The spec says | What was measured |
-|---|---|---|
-| **SD-021** *(medium)* | GRVX-1004 §5.2's mandatory caveat: the at-scale figure "is roughly 10x the bootstrap figure" | 43× at 1M events/month, 43× at 50M, 4× at 1B — wrong in the dangerous direction for the reader the sentence addresses. Also in `01-competitive-thesis.md` §2 Axis 4. |
-| **SD-022** *(medium)* | GRVX-1005 §5.3: the SIGKILL test "is the only test that actually proves §6; a unit test asserting `fsync` was called does not" | The reverse. Against a batcher that acknowledges before fsyncing, `TestDurabilityUnderKill` passes three times out of three and the two unit tests fail. SIGKILL does not discard the page cache. |
-| **SD-019** *(high)* | GRVX-910 §2: Cube's `load` endpoint is unauthenticated because no `CUBEJS_API_SECRET` is set | `checkAuth` tests `JWT_SECRET` first, and the bootstrap compose sets it inline rather than through `.env`. Cleared in implementation; §2's sentence is still wrong. |
+| Item | The spec says | What was measured | How the shipped code handles it |
+|---|---|---|---|
+| **SD-021** *(medium)* | GRVX-1004 §5.2's mandatory caveat: the at-scale figure "is roughly 10x the bootstrap figure" | 43× at 1M events/month, 43× at 50M, 4× at 1B — wrong in the dangerous direction for the reader the sentence addresses. Also in `01-competitive-thesis.md` §2 Axis 4. | **Mitigated and tested.** `withComputedMultiple` appends the real multiple next to the mandated sentence in both `pkg/costmodel` and `dashboards/lib/tco.js`, so the "10x" never appears alone. Guarded by `TestComputedMultipleAccompaniesTheCaveat` and its JS twin, with Go/JS agreement to $0.01 by `TestGoJSParity`. The thesis carries no "10x" figure; its Axis 4 requires at-scale figures beside bootstrap ones, which `tco.html` does — `TestPageShowsAllDeployments`. **Nothing is unguarded; what remains is amending §5.2's text.** |
+| **SD-022** *(medium)* | GRVX-1005 §5.3: the SIGKILL test "is the only test that actually proves §6; a unit test asserting `fsync` was called does not" | The reverse. Against a batcher that acknowledges before fsyncing, `TestDurabilityUnderKill` passes three times out of three and the two unit tests fail. SIGKILL does not discard the page cache. | **Both kinds of test are kept**, so the spec's wrong ranking costs nothing: `batch_test.go` holds the SIGKILL test *and* the unit tests it dismisses. Separately, SD-056 found the batcher all of them exercise is not on the production path, which matters more than which test is stronger. |
+| **SD-019** *(high)* | GRVX-910 §2: Cube's `load` endpoint is unauthenticated because no `CUBEJS_API_SECRET` is set | `checkAuth` tests `JWT_SECRET` first, and the bootstrap compose sets it inline rather than through `.env`. Cleared in implementation; §2's sentence is still wrong. | **Cleared in implementation.** The endpoint authenticates. Only §2's sentence is stale. |
+
+**Read this table as spec-text debt, not as live defects.** Every row's behaviour is already correct in
+the shipped code and covered by a named test; what is outstanding is an edit to the spec so that a
+future implementer reading it is not misled. Treating these as user-facing bugs overstates them —
+which has happened, so the mitigation column now states the evidence rather than asking a reader to
+trust the paragraph above it.
 
 ## Permissions and external checks
 
