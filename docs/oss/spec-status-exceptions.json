@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Paths a spec's \u00a74.1 table names that were deliberately never created, for a spec",
+    "that is genuinely done. Every entry names a reason and the record that explains it.",
+    "scripts/audit_spec_status.py fails on an entry with no reason, on a waived path that",
+    "now exists, and on one the spec does not actually list \u2014 so this file cannot quietly",
+    "become the place inconvenient findings go."
+  ],
+  "GRVX-710": {
+    "paths": [
+      "services/gateway/free_tier_test.go"
+    ],
+    "reason": "SD-001: the spec's premise was wrong. It was written to remove five plan gates; exhaustive grep found one real gate and four features that were never gated. The freed capabilities are tested where they live, and a file named for five gates that did not exist would have been named after a thing that never happened."
+  },
+  "GRVX-806": {
+    "paths": [
+      "pkg/evolve/cardinality_test.go"
+    ],
+    "reason": "The cardinality budget in pkg/evolve/cardinality.go is tested from pkg/evolve/evolve_test.go, which holds the package at 93.9% coverage. Splitting the file to match a table would move tests without adding one."
+  }
+}

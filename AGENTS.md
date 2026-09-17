@@ -8,6 +8,12 @@ The product is a **low-cost, data-first observability system**.
 
 It is **NOT** a Datadog replacement and must not attempt feature parity.
 
+**Horizon 2 amendment.** Gravix is now an open-core project: an Apache-2.0 core that is free
+forever, plus a paid `ee/` tier under BUSL-1.1. Feature parity is still forbidden. What is now
+*required* is provable superiority on four axes — correctness, recomputability, data ownership, and
+billing predictability. `docs/oss/00-open-core-charter.md` is the governing document and amends this
+file where they differ.
+
 ## Core Philosophy
 
 - Store **facts**, not metrics
@@ -23,8 +29,17 @@ It is **NOT** a Datadog replacement and must not attempt feature parity.
 - No logs platform
 - No real-time dashboards
 - No per-request querying
-- No high-cardinality dimensions (`user_id`, `request_id`, etc.)
+- No high-cardinality dimensions (`user_id`, `request_id`, and the like)
 - No custom query language
+
+These survive Horizon 2 unchanged and apply at every price point. If a paying customer demands one,
+the answer is "Gravix is not that product, and here is the tool that is." Revenue does not purchase
+an exception to the constitution.
+
+**One clarification.** `docs/04-non-goals.md` §7 said "no alerting". Phase 2 shipped threshold and
+2σ-deviation alerting, and Phase 8 adds error-budget burn rates. Charter §4 amends §7 to permit
+alerting evaluable from batch-aggregated facts on a ≥1-minute cadence. Anything needing sub-minute
+evaluation, streaming state, or per-request inspection is still rejected.
 
 ## Technology Direction
 
@@ -35,7 +50,19 @@ It is **NOT** a Datadog replacement and must not attempt feature parity.
 
 ## Specialized Agent Roles
 
-To evolve Gravix, we use three distinct personas. Use the prompts below to invoke them.
+Three personas are described below and remain valid. Fifteen more were added in Horizon 2 —
+see `docs/oss/10-agent-roster.md` for the full roster, the handoff matrix, and the escalation
+ladder. Each is dispatchable from `.claude/agents/`.
+
+Three of the newer roles hold vetoes that the CPO cannot overrule inside a sprint:
+`license-boundary-auditor` (on `ee/` placement and on any release where `make build-oss` fails),
+`security-engineer` (on releasing a known vulnerability), and `qa-engineer` (on shipping with an
+unproven acceptance criterion). Overruling any of them requires the public amendment procedure in
+charter §6.
+
+The work itself runs as loops, not as a list — see `docs/oss/11-agent-loops.md`. Horizon 1 was
+executed as a list, which is why every phase is marked complete and nothing re-checks whether the
+alerting still works or the cost claims still hold. Lists do not notice decay.
 
 ---
 

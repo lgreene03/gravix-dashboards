@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package referral implements a two-sided referral program.
 // Referrer and referee both receive a coupon (e.g., 1 month free).
 package referral

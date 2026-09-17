@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package ratelimit
 
 import (
@@ -16,11 +19,11 @@ type ipEntry struct {
 
 // IPLimiter provides per-IP rate limiting with automatic cleanup of stale entries.
 type IPLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*ipEntry
-	rate     int64
-	burst    int64
-	stopCh   chan struct{}
+	mu      sync.Mutex
+	entries map[string]*ipEntry
+	rate    int64
+	burst   int64
+	stopCh  chan struct{}
 }
 
 // NewIPLimiter creates an IP-based rate limiter.

@@ -1,0 +1,64 @@
+name: Bug report
+description: Something behaves differently from what it should.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities here. See
+        [SECURITY.md](https://github.com/lgreene03/gravix-dashboards/security/policy).
+  - type: input
+    id: version
+    attributes:
+      label: Gravix version
+      description: Output of `gravix --version`, or the commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - docker-compose.bootstrap.yml (lean stack)
+        - docker-compose.yml (full stack)
+        - Helm chart
+        - Built from source, run directly
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Exact steps from a clean checkout
+      description: Commands someone else can run to see this. Not a description of what you did.
+      placeholder: |
+        git clone https://github.com/lgreene03/gravix-dashboards
+        cd gravix-dashboards
+        ...
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: The actual output, error, or behaviour. Paste it rather than paraphrasing.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+    validations:
+      required: true
+  - type: dropdown
+    id: reproduces
+    attributes:
+      label: Does it reproduce on the default branch?
+      options:
+        - "Yes"
+        - "No"
+        - "Not checked"
+    validations:
+      required: true

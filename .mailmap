@@ -1,0 +1,18 @@
+# Identity consolidation for release notes and `git shortlog`.
+#
+# One person committing from two addresses is credited once. Nothing here
+# changes history; git applies it at read time, and `git log --use-mailmap` is
+# what pkg/relnotes reads.
+#
+# Format:  Canonical Name <canonical@email>  Other Name <other@email>
+#
+# The addresses in this file are the ones already in every commit's author and
+# Signed-off-by trailer. They are here because git needs them to tell two people
+# apart, and they never reach release notes — pkg/relnotes.CheckNoEmails fails
+# the build if one does.
+#
+# If you would rather not be credited at all, see docs/oss/no-credit.md. No
+# reason is required.
+
+Luke Greene <luke.greene86@gmail.com>
+Claude <noreply@anthropic.com> Claude Opus 5 <noreply@anthropic.com>

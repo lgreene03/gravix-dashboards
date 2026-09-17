@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "run_at": "2026-09-11T22:47:52Z",
+  "scale": "small",
+  "machine": {
+    "os": "linux",
+    "arch": "amd64",
+    "num_cpu": 4,
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "mem_total_bytes": 16856092672,
+    "disk_type": "unknown",
+    "go_version": "go1.24.9",
+    "gravix_commit": "be4e2a47ef8b2c8a268aa91947bdde45e3650a10",
+    "container": false
+  },
+  "dataset": {
+    "seed": 1001,
+    "facts": 1008000,
+    "days": 2,
+    "services": 3,
+    "paths_per_service": 4
+  },
+  "ingest_events_per_sec_per_core": 53927.22116279533,
+  "ingest_p99_latency_ms": 0.01239,
+  "rollup_events_per_sec": 119796.02459245526,
+  "bytes_per_event_raw": 203.7807132936508,
+  "bytes_per_event_rolled_up": 2.9025406746031748,
+  "bytes_per_event_compacted": 2.9025406746031748,
+  "query_p50_ms": 135.801649,
+  "query_p95_ms": 142.26324,
+  "query_p99_ms": 142.26324,
+  "query_cold_p95_ms": 151.457412,
+  "peak_resident_bytes": 662478848,
+  "notes": [
+    "disk type could not be determined; storage figures may not be comparable to a run on known hardware",
+    "ingest runs (events/sec): 215708.88, 211797.85, 216884.75",
+    "ingest excludes HTTP framing: it measures decode, schema validation and the durable-buffer append, which is the work Gravix does per fact",
+    "rollup runs (events/sec): 119796.02, 121207.28, 117009.85",
+    "cold query is the first read of freshly written files by a process that has not touched them; the OS page cache is NOT cleared, which needs root, so the true cold figure on a fresh machine is worse than this",
+    "query read 138141 metric rows per call; warm runs (ms): 142.26, 135.80, 120.41",
+    "compaction: 2925761 bytes -\u003e 2925761 bytes (100.0% of the rolled-up size); compaction did not reduce the warehouse at this scale, which is reported rather than omitted",
+    "total ingest throughput before dividing by 4 cores: 215709 events/sec"
+  ]
+}

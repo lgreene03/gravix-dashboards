@@ -74,6 +74,18 @@ For production use, instrument your service with an SDK rather than raw HTTP cal
 go get github.com/lgreene/gravix-dashboards/sdk/go
 ```
 
+:::warning This command does not work yet
+
+`go.mod` declares the module path `github.com/lgreene/gravix-dashboards`, and the repository is at
+`github.com/lgreene03/gravix-dashboards` — a different account. `go get` resolves a module path by
+fetching that URL, so this command cannot install the Gravix SDK, and it must not be run until the
+path is corrected. Tracked as **F-050** in
+[`docs/oss/findings.md`](https://github.com/lgreene03/gravix-dashboards/blob/main/docs/oss/findings.md).
+
+Until then, vendor the SDK from a clone of the repository.
+
+:::
+
 **Python**
 
 ```bash
@@ -102,6 +114,17 @@ After sending a few events, the rollup ETL job (runs every minute) will aggregat
 - **Status code distribution**
 
 The dashboard auto-refreshes every 30 seconds. No login is required in local mode.
+
+### The SLO tab
+
+The **SLO** tab needs no setup at all. It lists every service Gravix has seen send a fact, with one
+card each showing availability, P95 latency, request volume and how much of the error budget is
+left against a 99.9% target.
+
+There is nothing to configure and nothing saved: services appear because they sent data, and the
+page is rebuilt from live data each time you open it. A service you started sending from a minute
+ago shows a card with zeros until the first rollup covers it — that is "not aggregated yet", not an
+error.
 
 ## Next Steps
 

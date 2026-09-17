@@ -1,0 +1,12 @@
+.PHONY: build test clean
+
+# A Python plugin needs no build step. Gravix runs the interpreter:
+#   command = ["python3", "plugin.py"]
+build:
+	@echo "nothing to build; run: python3 plugin.py"
+
+test:
+	python3 -m unittest discover -p 'test_*.py' -v
+
+clean:
+	rm -rf __pycache__

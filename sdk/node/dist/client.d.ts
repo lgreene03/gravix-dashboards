@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 import { type GravixClientOptions, type RequestFact, type ServiceEvent } from "./types.js";
 /**
  * Client for the Gravix ingestion API.

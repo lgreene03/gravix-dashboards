@@ -1,0 +1,37 @@
+name: Feature request
+description: You have a problem Gravix does not solve.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We are most interested in the **problem**. A well-described problem often has a simpler
+        solution than the one that first comes to mind, and sometimes one that already exists.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem you have
+      description: What are you trying to find out, or prevent, or fix? Describe it without reference to any particular feature.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: What you have already attempted with Gravix as it is today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: A solution you have in mind
+      description: Optional. If you have one, describe it — but the problem above matters more.
+    validations:
+      required: false
+  - type: checkboxes
+    id: non-goals
+    attributes:
+      label: Non-goals
+      options:
+        - label: I have read docs/04-non-goals.md and this is not in one of those categories.
+          required: true

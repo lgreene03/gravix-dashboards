@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""{{.Name}} — a Gravix {{.Kind}} plugin.
+
+Speaks JSON-RPC 2.0 over stdio: one request object per line on stdin, one
+response object per line on stdout, flushed every time. Nothing else may go to
+stdout — a stray print corrupts the RPC stream. Diagnostics go to stderr, which
+Gravix forwards.
+"""
+
+import base64
+import json
+import sys
+
+# The Gravix plugin ABI this plugin speaks. Gravix refuses to load a plugin
+# declaring a different one rather than calling it and failing confusingly.
+ABI_VERSION = "{{.ABIVersion}}"
+
+# The answer to gravix.describe. Declare every configuration field here; a
+# field typed "secret" is never logged by Gravix, never included in an error,
+# and never written into a `gravix doctor` bundle.
+MANIFEST = {
+    "name": "{{.Name}}",
+    "version": "0.1.0",
+    "abi_version": ABI_VERSION,
+    "kind": "{{.Kind}}",
+    "description": "{{.Description}}",
+    "license": "Apache-2.0",
+    "config_schema": {
+        "endpoint": {
+            "type": "string",
+            "required": False,
+            "description": "where this plugin sends data; replace with what you need",
+        }
+    },
+}
+
+{{if eq .Kind "notifier"}}
+def deliver(alert):
+    """The stub to replace.
+
+    Must be idempotent on alert_id: Gravix retries, and a duplicate page in the
+    middle of the night is worse than a late one. Key whatever you send on the
+    alert id so the destination can collapse repeats.
+    """
+    print(
+        "{{.Name}}: alert {} ({}) {}={} threshold={} service={}".format(
+            alert.get("alert_id"),
+            alert.get("rule_name"),
+            alert.get("metric"),
+            alert.get("actual_value"),
+            alert.get("threshold"),
+            alert.get("service"),
+        ),
+        file=sys.stderr,
+    )
+    return {"delivered": True}
+{{end}}{{if eq .Kind "exporter"}}
+def write(batch):
+    """The stub to replace.
+
+    The destination string reaches logs and `gravix doctor` output, so it must
+    never contain a credential — name the bucket, not the signed URL.
+    """
+    rows = batch.get("rows") or []
+    print(
+        "{{.Name}}: {} {} rows for {}".format(
+            len(rows), batch.get("dataset"), batch.get("event_day")
+        ),
+        file=sys.stderr,
+    )
+    return {"rows_written": len(rows), "destination": "stderr"}
+{{end}}{{if eq .Kind "adapter"}}
+def convert(params):
+    """The stub to replace.
+
+    It currently accepts facts already in Gravix's shape, which makes the round
+    trip runnable before you have written a parser. Replace the body with one
+    that reads your own format.
+
+    path_template must use {id} placeholders. Gravix re-checks every fact
+    returned here against its own cardinality budget and drops the ones that
+    carry raw ids, so emitting them loses data rather than getting it in.
+    """
+    content_type = params.get("content_type")
+    if content_type != "application/json":
+        raise ValueError("unsupported content type {!r}".format(content_type))
+    # Payload is base64 in JSON because it is raw bytes.
+    raw = base64.b64decode(params.get("payload") or "")
+    facts = json.loads(raw or b"[]")
+    if not isinstance(facts, list):
+        raise ValueError("payload is not a list of facts")
+    return facts
+{{end}}
+
+def handle(req):
+    """Answer one request.
+
+    Never exit here: a returned JSON-RPC error is a clean failure Gravix
+    reports, while exiting counts as a crash and spends the failure budget.
+    """
+    resp = {"jsonrpc": "2.0", "id": req.get("id")}
+    method = req.get("method")
+    params = req.get("params") or {}
+
+    if method == "gravix.describe":
+        resp["result"] = MANIFEST
+{{if eq .Kind "notifier"}}    elif method == "gravix.notify":
+        try:
+            resp["result"] = deliver(params)
+        except Exception as exc:  # noqa: BLE001 - any failure is a clean RPC error
+            resp["error"] = {"code": -32000, "message": str(exc)}
+{{end}}{{if eq .Kind "exporter"}}    elif method == "gravix.export":
+        try:
+            resp["result"] = write(params)
+        except Exception as exc:  # noqa: BLE001 - any failure is a clean RPC error
+            resp["error"] = {"code": -32000, "message": str(exc)}
+{{end}}{{if eq .Kind "adapter"}}    elif method == "gravix.convert":
+        try:
+            resp["result"] = convert(params)
+        except Exception as exc:  # noqa: BLE001 - any failure is a clean RPC error
+            resp["error"] = {"code": -32000, "message": str(exc)}
+{{end}}    else:
+        resp["error"] = {"code": -32601, "message": "method not found"}
+
+    return resp
+
+
+def serve(stdin=sys.stdin, stdout=sys.stdout):
+    for line in stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        stdout.write(json.dumps(handle(req)) + "\n")
+        # Flushed after every response. Gravix reads one line at a time, so a
+        # response sitting in a buffer looks exactly like a hung plugin and
+        # gets killed at the call timeout.
+        stdout.flush()
+
+
+if __name__ == "__main__":
+    serve()

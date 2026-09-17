@@ -376,17 +376,33 @@ Trino).
 | `requestCount` | sum | Total requests |
 | `errorCount` | sum | Total 5xx errors |
 | `errorRate` | number | Percentage, computed from error/request counts |
-| `p50LatencyMs` | max | 50th percentile latency |
-| `p95LatencyMs` | max | 95th percentile latency |
-| `p99LatencyMs` | max | 99th percentile latency |
+| `bucketP50LatencyMs` | min | 50th percentile — **single bucket only** |
+| `bucketP95LatencyMs` | min | 95th percentile — **single bucket only** |
+| `bucketP99LatencyMs` | min | 99th percentile — **single bucket only** |
+| `latencySketch` | dimension, hidden | The serialised t-digest the merge reads |
 
-Percentile measures use `max` aggregation. Because the source data contains
-pre-aggregated percentiles (per 1-minute bucket), re-aggregating across buckets
-with `max` answers the question: "What was the worst latency any sub-interval
-saw?" This is a deliberate, conservative choice. See the
-[Design Decisions](#design-decisions) table for rationale.
+The three `bucket*` measures are exact within one minute-bucket and have **no
+correct aggregation across buckets**. This used to be `max`, on the reasoning that
+it answered "the worst latency any sub-interval saw" — but that is not what a
+dashboard labelled "P95 Latency" is read as, and on heavy-tailed latency it was
+measured **94% above** the true p95. Both were wrong; the old one was wrong and
+believable.
 
-**Dimensions:** `bucketStart`, `eventDay`, `service`, `method`, `pathTemplate`.
+The aggregation is now `min`, chosen deliberately so that anyone who queries these
+across a wider window gets an obviously-too-low number they will report, rather
+than a plausible one they will trust. They also carry
+`meta.aggregatable: false`, and the dashboard routes any window wider than a
+minute away from Cube entirely.
+
+**A percentile over more than one minute comes from
+`GET /api/v1/percentile`**, which merges the stored t-digests in Go with the same
+code that wrote them. It is the only path that can answer the question correctly,
+because neither DuckDB nor Trino can merge an opaque sketch. Its error bound is
+published in `contracts/request_metrics_minute.v2.yaml` and repeated in every
+response. See `docs/oss/specs/GRVX-808-mergeability-in-cube-model.md`.
+
+**Dimensions:** `bucketStart`, `eventDay`, `service`, `method`, `pathTemplate`,
+`tenantId`, and the hidden `latencySketch`.
 
 ### ServiceEventsDaily Cube
 
@@ -673,7 +689,7 @@ dispatch for production.
 | CronJobs for rollup | Simpler than streaming infrastructure; idempotent re-runs make recovery trivial |
 | 30-day default retention | Cost-conscious default; configurable per environment via Helm values |
 | External Secrets support | Integrates with AWS Secrets Manager, Vault, or GCP without changes to the Helm chart |
-| MAX for percentile re-aggregation | Conservative approach: reports the worst case across sub-intervals rather than an inaccurate merge of quantiles |
+| Sketch merge for percentile re-aggregation | **Superseded MAX (GRVX-808).** "Conservative" was not conservative: max-of-per-minute-p95s measured 94% above the true p95 on heavy-tailed latency, and there is nothing conservative about a number that is nearly double. Merging the stored t-digests is accurate to within 1% and the bound is published. |
 
 ---
 

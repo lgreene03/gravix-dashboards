@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 //go:build postgres || all
 
 package tenantdb
@@ -458,8 +461,8 @@ func TestPostgresRetentionPolicy(t *testing.T) {
 	tenant := createPgTestTenant(t, db, "Retention", "retention@pg.test")
 
 	policy := &RetentionPolicy{
-		TenantID:  tenant.ID,
-		FactsDays: 60,
+		TenantID:    tenant.ID,
+		FactsDays:   60,
 		MetricsDays: 90,
 		TracesDays:  14,
 	}

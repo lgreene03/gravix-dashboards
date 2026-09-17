@@ -1,0 +1,96 @@
+name: Plugin listing request
+description: Ask for your plugin to be listed in registry/plugins.json.
+labels: ["plugin-listing"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Listing here is not endorsement.** Gravix does not review, audit, test, or vouch for
+        third-party plugins, and no Gravix command downloads or installs one. See
+        [registry/README.md](https://github.com/lgreene03/gravix-dashboards/blob/main/registry/README.md).
+
+        There is no quality bar. Only the six mechanical checks below are applied, and a listing is
+        never refused for being small, unpopular, unfinished, or written in a language we do not use.
+
+        You can also skip this form and send a pull request adding your entry to
+        `registry/plugins.json` directly. The same six checks apply either way.
+  - type: input
+    id: name
+    attributes:
+      label: Plugin name
+      description: "Check 4: unique in the registry and starting with `gravix-`, kebab-case."
+      placeholder: gravix-notifier-mattermost
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      description: "Check 5: the interface your plugin implements."
+      options:
+        - notifier
+        - exporter
+        - adapter
+    validations:
+      required: true
+  - type: input
+    id: repository
+    attributes:
+      label: Repository URL
+      description: "Check 1: it must resolve and be public."
+      placeholder: https://github.com/example/gravix-notifier-mattermost
+    validations:
+      required: true
+  - type: input
+    id: license
+    attributes:
+      label: Licence
+      description: "Check 2: the SPDX identifier, matching the LICENSE file in that repository."
+      placeholder: Apache-2.0
+    validations:
+      required: true
+  - type: input
+    id: abi_version
+    attributes:
+      label: ABI version
+      description: "Check 3: the `abi_version` your manifest declares. `gravix plugin validate --path <binary>` prints it."
+      value: "1"
+    validations:
+      required: true
+  - type: input
+    id: data_flow
+    attributes:
+      label: Link to your README's Data flow section
+      description: >-
+        Check 6: your README needs a section headed `Data flow` saying what the plugin sends and
+        where. This is the only check that is about the reader rather than the mechanics — installing
+        a notifier that forwards alert contents to a third party is a data-flow decision, and nobody
+        can make it from a README that does not describe it.
+      placeholder: https://github.com/example/gravix-notifier-mattermost#data-flow
+    validations:
+      required: true
+  - type: input
+    id: description
+    attributes:
+      label: One-sentence description
+      description: Under 200 characters. It is printed by `gravix plugin list`.
+      placeholder: Sends Gravix alerts to a Mattermost channel.
+    validations:
+      required: true
+  - type: input
+    id: maintainer
+    attributes:
+      label: Maintainer
+      description: Who users should contact about this plugin. Not us.
+      placeholder: "@example"
+    validations:
+      required: true
+  - type: checkboxes
+    id: understood
+    attributes:
+      label: Before submitting
+      options:
+        - label: I understand that listing is not endorsement, and that Gravix carries no warranty for this plugin.
+          required: true
+        - label: My README's Data flow section says what this plugin sends and where it sends it.
+          required: true

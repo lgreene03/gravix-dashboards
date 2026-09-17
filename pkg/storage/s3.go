@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package storage
 
 import (
@@ -84,12 +87,12 @@ func retryWithBackoff(ctx context.Context, operation string, fn func() error) er
 			// Add jitter: 0.5x to 1.5x the delay
 			jitter := time.Duration(float64(delay) * (0.5 + rand.Float64()))
 			slog.Warn("s3 operation failed, retrying",
-			"operation", operation,
-			"attempt", attempt+1,
-			"max_retries", maxRetries+1,
-			"backoff", jitter.String(),
-			"error", lastErr,
-		)
+				"operation", operation,
+				"attempt", attempt+1,
+				"max_retries", maxRetries+1,
+				"backoff", jitter.String(),
+				"error", lastErr,
+			)
 
 			select {
 			case <-ctx.Done():

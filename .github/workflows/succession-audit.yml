@@ -1,0 +1,74 @@
+name: succession audit
+
+# Whether anybody other than the current maintainer could recover this project's
+# identity — the GitHub account, the registries, the release signing identity.
+#
+# Not the data. docs/disaster-recovery.md covers data, and data has backups.
+# These have none: losing access to an npm account is not a failure you recover
+# from by restoring a snapshot.
+#
+# THIS JOB IS RED TODAY, ON PURPOSE. Every live asset has one custodian and the
+# repository sits under a personal GitHub account, which cannot have a second
+# owner at all. It goes green when docs/oss/succession.md's last section has
+# been worked through, and not before.
+#
+# A permanently red check is normally a mistake — people learn to ignore it.
+# The reasoning that makes scripts/bus_factor.sh pass a recorded gap does not
+# transfer here, and the difference is the point: a subsystem with one reviewer
+# can be recovered by forking. An identity with one custodian cannot be
+# recovered at all. There is no equivalent of a fork for an npm account.
+#
+# It deliberately does NOT run on pull_request. Nothing in a diff can add a
+# second custodian, and a check every PR fails for a fact no PR can fix is a
+# check people learn to merge past. The one thing a diff CAN break — a
+# credential or a personal detail written into a succession file — is caught by
+# TestNoSecretsInSuccessionPlan in the ordinary test job, on every PR.
+#
+# GRVX-1503 §4.2 named ci.yml; see SD-048, and SD-037 for the same decision.
+
+on:
+  schedule:
+    # The 1st of every month at 08:00 UTC, half an hour after the bus-factor
+    # audit: how many people can review the code, then how many can recover the
+    # accounts it ships from.
+    - cron: '0 8 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  custody:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Verify custody
+        id: custody
+        run: |
+          set +e
+          ./scripts/verify_custody.sh | tee custody.txt
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the report
+        if: always()
+        run: |
+          {
+            echo "### Succession audit"
+            echo '```'
+            cat custody.txt
+            echo '```'
+            echo "Plan: [docs/oss/succession.md](../blob/main/docs/oss/succession.md)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on an asset only one person can recover
+        if: steps.custody.outputs.status != '0'
+        run: |
+          echo "::error::An asset of this project's identity has fewer than two custodians, has not been verified in twelve months, or a succession file contains something it must not."
+          echo "See docs/oss/succession.md — the last section is the ordered list of what would fix this."
+          exit 1

@@ -1,42 +1,101 @@
-# Binaries
-/ingestion-service
-/ingestion
+# ---------------------------------------------------------------------------
+# Compiled binaries
+#
+# `go build ./cmd/foo` with no -o writes ./foo into the working directory, so
+# every command in this repo needs covering by name. Build into bin/ instead:
+#   go build -o bin/gravix ./cmd/cli
+# ---------------------------------------------------------------------------
+bin/
+/badge_server
+/bootstrap_seed
+/checkboundary
+/incidentaudit
+/cli
+/compaction
+/demo_seed
 /gateway
+/gen
+/gen_facts
+/ingestion
+/ingestion-service
 /load-generator
 /load_generator
-/sink-writer
-/rollup-job
-/request_metrics_minute
-/service_events_daily
+/onboarding_gate
 /purge
-bin/
+/request_metrics_minute
+/rollup-job
+# Enumerating these one at a time is how an 11 MB iceberg_sync reached a commit
+# (F-052). tests/devenv's TestNoCommittedBinaries is the actual guard; this
+# list only keeps the common cases out of `git status`.
+/iceberg-sync
+/iceberg_sync
+/seed_tenants
+/service_events_daily
+/service_events_detail
+/sink-writer
+/status_page
+/trial_expiry
+gravix
 *.o
 *.a
+*.so
+*.exe
+*.test
 
-# Data
+# ---------------------------------------------------------------------------
+# Dependencies
+#
+# sdk/node/package-lock.json pins every version, so node_modules is fully
+# reproducible with `npm ci` and has no business in version control.
+# ---------------------------------------------------------------------------
+node_modules/
+
+# ---------------------------------------------------------------------------
+# Data and local state
+#
+# Gravix stores facts on disk. None of it is source.
+# ---------------------------------------------------------------------------
 data/
 storage/trino/data/
 storage/cube/data/
-
-# Cube Store cache
 cube/.cubestore/
+*.db
+*.db-shm
+*.db-wal
 
-# Debug artifacts
+# ---------------------------------------------------------------------------
+# Build and test output
+# ---------------------------------------------------------------------------
+coverage.out
+coverage.html
+*.coverprofile
+sbom.json
 cube_resp.json
+dist/
 
-# OS
+# ---------------------------------------------------------------------------
+# Tooling scratch
+# ---------------------------------------------------------------------------
+.claude/worktrees/
+.env
+.env.local
+
+# ---------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
-
-# IDE
 .idea/
 .vscode/
 *.swp
+*~
 
-# Docker
-.env
+# The Express recipe installs against the in-repo SDK (`file:../../../sdk/node`),
+# which CI links with `npm install --install-links`. A lock file pinning that
+# path would be rewritten on every install and go stale against the SDK it
+# points at, so the recipe deliberately has none.
+examples/recipes/express/package-lock.json
 
-# SQLite
-*.db
-*.db-journal
-*.db-wal
+# Python bytecode caches
+__pycache__/
+*.pyc

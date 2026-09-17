@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package otel
 
 import (
@@ -28,12 +31,12 @@ func newTestClient(t *testing.T, url string) *gravix.Client {
 
 func makeHTTPSpan(name string, attrs []attribute.KeyValue, start, end time.Time, status codes.Code) sdktrace.ReadOnlySpan {
 	s := tracetest.SpanStub{
-		Name:      name,
-		StartTime: start,
-		EndTime:   end,
+		Name:       name,
+		StartTime:  start,
+		EndTime:    end,
 		Attributes: attrs,
-		Status: sdktrace.Status{Code: status},
-		SpanKind:  trace.SpanKindServer,
+		Status:     sdktrace.Status{Code: status},
+		SpanKind:   trace.SpanKindServer,
 	}
 	return s.Snapshot()
 }

@@ -1,0 +1,239 @@
+// Command {{.Name}} is a Gravix {{.Kind}} plugin.
+//
+// It speaks JSON-RPC 2.0 over stdio: one request object per line on stdin, one
+// response object per line on stdout, flushed every time. Nothing else may go
+// to stdout — a stray print corrupts the RPC stream. Diagnostics go to stderr,
+// which Gravix forwards.
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+)
+
+// abiVersion is the Gravix plugin ABI this plugin speaks. Gravix refuses to
+// load a plugin declaring a different one, rather than calling it and failing
+// in a confusing way later.
+const abiVersion = "{{.ABIVersion}}"
+
+type request struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      int             `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+}
+
+type response struct {
+	JSONRPC string  `json:"jsonrpc"`
+	ID      int     `json:"id"`
+	Result  any     `json:"result,omitempty"`
+	Error   *rpcErr `json:"error,omitempty"`
+}
+
+type rpcErr struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// manifest is the answer to gravix.describe. Declare every configuration field
+// here; a field typed "secret" is never logged by Gravix, never included in an
+// error, and never written into a `gravix doctor` bundle.
+var manifest = map[string]any{
+	"name":          "{{.Name}}",
+	"version":       "0.1.0",
+	"abi_version":   abiVersion,
+	"kind":          "{{.Kind}}",
+	"description":   "{{.Description}}",
+	"license":       "Apache-2.0",
+	"config_schema": configSchema,
+}
+
+var configSchema = map[string]any{
+	"endpoint": endpointField,
+}
+
+var endpointField = map[string]any{
+	"type":        "string",
+	"required":    false,
+	"description": "where this plugin sends data; replace with what you need",
+}
+{{if eq .Kind "notifier"}}
+// alert is the subset of Gravix's Alert this plugin reads. Decoding a subset is
+// deliberate: a field added to Alert in a later release must not break a
+// plugin built against this one.
+type alert struct {
+	AlertID     string  `json:"alert_id"`
+	RuleName    string  `json:"rule_name"`
+	Metric      string  `json:"metric"`
+	Threshold   float64 `json:"threshold"`
+	ActualValue float64 `json:"actual_value"`
+	Service     string  `json:"service"`
+	FiredAt     string  `json:"fired_at"`
+}
+
+// deliver is the stub to replace.
+//
+// It must be idempotent on AlertID: Gravix retries, and a duplicate page in
+// the middle of the night is worse than a late one. Key whatever you send on
+// the alert id so the destination can collapse repeats.
+func deliver(a alert) error {
+	fmt.Fprintf(os.Stderr, "{{.Name}}: alert %s (%s) %s=%v threshold=%v service=%s at %s\n",
+		a.AlertID, a.RuleName, a.Metric, a.ActualValue, a.Threshold, a.Service, a.FiredAt)
+	return nil
+}
+{{end}}{{if eq .Kind "exporter"}}
+// batch is one set of rows handed to this exporter. Rows are untyped JSON
+// objects because what a row contains depends on the dataset, and the ABI must
+// not change every time a column is added to one of them.
+type batch struct {
+	Dataset  string           `json:"dataset"`
+	EventDay string           `json:"event_day"`
+	TenantID string           `json:"tenant_id"`
+	Rows     []map[string]any `json:"rows"`
+}
+
+// write is the stub to replace.
+//
+// The destination string is shown in logs and in `gravix doctor` output, so it
+// must never contain a credential — name the bucket, not the signed URL.
+func write(b batch) (rowsWritten int64, destination string, err error) {
+	fmt.Fprintf(os.Stderr, "{{.Name}}: %d %s rows for %s\n", len(b.Rows), b.Dataset, b.EventDay)
+	return int64(len(b.Rows)), "stderr", nil
+}
+{{end}}{{if eq .Kind "adapter"}}
+// convertParams is what Gravix sends for gravix.convert. Payload is base64 in
+// JSON because it is raw bytes.
+type convertParams struct {
+	Payload     []byte `json:"payload"`
+	ContentType string `json:"content_type"`
+}
+
+// requestFact is the fact shape Gravix accepts. path_template must use {id}
+// placeholders: Gravix re-checks every fact returned here against its own
+// cardinality budget and drops the ones that carry raw ids, so emitting them
+// loses data silently rather than getting it in.
+type requestFact struct {
+	EventID         string `json:"event_id"`
+	EventTime       string `json:"event_time"` // RFC3339
+	Service         string `json:"service"`
+	Method          string `json:"method"`
+	PathTemplate    string `json:"path_template"`
+	StatusCode      int32  `json:"status_code"`
+	LatencyMs       int32  `json:"latency_ms"`
+	UserAgentFamily string `json:"user_agent_family"`
+}
+
+// convert is the stub to replace.
+//
+// It currently accepts facts that are already in Gravix's shape, which makes
+// the round trip runnable before you have written a parser. Replace the body
+// with one that reads your own format.
+func convert(p convertParams) ([]requestFact, error) {
+	if p.ContentType != "application/json" {
+		return nil, fmt.Errorf("unsupported content type %q", p.ContentType)
+	}
+	var facts []requestFact
+	if err := json.Unmarshal(p.Payload, &facts); err != nil {
+		return nil, fmt.Errorf("decode payload: %w", err)
+	}
+	return facts, nil
+}
+{{end}}
+// handle answers one request. It never exits: a returned JSON-RPC error is a
+// clean failure Gravix reports, while exiting counts as a crash and spends the
+// plugin's failure budget.
+func handle(req request) response {
+	resp := response{JSONRPC: "2.0", ID: req.ID}
+
+	switch req.Method {
+	case "gravix.describe":
+		resp.Result = manifest
+{{if eq .Kind "notifier"}}
+	case "gravix.notify":
+		var a alert
+		if err := json.Unmarshal(req.Params, &a); err != nil {
+			resp.Error = &rpcErr{Code: -32602, Message: "invalid alert"}
+			break
+		}
+		if err := deliver(a); err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			break
+		}
+		resp.Result = map[string]any{"delivered": true}
+{{end}}{{if eq .Kind "exporter"}}
+	case "gravix.export":
+		var b batch
+		if err := json.Unmarshal(req.Params, &b); err != nil {
+			resp.Error = &rpcErr{Code: -32602, Message: "invalid batch"}
+			break
+		}
+		n, dest, err := write(b)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			break
+		}
+		resp.Result = map[string]any{"rows_written": n, "destination": dest}
+{{end}}{{if eq .Kind "adapter"}}
+	case "gravix.convert":
+		var p convertParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			resp.Error = &rpcErr{Code: -32602, Message: "invalid convert params"}
+			break
+		}
+		facts, err := convert(p)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			break
+		}
+		if facts == nil {
+			facts = []requestFact{}
+		}
+		resp.Result = facts
+{{end}}
+	default:
+		resp.Error = &rpcErr{Code: -32601, Message: "method not found"}
+	}
+
+	return resp
+}
+
+func serve(stdin io.Reader, stdout io.Writer) error {
+	in := bufio.NewReader(stdin)
+	out := bufio.NewWriter(stdout)
+
+	for {
+		line, err := in.ReadBytes('\n')
+		if err != nil {
+			return nil // Gravix closed the pipe; we are done.
+		}
+
+		var req request
+		if err := json.Unmarshal(line, &req); err != nil {
+			return nil
+		}
+
+		body, err := json.Marshal(handle(req))
+		if err != nil {
+			return err
+		}
+		if _, err := out.Write(append(body, '\n')); err != nil {
+			return err
+		}
+		// Flushed after every response. Gravix reads one line at a time, so a
+		// response sitting in a buffer looks exactly like a hung plugin and
+		// gets killed at the call timeout.
+		if err := out.Flush(); err != nil {
+			return err
+		}
+	}
+}
+
+func main() {
+	if err := serve(os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "{{.Name}}: %v\n", err)
+		os.Exit(1)
+	}
+}

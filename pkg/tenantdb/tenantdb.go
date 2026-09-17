@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package tenantdb provides multi-tenant data access for Gravix.
 //
 // It defines repository interfaces for tenants, API keys, and users,
@@ -20,8 +23,8 @@ type Tenant struct {
 	Plan                 string // free, team, business, scale, enterprise
 	StripeCustomerID     string
 	StripeSubscriptionID string
-	Status               string // active, suspended, churned
-	OverageAllowed       bool   // false=reject over limit (free), true=allow+flag (paid)
+	Status               string     // active, suspended, churned
+	OverageAllowed       bool       // false=reject over limit (free), true=allow+flag (paid)
 	ParentTenantID       string     // non-empty for child orgs in multi-org setup
 	TrialStartedAt       *time.Time // nil if never on trial
 	TrialEndsAt          *time.Time // nil if no trial or trial expired
@@ -262,8 +265,8 @@ type AlertRule struct {
 	ID              string
 	TenantID        string
 	Name            string
-	Metric          string  // error_rate, p50_latency, p95_latency, p99_latency, throughput
-	Operator        string  // gt, lt
+	Metric          string // error_rate, p50_latency, p95_latency, p99_latency, throughput
+	Operator        string // gt, lt
 	Threshold       float64
 	WindowMinutes   int
 	Service         string // empty = all services
@@ -341,11 +344,11 @@ type AuditRepo interface {
 // RetentionPolicy represents per-tenant data retention configuration.
 // When set, overrides the plan-based default retention for that tenant.
 type RetentionPolicy struct {
-	TenantID       string
-	FactsDays      int  // retention for request facts (0 = use plan default)
-	MetricsDays    int  // retention for aggregated metrics (0 = use plan default)
-	TracesDays     int  // retention for trace samples (0 = use 7-day default)
-	UpdatedAt      time.Time
+	TenantID    string
+	FactsDays   int // retention for request facts (0 = use plan default)
+	MetricsDays int // retention for aggregated metrics (0 = use plan default)
+	TracesDays  int // retention for trace samples (0 = use 7-day default)
+	UpdatedAt   time.Time
 }
 
 // RetentionPolicyRepo manages per-tenant retention policies.
@@ -452,10 +455,10 @@ type CustomDashboard struct {
 	TenantID    string
 	Name        string
 	Description string
-	Config      string    // JSON array of panel configurations
+	Config      string // JSON array of panel configurations
 	IsDefault   bool
-	SharedWith  string    // private, team
-	CreatedBy   string    // user ID
+	SharedWith  string // private, team
+	CreatedBy   string // user ID
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -469,6 +472,38 @@ type CustomDashboardRepo interface {
 	ListByTenant(ctx context.Context, tenantID string) ([]*CustomDashboard, error)
 	// SetDefault marks a dashboard as the tenant default and clears the flag on any other.
 	SetDefault(ctx context.Context, tenantID, id string) error
+}
+
+// SLORecord is a stored service level objective.
+//
+// It mirrors pkg/slo.SLO but keeps its own shape: the storage layer holds the
+// window as days because that is what the CHECK constraint can enforce, while
+// the engine works in durations. Converting at the boundary keeps the database
+// from having an opinion about time arithmetic.
+type SLORecord struct {
+	ID          string
+	TenantID    string
+	Service     string
+	Kind        string // availability | latency
+	Objective   float64
+	ThresholdMs float64
+	WindowDays  int
+	Enabled     bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// SLORepo manages service level objectives.
+type SLORepo interface {
+	Create(ctx context.Context, s *SLORecord) error
+	GetByID(ctx context.Context, id string) (*SLORecord, error)
+	Update(ctx context.Context, s *SLORecord) error
+	Delete(ctx context.Context, id string) error
+	ListByTenant(ctx context.Context, tenantID string) ([]*SLORecord, error)
+	// ListEnabled returns every enabled SLO across all tenants, for the alert
+	// evaluator's cron. It is the one method that crosses tenants, and it exists
+	// only so the evaluator does not have to enumerate tenants itself.
+	ListEnabled(ctx context.Context) ([]*SLORecord, error)
 }
 
 // TenantBranding holds per-tenant visual customization (Enterprise feature).
@@ -546,5 +581,6 @@ type DB interface {
 	CustomDashboards() CustomDashboardRepo
 	TenantBranding() TenantBrandingRepo
 	ScheduledExports() ScheduledExportRepo
+	SLOs() SLORepo
 	Close() error
 }

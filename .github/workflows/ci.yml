@@ -11,6 +11,23 @@ env:
   IMAGE_PREFIX: ${{ github.repository }}
 
 jobs:
+  # Charter §7.1: the Apache-2.0 core must build and test with ee/ deleted, and
+  # no core package may import ee/. A failure here is a charter violation, not a
+  # build error to work around, so this job is never continue-on-error.
+  oss-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Enforce the open-core boundary
+        run: make check-boundary
+      - name: Build the core with ee/ absent
+        run: make build-oss
+      - name: Test the core with ee/ absent
+        run: make test-oss
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -36,6 +53,86 @@ jobs:
       - name: Staticcheck
         run: staticcheck ./...
 
+      # tests/e2e/, tests/correctness/ and bench/ are behind `//go:build slow`,
+      # so an untagged vet and staticcheck never load them at all — an entire
+      # partition of the suite, silently unlinted. That is how a dead constant
+      # lived in tests/e2e for a day, next to a comment claiming a test used it.
+      #
+      # These run the same checks over that partition. They are separate steps
+      # rather than extra flags on the two above, so a failure names which half
+      # of the tree it came from.
+      - name: Vet (slow-tagged suites)
+        run: go vet -tags=slow ./...
+
+      - name: Staticcheck (slow-tagged suites)
+        run: staticcheck -tags=slow ./...
+
+  # ─── Isolated Go modules (GRVX-1104) ───
+  # terraform-provider-gravix/ and grafana-plugin/gravix-datasource/ each carry
+  # their own go.mod, so the root `go build ./...` and `go test ./...` never
+  # descend into them. That isolation is deliberate — it is what keeps their
+  # dependency trees out of check-boundary — and it also meant nothing in CI
+  # had ever compiled either one.
+  #
+  # The plugin has eight tests that would have run nowhere. Added here beyond
+  # GRVX-1104 §4.2, which says "no files to modify", because a test suite that
+  # never runs is a liability rather than coverage. See SD-051.
+  isolated-modules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Terraform provider — build
+        working-directory: terraform-provider-gravix
+        run: go build ./...
+
+      - name: Grafana plugin — vet and test
+        working-directory: grafana-plugin/gravix-datasource
+        run: |
+          go vet ./...
+          go test ./... -count=1
+
+      # CGO_ENABLED=0 is not a preference here. Grafana runs the backend binary
+      # on whatever machine runs Grafana, so a cgo dependency would make the
+      # plugin built-here-only, which for a plugin is the same as broken.
+      - name: Grafana plugin — backend is cross-buildable
+        working-directory: grafana-plugin/gravix-datasource
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          # Built under its real name, not /dev/null: Grafana execs
+          # <executable>_<goos>_<goarch>, and the first version of this job
+          # proved compilation while the plugin still could not start.
+          GOOS=linux GOARCH=amd64 go build -o dist/gpx_gravix_datasource_linux_amd64 ./cmd
+          test -x dist/gpx_gravix_datasource_linux_amd64
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Grafana plugin — frontend builds
+        working-directory: grafana-plugin/gravix-datasource
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+          npm run build
+          test -f dist/module.js
+          test -f dist/plugin.json
+
+      # AC-7, the one criterion that needs Grafana itself. It lives here rather
+      # than in the fast suite because it pulls a ~450MB image and waits on a
+      # container — scripts/golden_path_test.sh runs tests/e2e with a 120s
+      # budget and is explicitly the no-Docker smoke test. The step above has
+      # already built dist/, so the test's own build is a no-op cache hit.
+      - name: Grafana plugin — Grafana loads it (GRVX-1104 AC-7)
+        env:
+          GRAFANA_PLUGIN_E2E: '1'
+        run: go test -tags=slow ./tests/e2e/ -run TestGrafanaLoadsPlugin -count=1 -timeout 15m -v
+
   vuln:
     runs-on: ubuntu-latest
     steps:
@@ -47,6 +144,37 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
         run: govulncheck ./...
+
+  # The suite a contributor runs before pushing, with its budget enforced here.
+  # A five-minute promise nobody measures becomes a fifteen-minute suite, and
+  # then it becomes a suite nobody runs — which is how a drive-by contributor
+  # is lost before they have written a line.
+  fast-suite-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Run the contributor suite and enforce its budget
+        # Exit 4 means every test passed and the suite was over budget. That is
+        # a regression in its own right, and it is deliberately not the same
+        # exit code as a failing test: a contributor who cannot tell them apart
+        # fixes the wrong one.
+        #
+        # The budget here is 8 minutes rather than the contributor's 5. A shared
+        # runner is slower and far more variable than a developer machine: the
+        # same tree measured 3m30s and 5m33s on two runners twenty minutes apart
+        # (F-047), so the 5-minute number would be red at random. 8 minutes still
+        # catches the suite growing — it is 1.6x the typical run — while
+        # measuring the suite rather than the runner.
+        env:
+          GRAVIX_FAST_SUITE_BUDGET_SECONDS: '480'
+        run: ./scripts/test_fast.sh --timing
 
   test:
     runs-on: ubuntu-latest
@@ -68,11 +196,93 @@ jobs:
           key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-${{ matrix.go-version }}-
 
+      - name: Check the generated metric docs are current
+        run: make contracts-check
+
+      # Checks 3, 4 and 5 of the listing rules (registry/README.md), enforced
+      # on every pull request. Checks 1, 2 and 6 are about a third-party
+      # repository rather than about this file, so they are performed once by a
+      # reviewer: a registry that goes red whenever an unrelated repository has
+      # an outage is a registry nobody can merge into.
+      - name: Validate the plugin registry against its schema
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check jsonschema
+          python3 - <<'PY'
+          import json, sys
+          from jsonschema import Draft202012Validator
+
+          schema = json.load(open("registry/schema.json"))
+          registry = json.load(open("registry/plugins.json"))
+          errors = sorted(Draft202012Validator(schema).iter_errors(registry), key=lambda e: e.path)
+          for e in errors:
+              where = "/".join(str(p) for p in e.absolute_path) or "(root)"
+              print(f"::error file=registry/plugins.json::{where}: {e.message}")
+          if errors:
+              sys.exit(1)
+          print(f"registry: {len(registry['plugins'])} entries valid against schema.json")
+          PY
+
+      # Charter §6 requires an RFC, a 14-day comment window and two named
+      # approvals before the charter can be amended. This is what makes that
+      # procedure executable rather than aspirational: the window length, the
+      # approval count and the entrenchment question are checked here, not by
+      # whoever happens to be reviewing.
+      - name: Validate the RFCs and the decision log
+        run: make rfc-check
+
+      # The published roadmap is generated from the goal tree, the spec index and
+      # the non-goals. A stale board is a red build rather than something a
+      # reader finds out by believing it.
+      - name: Check the generated pricing pages are current
+        run: make pricing-check
+
+      - name: Check the published roadmap is current
+        run: make roadmap-check
+
+      # The roadmap board renders each spec's status straight onto the docs
+      # site. A spec marked done whose files do not exist is a claim that work
+      # happened, and nine of them sat in the register unchecked (F-044).
+      - name: Verify every spec marked done has its files
+        run: make spec-status-check
+
+      # SECURITY.md's supported-versions table is generated from the release
+      # record. A security policy claiming a support window the maintainers do
+      # not honour is worse than no policy, and both that file and
+      # docs/oss/lts-policy.md tell the reader this check exists — so it has to.
+      - name: Check the supported-versions table is current
+        run: make supported-versions-check
+
+      # Gravix collects no telemetry, so the only way anyone is listed in
+      # ADOPTERS.md is that somebody at that organisation asked. The Submission
+      # column records where, and this is what makes that opt-in claim
+      # checkable rather than merely stated.
+      #
+      # Exit 3 means the tracker was unreachable and nothing was checked. That
+      # is reported loudly and does not fail the build: a fabricated row still
+      # exits 1 and still goes red, while a gate that turns red because GitHub
+      # had a bad minute is a gate people learn to re-run (F-047). What it must
+      # never be is silence, which it was until F-049.
+      - name: Verify every adopter opted in
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          ./scripts/verify_adopters.sh
+          status=$?
+          set -e
+          if [ "$status" = "3" ]; then
+            echo "::warning::The issue tracker was unreachable, so the adopter opt-in claim was not verified on this run."
+            exit 0
+          fi
+          exit "$status"
+
       - name: Run tests with race detector
-        run: go test ./... -v -race -count=1
+        # -tags=slow so this covers every suite. GRVX-1206 split the suites by
+        # speed for contributors; CI still runs all of them on every pull request.
+        run: go test -tags=slow ./... -v -race -count=1
 
       - name: Run tests with coverage
-        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+        run: go test -tags=slow ./... -coverprofile=coverage.out -covermode=atomic
 
       - name: Check schema coverage >= 90%
         run: |
@@ -115,6 +325,7 @@ jobs:
           go build -o bin/service-events-detail-rollup ./transforms/service_events_detail/
           go build -o bin/load-generator ./cmd/load_generator/
           go build -o bin/purge ./cmd/purge/
+          go build -o bin/iceberg-sync ./transforms/iceberg_sync/
 
   helm-validate:
     runs-on: ubuntu-latest
@@ -195,6 +406,36 @@ jobs:
         with:
           dockerfile: services/gateway/Dockerfile
 
+      # The bootstrap stack had never parsed — one unquoted YAML value ending in
+      # a colon made Compose reject the whole file, so no service started and
+      # the error named a type rather than a line (F-010). Nothing ran this
+      # command in CI, which is why it survived. Now something does.
+      - name: Validate the bootstrap compose file
+        run: docker compose -f docker-compose.bootstrap.yml config >/dev/null
+
+      # The full stack, added here now that the duplicate `gateway:` key is gone
+      # (F-011). It was left out deliberately while that fault stood, with the
+      # note that it should join in the same change that fixes it — this is that
+      # change. Nothing in CI had ever loaded this file, which is how a file that
+      # Compose rejects outright survived from May to September.
+      - name: Validate the full-stack compose file
+        run: docker compose -f docker-compose.yml config >/dev/null
+        env:
+          # config resolves ${VAR:?msg} interpolation and fails the parse if such
+          # a variable is unset, so every one of them needs a value here. These
+          # are parse-time placeholders in a lint job that starts no container,
+          # not credentials.
+          #
+          # Do not maintain this list by hand — two attempts got it wrong, the
+          # second because the grep used to find the names excluded digits and so
+          # skipped both S3_ variables. TestComposeValidationStepSuppliesEvery
+          # RequiredVariable in cmd/onboarding_gate derives the list from the
+          # compose file and fails if this one falls behind.
+          JWT_SECRET: ci-compose-validation-placeholder
+          MINIO_ROOT_PASSWORD: ci-compose-validation-placeholder
+          S3_ACCESS_KEY: ci-compose-validation-placeholder
+          S3_SECRET_KEY: ci-compose-validation-placeholder
+
   # ─── Container Image Pipeline (runs only on main branch push) ───
   docker-build:
     runs-on: ubuntu-latest
@@ -203,6 +444,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Build provenance (GRVX-1401). id-token mints the OIDC token the
+      # attestation is signed with; attestations writes it. Both are scoped to
+      # this job, so nothing else in the workflow can sign anything.
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -242,6 +488,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -251,6 +498,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Signed, public evidence of what this image was built from: which commit,
+      # which workflow, which repository. G8.1 — "Cloud runs the same OSS core,
+      # no private fork" — stops being an assertion anybody has to take on trust
+      # and becomes `gh attestation verify oci://<image> --owner lgreene`, which
+      # a stranger can run.
+      #
+      # This is a core change, not a commercial one: every self-hoster pulling
+      # these images gets the same evidence, and it keeps working with ee/
+      # deleted. Only the tooling Gravix Cloud runs against its own images is
+      # in ee/ (GRVX-1401 §4.1a).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   # ─── Trivy Vulnerability Scanning ───
   image-scan:
@@ -308,10 +572,70 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-
 
+      # Bare-Parquet access (GRVX-1101). The DuckDB CLI is a foreign, unmodified
+      # SQL engine, and tests/e2e/bare_parquet_test.go shells out to it to prove
+      # the warehouse layout is readable by a generic engine with no Gravix
+      # process running. Without it those tests skip, so the proof is only real
+      # while this step succeeds.
+      #
+      # The version is pinned: an unpinned installer would let a DuckDB release
+      # turn this build red with no change to Gravix, and would make the proof
+      # unreproducible for anyone re-running it later. Bump it deliberately, and
+      # run `go test ./tests/e2e/ -run TestBareParquet -v` against the new
+      # version first.
+      - name: Install DuckDB CLI
+        env:
+          DUCKDB_VERSION: v1.1.3
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$RUNNER_TEMP/duckdb.zip" \
+            "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
+          unzip -o -d "$HOME/.local/bin" "$RUNNER_TEMP/duckdb.zip" duckdb
+          chmod +x "$HOME/.local/bin/duckdb"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/duckdb" --version
+
+      # Exit path (GRVX-1109). The claim is that a user can leave with
+      # everything, in formats readable with no Gravix component running. That
+      # is only true while this passes, so it runs on every commit rather than
+      # living in a document nobody executes.
+      - name: Exit path — export everything and read it with Gravix stopped
+        env:
+          E2E_TEST: "1"
+        run: go test -tags=slow ./tests/e2e/... -run 'TestExportEverything|TestExitPath|TestExportRowCounts|TestNoSecretInExitPath|TestConfigExportComplete|TestReadmeCommandsRun|TestChecksumsVerify|TestNonEmptyDestinationRefused' -v -count=1 -timeout 300s
+
       - name: Run end-to-end tests
         env:
           E2E_TEST: "1"
-        run: go test ./tests/e2e/... -v -count=1 -timeout 300s
+        run: go test -tags=slow ./tests/e2e/... -v -count=1 -timeout 300s
+
+  # ─── Correctness suite (GRVX-810) ───
+  # Proves the Phase 8 properties hold together — determinism, late data,
+  # retroactive backfill, mergeability, lineage, contract coverage — rather than
+  # one spec at a time. No Docker, and budgeted at five minutes.
+  #
+  # A failure here is a defect report against the spec that owns the property.
+  # It is never fixed by softening the assertion, and this job is never
+  # continue-on-error.
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Run the correctness suite
+        run: make test-correctness
+
+      # The public demonstration, run for real. It is the proof artefact for
+      # claim C2 in the competitive thesis, and a demo that breaks silently is
+      # worse than no demo because the docs keep claiming it works.
+      - name: Run the prove-it demonstration
+        run: ./scripts/prove_it.sh
 
   # ─── SDK Tests (Node + Python) ───
   sdk-tests:
@@ -332,6 +656,16 @@ jobs:
         run: |
           npm ci
           npx tsc --noEmit
+
+      - name: Node SDK tests
+        working-directory: sdk/node
+        run: npm test
+
+      # The Cube model, the dashboard's query routing and the lineage panel are
+      # JavaScript, so their correctness cannot be proven by `go test`.
+      # GRVX-808 AC-9/AC-11 and GRVX-809 AC-1/4/5/6/7/8/9/10/11/12/13/14 live here.
+      - name: Cube model and dashboard tests
+        run: node --test tests/cube/*.test.js dashboards/lib/*.test.js
 
       - name: Python SDK tests
         working-directory: sdk/python
@@ -376,29 +710,107 @@ jobs:
           name: docker-compose-logs
           path: /tmp/docker-compose-logs.txt
 
+  # ─── Timed onboarding budget (GRVX-910) ───
+  # G3.1: the time from `docker compose up` to a dashboard showing real, rolled-up
+  # data must stay under ten minutes. This runs on pull_request as well as push,
+  # because a budget that only gates main gates nothing — by the time it fails there
+  # the regression is already merged. Never continue-on-error: a budget that can
+  # silently pass is not a gate.
+  timed-onboarding:
+    runs-on: ubuntu-latest
+    needs: [build]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      # No .env is created on purpose. The whole claim under test is that this
+      # stack needs no configuration, so supplying any would measure a path no
+      # first-time user takes.
+      - name: Measure time to a populated dashboard
+        run: bash scripts/timed_onboarding_test.sh
+
+      - name: Upload stack logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-logs
+          path: /tmp/gravix-onboarding-logs.txt
+
   # ─── CI Summary Gate ───
+  # ─── Framework recipe examples ───
+  # Every recipe is executed for real against a stub ingestion server, and the
+  # path_template it sends is asserted. A recipe that documents /users/{id} and
+  # sends /users/1234 is worse than no recipe, and only running it catches that.
+  recipe-examples:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The SDKs are consumed from this checkout, not from a registry: a recipe
+      # must work against the code in the pull request, not the last release.
+      - name: Build the Node SDK
+        working-directory: sdk/node
+        run: npm ci && npm run build
+
+      - name: Install the Express recipe's dependencies
+        working-directory: examples/recipes/express
+        run: npm install express && npm install --install-links ../../../sdk/node
+
+      - name: Install the Python SDK and framework dependencies
+        run: python -m pip install --quiet ./sdk/python flask fastapi uvicorn django
+
+      - name: Run the recipe tests
+        run: go test ./examples/recipes/... -v -timeout 300s
+
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, test, build, e2e, sdk-tests, helm-validate, docker-lint]
+    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules]
     if: always()
     steps:
       - name: Check job results
         run: |
           echo "Lint:          ${{ needs.lint.result }}"
           echo "Vuln:          ${{ needs.vuln.result }}"
+          echo "Fast suite:    ${{ needs.fast-suite-budget.result }}"
           echo "Test:          ${{ needs.test.result }}"
           echo "Build:         ${{ needs.build.result }}"
           echo "E2E:           ${{ needs.e2e.result }}"
           echo "SDK Tests:     ${{ needs.sdk-tests.result }}"
           echo "Helm Validate: ${{ needs.helm-validate.result }}"
           echo "Docker Lint:   ${{ needs.docker-lint.result }}"
+          echo "Correctness:   ${{ needs.correctness.result }}"
+          echo "Recipes:       ${{ needs.recipe-examples.result }}"
+          echo "Onboarding:    ${{ needs.timed-onboarding.result }}"
+          echo "Isolated mods: ${{ needs.isolated-modules.result }}"
 
           # Fail if any required job failed
-          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
+          if [[ "${{ needs.timed-onboarding.result }}" == "failure" ]] || \
+             [[ "${{ needs.recipe-examples.result }}" == "failure" ]] || \
+             [[ "${{ needs.lint.result }}" == "failure" ]] || \
+             [[ "${{ needs.fast-suite-budget.result }}" == "failure" ]] || \
              [[ "${{ needs.test.result }}" == "failure" ]] || \
              [[ "${{ needs.build.result }}" == "failure" ]] || \
              [[ "${{ needs.e2e.result }}" == "failure" ]] || \
-             [[ "${{ needs.sdk-tests.result }}" == "failure" ]]; then
+             [[ "${{ needs.sdk-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.isolated-modules.result }}" == "failure" ]] || \
+             [[ "${{ needs.correctness.result }}" == "failure" ]]; then
             echo "::error::One or more required CI jobs failed"
             exit 1
           fi

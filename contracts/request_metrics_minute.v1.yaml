@@ -1,0 +1,217 @@
+# Copyright 2026 The Gravix Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contracts for the six metrics in request_metrics_minute.
+#
+# A contract is a published promise about what a number means. Changing a shipped
+# metric's meaning requires a new version here — never an edit in place — because
+# a consumer who stored last month's numbers must still be able to find out what
+# they meant.
+#
+# docs/02-derived-metrics.md is generated from this file by `make contracts`.
+
+contracts:
+  - name: request_count
+    version: v1
+    title: Requests
+    formula: COUNT(*) over RequestFacts in the bucket
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: exact
+    error_bound: none; this is a count of facts
+    mergeability: sum
+    merge_note: >-
+      Counts add. Summing the per-minute counts over any window gives the exact
+      count for that window.
+    late_data: >-
+      A late fact is appended to the fact stream with its original event_time. The
+      bucket it belongs to is rebuilt from scratch on the next rollup or recompute,
+      so the count corrects itself rather than drifting.
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+
+  - name: error_count
+    version: v1
+    title: Errors
+    formula: COUNT(*) over RequestFacts in the bucket WHERE status_code >= 500
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - status_code
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: exact
+    error_bound: none; this is a count of facts
+    mergeability: sum
+    merge_note: >-
+      Counts add. Note the threshold: a 4xx is a client error and is deliberately
+      not counted here, because it is usually the caller's fault and not a signal
+      about this service's health.
+    late_data: >-
+      Same as request_count: the bucket is rebuilt from facts, so a late error is
+      counted once the bucket is next computed.
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+
+  - name: error_rate
+    version: v1
+    title: Error rate
+    formula: error_count / request_count within the bucket; 0 when request_count is 0
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - status_code
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: exact
+    error_bound: none within a bucket; exact across buckets when merged as specified
+    mergeability: weighted_mean
+    merge_note: >-
+      MUST be recomputed across buckets as sum(error_count) / sum(request_count).
+      NEVER average the per-bucket rates. Averaging gives every bucket equal weight
+      regardless of traffic, so one idle minute with a single failed request counts
+      as much as a busy minute with ten thousand successes — which can turn a
+      healthy hour into an apparent outage, or hide a real one.
+    late_data: >-
+      Both numerator and denominator are recomputed together from facts, so the
+      rate is always internally consistent; it is never a new numerator over a
+      stale denominator.
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+
+  - name: latency_p50
+    version: v1
+    deprecated: true
+    title: Median latency (p50)
+    formula: 50th percentile of latency_ms over RequestFacts in the bucket
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - latency_ms
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: approximate
+    error_bound: UNBOUNDED across buckets; exact within one bucket
+    mergeability: none
+    merge_note: >-
+      Do not aggregate across buckets. There is no correct way to combine
+      per-bucket percentiles without the underlying distribution, which this metric
+      does not store.
+    late_data: >-
+      The bucket is recomputed from all of its facts, so a late fact shifts the
+      percentile to its correct value rather than being folded into a stale one.
+    known_defect: |
+      Exact within a single one-minute bucket, computed from raw latencies.
+      Across buckets the Cube model currently exposes MAX of the per-minute values
+      (cube/model/schema/RequestMetricsMinute.js), which is not the percentile of the
+      combined window and has an unbounded error. Do not aggregate this metric across
+      buckets. Fixed by GRVX-804, which stores a mergeable t-digest sketch.
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+
+  - name: latency_p95
+    version: v1
+    deprecated: true
+    title: 95th percentile latency (p95)
+    formula: 95th percentile of latency_ms over RequestFacts in the bucket
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - latency_ms
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: approximate
+    error_bound: UNBOUNDED across buckets; exact within one bucket
+    mergeability: none
+    merge_note: >-
+      Do not aggregate across buckets. There is no correct way to combine
+      per-bucket percentiles without the underlying distribution, which this metric
+      does not store.
+    late_data: >-
+      The bucket is recomputed from all of its facts, so a late fact shifts the
+      percentile to its correct value rather than being folded into a stale one.
+    known_defect: |
+      Exact within a single one-minute bucket, computed from raw latencies.
+      Across buckets the Cube model currently exposes MAX of the per-minute values
+      (cube/model/schema/RequestMetricsMinute.js), which is not the percentile of the
+      combined window and has an unbounded error. Do not aggregate this metric across
+      buckets. Fixed by GRVX-804, which stores a mergeable t-digest sketch.
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02
+
+  - name: latency_p99
+    version: v1
+    deprecated: true
+    title: 99th percentile latency (p99)
+    formula: 99th percentile of latency_ms over RequestFacts in the bucket
+    input_facts:
+      - RequestFact
+    input_fields:
+      - event_time
+      - service
+      - method
+      - path_template
+      - latency_ms
+    grain: 1 minute, per service/method/path_template
+    dimensions:
+      - tenant_id
+      - service
+      - method
+      - path_template
+    exactness: approximate
+    error_bound: UNBOUNDED across buckets; exact within one bucket
+    mergeability: none
+    merge_note: >-
+      Do not aggregate across buckets. There is no correct way to combine
+      per-bucket percentiles without the underlying distribution, which this metric
+      does not store. At p99 a one-minute bucket may hold too few requests for the
+      figure to mean much on its own — a bucket with fewer than 100 requests has no
+      99th percentile in any useful sense.
+    late_data: >-
+      The bucket is recomputed from all of its facts, so a late fact shifts the
+      percentile to its correct value rather than being folded into a stale one.
+    known_defect: |
+      Exact within a single one-minute bucket, computed from raw latencies.
+      Across buckets the Cube model currently exposes MAX of the per-minute values
+      (cube/model/schema/RequestMetricsMinute.js), which is not the percentile of the
+      combined window and has an unbounded error. Do not aggregate this metric across
+      buckets. Fixed by GRVX-804, which stores a mergeable t-digest sketch.
+    recompute_cmd: gravix recompute --metric request_metrics_minute --from 2026-09-01 --to 2026-09-02

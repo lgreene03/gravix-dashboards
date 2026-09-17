@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -6,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -22,8 +26,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	gravixv1 "github.com/lgreene/gravix-dashboards/gen/gravix/v1"
+	"github.com/lgreene/gravix-dashboards/pkg/baseline"
+	"github.com/lgreene/gravix-dashboards/pkg/cardinality"
 	"github.com/lgreene/gravix-dashboards/pkg/circuitbreaker"
+	"github.com/lgreene/gravix-dashboards/pkg/discovery"
+	"github.com/lgreene/gravix-dashboards/pkg/lateness"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
+	"github.com/lgreene/gravix-dashboards/pkg/pathlearn"
 	"github.com/lgreene/gravix-dashboards/pkg/ratelimit"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
@@ -127,6 +137,87 @@ func topicForTenant(tenantID, baseTopic string) string {
 	return tenantID + "/" + baseTopic
 }
 
+// unprocessableNote is returned to a caller whose fact can be stored but can
+// never appear in a metric, because its event_time predates the retention window.
+// Accepting such a fact silently would be the worst option available: the sender
+// would have no way to know its data vanished.
+const unprocessableNote = "event_time precedes the retention window; stored but not aggregated"
+
+// latenessConfig bounds the lateness classification. It is a variable so a test
+// can narrow the windows without waiting thirty days.
+var latenessConfig = lateness.DefaultConfig()
+
+// futureClockWarn rate-limits the wrong-clock warning to once per minute, so a
+// sender with a badly set clock cannot flood the log.
+var futureClockWarn struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+// classifyFact records how late an accepted fact was and returns its class.
+// It never changes whether the fact is accepted — lateness is a property of the
+// delivery, not of the fact's validity.
+func classifyFact(fact *gravixv1.RequestFact, at time.Time) lateness.Class {
+	eventTime := fact.EventTime.AsTime()
+	class := lateness.Classify(latenessConfig, eventTime, at)
+	factsByLatenessTotal.WithLabelValues(string(class), fact.Service).Inc()
+
+	if ahead := lateness.FutureBy(latenessConfig, eventTime, at); ahead > 0 {
+		warnFutureClock(fact.Service, ahead, at)
+	}
+	return class
+}
+
+// warnFutureClock logs at most once per minute that a sender's clock looks wrong.
+func warnFutureClock(service string, ahead time.Duration, at time.Time) {
+	futureClockWarn.mu.Lock()
+	defer futureClockWarn.mu.Unlock()
+	if at.Sub(futureClockWarn.last) < time.Minute {
+		return
+	}
+	futureClockWarn.last = at
+	slog.Warn(fmt.Sprintf("fact event_time is %s in the future; check the sender's clock", ahead),
+		"service", service, "ahead", ahead.String())
+}
+
+// writeUnprocessableEntries copies facts that can never be aggregated into their
+// own DLQ prefix, so an operator can find them. They are also written to the raw
+// path as normal: they are valid, immutable facts.
+func writeUnprocessableEntries(sink *DurableSink, tenantID string, entries []DLQEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	records := make([][]byte, 0, len(entries))
+	for _, e := range entries {
+		data, err := json.Marshal(e)
+		if err != nil {
+			slog.Error("unprocessable dlq marshal error", "error", err)
+			continue
+		}
+		records = append(records, data)
+	}
+	if len(records) == 0 {
+		return
+	}
+	topic := topicForTenant(tenantID, "dlq/unprocessable")
+	if err := sink.WriteBatch(topic, records); err != nil {
+		slog.Error("unprocessable dlq write error", "error", err)
+		ingestionDLQWriteErrorsTotal.Inc()
+	}
+}
+
+// unprocessableEntry builds the DLQ record for a fact that cannot be aggregated.
+func unprocessableEntry(tenantID, reqID string, at time.Time, raw []byte) DLQEntry {
+	return DLQEntry{
+		Timestamp: at,
+		TenantID:  tenantID,
+		RequestID: reqID,
+		FactType:  "request_fact",
+		Error:     unprocessableNote,
+		RawJSON:   json.RawMessage(raw),
+	}
+}
+
 // writeErrorJSON writes a structured JSON error response.
 func writeErrorJSON(w http.ResponseWriter, code int, errMsg string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -173,6 +264,17 @@ var (
 			Help: "Total storage upload failures.",
 		},
 	)
+	// A non-zero value here is a real, if small, loss of records: background
+	// work offered to the sink after Close began, which is declined rather than
+	// accepted and abandoned. Worth an alert if it is ever more than a handful
+	// per shutdown, because it means handlers were still being served after
+	// shutdown started.
+	ingestionShutdownDroppedTasksTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ingestion_shutdown_dropped_tasks_total",
+			Help: "Total background sink writes declined because shutdown had already begun.",
+		},
+	)
 	ingestionOverageEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ingestion_overage_events_total",
@@ -187,6 +289,20 @@ var (
 		},
 		[]string{"tenant_id"},
 	)
+	// factsByLatenessTotal counts accepted facts by how late they were relative to
+	// their own event_time. Both labels are bounded: class has exactly the four
+	// values lateness.Classes() defines, and service is already a bounded
+	// dimension. Nothing per-fact — no path_template, no request id — may be added
+	// here; docs/04-non-goals.md forbids high cardinality in our own telemetry as
+	// much as in the product.
+	factsByLatenessTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gravix_facts_received_by_lateness_total",
+			Help: "Accepted facts by lateness class and service.",
+		},
+		[]string{"class", "service"},
+	)
+
 	ingestionTraceSamplesTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ingestion_trace_samples_total",
@@ -219,10 +335,13 @@ func init() {
 	prometheus.MustRegister(collectors.NewBuildInfoCollector())
 	prometheus.MustRegister(ingestionFsyncDurationSeconds)
 	prometheus.MustRegister(ingestionDLQWriteErrorsTotal)
+	prometheus.MustRegister(ingestionShutdownDroppedTasksTotal)
 	prometheus.MustRegister(ingestionUploadErrorsTotal)
 	prometheus.MustRegister(ingestionOverageEventsTotal)
 	prometheus.MustRegister(ingestionQuotaRejectedTotal)
+	prometheus.MustRegister(factsByLatenessTotal)
 	prometheus.MustRegister(ingestionTraceSamplesTotal)
+	prometheus.MustRegister(ingestionRemoteWriteSeriesTotal)
 	prometheus.MustRegister(circuitBreakerState)
 	prometheus.MustRegister(circuitBreakerTripsTotal)
 }
@@ -247,6 +366,20 @@ type DurableSink struct {
 	activeFiles map[string]*os.File
 	mu          sync.Mutex
 	uploadWg    sync.WaitGroup // tracks in-flight upload goroutines
+	// loopWg tracks the three background loops themselves, not the uploads
+	// they start. Close waits for both: an upload that has finished is not the
+	// same as a loop that has stopped, and a loop still running after Close
+	// returned can still write into a directory the caller believes it owns.
+	loopWg sync.WaitGroup
+
+	// taskWg tracks background work handlers hand to the sink — today, the DLQ
+	// writes that a rejected fact triggers. closing, guarded by taskMu, is what
+	// makes Go safe against Close: a WaitGroup may not be Added to while
+	// another goroutine is Waiting on it at zero, so the decision to start new
+	// work and the decision to stop accepting it have to be the same decision.
+	taskMu  sync.Mutex
+	closing bool
+	taskWg  sync.WaitGroup
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -271,14 +404,24 @@ func NewDurableSink(bufferDir string, store storage.ObjectStore, cb *circuitbrea
 		maxBufferBytes: maxBufferBytes,
 	}
 
-	// Startup: Check for any previously rotated but not uploaded files
-	go ds.startupScan()
-
-	// Background: File Rotation & Upload Loop
-	go ds.backgroundRotationLoop()
-
-	// Background: Periodic retry for failed uploads
-	go ds.retryLoop()
+	// Three background loops, each tracked so Close can wait for it.
+	//
+	// They were untracked, and startupScan in particular walks the buffer
+	// directory and uploads what it finds with no reference to ds.ctx at all.
+	// Close cancelled the context, waited for in-flight uploads, and returned
+	// while that walk was still going — so a caller that deleted the buffer
+	// directory after Close could have it written into underneath them. It
+	// surfaced as a CI failure on a test whose own body had passed:
+	//
+	//   TempDir RemoveAll cleanup: unlinkat /tmp/Test…: directory not empty
+	//
+	// In a test that is a confusing red. In production it is a shutdown that
+	// can leave a half-written file behind, on the path whose entire job is
+	// not losing data.
+	ds.loopWg.Add(3)
+	go func() { defer ds.loopWg.Done(); ds.startupScan() }()
+	go func() { defer ds.loopWg.Done(); ds.backgroundRotationLoop() }()
+	go func() { defer ds.loopWg.Done(); ds.retryLoop() }()
 
 	return ds, nil
 }
@@ -367,22 +510,103 @@ func (ds *DurableSink) WriteBatch(topic string, records [][]byte) error {
 	return nil
 }
 
-func (ds *DurableSink) Close() error {
-	ds.cancel()
-	// Final rotation to flush any buffered data before shutdown
-	ds.rotateAll()
-	// Wait for all in-flight uploads to finish (with timeout)
+// Go runs fn in a goroutine that Close will wait for, and reports whether it
+// was started.
+//
+// It exists because the handlers spawn background writes — a rejected fact
+// becomes a DLQ record on a goroutine, so that a caller posting bad data is
+// not made to wait for the record of it. Those goroutines were bare `go`
+// statements holding a *DurableSink, which meant Close could cancel, drain
+// everything it knew about, log "all uploads completed before shutdown" and
+// return while one of them was still creating directories under the buffer
+// root. In a test that is a TempDir cleanup failing with "directory not
+// empty" after the test body has already passed; in production it is a DLQ
+// entry half-written across a restart, on the one path whose job is to make
+// sure a rejected fact is still accounted for.
+//
+// After Close has begun, Go returns false and runs nothing. That is deliberate
+// and it is a drop: a write accepted once shutdown has started has no rotation
+// left to reach it and no upload left to carry it, so pretending to accept it
+// would be worse than declining. Callers that must not drop should write
+// synchronously before Close is reachable.
+func (ds *DurableSink) Go(fn func()) bool {
+	ds.taskMu.Lock()
+	if ds.closing {
+		ds.taskMu.Unlock()
+		ingestionShutdownDroppedTasksTotal.Inc()
+		return false
+	}
+	ds.taskWg.Add(1)
+	ds.taskMu.Unlock()
+
+	go func() {
+		defer ds.taskWg.Done()
+		fn()
+	}()
+	return true
+}
+
+// waitBounded waits for wg, giving up after limit. It reports whether the wait
+// completed rather than timing out.
+//
+// The goroutine it leaks on a timeout is deliberate and bounded: it is parked
+// on a WaitGroup that a stuck upload will eventually release, and the
+// alternative — blocking shutdown indefinitely on a hung object store — is the
+// worse failure.
+func waitBounded(wg *sync.WaitGroup, limit time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
-		ds.uploadWg.Wait()
+		wg.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
+		return true
+	case <-time.After(limit):
+		return false
+	}
+}
+
+func (ds *DurableSink) Close() error {
+	// Stop accepting handler-spawned work before anything else. Every wait
+	// below is only meaningful if nothing can add to it afterwards.
+	ds.taskMu.Lock()
+	ds.closing = true
+	ds.taskMu.Unlock()
+
+	ds.cancel()
+
+	// Handler tasks first: they write through Write, so they have to be done
+	// before the final rotation, or their records are still in current.jsonl
+	// when rotateAll runs and never get uploaded at all.
+	if !waitBounded(&ds.taskWg, 15*time.Second) {
+		slog.Warn("timed out waiting for background writes to finish during shutdown")
+	}
+
+	// Final rotation to flush any buffered data before shutdown
+	ds.rotateAll()
+
+	// The loops come first, and the order matters. Each of them can still
+	// start an upload: the rotation loop through rotate, startupScan by
+	// calling uploadFile directly. Draining uploadWg while a loop was still
+	// running would only prove that the uploads started SO FAR had finished,
+	// and the next line of the loop could add another one.
+	//
+	// Waiting here also stops Close returning while startupScan is still
+	// walking the buffer directory, which is what a caller that deletes that
+	// directory next — every test using t.TempDir(), and every operator
+	// tearing down a node — is entitled to assume cannot happen.
+	if !waitBounded(&ds.loopWg, 15*time.Second) {
+		slog.Warn("timed out waiting for background loops to stop during shutdown")
+	}
+
+	// Now nothing new can be started, so this drains what is left.
+	if waitBounded(&ds.uploadWg, 15*time.Second) {
 		slog.Info("all uploads completed before shutdown")
-	case <-time.After(15 * time.Second):
+	} else {
 		slog.Warn("timed out waiting for uploads to finish during shutdown")
 	}
+
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 	for _, f := range ds.activeFiles {
@@ -479,6 +703,24 @@ func (ds *DurableSink) rotateTopic(topic string) {
 	}()
 }
 
+// localStoreRoot is the directory the local object store is rooted at for a
+// given --base-dir.
+//
+// It is the data root itself, NOT <base-dir>/raw. uploadFile's destination
+// keys already begin with "raw/", and every reader in the repository resolves
+// that same "raw/<topic>/" layout beneath the data root: the rollup jobs
+// default to ./data/raw/request_facts, cmd/purge and cmd/cli recompute root
+// their stores at ./data, and the gateway's DLQ endpoints list
+// "dlq/request_facts/" under ./data/raw.
+//
+// Rooting the store at <base-dir>/raw instead put the "raw/" from the key on
+// top of it, so facts landed in <base-dir>/raw/raw/<topic>/ — a directory no
+// reader ever looks in. The rollup found no input, produced no metrics, and
+// the dashboard stayed empty with every service reporting healthy. See F-015.
+func localStoreRoot(baseDir string) string {
+	return baseDir
+}
+
 // uploadFile uploads the local batch to the object store, wrapped in a circuit breaker.
 func (ds *DurableSink) uploadFile(topic, sourcePath string, t time.Time) {
 	// Destination Key: raw/<topic>/YYYY-MM-DD/HH/<uuid>.jsonl
@@ -542,7 +784,18 @@ func (ds *DurableSink) startupScan() {
 	// Walk buffer dir
 	err := filepath.Walk(ds.bufferDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// A directory that vanished mid-walk is not a fault: Close has
+			// cancelled and the caller is tearing the buffer down. Anything
+			// else is reported as before.
+			if ds.ctx.Err() != nil && errors.Is(err, os.ErrNotExist) {
+				return filepath.SkipAll
+			}
 			return err
+		}
+		// Stop promptly on shutdown rather than making Close wait out a walk
+		// of a directory that is about to be deleted.
+		if ds.ctx.Err() != nil {
+			return filepath.SkipAll
 		}
 		if info.IsDir() {
 			return nil
@@ -551,17 +804,42 @@ func (ds *DurableSink) startupScan() {
 			return nil
 		} // Ignore active file
 
-		// Found a batch file!
-		// Infer topic from parent dir name
+		// Found a batch file. The topic is the directory path RELATIVE to the
+		// buffer root, not the parent directory's name.
+		//
+		// In multi-tenant mode the layout is buffer/<tenant-id>/<topic>/, because
+		// rotation writes to filepath.Join(bufferDir, topicForTenant(id, topic)).
+		// Taking filepath.Base of the parent recovered "request_facts" and dropped
+		// the tenant, so this sweep re-uploaded to raw/request_facts/ while the
+		// normal path wrote raw/<tenant-id>/request_facts/. Two consequences, and
+		// the second is the serious one (F-033):
+		//
+		//  1. a file still on disk when the sweep runs is uploaded twice, to two
+		//     different keys — duplicate storage, and it inflates any
+		//     bytes-per-event figure measured from disk;
+		//  2. a file that ONLY this sweep recovers — the crash-recovery case it
+		//     exists for — lands under a prefix the multi-tenant rollup never
+		//     scans. Those facts are durably written and never read again, which
+		//     is silent loss on exactly the path that is supposed to prevent it.
+		//
+		// Relative resolution yields "<tenant-id>/request_facts" here and plain
+		// "request_facts" in legacy single-tenant mode, matching both layouts
+		// without needing to know which one is in use.
 		dir := filepath.Dir(path)
-		topic := filepath.Base(dir)
+		rel, relErr := filepath.Rel(ds.bufferDir, dir)
+		if relErr != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			slog.Error("orphaned batch file is not under the buffer root; skipping",
+				"path", path, "buffer_dir", ds.bufferDir, "error", relErr)
+			return nil
+		}
+		topic := filepath.ToSlash(rel)
 
-		slog.Info("found orphaned batch file", "path", path)
+		slog.Info("found orphaned batch file", "path", path, "topic", topic)
 		// Upload using file mod time as heuristic
 		ds.uploadFile(topic, path, info.ModTime().UTC())
 		return nil
 	})
-	if err != nil {
+	if err != nil && ds.ctx.Err() == nil {
 		slog.Error("startup scan error", "error", err)
 	}
 }
@@ -656,6 +934,8 @@ func main() {
 
 	port := flag.Int("port", 8080, "HTTP port")
 	baseDir := flag.String("base-dir", "./data", "Base directory for buffer and raw storage")
+	discoveryDB := flag.String("discovery-db", "", "Path to the service discovery database (default <base-dir>/discovery.db)")
+	warehouseDir := flag.String("warehouse-dir", "", "Path to the rollup warehouse, read for alert baselines (default <base-dir>/warehouse)")
 	flag.Parse()
 
 	// Auth mode: multi-tenant (TENANT_DB_PATH) or legacy (API_KEY)
@@ -712,7 +992,6 @@ func main() {
 	}
 
 	bufferDir := filepath.Join(*baseDir, "buffer")
-	rawDir := filepath.Join(*baseDir, "raw")
 
 	var store storage.ObjectStore
 	if os.Getenv("S3_ENDPOINT") != "" {
@@ -731,9 +1010,9 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		slog.Info("initializing local storage", "dir", rawDir)
+		slog.Info("initializing local storage", "dir", localStoreRoot(*baseDir))
 		var err error
-		store, err = storage.NewLocalStore(rawDir)
+		store, err = storage.NewLocalStore(localStoreRoot(*baseDir))
 		if err != nil {
 			slog.Error("failed to initialize local store", "error", err)
 			os.Exit(1)
@@ -763,6 +1042,34 @@ func main() {
 	}
 	defer sink.Close()
 
+	// Services register themselves by sending a fact. This is why there is no
+	// registration step to forget: the list cannot drift from what is actually
+	// reporting. It is deliberately independent of the tenant database, so it
+	// works the same in legacy single-key mode.
+	discoveryPath := *discoveryDB
+	if discoveryPath == "" {
+		discoveryPath = filepath.Join(*baseDir, "discovery.db")
+	}
+	reg, err := discovery.Open(discoveryPath)
+	if err != nil {
+		slog.Error("failed to open discovery registry", "error", err, "path", discoveryPath)
+		os.Exit(1)
+	}
+	defer reg.Close()
+
+	warehousePath := *warehouseDir
+	if warehousePath == "" {
+		warehousePath = filepath.Join(*baseDir, "warehouse")
+	}
+
+	// Normalizes obviously-dynamic path segments so a naive framework
+	// integration does not lose every fact to the DLQ, and bounds the
+	// cardinality of everything it cannot classify. In-memory and per-process:
+	// see SD-016 for what that means under a scaled deployment.
+	learner := pathlearn.NewLearner(
+		pathlearn.DefaultSegmentDistinctBudget,
+		pathlearn.DefaultTemplateBudgetPerService)
+
 	// Per-tenant rate limiting (fallback 100/s for legacy mode)
 	trl := ratelimit.NewTenantLimiter(100, 200)
 	defer trl.Close()
@@ -770,6 +1077,21 @@ func main() {
 	// Trace sampling rate
 	traceSampleRate := getTraceSampleRate()
 	slog.Info("trace sampling configured", "rate", traceSampleRate)
+
+	// Cardinality budget for external metrics protocols. Prometheus
+	// remote-write is the one ingest path where the sender, not Gravix,
+	// chooses the label set, so it is the one path that needs a hard cap to
+	// keep docs/04-non-goals.md §5 true. State is in-memory: a restart
+	// forgives the window, which is the right failure direction for a cap
+	// whose purpose is to stop abuse rather than to bill for it.
+	externalMetricsBudget := cardinality.NewBudget(cardinality.DefaultMaxSeriesPerMetricPerDay)
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			externalMetricsBudget.Reset()
+		}
+	}()
 
 	// Buffer-full middleware: reject new data when buffer exceeds limit
 	bufferCheck := func(next http.HandlerFunc) http.HandlerFunc {
@@ -784,12 +1106,24 @@ func main() {
 	}
 
 	// Wrap handlers: auth first (sets tenant context), then scope check, rate limit, buffer check, handler
-	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleFacts(sink, tdb))))))
-	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb))))))
+	http.Handle("/api/v1/facts", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleFacts(sink, tdb, reg, learner))))))
+	http.Handle("/api/v1/facts/batch", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleBatchFacts(sink, tdb, reg, learner))))))
 	http.Handle("/api/v1/events", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleEvents(sink, tdb))))))
 	http.Handle("/api/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleTraces(sink, tdb, traceSampleRate))))))
-	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("traces:write", handleOTLPTraces(sink))))))
+	http.Handle("/v1/traces", authMW(tenantRateLimitMiddleware(trl, requireScope("traces:write", handleOTLPTracesRejected))))
+	http.Handle("/v1/logs", authMW(tenantRateLimitMiddleware(trl, requireScope("traces:write", handleOTLPLogsRejected))))
+	http.Handle("/v1/metrics", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleOTLPMetrics(sink, externalMetricsBudget))))))
+	http.Handle("/api/v1/remote_write", authMW(tenantRateLimitMiddleware(trl, bufferCheck(requireScope("ingest:write", handleRemoteWrite(sink, externalMetricsBudget))))))
 	http.Handle("/api/v1/deploy", authMW(tenantRateLimitMiddleware(trl, bufferCheck(handleDeployWebhook(sink, tdb)))))
+	// Read-only and off the ingest path, so it carries neither the rate limiter
+	// nor the buffer check: a full buffer is precisely when someone needs to see
+	// what is reporting.
+	http.Handle("/api/v1/services", authMW(requireScope("admin:read", handleServices(reg))))
+	// Thresholds a user never has to choose, derived from their own traffic.
+	// Read and write are separate scopes: seeing what would be proposed is not
+	// the same permission as arming it.
+	http.Handle("/api/v1/alert-proposals", authMW(requireScope("admin:read", handleAlertProposals(warehousePath))))
+	http.Handle("/api/v1/alert-proposals/arm", authMW(requireScope("admin:write", handleArmAlertProposal(warehousePath, tdb))))
 
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -909,7 +1243,7 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
+func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, learner *pathlearn.Learner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -937,18 +1271,54 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 
 		reqID := logging.GetRequestID(r.Context())
 
-		fact, err := schemas.ParseRequestFact(body)
+		// Decode first, normalize, then validate. The rules are unchanged and
+		// still run — they just run on a path_template whose dynamic segments
+		// have been collapsed, so an integration reporting /users/42 is fixed
+		// rather than silently sent to the DLQ.
+		fact, err := schemas.UnmarshalRequestFactUnvalidated(body)
 		if err != nil {
-			// Write rejected fact to DLQ (async, non-blocking)
-			go writeDLQEntries(sink, tenantID, "request_fact", []DLQEntry{{
+			entries := []DLQEntry{{
 				Timestamp: time.Now().UTC(),
 				TenantID:  tenantID,
 				RequestID: reqID,
 				FactType:  "request_fact",
 				Error:     err.Error(),
 				RawJSON:   json.RawMessage(body),
-			}})
+			}}
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", entries) })
 			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid RequestFact: %v", err))
+			return
+		}
+
+		decision := learner.Learn(fact.Service, fact.Method, fact.PathTemplate)
+		if !decision.Accepted {
+			entries := []DLQEntry{{
+				Timestamp: time.Now().UTC(),
+				TenantID:  tenantID,
+				RequestID: reqID,
+				FactType:  "request_fact",
+				Error:     decision.Reason,
+				RawJSON:   json.RawMessage(body),
+			}}
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", entries) })
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "400", tenantID).Inc()
+			writeErrorJSON(w, http.StatusBadRequest, decision.Reason)
+			return
+		}
+		fact.PathTemplate = decision.Template
+
+		if err := schemas.ValidateRequestFact(fact); err != nil {
+			entries := []DLQEntry{{
+				Timestamp: time.Now().UTC(),
+				TenantID:  tenantID,
+				RequestID: reqID,
+				FactType:  "request_fact",
+				Error:     err.Error(),
+				RawJSON:   json.RawMessage(body),
+			}}
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", entries) })
+			writeErrorJSON(w, http.StatusBadRequest,
+				fmt.Sprintf("invalid RequestFact: validation error: %v", err))
 			return
 		}
 
@@ -966,17 +1336,253 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			return
 		}
 
+		// Recorded only after the write succeeded, so the registry never claims a
+		// service whose fact was not persisted. In-memory and lock-only: no disk
+		// I/O between here and the 201.
+		reg.RecordFact(fact.Service, fact.EventTime.AsTime())
+		reg.RecordTemplate(fact.Service, fact.Method, fact.PathTemplate, fact.EventTime.AsTime())
+
 		// Increment event counter for billing (best-effort, non-blocking)
 		incrementEventCounter(tdb, tenantID, 1)
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201", tenantID).Inc()
+		// The fact is stored either way. Classification decides only what we report
+		// back and what we count, never whether it was accepted.
+		class := classifyFact(fact, time.Now().UTC())
+
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(cleanData)))
+
+		if class == lateness.ClassUnprocessable {
+			entries := []DLQEntry{unprocessableEntry(tenantID, reqID, time.Now().UTC(), body)}
+			sink.Go(func() { writeUnprocessableEntries(sink, tenantID, entries) })
+
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "202", tenantID).Inc()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"accepted": 1,
+				"note":     unprocessableNote,
+			})
+			return
+		}
+
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "201", tenantID).Inc()
 		w.WriteHeader(http.StatusCreated)
 	}
 }
 
+// handleServices lists every service that has ever sent a fact.
+//
+// It answers the question a new user asks first — "is my data arriving?" —
+// without waiting for the five-minute rollup that the dashboard's Cube query
+// depends on. An empty registry is a 200 with an empty list, not a 404: no data
+// yet is a state to render, not an error to report.
+//
+// Aggregate only. One row per service with three counters, never anything about
+// an individual request.
+func handleServices(reg *discovery.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only GET is accepted")
+			return
+		}
+
+		services, err := reg.ListServices(r.Context())
+		if err != nil {
+			slog.Error("failed to list services", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to list services")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"services": services}); err != nil {
+			slog.Error("failed to encode services", "error", err)
+		}
+	}
+}
+
+// baselineLookbackDays is how much history a proposal is derived from. Seven
+// days covers a weekly cycle, so a service that is quiet at weekends does not
+// get a traffic-drop threshold set from weekdays alone.
+const baselineLookbackDays = 7
+
+// handleAlertProposals returns ready-to-arm alert rules with thresholds already
+// computed from what the user's own services actually do.
+//
+// A threshold nobody can choose is a threshold nobody sets: a new user does not
+// know their service's normal error rate, so asking for a number yields either
+// one that never fires or one that always does.
+func handleAlertProposals(warehouseDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only GET is accepted")
+			return
+		}
+
+		proposals, err := computeProposals(r.Context(), warehouseDir, getTenantID(r))
+		if err != nil {
+			slog.Error("failed to compute alert proposals", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to compute alert proposals")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"proposals": proposals}); err != nil {
+			slog.Error("failed to encode alert proposals", "error", err)
+		}
+	}
+}
+
+// computeProposals flattens every service's proposals into one list.
+//
+// No rolled-up data yet is an empty list, not an error: it is the state of every
+// stack whose first rollup has not run, and the remedy is to wait.
+func computeProposals(ctx context.Context, warehouseDir, tenantID string) ([]baseline.Proposal, error) {
+	baselines, err := baseline.Compute(ctx, warehouseDir, tenantID, baselineLookbackDays, time.Now())
+	if errors.Is(err, baseline.ErrNoData) {
+		return []baseline.Proposal{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	proposals := make([]baseline.Proposal, 0, len(baselines)*3)
+	for _, b := range baselines {
+		proposals = append(proposals, baseline.Propose(b)...)
+	}
+	return proposals, nil
+}
+
+// handleArmAlertProposal turns one proposal into a live alert rule.
+//
+// The threshold is recomputed here rather than read from the request, so a
+// stale or forged number cannot be armed. The client names which proposal it
+// wants; the server decides what it means.
+func handleArmAlertProposal(warehouseDir string, tdb tenantdb.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
+			return
+		}
+		if tdb == nil {
+			writeErrorJSON(w, http.StatusNotImplemented,
+				"alert proposals require a tenant database (TENANT_DB_PATH)")
+			return
+		}
+		// An armed rule needs a notification channel, and a channel needs a real
+		// tenant: notification_channels.tenant_id is NOT NULL REFERENCES
+		// tenants(id). Reaching the insert without one turns a misconfiguration
+		// into a 500 reading "failed to create notification channel", which says
+		// nothing about the cause.
+		if getTenantID(r) == "" {
+			writeErrorJSON(w, http.StatusNotImplemented,
+				"alert proposals require an authenticated tenant; this request carried none")
+			return
+		}
+
+		var req struct {
+			Service    string `json:"service"`
+			ProposalID string `json:"proposal_id"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, "service and proposal_id are required")
+			return
+		}
+		if req.Service == "" || req.ProposalID == "" {
+			writeErrorJSON(w, http.StatusBadRequest, "service and proposal_id are required")
+			return
+		}
+
+		ctx := r.Context()
+		tenantID := getTenantID(r)
+
+		baselines, err := baseline.Compute(ctx, warehouseDir, tenantID, baselineLookbackDays, time.Now())
+		if err != nil && !errors.Is(err, baseline.ErrNoData) {
+			slog.Error("failed to compute baselines while arming", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to compute alert proposals")
+			return
+		}
+
+		proposal, err := baseline.Find(baselines, req.Service, req.ProposalID)
+		if err != nil {
+			writeErrorJSON(w, http.StatusNotFound,
+				fmt.Sprintf("no proposal %s for service %s", req.ProposalID, req.Service))
+			return
+		}
+
+		channel, err := localAlertChannel(ctx, tdb, tenantID)
+		if err != nil {
+			slog.Error("failed to resolve the local alert channel", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to create notification channel")
+			return
+		}
+
+		rule := &tenantdb.AlertRule{
+			TenantID:        tenantID,
+			Name:            fmt.Sprintf("%s: %s (auto-proposed)", proposal.Service, proposal.Name),
+			Metric:          proposal.Metric,
+			Operator:        proposal.Operator,
+			Threshold:       proposal.Threshold,
+			WindowMinutes:   proposal.WindowMinutes,
+			Service:         proposal.Service,
+			ChannelID:       channel.ID,
+			CooldownMinutes: 30,
+			Status:          "active",
+		}
+		if err := tdb.AlertRules().Create(ctx, rule); err != nil {
+			slog.Error("failed to create alert rule", "error", err)
+			writeErrorJSON(w, http.StatusInternalServerError, "failed to create alert rule")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"alert_rule_id": rule.ID,
+			"channel_id":    channel.ID,
+		}); err != nil {
+			slog.Error("failed to encode arm response", "error", err)
+		}
+	}
+}
+
+// localAlertChannelName is the one channel auto-armed rules are attached to.
+const localAlertChannelName = "Local (dashboard only)"
+
+// localAlertChannel finds or creates the channel auto-armed rules notify.
+//
+// alert_rules.channel_id is NOT NULL REFERENCES notification_channels(id), so
+// there is no "no channel" state — a rule cannot exist without one. Rather than
+// make a self-hoster configure Slack before they can arm anything, rules go to a
+// "log" channel that delivers nowhere: the alert still fires and still lands in
+// alert history, which is what the dashboard reads.
+//
+// Reused rather than recreated, so arming five rules leaves one channel.
+func localAlertChannel(ctx context.Context, tdb tenantdb.DB, tenantID string) (*tenantdb.NotificationChannel, error) {
+	existing, err := tdb.NotificationChannels().ListByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list notification channels: %w", err)
+	}
+	for _, ch := range existing {
+		if ch.Name == localAlertChannelName && ch.Type == "log" {
+			return ch, nil
+		}
+	}
+
+	ch := &tenantdb.NotificationChannel{
+		TenantID: tenantID,
+		Name:     localAlertChannelName,
+		Type:     "log",
+		Config:   "{}",
+		Status:   "active",
+	}
+	if err := tdb.NotificationChannels().Create(ctx, ch); err != nil {
+		return nil, fmt.Errorf("create notification channel: %w", err)
+	}
+	return ch, nil
+}
+
 // handleBatchFacts handles JSONL (newline-delimited JSON) payloads with multiple facts per request.
-func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
+func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, learner *pathlearn.Learner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErrorJSON(w, http.StatusMethodNotAllowed, "only POST is accepted")
@@ -1014,6 +1620,7 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		var validRecords [][]byte
 		var errors []string
 		var dlqEntries []DLQEntry
+		var unprocessable []DLQEntry
 		marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
 
 		for i, line := range lines {
@@ -1021,9 +1628,42 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 				continue
 			}
 
-			fact, err := schemas.ParseRequestFact(line)
+			// Same three steps as the single-fact path: decode, normalize,
+			// validate. Each failure keeps the existing per-line shape, so a
+			// budget rejection reads like any other rejected line.
+			fact, err := schemas.UnmarshalRequestFactUnvalidated(line)
 			if err != nil {
 				errMsg := fmt.Sprintf("line %d: %v", i+1, err)
+				errors = append(errors, errMsg)
+				dlqEntries = append(dlqEntries, DLQEntry{
+					Timestamp: now,
+					TenantID:  tenantID,
+					RequestID: reqID,
+					FactType:  "request_fact",
+					Error:     errMsg,
+					RawJSON:   json.RawMessage(line),
+				})
+				continue
+			}
+
+			decision := learner.Learn(fact.Service, fact.Method, fact.PathTemplate)
+			if !decision.Accepted {
+				errMsg := fmt.Sprintf("line %d: %s", i+1, decision.Reason)
+				errors = append(errors, errMsg)
+				dlqEntries = append(dlqEntries, DLQEntry{
+					Timestamp: now,
+					TenantID:  tenantID,
+					RequestID: reqID,
+					FactType:  "request_fact",
+					Error:     errMsg,
+					RawJSON:   json.RawMessage(line),
+				})
+				continue
+			}
+			fact.PathTemplate = decision.Template
+
+			if err := schemas.ValidateRequestFact(fact); err != nil {
+				errMsg := fmt.Sprintf("line %d: validation error: %v", i+1, err)
 				errors = append(errors, errMsg)
 				dlqEntries = append(dlqEntries, DLQEntry{
 					Timestamp: now,
@@ -1052,6 +1692,19 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			}
 
 			validRecords = append(validRecords, cleanData)
+			// Spec §6.5 puts this in the loop, before the batch write. That
+			// differs from the single-fact path above, which records only after
+			// a successful write: if WriteBatch fails, these services stay in
+			// the registry and a client retry counts them twice. Discovery
+			// counters are a "what exists" aid, not billing, so the spec's
+			// placement is followed rather than silently improved. See SD-014.
+			reg.RecordFact(fact.Service, fact.EventTime.AsTime())
+			reg.RecordTemplate(fact.Service, fact.Method, fact.PathTemplate, fact.EventTime.AsTime())
+
+			if classifyFact(fact, now) == lateness.ClassUnprocessable {
+				unprocessable = append(unprocessable,
+					unprocessableEntry(tenantID, reqID, now, line))
+			}
 		}
 
 		// Write all valid records in a single batch (one fsync)
@@ -1066,7 +1719,14 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 
 		// Write rejected facts to DLQ (async, non-blocking)
 		if len(dlqEntries) > 0 {
-			go writeDLQEntries(sink, tenantID, "request_fact", dlqEntries)
+			sink.Go(func() { writeDLQEntries(sink, tenantID, "request_fact", dlqEntries) })
+		}
+
+		// Unprocessable facts were accepted and stored above. They are copied into
+		// their own DLQ prefix as well, so an operator can find data that will
+		// never reach a metric.
+		if len(unprocessable) > 0 {
+			sink.Go(func() { writeUnprocessableEntries(sink, tenantID, unprocessable) })
 		}
 
 		accepted := len(validRecords)
@@ -1076,17 +1736,29 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 			incrementEventCounter(tdb, tenantID, int64(accepted))
 		}
 
-		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", "200", tenantID).Inc()
 		ingestionBatchSizeBytes.WithLabelValues("request_facts").Observe(float64(len(body)))
 
+		// 202 rather than 200 when some facts can never be aggregated: every fact
+		// was accepted, but not all of them will appear in a metric, and the caller
+		// is entitled to know that from the status line.
+		status := http.StatusOK
+		if len(unprocessable) > 0 {
+			status = http.StatusAccepted
+		}
+		ingestionRequestsTotal.WithLabelValues("/api/v1/facts/batch", strconv.Itoa(status), tenantID).Inc()
+
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(status)
 		resp := map[string]interface{}{
 			"accepted": accepted,
 			"rejected": len(errors),
 		}
 		if len(errors) > 0 {
 			resp["errors"] = errors
+		}
+		if len(unprocessable) > 0 {
+			resp["unprocessable"] = len(unprocessable)
+			resp["note"] = unprocessableNote
 		}
 		json.NewEncoder(w).Encode(resp)
 	}

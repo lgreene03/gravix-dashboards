@@ -1,3 +1,8 @@
+//go:build slow
+
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package e2e
 
 import (
@@ -27,9 +32,7 @@ import (
 // 2. Run the rollup job
 // 3. Verify Parquet output exists in the warehouse
 func TestEndToEnd_IngestionToRollup(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -124,9 +127,7 @@ func TestEndToEnd_IngestionToRollup(t *testing.T) {
 
 // TestEndToEnd_PurgeRetention verifies the purge binary deletes old data and keeps recent data.
 func TestEndToEnd_PurgeRetention(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -184,9 +185,7 @@ func TestEndToEnd_PurgeRetention(t *testing.T) {
 // TestEndToEnd_ServiceEventsRollup verifies the service events pipeline:
 // Write raw events → run service events rollup → verify Parquet output.
 func TestEndToEnd_ServiceEventsRollup(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -272,9 +271,7 @@ func TestEndToEnd_ServiceEventsRollup(t *testing.T) {
 // TestEndToEnd_ServiceEventsDetailRollup verifies the service events detail pipeline:
 // Write raw events → run service events detail rollup → verify Parquet output.
 func TestEndToEnd_ServiceEventsDetailRollup(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -380,9 +377,7 @@ func findProjectRoot(t *testing.T) string {
 // TestEndToEnd_MultiTenantIsolation verifies that rollup output for tenant A
 // does not leak into tenant B's warehouse directory.
 func TestEndToEnd_MultiTenantIsolation(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -557,9 +552,7 @@ func writeServiceEvents(t *testing.T, store storage.ObjectStore, tenantPrefix, d
 // TestEndToEnd_MultiTenantServiceEventsDaily verifies that service events daily
 // rollup for tenant A does not leak into tenant B's warehouse.
 func TestEndToEnd_MultiTenantServiceEventsDaily(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -655,9 +648,7 @@ func TestEndToEnd_MultiTenantServiceEventsDaily(t *testing.T) {
 // TestEndToEnd_MultiTenantServiceEventsDetail verifies that service events detail
 // rollup for tenant A does not leak into tenant B's warehouse.
 func TestEndToEnd_MultiTenantServiceEventsDetail(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -753,9 +744,7 @@ func TestEndToEnd_MultiTenantServiceEventsDetail(t *testing.T) {
 // TestEndToEnd_DLQAndReplay writes a DLQ entry as JSONL, verifies the file
 // is valid and parseable, then simulates replaying the corrected fact.
 func TestEndToEnd_DLQAndReplay(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	baseDir := t.TempDir()
 	dataDir := filepath.Join(baseDir, "data")
@@ -854,9 +843,7 @@ func TestEndToEnd_DLQAndReplay(t *testing.T) {
 // TestEndToEnd_APIKeyExpiry verifies the full API key expiry lifecycle:
 // create a key with expiry, validate it works, validate expired key is rejected.
 func TestEndToEnd_APIKeyExpiry(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	dbPath := filepath.Join(t.TempDir(), "e2e.db")
 	db, err := tenantdb.Open(dbPath)
@@ -935,9 +922,7 @@ func TestEndToEnd_APIKeyExpiry(t *testing.T) {
 // TestEndToEnd_RequestIDPropagation verifies that request IDs are preserved
 // in DLQ entries when facts fail validation.
 func TestEndToEnd_RequestIDPropagation(t *testing.T) {
-	if os.Getenv("E2E_TEST") == "" {
-		t.Skip("Set E2E_TEST=1 to run end-to-end tests")
-	}
+	requireE2E(t)
 
 	// This test verifies the DLQ entry structure includes request_id field
 	type DLQEntry struct {

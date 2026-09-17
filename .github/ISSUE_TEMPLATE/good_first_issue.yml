@@ -1,0 +1,85 @@
+name: Good first issue
+description: For maintainers — create a first issue that names the file, the change, and the check.
+title: "[good first issue] "
+labels: ["good first issue"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **For maintainers.** If you are looking for something to work on, browse the
+        [`good first issue` label](https://github.com/lgreene03/gravix-dashboards/labels/good%20first%20issue)
+        instead — you do not need this form.
+
+        Every heading below is required and `scripts/gfi_audit.sh` checks for it. An issue missing
+        any of them is a trap, not an invitation: small and underspecified is the worst combination,
+        because it looks approachable and then is not.
+
+        If you cannot state the verification command, this is not a good first issue. Label it
+        something else.
+  - type: textarea
+    id: the_file
+    attributes:
+      label: The file
+      description: The exact repo-relative path, and the line or function if that helps.
+      value: |
+        ### The file
+
+        `path/to/file.go`, in `FunctionName`.
+    validations:
+      required: true
+  - type: textarea
+    id: the_change
+    attributes:
+      label: The change
+      description: >-
+        What should be true afterwards. Not "improve X" — rather "`Foo` should return `ErrBar`
+        instead of `nil` when `baz` is empty".
+      value: |
+        ### The change
+    validations:
+      required: true
+  - type: textarea
+    id: how_to_verify
+    attributes:
+      label: How to verify
+      description: The exact command, and what its output should be.
+      value: |
+        ### How to verify
+
+        ```bash
+        go test ./path/... -run TestName -v
+        ```
+
+        Expected: PASS.
+    validations:
+      required: true
+  - type: textarea
+    id: why_this_matters
+    attributes:
+      label: Why this matters
+      description: One sentence, so the work is not busywork.
+      value: |
+        ### Why this matters
+    validations:
+      required: true
+  - type: textarea
+    id: if_you_get_stuck
+    attributes:
+      label: If you get stuck
+      description: Where to ask, and the 48-hour commitment.
+      value: |
+        ### If you get stuck
+
+        Comment here, or open a
+        [discussion](https://github.com/lgreene03/gravix-dashboards/discussions). Someone will
+        answer within 48 hours. A question is not a failure — an issue you cannot start from is our
+        bug, not yours.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        ## Claiming
+
+        A contributor claims this by commenting. The claim holds for 21 days. Nothing is owed here;
+        life happens, and an unclaimed issue is a queue problem, not a person problem.

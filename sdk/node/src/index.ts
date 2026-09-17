@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 export { GravixClient } from "./client.js";
 export {
   type RequestFact,

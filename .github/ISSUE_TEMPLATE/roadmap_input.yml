@@ -1,0 +1,78 @@
+name: Roadmap input
+description: Tell us a problem you have. Not the feature — the problem.
+title: "[roadmap] "
+labels: ["roadmap-input", "under consideration"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Tell us the problem, not the feature.** The feature you have in mind is your first guess at
+        a solution, and it is often not the best one available to us — but we cannot find a better one
+        without knowing what is actually going wrong.
+
+        Reactions on this issue tell us what people want. They do not decide what gets built; see
+        [how input is weighed](https://github.com/lgreene03/gravix-dashboards/blob/main/docs/oss/roadmap-input.md).
+
+        Every input gets a disposition and appears on the
+        [roadmap](https://lgreene03.github.io/gravix-dashboards/docs/roadmap). Nothing sits
+        unlabelled, and nothing sits `under consideration` for more than two goal reviews.
+
+        Before you write: the [seven non-goals](https://github.com/lgreene03/gravix-dashboards/blob/main/docs/04-non-goals.md)
+        are permanent and will be declined every time. Each one names a tool that does do the thing,
+        so if yours is in there you will still leave with somewhere to go.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is going wrong?
+      description: >-
+        The problem, with numbers if you have them. "Our p99 checkout latency doubled and it took
+        four hours to find out" tells us far more than "please add anomaly detection".
+      placeholder: |
+        When ... happens, we ...
+        It costs us ... and we notice it ... later than we would like.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Including the thing that nearly worked. That is usually the most useful part.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptable
+    attributes:
+      label: What would you accept?
+      description: >-
+        Often there is a smaller answer that ships sooner. If a partial fix would help, say what it
+        would need to do.
+    validations:
+      required: true
+  - type: dropdown
+    id: would_build
+    attributes:
+      label: Would you be interested in building it?
+      description: >-
+        Nothing obliges you to, and "no" is a completely normal answer. It changes what we can
+        promise, not whether we listen.
+      options:
+        - "No — I am reporting the problem"
+        - "Maybe, with guidance"
+        - "Yes, I would like to try"
+    validations:
+      required: true
+  - type: input
+    id: scale
+    attributes:
+      label: Roughly what scale are you at?
+      description: Events per day, services, team size — whatever you can share. Approximate is fine.
+      placeholder: "~2M events/day, 6 services, 4 engineers"
+  - type: checkboxes
+    id: understood
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have described the problem, not only the feature I want.
+          required: true
+        - label: I have checked this is not one of the seven non-goals, or I am asking anyway and understand it will be declined with a pointer to a tool that does it.
+          required: true

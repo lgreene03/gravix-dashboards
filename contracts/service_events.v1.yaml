@@ -1,0 +1,75 @@
+# Copyright 2026 The Gravix Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contracts for the service-event metrics.
+#
+# These existed as Cube measures with no published definition until GRVX-810's
+# exit gate enumerated the model and found them. That gate is the reason they are
+# here: a number the product can show without a contract is a number nobody can
+# check, and "every metric has a contract" is either true of all of them or it is
+# not a claim.
+#
+# Both are exact counts of immutable facts. There is no sketch, no sampling and no
+# approximation anywhere in their path, which is why their error bound says so
+# plainly rather than being left blank.
+#
+# docs/02-derived-metrics.md is generated from this file by `make contracts`.
+
+contracts:
+  - name: service_event_count
+    version: v1
+    title: Service events
+    formula: count of ServiceEvent facts
+    input_facts:
+      - ServiceEvent
+    input_fields:
+      - event_time
+      - service
+      - event_type
+    grain: one row per event, per service/event_type
+    dimensions:
+      - tenant_id
+      - service
+      - event_type
+    exactness: exact
+    error_bound: none — this is a count of stored facts, not an estimate
+    mergeability: sum
+    merge_note: >-
+      Counts of disjoint sets add. Summing this measure across services, event types
+      or any time range gives the same answer as counting the underlying facts over
+      that range, because every fact is counted once and belongs to exactly one group.
+    late_data: >-
+      The detail table is rebuilt from all facts for the day, so an event that arrives
+      late appears at its event_time rather than at its arrival time.
+    recompute_cmd: >-
+      not rebuildable by the gravix CLI yet; run: go run ./transforms/service_events_detail/
+
+  - name: service_event_count_daily
+    version: v1
+    title: Service events per day
+    formula: count of ServiceEvent facts, grouped by day
+    input_facts:
+      - ServiceEvent
+    input_fields:
+      - event_time
+      - service
+      - event_type
+    grain: 1 day, per service/event_type
+    dimensions:
+      - tenant_id
+      - service
+      - event_type
+    exactness: exact
+    error_bound: none — this is a count of stored facts, not an estimate
+    mergeability: sum
+    merge_note: >-
+      Summing across days, services or event types is exact. Note that this is the
+      SUM of the event_count column, never the row count: the daily table holds one
+      row per service/event_type/day, so counting its rows counts groups rather than
+      events. That is the same trap the Cube model's built-in `count` measure sets,
+      which is why that one is hidden.
+    late_data: >-
+      The day is rebuilt from all of its facts, so a late event is counted in the day
+      its event_time names.
+    recompute_cmd: >-
+      not rebuildable by the gravix CLI yet; run: go run ./transforms/service_events_daily/

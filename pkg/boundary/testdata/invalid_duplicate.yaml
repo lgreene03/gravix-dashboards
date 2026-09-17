@@ -1,0 +1,14 @@
+version: 1
+capabilities:
+  - id: same-id
+    name: First
+    placement: core
+    charter_ref: "§2.1"
+    rationale: One.
+    paths: [pkg/boundary/]
+  - id: same-id
+    name: Second
+    placement: core
+    charter_ref: "§2.1"
+    rationale: Two.
+    paths: [pkg/boundary/]

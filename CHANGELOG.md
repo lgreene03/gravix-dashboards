@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Horizon 2: Gravix became an open-core project. The core is Apache-2.0 and free forever; a paid tier
+lives under `ee/` (BUSL-1.1, source-available). Feature parity with Datadog is still forbidden — what
+changed is that Gravix now claims superiority on four axes that have to be *provable*: correctness,
+recomputability, data ownership, and billing predictability.
+
+Nothing below has shipped in a tagged release yet.
+
+### Added
+
+- **Open-core boundary, enforced by CI** — the Apache-2.0 core builds and tests with `ee/` physically deleted, checked on every pull request by `make build-oss`, `make test-oss` and `make check-boundary` (GRVX-702, GRVX-703, GRVX-704)
+- **Correctness suite** — proves a recompute is byte-identical under adversarial conditions, that a late fact lands in its own bucket without disturbing the prior value, that a retroactively added dimension matches a from-scratch build, and that a merged sketch's percentile stays within its bound (GRVX-801…812)
+- **`gravix explain`** — shows where a number came from: the facts, the transform, and the contract that defines it
+- **`gravix recompute` and `gravix evolve`** — rebuild derived metrics from raw facts, and add a percentile or dimension with a backfill over history
+- **Metric contracts** — `docs/02-derived-metrics.md` is generated from `contracts/`, and `make contracts-check` fails if the published definition drifts from the contract (GRVX-803)
+- **Zero-config onboarding** — time to a populated dashboard is measured in CI, budgeted at ten minutes (GRVX-901…910)
+- **Benchmark harness** — every published cost and performance number comes from `bench/` and is reproducible by an outsider (GRVX-1001)
+- **Bare-Parquet access** — the warehouse is readable by a stock DuckDB CLI with no Gravix component installed, executed in CI (GRVX-1101)
+- **Prometheus remote-write receiver** — with a hard per-metric-per-day series cap, so an import cannot smuggle in high cardinality (GRVX-1102)
+- **OTLP metrics endpoint** — `/v1/metrics` accepts metrics; `/v1/traces` and `/v1/logs` refuse at the door, because tracing and logs are non-goals rather than unfinished features (GRVX-1105)
+- **`gravix export`** — facts, metrics and events as Parquet, CSV or JSONL (GRVX-1107)
+- **`gravix import`** — Datadog metric history, marked as imported, and refusing to invent the facts an aggregate never contained (GRVX-1108, partial)
+- **`gravix export --everything`** — one command writes everything Gravix holds into open formats, with a README and checksums; CI runs it and then reads it back with every Gravix service stopped (GRVX-1109)
+- **Plugin ABI v2** — plugins are subprocesses speaking JSON-RPC 2.0 over stdio, so a plugin built against one release keeps working against the next. Per-call timeout, crash isolation with backoff, a failure budget, a memory limit, and secrets that never reach a log (GRVX-1201)
+- **Plugin registry and `gravix plugin new`** — a JSON file in this repository rather than a service, and a scaffold that builds and passes its tests unedited for all three kinds in Go and Python (GRVX-1202)
+- **Contribution ladder** — contributor → reviewer → maintainer, every criterion evidenced by public activity, with no discretionary path (GRVX-1203)
+- **RFC process and decision log** — charter §6's procedure made executable: comment windows, named approvals and the entrenchment guard are checked by CI. Rejected and withdrawn RFCs stay in the log permanently (GRVX-1204)
+- **`good first issue` pipeline** — every labelled issue names the file, the change, and the command that verifies it, with a weekly audit (GRVX-1205)
+- **One-command dev setup and a 5-minute contributor suite** — `./scripts/dev_setup.sh` and `make test-fast`, with the budget enforced in CI. No test was skipped or shortened to fit it (GRVX-1206)
+- **Generated release notes** — every contributor named, first contributions marked, no email addresses, and a `no-credit` list that is honoured by CI rather than by memory (GRVX-1209)
+- **Supply chain** — reproducible builds, release signing, and a CycloneDX SBOM (GRVX-709)
+
+### Changed
+
+- **Test suites are split by speed** — `make test-fast` is the contributor suite; `make test-full` and `make test` still run everything. `tests/e2e/`, `tests/correctness/` and `bench/` carry a `//go:build slow` tag, and CI runs every suite on every pull request (GRVX-1206)
+- **`gravix doctor`** — diagnoses setup failures and prints the fix for each rather than the error
+
+### Fixed
+
+- **Plugin host data race** — the subprocess reader goroutine and the kill path raced on the same field; a cancelled call also left a response in flight, so the next call could have read the previous one's answer (GRVX-1201)
+- **Cube models never read their environment** — every environment conditional in the schema was dead, because Cube evaluates model files in a sandbox with no `process` (F-037)
+- **Pre-aggregations were declared that no shipped stack could build** (F-035, F-036, F-038)
+- **Ingestion and the rollups disagreed about where data lives** (F-027)
+
+### Security
+
+- **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
+
 ## [1.0.0] - 2026-03-23
 
 ### Added

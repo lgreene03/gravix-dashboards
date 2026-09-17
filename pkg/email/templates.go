@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package email
 
 import (
@@ -17,13 +20,13 @@ type OnboardingData struct {
 
 // BillingAlertData holds variables for billing alert emails.
 type BillingAlertData struct {
-	UserName    string
-	TenantName  string
-	Plan        string
-	EventCount  int64
-	EventLimit  int64
+	UserName     string
+	TenantName   string
+	Plan         string
+	EventCount   int64
+	EventLimit   int64
 	UsagePercent int
-	BaseURL     string
+	BaseURL      string
 }
 
 // welcomeTmpl — sent immediately after registration.

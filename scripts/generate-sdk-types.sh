@@ -9,7 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-OPENAPI_FILE="$ROOT_DIR/services/gateway/openapi.json"
+OPENAPI_FILE="$ROOT_DIR/pkg/gatewaycore/openapi.json"
 OUTPUT_FILE="$ROOT_DIR/sdk/node/src/generated-types.ts"
 
 if [ ! -f "$OPENAPI_FILE" ]; then
@@ -30,7 +30,7 @@ import json
 import sys
 import os
 
-spec_path = os.environ.get("OPENAPI_FILE", "services/gateway/openapi.json")
+spec_path = os.environ.get("OPENAPI_FILE", "pkg/gatewaycore/openapi.json")
 with open(spec_path) as f:
     spec = json.load(f)
 
@@ -72,7 +72,13 @@ def ts_type(schema, indent=0):
         return "{\n" + pad + inner + "\n" + "  " * indent + "}"
     return "unknown"
 
-print("// Auto-generated from services/gateway/openapi.json")
+# The licence header is emitted here rather than added afterwards. GRVX-701
+# requires every source file to carry one, and a generated file that acquires its
+# header from a separate pass drifts the moment it is regenerated.
+print("// Copyright 2026 The Gravix Authors")
+print("// SPDX-License-Identifier: Apache-2.0")
+print()
+print("// Auto-generated from pkg/gatewaycore/openapi.json")
 print("// Do not edit manually — run scripts/generate-sdk-types.sh")
 print(f"// Generated from OpenAPI spec v{spec['info']['version']}")
 print()
@@ -95,7 +101,7 @@ python3 << 'PYTHON' > "$PY_OUTPUT"
 import json
 import os
 
-spec_path = os.environ.get("OPENAPI_FILE", "services/gateway/openapi.json")
+spec_path = os.environ.get("OPENAPI_FILE", "pkg/gatewaycore/openapi.json")
 with open(spec_path) as f:
     spec = json.load(f)
 
@@ -123,8 +129,12 @@ def py_type(schema):
         return "dict[str, Any]"
     return "Any"
 
+# As above: the licence header belongs to the generator, not to a later pass.
+print("# Copyright 2026 The Gravix Authors")
+print("# SPDX-License-Identifier: Apache-2.0")
+print()
 print('"""')
-print("Auto-generated from services/gateway/openapi.json")
+print("Auto-generated from pkg/gatewaycore/openapi.json")
 print("Do not edit manually — run scripts/generate-sdk-types.sh")
 print(f"Generated from OpenAPI spec v{spec['info']['version']}")
 print('"""')

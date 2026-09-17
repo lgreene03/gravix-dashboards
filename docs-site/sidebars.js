@@ -2,6 +2,7 @@
 const sidebars = {
   tutorialSidebar: [
     'getting-started',
+    'roadmap',
     {
       type: 'category',
       label: 'Platform',
@@ -29,6 +30,51 @@ const sidebars = {
       ],
     },
     'api-reference',
+    // Your data is yours, and these are the pages that prove it rather than
+    // asserting it. Every one was orphaned from this sidebar until GRVX-1207;
+    // a page nobody can navigate to is a page that does not exist.
+    {
+      type: 'category',
+      label: 'Your data',
+      items: [
+        'bare-parquet-access',
+        // Iceberg tables (GRVX-1106). Added here beyond that spec's file list
+        // for the same reason the migration guide below was: an orphaned page
+        // fails TestBoardIsInTheSidebar, and a page nobody can navigate to is a
+        // page that does not exist.
+        'iceberg-tables',
+        // The Grafana datasource plugin (GRVX-1104) and the human procedure for
+        // publishing it. Same reason as the two entries above: an orphaned page
+        // fails TestBoardIsInTheSidebar.
+        'grafana-plugin',
+        'grafana-plugin-publishing',
+        // GRVX-1103: the PromQL translation table and the BI-tool connection
+        // guide. Orphaned pages fail TestBoardIsInTheSidebar.
+        'sql-vs-promql',
+        'connect-bi-tools',
+        // GRVX-1312. Both generated from boundary.yaml by scripts/gen_pricing_page.py.
+        'what-stays-free',
+        'pricing',
+        'migrating',
+        // The exit path out of Gravix Cloud (GRVX-1403). Added here beyond that
+        // spec's file list, because TestBoardIsInTheSidebar fails on any page in
+        // docs-site/docs/ that cannot be navigated to — and an unreachable
+        // migration guide is the one page that must never be hard to find.
+        'cloud-to-selfhost-migration',
+        'selfhost-to-cloud-migration',
+        'leaving-gravix',
+        'prove-it',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Contributing',
+      items: [
+        'development-setup',
+        'writing-a-plugin',
+        'plugin-registry',
+      ],
+    },
     {
       type: 'category',
       label: 'Comparisons',

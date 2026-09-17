@@ -1,3 +1,6 @@
+# Copyright 2026 The Gravix Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """HTTP middleware for automatic request instrumentation.
 
 Supports Flask (via before/after_request) and ASGI (FastAPI, Starlette).

@@ -47,7 +47,11 @@ fi
 # 4. E2E tests
 # -------------------------------------------------------
 echo "[4/8] Running E2E tests..."
-if E2E_TEST=1 go test ./tests/e2e/... -count=1 -timeout 120s -v 2>&1 | tee /tmp/gravix_e2e_output.txt | tail -30; then
+# -tags=slow because GRVX-1206 moved tests/e2e behind that tag so `go test ./...`
+# is fast. This script opts back in on purpose: it is the no-Docker smoke test,
+# it has always run these, they take about four seconds, and dropping them to
+# make a number look better would be weakening a suite rather than splitting it.
+if E2E_TEST=1 go test -tags=slow ./tests/e2e/... -count=1 -timeout 120s -v 2>&1 | tee /tmp/gravix_e2e_output.txt | tail -30; then
     pass "E2E tests"
 else
     fail "E2E tests (see /tmp/gravix_e2e_output.txt)"

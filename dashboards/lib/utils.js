@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Shared UI utility functions for the Gravix dashboard.
 // Loaded before app.js — provides globals used across all pages.
 

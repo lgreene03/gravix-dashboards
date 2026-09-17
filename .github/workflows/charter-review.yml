@@ -1,0 +1,106 @@
+name: charter review due
+
+# Charter §6.1: once a year, within 30 days of the ratification anniversary, we
+# publish measured evidence of whether §5's promises were kept.
+#
+# A review that happens when convenient is not a review, so the reminder is a
+# scheduled job rather than a calendar entry in somebody's head. It opens an
+# issue 60 days ahead, which is enough time to collect evidence, write an
+# uncomfortable section 3, and run a §6 amendment's 14-day comment window if the
+# review proposes one.
+#
+# It is its own workflow rather than a job in ci.yml for the reason SD-037
+# established: ci.yml has no schedule, and giving it one would run the entire
+# test matrix to check a date.
+
+on:
+  schedule:
+    # 1 October, 60 days before the 30 November anniversary window opens.
+    # Dated rather than relative because a reminder that drifts is a reminder
+    # that eventually fires after the deadline it exists to beat.
+    - cron: '0 9 1 10 *'
+  workflow_dispatch:
+  # And on any change to the review machinery, so a change that breaks the
+  # evidence collector is caught by the thing that depends on it.
+  pull_request:
+    paths:
+      - 'pkg/charterreview/**'
+      - 'scripts/charter_evidence.sh'
+      - 'docs/oss/charter-review/**'
+      - 'docs/oss/boundary.yaml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The review diffs boundary.yaml across the period, which needs more
+          # than the default shallow clone.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Collect the evidence
+        id: evidence
+        run: |
+          set +e
+          ./scripts/charter_evidence.sh --out charter-evidence.json
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          cat charter-evidence.json
+
+      # Exit 2 is a capability moved from core into ee/. Charter §7.3 Q4 is
+      # entrenched — once open, always open — so this fails the build rather
+      # than opening an issue for later.
+      - name: Fail on a re-gated capability
+        if: steps.evidence.outputs.status == '2'
+        run: |
+          echo "::error::A capability moved from core into ee/. Charter §7.3 Q4 is entrenched."
+          echo "Escalate to the License & Boundary Auditor before anything else."
+          exit 1
+
+      # Exit 3 is the canary: OSS retention falling while Pro MRR rises. It
+      # triggers Loop L0 regardless of the revenue figure.
+      - name: Fail on a tripped canary
+        if: steps.evidence.outputs.status == '3'
+        run: |
+          echo "::error::The canary tripped: OSS retention is falling while Pro revenue rises."
+          echo "The free tier may be being degraded. Escalate to the CPO for an immediate Loop L0."
+          exit 1
+
+      - name: Fail when the evidence cannot be computed
+        if: steps.evidence.outputs.status == '1'
+        run: exit 1
+
+      - name: Open the review-due issue
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Charter review due: $(date -u +%Y)" \
+            --body "Charter §6.1 requires the annual review within 30 days of the ratification anniversary.
+
+          Evidence is attached to this run. Start from
+          [docs/oss/charter-review/README.md](docs/oss/charter-review/README.md) and
+          [_TEMPLATE.md](docs/oss/charter-review/_TEMPLATE.md).
+
+          Section 3, *Where we fell short*, is **mandatory and may not be empty**. A transparency
+          report with nothing uncomfortable in it is a press release.
+
+          Run: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}" \
+            --assignee lgreene03 \
+            --label "charter" || echo "::warning::could not open the issue; the evidence is in this run"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: charter-evidence
+          path: charter-evidence.json

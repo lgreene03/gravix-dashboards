@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package tenantdb
 
 import (
@@ -71,10 +74,10 @@ func (s *SQLiteDB) EventCounters() EventCounterRepo {
 func (s *SQLiteDB) NotificationChannels() NotificationChannelRepo {
 	return &sqliteNotificationChannelRepo{db: s.db}
 }
-func (s *SQLiteDB) AlertRules() AlertRuleRepo     { return &sqliteAlertRuleRepo{db: s.db} }
+func (s *SQLiteDB) AlertRules() AlertRuleRepo      { return &sqliteAlertRuleRepo{db: s.db} }
 func (s *SQLiteDB) AlertHistory() AlertHistoryRepo { return &sqliteAlertHistoryRepo{db: s.db} }
 func (s *SQLiteDB) AuditLog() AuditRepo            { return &sqliteAuditRepo{db: s.db} }
-func (s *SQLiteDB) MonthlyUsage() MonthlyUsageRepo  { return &sqliteMonthlyUsageRepo{db: s.db} }
+func (s *SQLiteDB) MonthlyUsage() MonthlyUsageRepo { return &sqliteMonthlyUsageRepo{db: s.db} }
 func (s *SQLiteDB) RetentionPolicies() RetentionPolicyRepo {
 	return &sqliteRetentionPolicyRepo{db: s.db}
 }
@@ -119,6 +122,9 @@ func (s *SQLiteDB) TenantBranding() TenantBrandingRepo {
 }
 func (s *SQLiteDB) ScheduledExports() ScheduledExportRepo {
 	return &sqliteScheduledExportRepo{db: s.db}
+}
+func (s *SQLiteDB) SLOs() SLORepo {
+	return &sqliteSLORepo{db: s.db}
 }
 
 // --- Tenant Repo ---

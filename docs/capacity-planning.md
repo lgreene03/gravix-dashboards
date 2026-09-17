@@ -22,6 +22,34 @@ Events/sec averages assume uniform distribution across 30 days (events / 2,592,0
 
 ### Per-event storage estimates
 
+> **These figures are planning estimates and have now been measured.** Run
+> [`./bench/run.sh --scale small`](../bench/README.md) and read the numbers out of the result file,
+> or use the [cost calculator](../dashboards/tco.html), which takes its storage input from a bench
+> result and refuses to run on a constant.
+>
+> The measured figures differ from the estimates below, and the difference in the *mechanism* matters
+> more than the difference in the numbers — see
+> [F-020](oss/findings.md). Both are retained here rather than silently replaced, because a reader
+> who sized a deployment from the old numbers should be able to see what changed.
+
+| Format | Per event, **measured** | Per event, planning estimate | |
+|---|---:|---:|---|
+| JSONL (raw) | **203.78 B** | ~300 B | The estimate is conservative: it over-provisions by 47% |
+| Parquet (warehouse) | **2.89 B** | ~30-50 B | See the note below — this is not a compression ratio |
+| Total per event | **206.68 B** | ~330-350 B | |
+
+**The Parquet figure is not compression, and the old table's "Compression Ratio" column was
+misleading.** The rollup **aggregates**: many facts collapse into one minute-bucket row per
+service/method/path_template. Most of the reduction is fewer rows, not smaller ones. Two consequences
+the old wording hid:
+
+- **Per-event data cannot be recovered from the warehouse.** Raw JSONL is the only per-event record,
+  which is why `docs/00-system-truth.md` §4 forbids deleting it. Parquet is not a compressed copy.
+- **The ratio is not a constant.** It is a function of events per bucket-key, so a deployment with
+  one service gets a far better ratio than one with twenty. Size from the raw figure, not the ratio.
+
+The original estimates, retained for comparison with anything sized before this was measured:
+
 A single `RequestFact` event is approximately 200-400 bytes as JSONL (varies with field lengths). Use 300 bytes as a planning average.
 
 | Format   | Per Event | Compression Ratio | Notes                           |

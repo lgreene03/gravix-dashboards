@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package provider implements the Gravix Terraform provider.
 // It exposes gravix_api_key, gravix_alert_rule, and gravix_tenant resources
 // so engineering teams can manage Gravix configuration as infrastructure-as-code.
@@ -30,9 +33,9 @@ func New() *schema.Provider {
 			},
 		},
 		ResourcesMap: map[string]*schema.Resource{
-			"gravix_api_key":   resources.ResourceAPIKey(),
+			"gravix_api_key":    resources.ResourceAPIKey(),
 			"gravix_alert_rule": resources.ResourceAlertRule(),
-			"gravix_tenant":    resources.ResourceTenant(),
+			"gravix_tenant":     resources.ResourceTenant(),
 		},
 		ConfigureContextFunc: configure,
 	}

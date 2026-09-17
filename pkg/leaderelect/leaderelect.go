@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package leaderelect provides leader election for rollup transforms.
 //
 // Two implementations are available:

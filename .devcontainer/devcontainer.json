@@ -1,0 +1,34 @@
+{
+  "name": "Gravix",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  // Checks the toolchain, fetches modules, and runs the fast suite once, so the
+  // container is not "ready" until a test has actually passed in it.
+  "postCreateCommand": "./scripts/dev_setup.sh",
+
+  "remoteUser": "root",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ],
+      "settings": {
+        "go.testFlags": ["-count=1"],
+        "go.lintTool": "staticcheck"
+      }
+    }
+  },
+
+  // The container is one supported path, never the only one. A contributor with
+  // Go installed works natively with ./scripts/dev_setup.sh and needs no
+  // container at all — see docs-site/docs/development-setup.md.
+  "forwardPorts": [8000, 8090, 8091],
+  "portsAttributes": {
+    "8000": { "label": "Dashboard" },
+    "8090": { "label": "Ingestion API" },
+    "8091": { "label": "Gateway API" }
+  }
+}

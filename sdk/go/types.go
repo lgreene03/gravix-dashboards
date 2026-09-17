@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package gravix provides a Go client for the Gravix observability platform.
 //
 // The client supports sending request facts and service events to the Gravix

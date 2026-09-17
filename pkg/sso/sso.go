@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package sso provides SAML and OIDC single sign-on for enterprise tenants.
 package sso
 

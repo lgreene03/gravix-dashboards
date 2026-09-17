@@ -1,3 +1,6 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package gravix
 
 import (
@@ -85,8 +88,8 @@ func TestHTTPMiddleware_CapturesStatusCode(t *testing.T) {
 	defer client.Close()
 
 	tests := []struct {
-		name     string
-		code     int
+		name string
+		code int
 	}{
 		{"200", http.StatusOK},
 		{"404", http.StatusNotFound},
@@ -122,8 +125,8 @@ func TestHTTPMiddleware_UserAgentExtraction(t *testing.T) {
 	wrapped := HTTPMiddleware(client, nil)(handler)
 
 	tests := []struct {
-		ua       string
-		wantLog  bool
+		ua      string
+		wantLog bool
 	}{
 		{"Mozilla/5.0", true},
 		{"curl/7.68.0", true},

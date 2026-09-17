@@ -1,9 +1,13 @@
+// Copyright 2026 The Gravix Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lgreene/gravix-dashboards/pkg/manifest"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/parquet-go/parquet-go"
@@ -344,6 +349,19 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 
 	log.Printf("Merging %d parquet files into %s...", len(groupKeys), destKey)
 
+	// Source manifests carry the lineage the merged file inherits. A source with
+	// no manifest contributes nothing rather than failing the merge: the warehouse
+	// predates manifests and must stay compactable.
+	sourceManifests, err := readSourceManifests(ctx, store, groupKeys)
+	if err != nil {
+		return err
+	}
+
+	// mergedRows is the merged row set, whatever its topic, so the manifest is
+	// built once rather than three times.
+	var mergedRows any
+	var rowCount int64
+
 	switch topic {
 	case "request_metrics_minute":
 		var allRows []MetricRow
@@ -373,6 +391,7 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 		}
 
 		merged := mergeMetricRows(allRows)
+		mergedRows, rowCount = merged, int64(len(merged))
 
 		var parquetBuf bytes.Buffer
 		writer := parquet.NewGenericWriter[MetricRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
@@ -415,6 +434,7 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 		}
 
 		merged := mergeEventSummaryRows(allRows)
+		mergedRows, rowCount = merged, int64(len(merged))
 
 		var parquetBuf bytes.Buffer
 		writer := parquet.NewGenericWriter[EventSummaryRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
@@ -457,6 +477,7 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 		}
 
 		merged := mergeEventDetailRows(allRows)
+		mergedRows, rowCount = merged, int64(len(merged))
 
 		var parquetBuf bytes.Buffer
 		writer := parquet.NewGenericWriter[EventDetailRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
@@ -472,14 +493,92 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 		}
 	}
 
-	// Delete old files after successful write
+	if err := writeMergedManifest(ctx, store, topic, destKey, mergedRows, rowCount, sourceManifests); err != nil {
+		return err
+	}
+
+	// Delete old files after the merged file and its manifest are safely written.
+	// Data file first, then its manifest: a manifest left without its data file is
+	// a detectable inconsistency, a data file left without its manifest is not.
 	for _, key := range groupKeys {
 		if err := store.Delete(ctx, key); err != nil {
 			log.Printf("Warning: failed to delete old parquet key %s: %v", key, err)
+			continue
+		}
+		manifestKey := manifest.Path(key)
+		exists, err := store.Exists(ctx, manifestKey)
+		if err != nil {
+			log.Printf("Warning: failed to check manifest %s: %v", manifestKey, err)
+			continue
+		}
+		if !exists {
+			continue
+		}
+		if err := store.Delete(ctx, manifestKey); err != nil {
+			log.Printf("Warning: failed to delete old manifest %s: %v", manifestKey, err)
 		}
 	}
 
 	return nil
+}
+
+// readSourceManifests loads the manifest beside each source file. Sources with no
+// manifest are skipped, not treated as an error.
+func readSourceManifests(ctx context.Context, store storage.ObjectStore, keys []string) ([]*manifest.Manifest, error) {
+	var out []*manifest.Manifest
+	for _, key := range keys {
+		m, err := manifest.Read(ctx, store, key)
+		switch {
+		case err == nil:
+			out = append(out, m)
+		case errors.Is(err, manifest.ErrNoManifest):
+			// Predates manifests; it contributes no lineage.
+		default:
+			return nil, fmt.Errorf("reading manifest for %s: %w", key, err)
+		}
+	}
+	return out, nil
+}
+
+// writeMergedManifest describes the merged file: its own identity, row count and
+// digest, with the union of its sources' lineage.
+//
+// When no source carried a manifest the merged file gets none either. Writing one
+// would claim a lineage that was never recorded, and empty source keys read as
+// "derived from nothing" rather than "unknown".
+func writeMergedManifest(ctx context.Context, store storage.ObjectStore, topic, destKey string, rows any, rowCount int64, sources []*manifest.Manifest) error {
+	if len(sources) == 0 {
+		return nil
+	}
+
+	tenantID, _, date, _, ok := parseWarehouseKey(destKey)
+	if !ok {
+		return fmt.Errorf("cannot derive partition identity from merged key %s", destKey)
+	}
+
+	digest, err := manifest.ContentDigest(rows)
+	if err != nil {
+		return fmt.Errorf("digesting merged rows for %s: %w", destKey, err)
+	}
+
+	day, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return fmt.Errorf("parsing day from merged key %s: %w", destKey, err)
+	}
+
+	m := manifest.Merge(manifest.Manifest{
+		Metric:        topic,
+		MetricVersion: sources[0].MetricVersion,
+		ContentDigest: digest,
+		TenantID:      tenantID,
+		EventDay:      date,
+		WindowFrom:    day.UTC().Format(time.RFC3339),
+		WindowTo:      day.UTC().AddDate(0, 0, 1).Format(time.RFC3339),
+		RowCount:      rowCount,
+		DataFile:      destKey,
+	}, sources)
+
+	return manifest.Write(ctx, store, m)
 }
 
 func main() {
@@ -591,7 +690,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		cutoff := now.Truncate(24 * time.Hour).AddDate(0, 0, -daysLimit)
+		cutoff := now.Truncate(24*time.Hour).AddDate(0, 0, -daysLimit)
 		if fileTime.Before(cutoff) {
 			continue
 		}
@@ -658,7 +757,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		cutoff := now.Truncate(24 * time.Hour).AddDate(0, 0, -daysLimit)
+		cutoff := now.Truncate(24*time.Hour).AddDate(0, 0, -daysLimit)
 		if fileTime.Before(cutoff) {
 			continue
 		}

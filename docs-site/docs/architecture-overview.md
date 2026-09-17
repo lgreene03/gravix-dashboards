@@ -95,9 +95,23 @@ The service authenticates requests via `X-API-Key` header and exposes `/live` an
 
 ### Gateway service
 
-**Location**: `services/gateway/`
+**Location**: `pkg/gatewaycore/`, with the entrypoint at `services/gateway/`
 
 The gateway handles tenant management, authentication (JWT), billing (Stripe), alerting, team invitations, GDPR compliance, and analytics queries. It proxies dashboard data requests to Cube.js and serves the OpenAPI specification at `/api/gateway/openapi.json`.
+
+All of that lives in `pkg/gatewaycore`, an importable package. `services/gateway/main.go` is a five-line entrypoint that calls `gatewaycore.Run()`, and `go build -o bin/gateway ./services/gateway/` still produces the binary every deployment artefact expects.
+
+### Extension points
+
+**Location**: `pkg/extpoint/`
+
+Gravix is open core: the Apache-2.0 core must build, test and run with the source-available `ee/` directory physically deleted. `pkg/extpoint` is the only door between them, and it points one way. An `ee/` package registers an `Extension` — a name, a path prefix and an `http.Handler` — from its own `init()`, and `gatewaycore.Run` mounts whatever is registered onto the HTTP listener it was already building. The core never imports `ee/`; `make check-boundary` fails the build if any file outside `ee/` tries.
+
+That yields two binaries from one codebase. `make build` produces `bin/gateway` from `services/gateway/`, which imports `pkg/gatewaycore` and nothing else. `make build-ee` produces `bin/gateway-ee` from `ee/cmd/gateway/`, which calls the identical `gatewaycore.Run()` and blank-imports the `ee/` feature packages that build should include. The paid build is the free build plus registrations — never a different program.
+
+`GET /api/gateway/ee/status` lists what is mounted. On an open-source install it answers `200` with `{"extensions":[]}`, because the registry is empty rather than because anything checks a licence: with no `ee/` package in the build graph, nothing ever calls `Register`. There is no upsell in that response, and none in the dashboard.
+
+Three capabilities are mounted this way today: the fleet console (`ee/fleet`) manages many Gravix installations from one place, `ee/intelligence` forecasts where a metric is heading and when a threshold will be crossed, and `ee/warehouse` keeps an external data warehouse continuously in step. All three are **source-available, not open source**: it is licensed under BUSL-1.1, its source is in the repository, and it is not part of the Apache-2.0 core. A managed installation does not need the console — every install runs, ingests, aggregates, alerts and serves dashboards with it unreachable, permanently. Forecasting is additive in the same way: the free 2σ anomaly detector is in the Apache-2.0 core and stays there, and `ee/intelligence` answers a different question beside it. It reads the same `data/warehouse/` Parquet the free product writes, refuses to forecast a series it cannot forecast responsibly, and states the confidence its own back-test measures rather than a rounder number. Warehouse sync is the same shape again: `gravix export` already writes the same data for any range, free and with no cap, and what the paid package adds is remembering what has been loaded, evolving the target schema, and reconciling partitions Gravix revised after a late fact arrived. Its README says so in its opening paragraph. When an Enterprise licence lapses, the console's configuration becomes read-only and every managed installation is entirely unaffected; `ee/fleet/demo_expiry.sh` runs both binaries against an expired licence and shows exactly that.
 
 ### Rollup ETL jobs
 

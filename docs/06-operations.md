@@ -1,5 +1,8 @@
 # Local Operations Runbook (Docker Compose)
 
+> For a **Kubernetes production** deployment, see [`operations.md`](operations.md) instead.
+> This runbook covers a local `docker-compose` stack.
+
 This guide covers common operational tasks, maintenance procedures, and troubleshooting steps for running Gravix locally with Docker Compose.
 
 > **Kubernetes operations**: For production Kubernetes operations, see [operations.md](operations.md).
@@ -187,3 +190,181 @@ Since raw data (JSONL) and warehouse data (Parquet) are separated:
 
 - If **Parquet** is corrupted: Delete the files and re-run the Rollup Job from Raw data.
 - If **Raw** is corrupted: Data for that period may be lost if not backed up externally.
+
+## 5. Rebuilding metrics (`gravix recompute`)
+
+Recomputation is not a manual procedure. `gravix recompute` rebuilds any historical
+window from the raw facts and replaces the prior output in place.
+
+```bash
+# Rebuild one week
+gravix recompute --from 2026-09-01 --to 2026-09-08
+
+# See what would change, without writing
+gravix recompute --from 2026-09-01 --to 2026-09-02 --dry-run
+
+# Multi-tenant, four partitions at a time
+gravix recompute --from 2026-09-01 --to 2026-09-08 --tenant acme --tenant globex --concurrency 4
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--from` | *required* | Start of the window, RFC3339 or `YYYY-MM-DD` |
+| `--to` | *required* | End of the window, **exclusive** |
+| `--metric` | `request_metrics_minute` | Metric to rebuild |
+| `--tenant` | *(none)* | Tenant id; repeatable. Omit for single-tenant mode |
+| `--input` | `./data/raw` | Raw facts directory |
+| `--output` | `./data/warehouse` | Warehouse output directory |
+| `--dry-run` | `false` | Plan and report without writing |
+| `--concurrency` | `1` | Partitions rebuilt in parallel |
+
+Exit codes: `0` success, `1` a partition failed, `2` invalid flags, `3` the lock is
+held by a running rollup.
+
+### 5.1 What makes a rebuild safe
+
+- **One partition, one key.** A tenant-day always writes to
+  `warehouse/<metric>/event_day=YYYY-MM-DD/<metric>_YYYYMMDD.parquet`. The key is
+  derived from the partition, never minted per run, so a rebuild **replaces** its
+  prior output rather than adding a second file the query layer would double-count.
+- **Byte-identical output.** The same facts always encode to the same bytes. Rows are
+  sorted by the full aggregation key (bucket, service, method, path template), each
+  bucket's latencies are sorted before its percentiles are taken, the compression
+  level is pinned rather than inherited from the library default, and nothing
+  run-scoped — no timestamp, hostname, or run id — is written into the file.
+- **Unchanged partitions are left alone.** Before writing, the engine encodes the new
+  file in memory and compares it with what is already stored. Identical bytes count as
+  `unchanged` and no write happens, so re-running a window is a genuine no-op rather
+  than a rewrite that merely lands on the same values.
+- **Read order does not matter.** The object store gives no ordering guarantee. Fact
+  files are read in a fixed order and every aggregation is order-independent, so two
+  rebuilds of the same day agree bit for bit.
+- **Facts are never touched.** Recompute reads facts and rewrites derivatives only,
+  per `docs/00-system-truth.md` §2.
+- **One writer at a time.** A recompute takes the same lock as the cron rollup, so the
+  two can never write the same partition concurrently. A held lock exits `3` and
+  writes nothing.
+
+### 5.2 Why it matters
+
+`docs/00-system-truth.md` §4 promises that every metric is recomputable. That promise
+is only worth something if a rebuild is provably the same as the original — otherwise
+"recomputable" means "will produce some other number, later". The determinism rules
+above are what make the promise checkable, and `pkg/recompute` tests each of them by
+name.
+
+## 6. Adding a metric to history (`gravix evolve`)
+
+Gravix kept the facts, so a metric that never existed can be computed for last month.
+
+```bash
+# Add p99.9 across the last 30 days. No fact read: the sketch already knows.
+gravix evolve add-percentile --quantile 0.999 --from 2026-08-12 --to 2026-09-11
+
+# Add a dimension. This does re-read facts — the rows were never separated.
+gravix evolve add-dimension --field user_agent_family --from 2026-08-12 --to 2026-09-11
+
+# See the plan without writing anything.
+gravix evolve add-dimension --field user_agent_family --from 2026-08-12 --to 2026-09-11 --dry-run
+```
+
+Without `--yes` the command prints the plan and waits for you to type `yes`. Backfilling rewrites
+every partition in the window; that should not be one keystroke away.
+
+Exit codes: `0` success, `1` partial failure, `2` invalid flags or a refused change, `3` you declined.
+
+### 6.1 Why the two kinds cost different things
+
+| | Percentile | Dimension |
+|---|---|---|
+| Reads raw facts | **no** | **yes** |
+| Why | each bucket stores a mergeable sketch; a quantile is a question it already answers | the dimension was never in the aggregation key, so the rows that would carry it were never separated |
+| Rows after | same count | more — one per distinct value |
+
+### 6.2 What is refused, and why
+
+- **Unbounded dimensions.** `user_id`, `request_id`, `session_id`, `ip_address`, `trace_id`, `span_id`
+  and `event_id` are permanently denied. The list is not configurable: a config option would turn a
+  constraint into a suggestion, and an unbounded dimension admitted once is unrecoverable — the
+  partitions are written by the time anyone sees the bill. See
+  [`04-non-goals.md`](04-non-goals.md) §5.
+- **Anything above 1,000 distinct values per day.** Sampling reads the first, middle and last day of
+  the window in full. The refusal reports the observed count, so you learn why and not only that.
+- **A percentile over partitions written before sketches existed.** Those files genuinely lack the
+  information. The refusal names the days so you can rebuild them first.
+- **A window reaching past fact retention.** Days whose facts are gone are reported and **not**
+  backfilled. Partial success is reported as partial, never as success.
+
+### 6.3 What it does not do
+
+It never edits or deletes a fact. An evolution is a rebuild of derivatives, and every partition it
+rewrites gets a revision bump and a manifest recording what it superseded, exactly as a late-arriving
+fact would.
+
+## 7. Where did this number come from? (`gravix explain`)
+
+```bash
+gravix explain request_metrics_minute "2026-09-09 14:23" --filter service=api
+gravix explain latency_p95 2026-09-09T14:23:00Z --filter service=api --json
+```
+
+Real output:
+
+```
+metric:        request_metrics_minute@v2
+bucket:        2026-09-09T14:23:00Z
+filters:       service=api
+values:        request_count=3  error_count=1  error_rate=0.333333  p50_latency_ms=16 ...
+
+contract:      latency_p50@v2
+               (a rollup covers several metrics; this is the weakest guarantee among them)
+formula:       50th percentile of latency_ms, from the merged latency_sketch over the queried window
+grain:         1 minute, per service/method/path_template
+exactness:     sketch (relative error <= 1% at q in [0.5, 0.99], measured by ...)
+mergeability:  sketch_merge — Merge the latency_sketch column across buckets, then query the
+               quantile. Never take max, mean, or any other function of the per-bucket scalars.
+
+derived from:  3 facts in 1 file(s)
+  raw/request_facts/2026-09-09/14/facts.jsonl
+
+data file:     warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet
+idempotency:   request_metrics_minute:v2:_single:20260909
+digest:        sha256:ddf7cdf1...
+revision:      0
+
+reproduce:     gravix recompute --metric request_metrics_minute --from 2026-09-09 --to 2026-09-10
+```
+
+Exit codes: `0` success, `1` no partition or no matching row, `2` invalid flags or a filter on a
+non-dimension, `4` the partition has no manifest.
+
+### 7.1 Provenance is aggregate, deliberately
+
+`explain` reports **which fact files** and **how many facts**. It never returns a request record, and
+no output path is capable of it: the manifest is the only source of provenance, and a manifest holds
+keys and counts, not contents.
+
+`--filter` is restricted to the metric's declared dimensions for the same reason. A filter on
+`event_id` would be exactly the per-request drill-down [`04-non-goals.md`](04-non-goals.md) §5 forbids,
+so the check is a whitelist — a new fact field cannot quietly become queryable.
+
+### 7.2 A missing manifest is an answer, not a crash
+
+A partition written before manifests existed has no recorded provenance. `explain` says so and exits
+`4`, a distinct code because it is a known and recoverable state:
+
+```
+lineage unavailable: this partition was written before manifests existed
+  data file: warehouse/request_metrics_minute/event_day=2026-09-09/request_metrics_minute_20260909.parquet
+  metric version: unknown
+  to make lineage available, run: gravix recompute --metric request_metrics_minute --from 2026-09-09 --to 2026-09-10
+```
+
+Inferring a plausible lineage would be worse than admitting the gap. The whole value of the feature is
+that its output can be trusted.
+
+### 7.3 How far back revisions go
+
+A manifest records the digest it superseded and when — one step. So `explain` can tell you a partition
+is at revision 5 and what revision 4 held, but not revisions 1 through 3. The report never implies
+otherwise.

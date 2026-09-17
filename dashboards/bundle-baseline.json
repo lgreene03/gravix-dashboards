@@ -1,0 +1,7 @@
+{
+  "gzip_bytes": 65404,
+  "recorded_for": "GRVX-908",
+  "origin_gzip_bytes": 48880,
+  "origin_label": "the commit before GRVX-809",
+  "note": "Gzipped size of app.js + styles.css + lib/*.js. TestDashboardBundleBudget allows 8192 bytes of growth over gzip_bytes; a change that legitimately exceeds that updates this file in the same commit, so the increase is reviewable in the diff. See F-012."
+}

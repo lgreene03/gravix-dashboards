@@ -13,6 +13,18 @@ The Gravix Go SDK provides a lightweight client for sending request facts, plus 
 go get github.com/lgreene/gravix-dashboards/sdk/go
 ```
 
+:::warning This command does not work yet
+
+`go.mod` declares the module path `github.com/lgreene/gravix-dashboards`, and the repository is at
+`github.com/lgreene03/gravix-dashboards` — a different account. `go get` resolves a module path by
+fetching that URL, so this command cannot install the Gravix SDK, and it must not be run until the
+path is corrected. Tracked as **F-050** in
+[`docs/oss/findings.md`](https://github.com/lgreene03/gravix-dashboards/blob/main/docs/oss/findings.md).
+
+Until then, vendor the SDK from a clone of the repository.
+
+:::
+
 Requires Go 1.21+.
 
 ## Creating a Client

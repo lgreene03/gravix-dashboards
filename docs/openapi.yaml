@@ -8,9 +8,10 @@ info:
   version: 0.1.0
   contact:
     name: Gravix
-    url: https://github.com/gravix-io/gravix
+    url: https://github.com/lgreene03/gravix-dashboards
   license:
-    name: MIT
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
 
 servers:
   - url: http://localhost:8090
@@ -40,6 +41,10 @@ tags:
     description: Dead-letter queue management
   - name: Audit
     description: Audit log
+  - name: Metrics
+    description: Derived metric queries whose correctness needs server-side computation
+  - name: SLOs
+    description: Service level objectives, error budgets and burn-rate alerting
 
 paths:
   # ── Ingestion endpoints ──────────────────────────────────────────────
@@ -49,6 +54,22 @@ paths:
       operationId: ingestFact
       summary: Ingest a single request fact
       description: |
+        **Path templates are normalized on arrival.** A segment that is a UUID or a run
+        of four or more digits is rewritten to `{id}` before validation, so an
+        integration that reports the literal request path (`/users/42`) is corrected
+        rather than rejected. Anything else that proves dynamic — more than 50 distinct
+        values at one position for a given service and method — is collapsed to
+        `{param}`, permanently.
+
+        A service may register at most 200 distinct path templates. Beyond that, a
+        request carrying a *new* template is rejected with `400` and the message
+        `path_template budget exceeded for service "<name>" (budget=200); normalize
+        this route in your instrumentation`. Templates already seen keep being
+        accepted, so a full budget never stops traffic that was already flowing.
+
+        These budgets are held in memory per ingestion process. A horizontally scaled
+        deployment bounds cardinality per replica rather than in total — see SD-016.
+
         Records a single HTTP request observation. The fact is validated,
         persisted to disk (fsync'd), and later rolled up into minute-level metrics.
       tags: [Data]
@@ -177,6 +198,181 @@ paths:
           $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/services:
+    get:
+      operationId: listServices
+      summary: List every service that has sent a fact
+      description: |
+        Returns every distinct `service` value observed on an accepted RequestFact,
+        with the first and last time it was seen and how many facts it has sent.
+
+        Services register themselves by sending data — there is no registration
+        step, so this list cannot drift from what is actually reporting. The
+        registry is updated the moment a fact is accepted, so a service appears
+        here without waiting for the five-minute rollup that metric queries need.
+
+        Aggregate only: one row per service and three counters, never anything
+        about an individual request.
+
+        An empty registry returns `200` with an empty list. No data yet is a
+        state to render, not an error.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      responses:
+        "200":
+          description: The services observed so far, sorted by name ascending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, first_seen_at, last_seen_at, request_count]
+                      properties:
+                        name:
+                          type: string
+                          description: The service name as sent on the fact.
+                          example: auth-service
+                        first_seen_at:
+                          type: string
+                          format: date-time
+                          description: Event time of the earliest fact seen from this service.
+                          example: "2026-09-10T12:00:00Z"
+                        last_seen_at:
+                          type: string
+                          format: date-time
+                          description: Event time of the most recent fact seen from this service.
+                          example: "2026-09-10T12:05:00Z"
+                        request_count:
+                          type: integer
+                          format: int64
+                          description: |
+                            Facts accepted from this service since the registry was created.
+                            A discovery aid, not a billing figure: it is not reconciled against
+                            stored facts, and a retried batch can count twice.
+                          example: 482
+              example:
+                services:
+                  - name: auth-service
+                    first_seen_at: "2026-09-10T12:00:00Z"
+                    last_seen_at: "2026-09-10T12:05:00Z"
+                    request_count: 482
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The API key lacks the `admin:read` scope.
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/alert-proposals:
+    get:
+      operationId: listAlertProposals
+      summary: Alert rules proposed from observed traffic
+      description: |
+        Returns ready-to-arm alert rules whose thresholds are derived from what each
+        service actually does, computed from the last seven days of rollup output.
+
+        A threshold nobody can choose is a threshold nobody sets: a new user does not
+        know their own service's normal error rate, so asking for a number yields
+        either one that never fires or one that fires constantly. Thresholds here are
+        multiples of observed behaviour — three times the mean error rate (never below
+        5%), twice the mean P95 latency, half the mean throughput.
+
+        A proposal whose baseline is zero is omitted rather than returned with a zero
+        threshold, because an alert that fires whenever latency exceeds zero trains its
+        reader to ignore it.
+
+        Before the first rollup there is nothing to derive from, and the response is
+        `200` with an empty list rather than an error.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      responses:
+        "200":
+          description: Candidate rules, or an empty list if nothing has been rolled up yet.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proposals]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlertProposal"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/alert-proposals/arm:
+    post:
+      operationId: armAlertProposal
+      summary: Arm one proposed alert rule
+      description: |
+        Creates a live alert rule from a proposal. No login and no manually-chosen
+        threshold: the caller names which proposal it wants and the server decides what
+        that means.
+
+        The threshold is always recomputed from the current baseline and never read
+        from the request, so a stale or forged number cannot be armed. Any threshold,
+        metric or operator sent in the body is ignored.
+
+        An alert rule requires a notification channel, so the first arm also creates a
+        channel named "Local (dashboard only)" of type `log`, which delivers nowhere:
+        the alert still fires and still lands in alert history, which is what the
+        dashboard reads. Later arms reuse it rather than creating another.
+      tags: [Data]
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service, proposal_id]
+              properties:
+                service:
+                  type: string
+                  example: auth-service
+                proposal_id:
+                  type: string
+                  enum: [error_rate, p95_latency, throughput_drop]
+                  example: error_rate
+      responses:
+        "201":
+          description: The rule was created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alert_rule_id, channel_id]
+                properties:
+                  alert_rule_id:
+                    type: string
+                  channel_id:
+                    type: string
+        "400":
+          description: "`service` or `proposal_id` was missing."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: |
+            No such proposal for that service — either the service has no rollup data,
+            or the proposal was omitted because its baseline is zero.
+        "501":
+          description: |
+            The deployment has no tenant database (`TENANT_DB_PATH` unset), so there is
+            nothing to create an alert rule in.
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -889,6 +1085,457 @@ paths:
 
   # ── Audit Log endpoint ─────────────────────────────────────────────
 
+  /api/v1/percentile:
+    get:
+      operationId: getWindowPercentile
+      summary: Percentile over a time window
+      description: >
+        Returns a quantile computed by merging the t-digest sketches stored with each
+        minute bucket.
+
+
+        This endpoint exists because a percentile has no correct aggregation across
+        buckets: the maximum of sixty one-minute p95s is not the hour's p95, and on
+        heavy-tailed latency it was measured 94% above the true value. The semantic
+        layer therefore exposes the per-bucket percentile columns as non-aggregatable
+        and any window wider than one minute is answered here, where the sketches can
+        be merged with the same implementation that wrote them.
+
+
+        The answer is a sketch, not an exact value. `exactness` and `error_bound` in
+        the response say so, and the bound is the one published in
+        contracts/request_metrics_minute.v2.yaml.
+      tags: [Metrics]
+      security:
+        - gravixKeyAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: metric
+          in: query
+          schema:
+            type: string
+            default: request_metrics_minute
+            enum: [request_metrics_minute]
+          description: The metric to query. Only request_metrics_minute carries sketches.
+        - name: quantile
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            # OpenAPI 3.0 spells an exclusive bound as a boolean beside the
+            # bound itself; the numeric form is 3.1 syntax and is silently
+            # ignored by 3.0 tooling, which would document the wrong range.
+            minimum: 0
+            exclusiveMinimum: true
+            maximum: 1
+            exclusiveMaximum: true
+            example: 0.95
+          description: >
+            The quantile, strictly between 0 and 1. The published error bound covers
+            [0.5, 0.99]; quantiles outside that range are answered but less accurate.
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Start of the window, inclusive (RFC3339).
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: End of the window, exclusive (RFC3339). At most 31 days after `from`.
+        - name: granularity
+          in: query
+          schema:
+            type: string
+            enum: [minute, hour, day, all]
+            default: all
+          description: >
+            How to group the window. `all` returns one bucket covering the whole
+            window; the others return one per period that has data.
+        - name: service
+          in: query
+          schema:
+            type: string
+          description: Restrict to one service.
+        - name: method
+          in: query
+          schema:
+            type: string
+          description: Restrict to one HTTP method.
+        - name: path_template
+          in: query
+          schema:
+            type: string
+          description: >
+            Restrict to one path template. Only the three declared dimensions are
+            accepted; high-cardinality filters are a stated non-goal.
+      responses:
+        "200":
+          description: The merged quantile for each bucket that has data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PercentileResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/PreSketchPartition"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: >
+            Metric storage is not configured, so no sketch can be read. The endpoint
+            reports this rather than falling back to the per-bucket scalars, which
+            would be the wrong number.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "metric storage is not configured"
+                code: 503
+
+  /api/v1/lineage:
+    get:
+      operationId: getLineage
+      summary: Provenance of one metric value
+      description: >
+        Returns everything behind a single metric value: the contract that defines
+        it, how exact it is, which fact files it was computed from and how many
+        facts those held, whether the partition has been revised, and the command
+        that rebuilds it.
+
+
+        This is `gravix explain` over HTTP. The response is assembled by the same
+        code the CLI uses, so the two cannot disagree about where a number came
+        from.
+
+
+        It reports aggregates and file names, never individual request records —
+        per-request querying is a stated non-goal (docs/04-non-goals.md §5) and no
+        parameter or response field here can be used to reach one. Only the three
+        declared dimensions are accepted as filters.
+      tags: [Metrics]
+      security:
+        - gravixKeyAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: metric
+          in: query
+          schema:
+            type: string
+            default: request_metrics_minute
+          description: >
+            The rollup name, or one of its contract names (for example
+            `latency_p95`). Naming a contract focuses the report on that metric's
+            definition; naming the rollup reports the weakest guarantee present,
+            because that is the one a reader most needs to know about.
+        - name: bucket
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: The `bucket_start` being explained (RFC3339). Matched exactly.
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: method
+          in: query
+          schema:
+            type: string
+        - name: path_template
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The value's full provenance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lineage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No partition covers that bucket, or no row matches the filters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/LineageUnavailable"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Metric storage is not configured, so no partition can be read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/gateway/slos:
+    get:
+      operationId: listSLOs
+      summary: List service level objectives
+      description: >
+        Returns every SLO for the caller's tenant, with the note about detection
+        latency that every burn-rate response carries.
+
+
+        SLOs are not a paid feature. A team monitoring its own services considers
+        error budgets table stakes, so gating them would make the free tier a demo
+        rather than a product (charter §7.3).
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The tenant's SLOs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SLO"
+                  detection_latency_note:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/GatewayRateLimited"
+    post:
+      operationId: createSLO
+      summary: Create a service level objective
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SLOInput"
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SLO"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: An SLO already exists for that service and kind.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/gateway/slos/{id}:
+    put:
+      operationId: updateSLO
+      summary: Update a service level objective
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SLOInput"
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SLO"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: An SLO already exists for that service and kind.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteSLO
+      summary: Delete a service level objective
+      description: Requires the admin role.
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted.
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/gateway/slos/{id}/status:
+    get:
+      operationId: getSLOStatus
+      summary: Current error-budget status
+      description: >
+        How much of the error budget has been spent over the SLO's rolling window.
+
+
+        `data_through_utc` is the start of the newest bucket counted, never the
+        time of the request. Gravix aggregates in batches, so the newest data is
+        minutes old, and a status that reported `now` would claim a freshness it
+        does not have.
+
+
+        `exactness` is `exact` for an availability SLO, which counts two exact
+        counters, and `sketch` for a latency SLO, which reads the fraction under
+        the threshold from merged t-digests. The `error_bound` field says what
+        that is worth at this window's sample size.
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The SLO's current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SLOStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: >
+            No metric data in the window. This is distinct from a healthy SLO:
+            reporting 100% for a service that stopped sending data is how a
+            monitoring system lies.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum: [no_data]
+                  window_start:
+                    type: string
+                    format: date-time
+                  window_end:
+                    type: string
+                    format: date-time
+                  message:
+                    type: string
+
+  /api/gateway/slos/{id}/burn:
+    get:
+      operationId: getSLOBurnRate
+      summary: Error-budget burn rate per alerting tier
+      description: >
+        The burn rate over each of the four multi-window tiers, and which if any
+        is firing.
+
+
+        A burn rate is a multiple of the rate that would exhaust the budget
+        exactly when the window closes: 1.0 is on track, 14.4 exhausts a 30-day
+        budget in 50 hours. A tier fires only when its long AND its short window
+        both exceed the threshold — the long window is the signal, and the short
+        window is what makes the alert stop once the burn does.
+
+
+        Non-firing tiers are returned too, because "2.1x against a 3x threshold"
+        is how someone sees a problem coming.
+
+
+        **Detection latency.** The five-minute short window is not five-minute
+        detection. Gravix aggregates in batches, so an alert is detected 5-15
+        minutes after the requests that caused it. Every response repeats this in
+        `detection_latency_note`.
+      tags: [SLOs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Burn rates per tier.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slo:
+                    $ref: "#/components/schemas/SLO"
+                  tiers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SLOBurnTier"
+                  firing:
+                    nullable: true
+                    description: The highest-severity firing tier, or null.
+                    allOf:
+                      - $ref: "#/components/schemas/SLOTier"
+                  exactness:
+                    type: string
+                    enum: [exact, sketch]
+                  detection_latency_note:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/gateway/audit-log:
     get:
       operationId: listAuditLog
@@ -938,8 +1585,50 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: JWT token from /api/gateway/login
+    gravixKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Gravix-Key
+      description: >
+        Per-tenant Gravix API key, created via /api/gateway/api-keys. The gateway
+        resolves it to a tenant and answers only for that tenant's partitions.
+        An `Authorization: Bearer <key>` header is accepted as an alternative.
 
   schemas:
+    AlertProposal:
+      type: object
+      required: [id, service, name, metric, operator, threshold, window_minutes]
+      properties:
+        id:
+          type: string
+          enum: [error_rate, p95_latency, throughput_drop]
+        service:
+          type: string
+          example: auth-service
+        name:
+          type: string
+          description: Display name the armed rule will carry.
+          example: Elevated error rate
+        metric:
+          type: string
+          enum: [error_rate, p95_latency, throughput]
+        operator:
+          type: string
+          enum: [gt, lt]
+          description: "`lt` for the traffic-drop rule, which fires when throughput falls."
+        threshold:
+          type: number
+          format: double
+          description: |
+            Derived from the service's own baseline. Recomputed server-side when armed,
+            so a value read here and sent back later has no effect.
+          example: 0.06
+        window_minutes:
+          type: integer
+          description: |
+            Evaluation window. Never shorter than the rollup cadence, or the rule would
+            evaluate against partial data.
+          example: 15
     # ── Ingestion schemas ────────────────────────────────────────────
 
     RequestFact:
@@ -1434,6 +2123,317 @@ components:
         offset:
           type: integer
 
+    SLOInput:
+      type: object
+      required: [service, kind, objective, window_days]
+      properties:
+        service:
+          type: string
+        kind:
+          type: string
+          enum: [availability, latency]
+        objective:
+          type: number
+          format: double
+          description: Strictly between 0 and 1, e.g. 0.999.
+          example: 0.999
+        threshold_ms:
+          type: number
+          format: double
+          description: Required and positive for a latency SLO; ignored otherwise.
+        window_days:
+          type: integer
+          enum: [7, 28, 30]
+          description: >
+            Three values, not arbitrary: an error budget is only meaningful against a
+            period a team reasons about, and the burn-rate tier thresholds are
+            calibrated against a month.
+        enabled:
+          type: boolean
+          default: true
+
+    SLO:
+      allOf:
+        - $ref: "#/components/schemas/SLOInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            tenant_id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    SLOStatus:
+      type: object
+      properties:
+        slo:
+          $ref: "#/components/schemas/SLO"
+        good_events:
+          type: integer
+          format: int64
+        total_events:
+          type: integer
+          format: int64
+        actual_ratio:
+          type: number
+          format: double
+        budget_total:
+          type: number
+          format: double
+          description: Bad events the objective allows over the window.
+        budget_consumed:
+          type: number
+          format: double
+        budget_remaining:
+          type: number
+          format: double
+          description: Negative once the budget is overspent.
+        budget_remaining_pct:
+          type: number
+          format: double
+        breaching:
+          type: boolean
+        exactness:
+          type: string
+          enum: [exact, sketch]
+        error_bound:
+          type: string
+          description: Present for a latency SLO. What its numbers are worth at this sample size.
+        computed_at:
+          type: string
+          format: date-time
+        data_through_utc:
+          type: string
+          format: date-time
+          description: Start of the newest bucket counted. Always older than computed_at.
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+
+    SLOTier:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [page, ticket]
+        long_window:
+          type: integer
+          format: int64
+          description: Nanoseconds.
+        short_window:
+          type: integer
+          format: int64
+        threshold:
+          type: number
+          format: double
+
+    SLOBurnTier:
+      type: object
+      properties:
+        tier:
+          $ref: "#/components/schemas/SLOTier"
+        long_burn_rate:
+          type: number
+          format: double
+        short_burn_rate:
+          type: number
+          format: double
+        firing:
+          type: boolean
+        time_to_exhaustion:
+          type: integer
+          format: int64
+          description: Nanoseconds the budget lasts at the long window's rate.
+        reason:
+          type: string
+          description: >
+            One sentence saying why this tier is or is not firing. It travels with
+            the verdict so whoever is woken does not have to re-derive it.
+
+    Lineage:
+      type: object
+      description: >
+        The full provenance of one metric value. Every field that qualifies the
+        number travels with it — a number whose exactness you have to look up
+        somewhere else is a number nobody checks.
+      required:
+        - metric
+        - metric_version
+        - contract_ref
+        - bucket
+        - values
+        - formula
+        - grain
+        - exactness
+        - mergeability
+        - data_file
+        - idempotency_key
+        - content_digest
+        - source_fact_keys
+        - fact_count
+        - recompute_cmd
+      properties:
+        metric:
+          type: string
+          example: request_metrics_minute
+        metric_version:
+          type: string
+          example: v2
+        contract_ref:
+          type: string
+          description: >
+            The contract whose formula, exactness and mergeability are reported. It
+            differs from `metric` when a rollup was asked about: a rollup is several
+            metrics, so one of their contracts has to be the one described, and the
+            reader is entitled to know which.
+          example: latency_p95@v2
+        bucket:
+          type: string
+          format: date-time
+        filters:
+          type: object
+          additionalProperties:
+            type: string
+          description: The dimension filters that selected the row. Never more than the three declared dimensions.
+        values:
+          type: object
+          description: Every measure in the row. Aggregates only.
+          additionalProperties: true
+        formula:
+          type: string
+          example: percentile(latency_ms, 0.95) within bucket
+        grain:
+          type: string
+          example: minute
+        exactness:
+          type: string
+          enum: [exact, sketch, approximate]
+        error_bound:
+          type: string
+        mergeability:
+          type: string
+          enum: [sum, weighted_mean, sketch_merge, none]
+        merge_note:
+          type: string
+        known_defect:
+          type: string
+          description: >
+            Present when `exactness` is `approximate`. The contract registry refuses
+            to load an approximate metric that does not declare one, so an
+            undisclosed approximation cannot ship.
+        data_file:
+          type: string
+          description: The object key of the Parquet partition the row was read from.
+        idempotency_key:
+          type: string
+          example: "request_metrics_minute:v2::20260909"
+        content_digest:
+          type: string
+          description: >
+            A sha256 over the partition's canonicalised rows, not over the Parquet
+            container — so it is stable across writer versions and compression
+            settings, and changes only when a published number changes.
+          example: "sha256:9fccad8ddd3ad6ee438b5d5df40d6e2262f7f748f107ada14723ed414b63990b"
+        source_fact_keys:
+          type: array
+          description: The fact **files** the partition was built from. Never fact records.
+          items:
+            type: string
+        fact_count:
+          type: integer
+          format: int64
+          description: Facts read for the whole partition, not just the filtered row.
+        current_revision:
+          type: integer
+          description: 0 for a partition whose published numbers have never changed.
+        revision_history:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineageRevision"
+        recompute_cmd:
+          type: string
+          description: A command that rebuilds this partition from its facts.
+
+    LineageRevision:
+      type: object
+      properties:
+        number:
+          type: integer
+        digest:
+          type: string
+        revised_at:
+          type: string
+          format: date-time
+
+    PercentileResponse:
+      type: object
+      description: >
+        A quantile answered by merging stored sketches. Every field that qualifies
+        the number — its exactness, its error bound, and how many sketches went into
+        it — is part of the response, not documentation someone has to go and find.
+      required: [metric, quantile, granularity, exactness, error_bound, buckets]
+      properties:
+        metric:
+          type: string
+          example: request_metrics_minute
+        quantile:
+          type: number
+          format: double
+          example: 0.95
+        granularity:
+          type: string
+          enum: [minute, hour, day, all]
+          example: hour
+        exactness:
+          type: string
+          enum: [sketch]
+          description: >
+            Always `sketch` here. The value is an approximation with a published
+            bound, never an exact order statistic over the raw facts.
+        error_bound:
+          type: string
+          description: The bound published by the metric contract, stated in the response.
+          example: "relative error <= 1% for q in [0.5, 0.99]"
+        buckets:
+          type: array
+          description: One entry per period that had data. Empty when nothing matched.
+          items:
+            $ref: "#/components/schemas/PercentileBucket"
+
+    PercentileBucket:
+      type: object
+      required: [bucket_start, value, observations, sketches_merged]
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+          description: Start of this bucket, UTC. For granularity `all`, the window start.
+          example: "2026-09-09T14:00:00Z"
+        value:
+          type: number
+          format: double
+          description: The quantile in the metric's own unit (milliseconds for latency).
+          example: 142.3
+        observations:
+          type: integer
+          format: int64
+          description: Requests represented by the merged sketches.
+          example: 72240
+        sketches_merged:
+          type: integer
+          description: >
+            How many per-minute sketches were merged. A low count against a wide
+            window means the window is mostly empty.
+          example: 60
+
   responses:
     BadRequest:
       description: Validation failure.
@@ -1474,6 +2474,42 @@ components:
           example:
             error: "not found"
             code: 404
+
+    LineageUnavailable:
+      description: >
+        The partition exists and its data is fine, but its provenance was never
+        recorded — it was written before manifests existed. This is a recoverable
+        state rather than a failure, which is why it has its own status code and
+        its own body: the response carries the command that records it.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, reason, recompute_cmd]
+            properties:
+              error:
+                type: string
+                enum: [lineage_unavailable]
+              reason:
+                type: string
+                example: partition predates manifests
+              recompute_cmd:
+                type: string
+                example: "gravix recompute --metric request_metrics_minute --from 2026-09-09 --to 2026-09-10"
+
+    PreSketchPartition:
+      description: >
+        A partition in the requested window predates sketch storage, so the window
+        cannot be answered correctly. The days are named so `gravix recompute` can
+        rebuild them. This is deliberately an error rather than a silent fallback to
+        the per-bucket scalars.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "partitions 2026-09-01, 2026-09-02 predate sketch storage; run gravix recompute for those days"
+            code: 422
 
     PayloadTooLarge:
       description: Request body exceeds 1 MB limit.

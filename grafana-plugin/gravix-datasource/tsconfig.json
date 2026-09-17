@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2018",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "jsx": "react",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": false,
+    // Not noEmit: ts-loader needs TypeScript to actually emit, and with it set
+    // webpack fails with "TypeScript emitted no output". `npm run typecheck`
+    // passes --noEmit on the command line instead, where it belongs.
+    "declarationMap": false,
+    "lib": ["ES2018", "DOM"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

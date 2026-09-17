@@ -23,6 +23,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Required for keyless cosign signing via GitHub OIDC. There is no
+      # long-lived signing key to steal or hand over at succession.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,6 +102,94 @@ jobs:
             echo "| \`ghcr.io/${{ github.repository }}-load-generator\` | \`${{ steps.version.outputs.version }}\` |"
           } > /tmp/release-notes.md
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      # GRVX-1209. Credit is the part that must not depend on somebody
+      # remembering, so it is generated; the narrative is the opposite, and the
+      # generator refuses to invent it. This PREPENDS to the notes assembled
+      # above, so the deployment and container-image sections are untouched.
+      #
+      # It fails the release when .release-summary.md is missing, when a
+      # breaking change has no upgrade note, when the tag disagrees with the
+      # bump the changes require, or when an email address would be published.
+      # Each of those is worth a red release rather than a quiet one.
+      - name: Assemble credited release notes
+        run: |
+          set -euo pipefail
+
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -2 | tail -1)
+          if [ "$PREV_TAG" = "${GITHUB_REF_NAME}" ]; then PREV_TAG=""; fi
+
+          go run ./pkg/relnotes/cmd/gen \
+            -prev "$PREV_TAG" \
+            -head "${GITHUB_REF_NAME}" \
+            -version "${GITHUB_REF_NAME}" \
+            -out /tmp/credited-notes.md
+
+          cat /tmp/credited-notes.md /tmp/release-notes.md > /tmp/release-notes.combined.md
+          mv /tmp/release-notes.combined.md /tmp/release-notes.md
+
+      # The generator refuses to render an address, and this checks the file
+      # that is actually about to be published — including the sections the
+      # step above did not write.
+      - name: Refuse to publish an email address
+        run: |
+          set -euo pipefail
+          if grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' /tmp/release-notes.md \
+             | grep -v '@users.noreply.github.com' | grep . ; then
+            echo "::error::PRIVACY DEFECT: an email address is in the release notes."
+            echo "These addresses were given for DCO compliance, not publication."
+            exit 1
+          fi
+          echo "no email addresses in the release notes"
+
+      - name: Build release binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for entry in \
+            "ingestion:./services/ingestion/" \
+            "gateway:./services/gateway/" \
+            "rollup:./transforms/request_metrics_minute/" \
+            "compaction:./transforms/compaction/" \
+            "load-generator:./cmd/load_generator/" \
+            "gravix:./cmd/cli/"; do
+            name="${entry%%:*}"; pkg="${entry#*:}"
+            CGO_ENABLED=0 GOFLAGS=-trimpath \
+              go build -ldflags="-s -w -buildid=" -o "dist/$name" "$pkg"
+          done
+          ls -la dist/
+
+      - name: Verify the build is reproducible
+        run: make verify-reproducible
+
+      - name: Generate SBOM
+        run: |
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+          ./scripts/generate_sbom.sh dist/sbom.json
+          jq '.components | length' dist/sbom.json
+
+      - name: Generate checksums
+        run: |
+          cd dist && sha256sum * > checksums.txt && cat checksums.txt
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign binaries, SBOM and checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in *; do
+            case "$f" in *.sig|*.pem) continue ;; esac
+            cosign sign-blob --yes \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.pem" \
+              "$f"
+          done
+          ls -la
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -106,3 +199,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
           generate_release_notes: false
+          # Binaries, their signatures and certificates, the SBOM, and the
+          # checksums. Without these attached, signing them proves nothing to
+          # anyone downloading the release.
+          files: |
+            dist/*

@@ -1,0 +1,93 @@
+# Infrastructure list prices used by pkg/costmodel.
+#
+# BASIS IS THE CONTRACT. Every entry declares how its number was obtained:
+#
+#   measured    — came out of a bench/ result file on a named date
+#   list_price  — the vendor's published rate, read from the vendor's own page
+#                 on the `retrieved` date by someone who recorded it
+#   estimate    — everything else, including a rate recalled rather than read
+#
+# Every entry below is `estimate`, because none has been read off a vendor page
+# in this repository's history. They are the right order of magnitude and they
+# are not quotable. Promoting one to `list_price` means opening the vendor's own
+# pricing page, reading the number, and setting `retrieved` to that day — the
+# same discipline bench/cardinality applies to competitor prices, for the same
+# reason.
+#
+# A calculator that presents a recalled number as a vendor rate is worse than
+# one that admits it is estimating.
+version: 1
+retrieved: "2026-09-11"
+currency: USD
+
+bootstrap_vps:
+  # A small single-tenant VPS: 2 vCPU, 4 GB RAM, ~40 GB SSD. Modelled on the
+  # class of instance docker-compose.bootstrap.yml is designed for (~800 MB
+  # steady-state RAM), not on any one vendor's SKU.
+  instance_usd_month:
+    value: 5.00
+    basis: estimate
+    source: "class of a 2 vCPU / 4 GB VPS; not read from a vendor page"
+  included_storage_gb:
+    value: 40
+    basis: estimate
+    source: "typical allowance at that instance class"
+  extra_storage_usd_gb_month:
+    value: 0.10
+    basis: estimate
+    source: "typical block-storage add-on rate"
+  egress_usd_gb:
+    value: 0.01
+    basis: estimate
+    source: "typical after a large included allowance"
+  included_egress_gb:
+    value: 1000
+    basis: estimate
+    source: "typical allowance at that instance class"
+
+aws_single:
+  # EKS plus the compute the Helm chart requests, plus S3 for raw and warehouse.
+  eks_control_plane_usd_month:
+    value: 73.00
+    basis: estimate
+    source: "EKS control plane, per cluster, recalled not read"
+  node_usd_month:
+    value: 61.00
+    basis: estimate
+    source: "one general-purpose 2 vCPU / 8 GB on-demand node, recalled not read"
+  nodes:
+    value: 2
+    basis: estimate
+    source: "deploy/gravix default replica counts"
+  s3_storage_usd_gb_month:
+    value: 0.023
+    basis: estimate
+    source: "S3 Standard first 50 TB, recalled not read"
+  s3_put_usd_per_1000:
+    value: 0.005
+    basis: estimate
+    source: "S3 PUT/COPY/POST/LIST, recalled not read"
+  s3_get_usd_per_1000:
+    value: 0.0004
+    basis: estimate
+    source: "S3 GET, recalled not read"
+  egress_usd_gb:
+    value: 0.09
+    basis: estimate
+    source: "first 10 TB/month to internet, recalled not read"
+  load_balancer_usd_month:
+    value: 18.00
+    basis: estimate
+    source: "one ALB, base hours only, recalled not read"
+
+aws_multi:
+  # Three regions. Deliberately modelled as three full single-region
+  # deployments plus cross-region replication, because that is what it is.
+  regions:
+    value: 3
+    basis: estimate
+    source: "docs/oss/specs: three-region shape"
+  cross_region_transfer_usd_gb:
+    value: 0.02
+    basis: estimate
+    source: "inter-region transfer, recalled not read"
