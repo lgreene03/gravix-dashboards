@@ -52,6 +52,9 @@ const sidebars = {
         // guide. Orphaned pages fail TestBoardIsInTheSidebar.
         'sql-vs-promql',
         'connect-bi-tools',
+        // GRVX-1312. Both generated from boundary.yaml by scripts/gen_pricing_page.py.
+        'what-stays-free',
+        'pricing',
         'migrating',
         // The exit path out of Gravix Cloud (GRVX-1403). Added here beyond that
         // spec's file list, because TestBoardIsInTheSidebar fails on any page in

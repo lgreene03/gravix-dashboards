@@ -3605,3 +3605,75 @@ passes with nothing to spare and the next skip added anywhere in the repository 
 That is the ratchet working, not a problem to route around. But it does mean whoever adds the next
 Docker- or stack-gated test has to create headroom first, the way SD-051 did, rather than nudging the
 constant up. The constant going up is the one outcome the gate exists to prevent.
+
+---
+
+## SD-053 — GRVX-1312's core half was executable all along, and its README change would publish a lie
+
+**Found by:** `docs-engineer` executing GRVX-1312
+**Affects:** GRVX-1312 §4.2, §5.3, §7 AC-12, §8 step 3
+**Severity:** medium — the free-tier page is the project's central public promise and was blocked
+behind billing code that cannot be written yet
+**Status:** partial; 8 of 13 acceptance criteria proven
+
+### The spec is split, and only one half was blocked
+
+§0 says it plainly: "`ee/` for the packaging logic; the **public page is core**". Phase 13's six
+blocked specs all hang off GRVX-1304 — 1305, 1306 and 1310 depend on it directly, 1308 through 1306,
+1312 through 1305 — and SD-040 holds 1304 for a two-maintainer approval the project cannot supply.
+
+But the core half of 1312 depends on `boundary.yaml`, which GRVX-703 delivered and which has been
+sitting complete the whole time. **The page listing what stays free forever was blocked behind the
+code that charges money.** That is exactly backwards, and it is the same "blocked is too coarse"
+error that hid GRVX-1103.
+
+Done: the generator, both pages, the Makefile targets, the CI staleness gate, and eight criteria.
+Not done: `ee/packaging/` and AC-6, AC-7, AC-10, which need plan definitions from GRVX-1305.
+
+### No prices were invented
+
+§5.1 requires a `## Pricing` section. There are no plans, and pricing is an owner's decision, not an
+implementer's. The section therefore states that no plans are defined, names GRVX-1305 and SD-040 as
+why, and lists the four constraints already fixed by §5.5 — flat per-event unit, volume and overage
+before signup, no limit on a core capability, full price on the page. A plausible-looking number
+would have been the worst possible thing to put there.
+
+### AC-12 is refused, not deferred
+
+AC-12 removes the README's sentence *"None of the paid features exist yet. They are Phase 13."*
+That sentence is **still true**: 1304 and 1305 are blocked, so no paid feature exists. The spec
+assumed 1312 would land after them. Executing AC-12 now would replace a true statement with a false
+one in the project's most-read file, to satisfy a checkbox. `README.md` is untouched.
+
+### §5.3's GENERATED marker cannot be the first line
+
+§5.3 says the pages carry a `<!-- GENERATED -->` **first line**. A frontmatter block is only
+recognised when the opening `---` is the very first thing in the file; a leading comment turns it
+into body text and the page loses its title and sidebar position. The marker goes immediately after
+the frontmatter instead.
+
+`docs-site/docs/roadmap.md` puts the marker first and so probably carries that defect already. It is
+not this spec's file to change, and there is a reason nobody noticed: **no workflow builds the docs
+site.** Not one job references `docusaurus` or `docs-site`, so every page's frontmatter is unverified
+in CI. Recorded rather than fixed, because wiring a Docusaurus build is its own piece of work.
+
+### §8 step 3's grep reports a false positive
+
+The verification command greps `dashboards/` for upsell strings, unbounded:
+
+```
+grep -rniE "upgrade to pro|go pro|unlock this|premium feature|start your trial" dashboards/
+```
+
+`dashboards/lib/tco.test.js:117` contains `Go produced no ${e.deployment}` — and "Go **pro**duced"
+contains "go pro". Run verbatim, the command reports 1 where §8 expects 0. `TestNoUpsellInProduct`
+word-bounds every alternative, and was re-checked by appending a real upsell string, which it caught
+at the right line, then reverting.
+
+### AC-9 is weaker than it will need to be
+
+AC-9 says no `core` capability gains a packaging limit. With no packaging, the test asserts that
+`boundary.yaml` carries no limit vocabulary on any entry. That is a real check today and the right
+shape for later, but it cannot see a limit imposed in `ee/packaging/plan.go`, because that file does
+not exist. When GRVX-1305 unblocks, AC-9 needs extending to the plan definitions themselves — noted
+here so it is not mistaken for finished.

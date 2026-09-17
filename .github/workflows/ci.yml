@@ -233,6 +233,9 @@ jobs:
       # The published roadmap is generated from the goal tree, the spec index and
       # the non-goals. A stale board is a red build rather than something a
       # reader finds out by believing it.
+      - name: Check the generated pricing pages are current
+        run: make pricing-check
+
       - name: Check the published roadmap is current
         run: make roadmap-check
 
