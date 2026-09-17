@@ -85,11 +85,40 @@ Docker daemon, and nothing below should be assumed cleared until CI says so.
 
 - **F-025** *(high)* — the full stack has F-021 too, and the fix is the chown init container that has
   not yet been observed working. Porting it now would be guessing twice.
-- **GRVX-1003** — returned `SPEC DEFECT: §5.1`; the measured footprint is 206.68 bytes/event against
-  a 120 budget, and 35.59 if raw JSONL were compressed at rest, which nothing does.
-- **GRVX-1006** — nine of ten criteria need a running Cube. Note, now a tested fact rather than a
-  warning: this stack declares no pre-aggregations, so every latency figure it produces is a **cold
-  read from Parquet**. Quoting one as pre-aggregated repeats F-020 and F-022. See F-038.
+- **GRVX-1003** — *no longer blocked; now `partial`.* The defect was returned before §6 step 7, which
+  says what to do when the budget is missed: report the shortfall per component. `bench/storage` now
+  does, and the report is decisive — raw JSONL is 220.40 bytes/event against a **total** budget of
+  120, so no Parquet encoding can close it, and the "compressed at rest" premise §5.1 budgets for
+  needs `services/ingestion/**`, which §4.3 forbids touching. What is left is a spec amendment. See
+  SD-055.
+- **GRVX-1006** — **blocked by SD-024, and more specifically than "needs a running Cube".** Its §4.1
+  deliverable `cube/model/preaggregations.js` *is* the artefact SD-024 is deciding about: whether
+  pre-aggregations get an external store, get one via `CUBEJS_DEV_MODE`, or **are dropped entirely**
+  so ≤400 ms must be met reading Parquet direct. Writing that file is not implementation; it is
+  picking one of three options in an open trade-off, one of which is "do not build this". The models
+  currently declare `preAggregations: {}` deliberately, because F-038 established that **no shipped
+  stack can build a rollup at all**. AC-7's cache warming is downstream of the same decision — there
+  is nothing to warm if the answer is "dropped".
+
+  Standing consequence, a tested fact rather than a warning: every latency figure this stack produces
+  is a **cold read from Parquet**. Quoting one as pre-aggregated repeats F-020 and F-022.
+
+### Every spec has now been audited against its own criteria
+
+All 88 were read individually rather than trusted by label, and the labels were wrong four times:
+**GRVX-1103** was not blocked at all, **GRVX-1312**'s core half was blocked behind its own `ee/`
+half, **GRVX-1004** was blocked with its entire implementation already in the tree, and **GRVX-1003**
+was closed by a defect its own §6 tells you how to handle. Each is now `partial` and each found a
+real defect on the way — including a Grafana plugin that could not load and a published SQL guide
+wrong by 144×.
+
+What remains blocked is blocked for a named reason that an implementer cannot clear: a second
+maintainer (SD-040), an external auditor (GRVX-1407), a pricing audit the implementer is forbidden to
+self-verify (GRVX-1002), an open cost trade-off (SD-024, GRVX-1006), a reference machine
+(GRVX-1005's AC-1), or a dependency on one of those (GRVX-1007, GRVX-1008).
+
+**An unexplained status is indistinguishable from a spec nobody looked at.** That is what hid four of
+these, and it is why every entry on this page now names its cause.
 - **GRVX-1007, GRVX-1008** — not startable; 1007 depends on 1002/1003/1005/1006, and 1008 on 1007.
 - **GRVX-1103** — *no longer blocked.* It was marked blocked with no reason recorded here, and turned
   out to be two documentation pages and a script: AC-3 and AC-4 are proven, only AC-1 and AC-2 need
