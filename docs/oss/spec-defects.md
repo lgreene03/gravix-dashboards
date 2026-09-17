@@ -3677,3 +3677,71 @@ AC-9 says no `core` capability gains a packaging limit. With no packaging, the t
 shape for later, but it cannot see a limit imposed in `ee/packaging/plan.go`, because that file does
 not exist. When GRVX-1305 unblocks, AC-9 needs extending to the plan definitions themselves — noted
 here so it is not mistaken for finished.
+
+---
+
+## SD-054 — GRVX-1004 was marked `blocked` with its entire implementation already in the tree
+
+**Found by:** `perf-cost-engineer` auditing Phase 10's blocked specs
+**Affects:** GRVX-1004 §7 AC-8…AC-11; the `blocked` label in `docs/oss/spec-status.json`
+**Severity:** medium — a complete implementation was recorded as not started
+**Status:** partial; 11 of 11 criteria now have tests, 10 fully proven
+
+### Every §4.1 file existed
+
+`pkg/costmodel/costmodel.go`, `costmodel_test.go`, `prices.yaml`, `dashboards/tco.js`,
+`tco.test.js` and `dashboards/tco.html` were all present, and the Go suite passed. Seven of the
+eleven acceptance criteria had their named tests and were green.
+
+What was missing was tests for the four criteria about the **page** — AC-8, AC-9, AC-10, AC-11 —
+so the spec was left marked `blocked` and read, to anyone scanning the register, as though no work
+had been done at all.
+
+This is the third instance of the same pattern in two days: GRVX-1103 was `blocked` and was fully
+executable, GRVX-1312's core half was `blocked` behind its own `ee/` half, and GRVX-1004 was
+`blocked` with the work already finished. A status is a claim, and these three were false.
+
+### What the open decisions actually block
+
+The register cites SD-021 and SD-024 against GRVX-1004, and both are real — but neither blocks the
+page:
+
+- **SD-021** is that §5.2's mandatory caveat says the at-scale figure "is roughly 10x the bootstrap
+  figure" while the model computes 43× at 1M events/month, 43× at 50M and 4× at 1B. That is a wrong
+  number in a published caveat, and amending spec-mandated text is an owner's decision. It does not
+  touch AC-8 to AC-11.
+- **SD-024** is about where Cube's pre-aggregations live, which changes a *cost input*, not whether
+  the page renders three deployments without a sales form.
+
+So GRVX-1004 moves to `partial`. The one thing genuinely still open is SD-021's caveat text.
+
+### AC-10 is proven structurally, not by rendering
+
+AC-10 is "no horizontal scroll at 400px; correct in all three themes", and honestly checking that
+means rendering the page in a browser. **This repository has no browser test anywhere** — dashboards
+are deliberately static with no build step, and every `dashboards/lib/*.test.js` is a `node --test`
+logic test. Introducing Playwright for one criterion is a larger architectural change than §4.1
+asked for, and it is not made unilaterally here.
+
+`TestTCOPageResponsiveAndThemed` therefore checks what is structurally true: a viewport declaration,
+all four theme selectors including the `:root:not([data-theme="light"])` guard that stops a system
+preference overriding an explicit light choice, no fixed width above 400px, and no forced
+`overflow-x`. Mutation-tested by injecting `width: 900px`, which it caught.
+
+**Rendering remains unverified.** A future spec that wants AC-10 fully closed should add a browser
+test deliberately, as its own decision, rather than having one smuggled in under a cost calculator.
+
+### The other three were mutation-tested too
+
+`TestNoSalesCTA` caught an injected "Contact sales" link; `TestCapacityPlanningReconciled` caught an
+injected `$42/month`. `TestPageShowsAllDeployments` asserts all three deployment ids, that the page
+calls `estimateAll`, and that no control selects a single deployment — showing one alone would invite
+exactly the comparison AC-2's no-single-deployment API exists to refuse.
+
+### Phase 10's remaining three are genuinely not started
+
+For the record, since this audit read all four: `GRVX-1003` (`bench/storage/`, `pkg/encoding/`) and
+`GRVX-1006` (`bench/query/`, `cube/model/preaggregations.js`, `services/gateway/cache_warm.go`) have
+no §4.1 file on disk. `GRVX-1005` has `services/ingestion/batch.go` and its tests but not
+`bench/ingest/ingest.go`, so it is partially built and its remaining work is the benchmark harness —
+which needs the reference machine §5 names, not a decision.
