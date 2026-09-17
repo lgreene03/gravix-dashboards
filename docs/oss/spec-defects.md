@@ -3745,3 +3745,103 @@ For the record, since this audit read all four: `GRVX-1003` (`bench/storage/`, `
 no §4.1 file on disk. `GRVX-1005` has `services/ingestion/batch.go` and its tests but not
 `bench/ingest/ingest.go`, so it is partially built and its remaining work is the benchmark harness —
 which needs the reference machine §5 names, not a decision.
+
+---
+
+## SD-055 — GRVX-1003's defect was returned before §6 was followed, and its main task cannot move the number
+
+**Found by:** `perf-cost-engineer` executing GRVX-1003
+**Affects:** GRVX-1003 §2, §4.2, §4.3, §5.1, §5.2, §6 step 7
+**Severity:** medium — a spec closed as blocked that its own §6 says how to finish
+**Status:** partial; the measurement harness and the pinned encodings exist, AC-2 and AC-9 proven,
+AC-1 not met and provably not meetable within §4.3
+
+### The spec says what to do when the budget is missed
+
+GRVX-1003 was closed with `SPEC DEFECT: §5.1` because the measured footprint was 206.68 bytes/event
+against a 120 budget. But §6 step 7 is explicit:
+
+> **If the total exceeds 120, report the shortfall per component rather than adjusting the target.**
+
+and §6.1 fixes the message for exactly that case. Missing the budget is a **contemplated outcome of
+executing the spec**, not a reason to stop before starting it. The defect was returned before the
+per-component report it asks for was produced, so nobody learned *which* term was over.
+
+### The per-component report
+
+`bench/storage` now produces it. Measured on a synthetic corpus of 500,000 facts across 200 bucket
+keys and 60 one-minute buckets:
+
+| Component | bytes/event | Budget | |
+|---|---|---|---|
+| raw | **220.40** | 70 | **OVER** |
+| rolled_up | 0.01 | 30 | ok |
+| sketch | 0.00 | 15 | ok |
+| manifests | 0.00 | 1 | ok |
+| **TOTAL** | **220.42** | **120** | **OVER** |
+
+**Only the raw term matters, and it is not a rounding problem.** Raw JSONL alone is 1.8× the entire
+budget. Even if every Parquet term were driven to zero, the total would miss 120 by 100.4
+bytes/event.
+
+### Which means §5.2's encodings cannot help
+
+§5.2 is the spec's main implementation task: pin a Parquet encoding for every MetricRow column and
+apply it in the rollup, recompute and compaction writers. Those encodings act on `rolled_up` and
+`sketch`, whose combined budget is 45 of the 120 — and which together measure **0.01 bytes/event**.
+
+Perfecting a term already three orders of magnitude under its budget cannot move a total that a
+different term exceeds on its own. The encodings are therefore **pinned but not yet applied to the
+writers**: applying them rewrites every Parquet file's bytes and re-opens GRVX-801's determinism
+guarantee, which is real risk for a change measurement says has no effect on the goal. That is an
+owner's call now that the number exists, and §6 step 1 — "measure the current footprint per
+component" — is what it was waiting on.
+
+### The budget's premise is in a file the spec forbids touching
+
+§5.1 budgets raw at "≤70 bytes/event, **compressed at rest**". Nothing in the core compresses raw
+JSONL, and the write path that would is `services/ingestion/**`, which §4.3 lists as **must not
+touch** because raw JSONL is the recompute source of truth.
+
+So the spec's budget assumes a compression that only a forbidden file could perform. That is the
+real §5.1 defect, and it is structural rather than numeric: no work permitted by §4.2 can reach 120.
+`Footprint.Report()` prints this caveat whenever it measures an uncompressed corpus, so the total is
+never quoted against a budget whose premise did not hold.
+
+### What the synthetic numbers are not
+
+The corpus above is uniform — cycling services, identical timestamps, sequential ids — so its
+**compression ratios are not trustworthy**. Compressing its raw JSONL yields 2.03 bytes/event, a
+108× ratio no real fact stream would reach; §2 estimates ~3× and an earlier real measurement found
+35.59. The `rolled_up` and `sketch` figures are understated for the same reason.
+
+The one figure that does not depend on this is **uncompressed raw at 220.40 bytes/event**, because
+that is just the size of the JSON, and it matches §2's own "~200 bytes" estimate. Every conclusion
+above rests on that figure alone. Real ratios need a real corpus from `bench/run.sh` on the
+reference machine.
+
+### §5.2's table and §2's field count are stale
+
+§5.2 assigns encodings to 14 columns. `recompute.MetricRow` has **17**. The three it does not name —
+`user_agent_family`, `extra_quantile_label`, `extra_quantile_ms` — were added afterwards by the
+Evolution work, and §2's "MetricRow has 12 fields plus the two added by GRVX-804" reaches 14 for the
+same reason. `pkg/encoding` pins all 17 and justifies the three by their neighbours.
+
+`TestEveryMetricRowColumnIsPinned` reads the struct reflectively rather than restating it, so the
+next column added fails that package instead of silently taking a library default. It earned this
+immediately: it caught a first draft of `pkg/encoding` that had **dropped `event_day`** on a wrong
+reading that it was only the Hive partition directory. It is a real column, §5.2 was right about it,
+and the test said so before the mistake could be published.
+
+### A compression level that is not the pinned one
+
+`pkg/recompute.CompressionLevel` is `zstd.SpeedFastest`, and its comment says it exists "rather than
+zstd.SpeedDefault because a library upgrade may redefine the default". Three writers use
+`zstd.SpeedDefault` directly: `transforms/compaction/main.go:397`, `service_events_daily/main.go:423`
+and `service_events_detail/main.go:420`.
+
+Content digests are computed over rows rather than the Parquet container, so this is not a
+correctness defect — it is why that design was chosen. But §6 step 3 requires the three writers to
+take their settings from one shared place "so they cannot drift", and on compression level they have
+already drifted. Left unchanged here because changing it rewrites files for no measured benefit, and
+this spec's own evidence says the storage gain would be nil.
