@@ -46,7 +46,7 @@ fails the build if any non-goal on this page names none.
 
 - We **WILL NOT** invent a Domain Specific Language (DSL) like PromQL or LogQL.
 - **Constraint**: All data access is via standard SQL only.
-- **Alternative tool**: **Trino**, **DuckDB** or any SQL client, pointed at `data/warehouse/`. The files are plain Parquet and readable with no Gravix process running — see [Bare-Parquet access](../docs-site/docs/bare-parquet-access.md).
+- **Alternative tool**: **Trino**, **DuckDB** or any SQL client, pointed at `data/warehouse/`. The files are plain Parquet and readable with no Gravix process running — see [Bare-Parquet access](https://github.com/lgreene03/gravix-dashboards/blob/main/docs-site/docs/bare-parquet-access.md).
 
 ## 7. No Feature Parity with Datadog
 

@@ -103,7 +103,7 @@ procedure, not a vote.
 ### §6. No Custom Query Language
 
 - We will not invent a Domain Specific Language (DSL) like PromQL or LogQL.
-- **Use instead:** **Trino**, **DuckDB** or any SQL client, pointed at `data/warehouse/`. The files are plain Parquet and readable with no Gravix process running — see [Bare-Parquet access](../docs-site/docs/bare-parquet-access.md).
+- **Use instead:** **Trino**, **DuckDB** or any SQL client, pointed at `data/warehouse/`. The files are plain Parquet and readable with no Gravix process running — see [Bare-Parquet access](https://github.com/lgreene03/gravix-dashboards/blob/main/docs-site/docs/bare-parquet-access.md).
 
 ### §7. No Feature Parity with Datadog
 

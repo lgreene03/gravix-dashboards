@@ -133,6 +133,46 @@ jobs:
           GRAFANA_PLUGIN_E2E: '1'
         run: go test -tags=slow ./tests/e2e/ -run TestGrafanaLoadsPlugin -count=1 -timeout 15m -v
 
+  # ─── Documentation site ───
+  # The site had never been built by anything. Three independent defects had
+  # accumulated behind that silence, any one of which fails the build outright:
+  # a missing src/css/custom.css the config has always referenced, no page
+  # serving "/" while routeBasePath is "/", and a relative link copied into a
+  # generated page where it no longer resolved. See SD-057.
+  #
+  # npm ci, not npm install: docs-site had no committed lockfile, so a fresh
+  # install resolved webpack 5.101+, whose tightened ProgressPlugin schema
+  # rejects the options webpackbar passes. The lockfile and the ~5.100.0
+  # override are what keep this reproducible.
+  docs-site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+
+      - name: Install (locked)
+        working-directory: docs-site
+        run: npm ci
+
+      # Docusaurus fails the build on a broken internal link, which is the
+      # check that matters: 30 published pages cross-reference each other and
+      # nothing else verifies those links resolve.
+      - name: Build the documentation site
+        working-directory: docs-site
+        run: npm run build
+
+      - name: Every sidebar page rendered
+        working-directory: docs-site
+        run: |
+          pages=$(find build -name '*.html' | wc -l)
+          echo "rendered $pages pages"
+          test "$pages" -ge 30
+
   vuln:
     runs-on: ubuntu-latest
     steps:
@@ -781,7 +821,7 @@ jobs:
 
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules]
+    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules, docs-site]
     if: always()
     steps:
       - name: Check job results
@@ -799,6 +839,7 @@ jobs:
           echo "Recipes:       ${{ needs.recipe-examples.result }}"
           echo "Onboarding:    ${{ needs.timed-onboarding.result }}"
           echo "Isolated mods: ${{ needs.isolated-modules.result }}"
+          echo "Docs site:     ${{ needs.docs-site.result }}"
 
           # Fail if any required job failed
           if [[ "${{ needs.timed-onboarding.result }}" == "failure" ]] || \
@@ -810,6 +851,7 @@ jobs:
              [[ "${{ needs.e2e.result }}" == "failure" ]] || \
              [[ "${{ needs.sdk-tests.result }}" == "failure" ]] || \
              [[ "${{ needs.isolated-modules.result }}" == "failure" ]] || \
+             [[ "${{ needs.docs-site.result }}" == "failure" ]] || \
              [[ "${{ needs.correctness.result }}" == "failure" ]]; then
             echo "::error::One or more required CI jobs failed"
             exit 1

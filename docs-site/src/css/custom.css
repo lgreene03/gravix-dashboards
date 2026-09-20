@@ -1,0 +1,42 @@
+/**
+ * Custom styles for the Gravix documentation site.
+ *
+ * docusaurus.config.js has referenced this file since the site was configured,
+ * but it did not exist, so the client bundle could not resolve it and
+ * `npm run build` failed before rendering a single page. Nothing caught that,
+ * because no CI job built the site. See SD-057.
+ *
+ * Kept deliberately small: the classic preset's defaults are good, and a
+ * documentation site whose styling needs explaining is a documentation site
+ * that will drift from whatever the next person expects.
+ */
+
+:root {
+  --ifm-color-primary: #1f6feb;
+  --ifm-color-primary-dark: #1b63d4;
+  --ifm-color-primary-darker: #195dc8;
+  --ifm-color-primary-darkest: #154ca5;
+  --ifm-color-primary-light: #397ded;
+  --ifm-color-primary-lighter: #4686ee;
+  --ifm-color-primary-lightest: #6b9ff1;
+  --ifm-code-font-size: 92%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #58a6ff;
+  --ifm-color-primary-dark: #3d97ff;
+  --ifm-color-primary-darker: #2f8fff;
+  --ifm-color-primary-darkest: #0673ff;
+  --ifm-color-primary-light: #73b5ff;
+  --ifm-color-primary-lighter: #81bdff;
+  --ifm-color-primary-lightest: #aed3ff;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.12);
+}
+
+/* Several pages carry a two-column "what is proven / what is not" table whose
+   left column is prose. Without this they render with a cramped first column
+   that makes the claim harder to read than the caveat beside it. */
+.markdown table td:first-child {
+  min-width: 14rem;
+}
