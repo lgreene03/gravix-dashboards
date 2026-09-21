@@ -3657,6 +3657,13 @@ not this spec's file to change, and there is a reason nobody noticed: **no workf
 site.** Not one job references `docusaurus` or `docs-site`, so every page's frontmatter is unverified
 in CI. Recorded rather than fixed, because wiring a Docusaurus build is its own piece of work.
 
+**Confirmed, then fixed (2026-09-21).** Once SD-057 got the site building, the built roadmap page
+carried the title `roadmap | Gravix Docs` — lowercase, derived from the filename — and the sidebar
+link read `roadmap`, while pages with frontmatter first rendered their declared titles. The
+"probably" above was correct. `scripts/gen_roadmap_board.py` now emits the frontmatter first and the
+marker immediately after it, `TestBoardIsGenerated` asserts that layout instead of the defective
+one it used to demand, and the rebuilt page reads `Roadmap | Gravix Docs`.
+
 ### §8 step 3's grep reports a false positive
 
 The verification command greps `dashboards/` for upsell strings, unbounded:

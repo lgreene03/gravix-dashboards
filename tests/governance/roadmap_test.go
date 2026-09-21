@@ -78,11 +78,28 @@ func TestBoardSectionsInOrder(t *testing.T) {
 func TestBoardIsGenerated(t *testing.T) {
 	text := board(t)
 
-	first, _, _ := strings.Cut(text, "\n")
-	if !strings.HasPrefix(first, "<!-- GENERATED") {
-		t.Errorf("the board's first line is %q, want a generated marker", first)
+	// Frontmatter first, marker immediately after it. This test used to demand
+	// the marker on line one, which encoded a defect: a frontmatter block is
+	// only recognised when its opening --- is the very first thing in the
+	// file, and with the marker ahead of it Docusaurus titled the built page
+	// "roadmap" from the filename and ignored sidebar_position. Verified on
+	// the built site (SD-057), not reasoned.
+	lines := strings.SplitN(text, "\n", 6)
+	if len(lines) < 5 {
+		t.Fatalf("the board has only %d lines", len(lines))
 	}
-	if !strings.Contains(first, "do not edit") {
+	if lines[0] != "---" {
+		t.Errorf("the board's first line is %q, want the frontmatter opener --- so the "+
+			"page keeps its title and sidebar position", lines[0])
+	}
+	if lines[3] != "---" {
+		t.Errorf("line 4 is %q, want the frontmatter closer ---", lines[3])
+	}
+	marker := lines[4]
+	if !strings.HasPrefix(marker, "<!-- GENERATED") {
+		t.Errorf("the line after the frontmatter is %q, want the generated marker", marker)
+	}
+	if !strings.Contains(marker, "do not edit") {
 		t.Error("the marker does not tell a reader not to edit the file")
 	}
 	if !containsProse(text, "Nothing on this page is typed by hand; to change it, change the document it comes from.") {

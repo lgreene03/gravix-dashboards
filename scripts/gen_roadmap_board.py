@@ -287,11 +287,16 @@ def render(phases, non_goals, rejected, inputs, progress) -> str:
     b: list[str] = []
     w = b.append
 
-    w(GENERATED_MARKER)
+    # Frontmatter first. A frontmatter block is only recognised when its
+    # opening `---` is the very first thing in the file; with the GENERATED
+    # marker ahead of it, Docusaurus rendered this page titled "roadmap" from
+    # the filename and ignored sidebar_position. Verified against the built
+    # site, not reasoned — see SD-053 and SD-057.
     w("---")
     w("title: Roadmap")
     w("sidebar_position: 10")
     w("---")
+    w(GENERATED_MARKER)
     w("")
     w("# Roadmap")
     w("")
