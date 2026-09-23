@@ -64,7 +64,7 @@ const config = {
           {
             title: 'Docs',
             items: [
-              { label: 'Getting Started', to: '/getting-started' },
+              { label: 'Getting Started', to: '/' },
               { label: 'Go SDK', to: '/sdk-go' },
               { label: 'Python SDK', to: '/sdk-python' },
               { label: 'Node SDK', to: '/sdk-node' },

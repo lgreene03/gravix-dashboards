@@ -3657,6 +3657,13 @@ not this spec's file to change, and there is a reason nobody noticed: **no workf
 site.** Not one job references `docusaurus` or `docs-site`, so every page's frontmatter is unverified
 in CI. Recorded rather than fixed, because wiring a Docusaurus build is its own piece of work.
 
+**Confirmed, then fixed (2026-09-21).** Once SD-057 got the site building, the built roadmap page
+carried the title `roadmap | Gravix Docs` — lowercase, derived from the filename — and the sidebar
+link read `roadmap`, while pages with frontmatter first rendered their declared titles. The
+"probably" above was correct. `scripts/gen_roadmap_board.py` now emits the frontmatter first and the
+marker immediately after it, `TestBoardIsGenerated` asserts that layout instead of the defective
+one it used to demand, and the rebuilt page reads `Roadmap | Gravix Docs`.
+
 ### §8 step 3's grep reports a false positive
 
 The verification command greps `dashboards/` for upsell strings, unbounded:
@@ -3934,3 +3941,64 @@ under a 120-second limit that the compile exhausted, so two greps matched nothin
 removing an fsync fails AC-7's test, adding a plan branch to the write path fails AC-9's, and
 removing the validation call fails AC-8's. A test whose failure has not been observed is a test
 nobody has checked, and that includes the case where the checking itself timed out.
+
+---
+
+## SD-057 — the documentation site had never been built, and three defects had accumulated behind that
+
+**Found by:** `docs-engineer`, acting on the audit item "no workflow builds the docs site"
+**Affects:** `docs-site/` — `docusaurus.config.js`, `getting-started.md`, `package.json`; `docs/04-non-goals.md`; `.github/workflows/ci.yml`
+**Severity:** high — 30 published pages, none of them ever rendered
+**Status:** fixed; the site builds, 31 pages emit, and CI builds it on every pull request
+
+### The silence was the defect
+
+SD-053 recorded that no workflow referenced `docusaurus` or `docs-site`, so every page's frontmatter
+was unverified. That was understated. **Nothing had ever built the site at all**, and running
+`npm run build` failed three separate times for three unrelated reasons, each fatal on its own:
+
+1. **`docusaurus.config.js:36` sets `customCss: './src/css/custom.css'`, and `docs-site/src/` did not
+   exist.** The client bundle could not resolve it, so the build died before rendering a page.
+2. **`routeBasePath` is `'/'` and no page claimed `slug: /`**, so the site root 404'd and the navbar
+   brand link was broken on all 30 pages. `getting-started.md` — the sidebar's first entry, already
+   `sidebar_position: 1` — now serves it.
+3. **A relative link that stopped resolving when copied.** `docs/04-non-goals.md:49` linked to
+   `../docs-site/docs/bare-parquet-access.md`, correct from `docs/`, and
+   `scripts/gen_roadmap_board.py` copies that text verbatim into `docs-site/docs/roadmap.md`, where
+   it is not. Now an absolute URL, which survives being copied anywhere.
+
+Docusaurus fails a build on a broken internal link. That check is worth more here than the rendering:
+30 pages cross-reference each other and nothing else verified those links resolve.
+
+### `docs-site` was the only npm module with no committed lockfile
+
+`sdk/node` and `grafana-plugin/gravix-datasource` both commit one. `docs-site` did not, so its
+dependency tree was whatever npm resolved on the day — and today that resolves **webpack 5.111.1**,
+which rejects the build outright:
+
+```
+Progress Plugin has been initialized using an options object that does not match the API schema.
+  options has an unknown property 'name'
+```
+
+`webpackbar` passes `{name, color, reporters}` to webpack's `ProgressPlugin`, and webpack tightened
+that schema to reject unknown properties. Bisected: **5.100.0 builds, 5.101.0 does not.** Pinned with
+an override of `~5.100.0`, which still takes patches in that line, and the lockfile is now committed
+so `npm ci` reproduces it.
+
+The code did not change. The dependency did. That is precisely what a lockfile prevents and what a
+build in CI catches, and this repository had neither for this module.
+
+### What now guards it
+
+A `docs-site` job runs `npm ci` and `npm run build` on every pull request, gated into `ci-summary`,
+and asserts at least 30 pages render. `.gitignore` now covers `docs-site/.docusaurus/` and
+`docs-site/build/`, which were untracked build output.
+
+### A correction to the audit that found this
+
+The same audit called `PRODUCT_ROADMAP.md` the "likeliest doc to rot" for covering Horizon 1 only.
+It is not. Its line 7 carries a prominent banner naming `docs/oss/20-roadmap-horizon-2.md` as the
+current roadmap, stating which two things below it are out of date and citing SD-001. The document
+is honestly maintained, and calling it a risk was a judgement made without reading it closely — the
+second documentation risk overstated in the same session, after SD-021.
