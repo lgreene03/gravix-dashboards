@@ -25,7 +25,12 @@ of the same warehouse, get the same answers.
 Environment: SECRET (Cube's JWT secret), TENANT_ID (may be empty),
 CUBE_URL (default http://localhost:4000), DATA_WAIT_SECONDS (default 600).
 
-Exit codes: 0 captured or identical, 1 different, 2 no data or Cube errors.
+A query that errors on both versions because its cube has no files yet, such
+as the event cubes before their hourly rollup, is listed as not compared. Any
+other error on either side counts as a difference.
+
+Exit codes: 0 captured, or no differences; 1 different, or nothing compared;
+2 the warehouse never answered with data.
 """
 import base64
 import datetime
@@ -125,7 +130,7 @@ def capture(out, date_range):
     if not date_range:
         today = datetime.datetime.now(datetime.timezone.utc).date()
         date_range = [str(today - datetime.timedelta(days=1)), str(today)]
-    results, failed = {}, False
+    results = {}
     for who, tok in tokens.items():
         for name, q in QUERIES.items():
             q = json.loads(json.dumps(q))
@@ -135,10 +140,9 @@ def capture(out, date_range):
             results[f"{who}/{name}"] = {"kind": kind, "rows": rows}
             label = f"{len(rows)} row(s)" if kind == "data" else rows
             print(f"{who}/{name}: {label}")
-            failed |= kind != "data"
     with open(out, "w") as f:
         json.dump({"range": date_range, "tenant": tenant, "results": results}, f, indent=1, sort_keys=True)
-    return 2 if failed else 0
+    return 0
 
 
 def norm(v):
@@ -164,17 +168,26 @@ def compare(path_a, path_b):
     if a["range"] != b["range"]:
         print(f"the captures asked different date ranges: {a['range']} and {b['range']}")
         return 1
-    diffs = 0
+    diffs, compared, uncompared = 0, 0, []
     for key in sorted(set(a["results"]) | set(b["results"])):
         ra, rb = a["results"].get(key), b["results"].get(key)
         if ra is None or rb is None:
             print(f"{key}: only in {'A' if rb is None else 'B'}")
             diffs += 1
             continue
+        if ra["kind"] != "data" and rb["kind"] != "data" and \
+                "No files found" in ra["rows"] and "No files found" in rb["rows"]:
+            print(f"{key}: not compared, no files for this cube on either version")
+            uncompared.append(key)
+            continue
         if ra["kind"] != "data" or rb["kind"] != "data":
-            print(f"{key}: A {ra['kind']}, B {rb['kind']}: {ra['rows'] if ra['kind'] != 'data' else rb['rows']}")
+            print(f"{key}: A {ra['kind']}, B {rb['kind']}")
+            for side, r in (("A", ra), ("B", rb)):
+                if r["kind"] != "data":
+                    print(f"  {side}: {r['rows']}")
             diffs += 1
             continue
+        compared += 1
         rows_a, rows_b = ra["rows"], rb["rows"]
         if len(rows_a) != len(rows_b):
             print(f"{key}: {len(rows_a)} row(s) against {len(rows_b)}")
@@ -195,8 +208,15 @@ def compare(path_a, path_b):
         if bad:
             diffs += 1
         print(f"{key}: {len(rows_a)} row(s), " + ("identical" if not bad else f"{bad} value(s) differ"))
-    print("EQUIVALENT" if diffs == 0 else f"DIFFERENT: {diffs} query result(s) differ")
-    return 0 if diffs == 0 else 1
+    if diffs:
+        print(f"DIFFERENT: {diffs} query result(s) differ")
+        return 1
+    if compared == 0:
+        print("NOTHING COMPARED: no query returned data on both versions")
+        return 1
+    print(f"EQUIVALENT: {compared} query result(s) identical"
+          + (f"; {len(uncompared)} not compared, no data on either version: {', '.join(uncompared)}" if uncompared else ""))
+    return 0
 
 
 def main(argv):

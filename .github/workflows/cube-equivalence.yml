@@ -40,18 +40,23 @@ jobs:
           docker compose ps -a
           exit 1
 
-      # The tenant the dashboard's queries are scoped to is the directory the
-      # rollup files its metrics under, which exists once a rollup has run.
+      # Wait for a metrics file, not the directory: the rollup creates the
+      # directory before it has written anything, and stopping the writers
+      # then leaves Cube nothing to read. The tenant the dashboard's queries
+      # are scoped to is the directory the file sits under.
       - name: Wait for a rollup, then stop everything that writes
         run: |
+          file=""
           for _ in $(seq 1 80); do
-            tenant="$(docker compose exec -T gateway sh -c \
-              'for d in /app/data/warehouse/*/; do [ -d "$d/request_metrics_minute" ] && basename "$d" && break; done' \
-              2>/dev/null || true)"
-            [ -n "$tenant" ] && break
+            file="$(docker compose exec -T gateway find /app/data/warehouse \
+              -path '*/request_metrics_minute/*' -name '*.parquet' 2>/dev/null | head -1 || true)"
+            [ -n "$file" ] && break
             sleep 10
           done
-          [ -n "$tenant" ] || { echo "::error::no rollup output within the wait"; exit 1; }
+          [ -n "$file" ] || { echo "::error::no metrics Parquet within the wait"; exit 1; }
+          echo "first metrics file: $file"
+          tenant="$(printf '%s' "$file" | sed -n 's|^/app/data/warehouse/\([^/]*\)/request_metrics_minute/.*|\1|p')"
+          [ -n "$tenant" ] || { echo "::error::could not read a tenant from $file"; exit 1; }
           echo "TENANT_ID=$tenant" >> "$GITHUB_ENV"
           # Rollups first, so none is cut off by losing its input.
           docker compose stop request-metrics-rollup service-events-rollup purge synthetic-traffic ingestion
