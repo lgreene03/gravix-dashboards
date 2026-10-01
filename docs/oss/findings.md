@@ -3758,3 +3758,62 @@ Two weaknesses, both fixed. `.mailmap` now folds **every** identity on `noreply@
 matches any `Claude <Family> <version>`. `TestMailmapFoldsEveryModelIdentity` runs
 `git check-mailmap` against a list of names, including one that does not exist yet, so it does not
 depend on which commits a checkout happens to hold. Restoring the one-name `.mailmap` fails it.
+
+---
+
+## F-056 — the benchmark's per-core ingest figure was a one-core rate divided by every core, and its "durable" append never synced
+
+**Found by** reading `bench/measure.go` while choosing GRVX-1005's reference machine
+**Affects** `bench/measure.go`, `bench/main.go`, G4.3, GRVX-1005 AC-1
+**Severity** high — the figure is the named arbiter of a public goal, and it was wrong in two
+directions at once
+**Status** fixed (DD-017)
+
+### What was wrong
+
+`measureIngest` read every fact file on one goroutine and wrote to a buffered file it flushed once at
+the end. `bench/main.go` then divided the rate by `machine.num_cpu`. Two errors, pulling opposite
+ways:
+
+- **The divisor.** One goroutine uses one core. Dividing its rate by four reports a quarter of a
+  one-core rate as a per-core rate. The committed result `bench/results/20260911T224752Z-small.json`
+  shows it: 215,709 events/sec on one goroutine, published in the result as 53,927 per core.
+- **The durability.** The README and the result's notes both said "appended to the durable buffer".
+  Nothing was durable until the final flush, and nothing was ever fsynced. The ingestion service
+  fsyncs every batch before it acknowledges, so the bench left out the one cost `batch.go` measures
+  as about 70% of a single-fact write.
+
+No published claim cites the old figure. G4.3 is recorded as not started, and GRVX-1005 AC-1 was not
+claimed. That is the only reason this is a finding and not a correctness defect.
+
+### Why it was not caught
+
+The bench tests checked that the stage refuses empty and corrupt input, and that the result has
+every field. Nothing checked what the divisor counted or whether the sink was synced. A per-core
+figure is a ratio, and no test looked at its denominator.
+
+### What changed
+
+- The ingest stage runs on `machine.num_cpu` workers, splitting the fact files between them, so the
+  divisor counts cores that did the work.
+- Every 512 appended facts, the shared buffer is flushed and fsynced under one lock, as the service's
+  group commit does at its default batch. The tail is synced before the clock stops.
+- `TestIngestIsDurableAtTheServiceBatchSize` runs one, three and eight workers. It requires every
+  fact in the sink exactly once, and one fsync per 512 facts plus one for the tail.
+  `TestBenchSyncsAtTheServiceBatchSize` fails if the bench's 512 drifts from the service's
+  `DefaultMaxBatchSize`. `TestBenchPerCoreDividesByTheWorkersItRan` fails if the worker count and the
+  divisor are not the same value.
+- Each guard was checked by mutation: no periodic sync, every worker reading every file, and one
+  worker in `main.go`. Each failed its test.
+
+The small scale on this environment's 4-core machine, after the fix:
+
+```
+ingest runs (events/sec): 295503.89, 310683.66, 295147.20
+ingest ran on 4 parallel workers, one per core, and fsynced the buffer every 512 facts
+total ingest throughput before dividing by 4 cores: 295504 events/sec
+ingest_events_per_sec_per_core: 73876
+```
+
+That is not the reference machine and is not a published figure. The figure still excludes HTTP,
+as the README says.

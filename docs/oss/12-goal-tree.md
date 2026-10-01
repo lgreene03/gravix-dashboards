@@ -126,7 +126,7 @@ healthy and no number ever reached a chart.
 |---|---|---|---|
 | G4.1 | Benchmark harness in-repo, runnable by an outsider | 1 command | `bench/run.sh` | `perf-cost-engineer` |
 | G4.2 | $/million events (ingest+store+query, 30-day retention) published and reproduced | ±10% of published | `COST REPORT` | `perf-cost-engineer` |
-| G4.3 | Ingest throughput on the reference box | ≥20,000 ev/s/core | `bench/results/` | `perf-cost-engineer` |
+| G4.3 | Ingest throughput on the reference box (a GitHub-hosted `ubuntu-24.04` runner, DD-018) | ≥20,000 ev/s/core | `bench/results/`, from the `bench` workflow | `perf-cost-engineer` |
 | G4.4 | Storage after rollup + compaction | ≤120 bytes/event at 30-day retention | `bench/results/` | `perf-cost-engineer` |
 | G4.5 | Dashboard query p95, warm cache | ≤400 ms | `bench/results/` | `perf-cost-engineer` |
 | G4.6 | TCO calculator published, with the at-scale figures **beside** the bootstrap figures | live page | `docs-engineer` |

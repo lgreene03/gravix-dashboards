@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
@@ -18,8 +20,20 @@ import (
 	"github.com/lgreene/gravix-dashboards/schemas"
 )
 
-// measureIngest times the ingestion path a fact actually travels: JSON decode
-// plus schema validation plus the append to the durable buffer.
+// ingestSyncEvery is how many appended facts share one fsync. It is the
+// ingestion service's DefaultMaxBatchSize, the batch its group commit fills
+// under sustained load, so the benchmark pays for durability at the rate the
+// service does. TestBenchSyncsAtTheServiceBatchSize keeps the two equal.
+const ingestSyncEvery = 512
+
+// syncFile is the fsync the ingest stage calls; a variable so a test can count
+// the calls.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
+// measureIngest times the ingestion path a fact actually travels, on every
+// core: JSON decode plus schema validation in parallel, then the append to one
+// durable buffer that is fsynced every ingestSyncEvery facts, as the service's
+// group commit does.
 //
 // It deliberately does NOT include HTTP framing. The ingestion handler lives in
 // package main under services/ingestion and cannot be imported, and GRVX-1001
@@ -28,7 +42,14 @@ import (
 // kernel's loopback as much as Gravix. So this measures the work Gravix does
 // per fact, and the exclusion is recorded in the result's Notes rather than
 // left for a reader to assume either way.
-func measureIngest(factsDir string, dst string) (eventsPerSec float64, latencies []float64, err error) {
+//
+// workers is the number of goroutines doing the per-fact work. The per-core
+// figure divides by it, so it must be the number of cores the run is
+// credited with: F-056 found a one-goroutine rate divided by four cores.
+func measureIngest(factsDir string, dst string, workers int) (eventsPerSec float64, latencies []float64, err error) {
+	if workers < 1 {
+		return 0, nil, fmt.Errorf("ingest needs at least one worker, got %d", workers)
+	}
 	files, err := jsonlFiles(factsDir)
 	if err != nil {
 		return 0, nil, err
@@ -45,54 +66,108 @@ func measureIngest(factsDir string, dst string) (eventsPerSec float64, latencies
 		return 0, nil, err
 	}
 	defer sink.Close()
-	buffered := bufio.NewWriterSize(sink, 1<<20)
 
-	latencies = make([]float64, 0, 1024)
-	var count int64
-	start := time.Now()
-
-	for _, path := range files {
-		f, err := os.Open(path)
-		if err != nil {
-			return 0, nil, err
+	var (
+		mu       sync.Mutex // guards buffered, count, and firstErr
+		buffered = bufio.NewWriterSize(sink, 1<<20)
+		count    int64
+		firstErr error
+		failed   atomic.Bool
+		wg       sync.WaitGroup
+	)
+	fail := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
 		}
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(strings.TrimSpace(string(line))) == 0 {
-				continue
-			}
-			perFact := time.Now()
-
-			fact, err := schemas.UnmarshalRequestFactUnvalidated(line)
-			if err != nil {
-				f.Close()
-				return 0, nil, fmt.Errorf("%s: %w", path, err)
-			}
-			if err := schemas.ValidateRequestFact(fact); err != nil {
-				f.Close()
-				return 0, nil, fmt.Errorf("%s: %w", path, err)
-			}
-			if _, err := buffered.Write(line); err != nil {
-				f.Close()
-				return 0, nil, err
-			}
-			if err := buffered.WriteByte('\n'); err != nil {
-				f.Close()
-				return 0, nil, err
-			}
-
-			latencies = append(latencies, float64(time.Since(perFact).Nanoseconds())/1e6)
-			count++
-		}
-		if err := scanner.Err(); err != nil {
-			f.Close()
-			return 0, nil, err
-		}
-		f.Close()
+		mu.Unlock()
+		failed.Store(true)
 	}
+	// appendFact writes one validated fact and pays for an fsync every
+	// ingestSyncEvery facts, under the same lock: the service has one writer
+	// per file, so its fsyncs are serialised too.
+	appendFact := func(line []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, err := buffered.Write(line); err != nil {
+			return err
+		}
+		if err := buffered.WriteByte('\n'); err != nil {
+			return err
+		}
+		count++
+		if count%ingestSyncEvery == 0 {
+			if err := buffered.Flush(); err != nil {
+				return err
+			}
+			return syncFile(sink)
+		}
+		return nil
+	}
+
+	perWorker := make([][]float64, workers)
+	start := time.Now()
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			lat := make([]float64, 0, 1024)
+			defer func() { perWorker[w] = lat }()
+			for i := w; i < len(files); i += workers {
+				if failed.Load() {
+					return
+				}
+				path := files[i]
+				f, err := os.Open(path)
+				if err != nil {
+					fail(err)
+					return
+				}
+				scanner := bufio.NewScanner(f)
+				scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+				for scanner.Scan() {
+					line := scanner.Bytes()
+					if len(strings.TrimSpace(string(line))) == 0 {
+						continue
+					}
+					perFact := time.Now()
+
+					fact, err := schemas.UnmarshalRequestFactUnvalidated(line)
+					if err != nil {
+						f.Close()
+						fail(fmt.Errorf("%s: %w", path, err))
+						return
+					}
+					if err := schemas.ValidateRequestFact(fact); err != nil {
+						f.Close()
+						fail(fmt.Errorf("%s: %w", path, err))
+						return
+					}
+					if err := appendFact(line); err != nil {
+						f.Close()
+						fail(err)
+						return
+					}
+					lat = append(lat, float64(time.Since(perFact).Nanoseconds())/1e6)
+				}
+				if err := scanner.Err(); err != nil {
+					f.Close()
+					fail(err)
+					return
+				}
+				f.Close()
+			}
+		}(w)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return 0, nil, firstErr
+	}
+	// The tail of the last batch is durable too, or it was not ingested.
 	if err := buffered.Flush(); err != nil {
+		return 0, nil, err
+	}
+	if err := syncFile(sink); err != nil {
 		return 0, nil, err
 	}
 	elapsed := time.Since(start)
@@ -102,6 +177,9 @@ func measureIngest(factsDir string, dst string) (eventsPerSec float64, latencies
 	}
 	if elapsed <= 0 {
 		return 0, nil, fmt.Errorf("ingest of %d facts measured as zero elapsed time", count)
+	}
+	for _, lat := range perWorker {
+		latencies = append(latencies, lat...)
 	}
 	return float64(count) / elapsed.Seconds(), latencies, nil
 }

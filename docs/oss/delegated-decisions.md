@@ -340,3 +340,44 @@ on a day with no commit.
 
 **To reverse.** Restore "not final until the window closes" in the status row and reopen the window
 with new dates. Do that if the owner announces the evaluation and comments arrive.
+
+## DD-017 — F-056: the bench measures ingest on every core, with fsyncs at the service's batch
+
+**Date** 2026-10-01 · **Tier** routine (bug fix in the benchmark) · **Finding** F-056
+
+**Options.** Keep one goroutine and stop dividing by the core count; or run one worker per core and
+keep the division. Separately, keep skipping fsync and say so; or fsync at the service's batch size.
+
+**Chosen.** One worker per core, with an fsync every 512 facts. "Per core" in G4.3 means a loaded
+machine, and one goroutine is only an upper bound on that. Skipping fsync would leave out most of the
+cost of a write, and the README already promised a durable buffer. The service's batcher is in
+`package main` and cannot be imported, so the bench carries its batch size, and a test pins the two
+together.
+
+**Done.** `bench/measure.go`, `bench/main.go`, three tests, and the README's field description.
+
+**To reverse.** Restore the single-goroutine loop. Then also stop dividing by `num_cpu`, or the
+figure is wrong again.
+
+## DD-018 — GRVX-1005: the reference machine is a GitHub-hosted `ubuntu-24.04` runner
+
+**Date** 2026-10-01 · **Tier** routine (measurement setup) · **Spec** GRVX-1005, G4.3
+
+**Options.** A maintainer's own machine; a fixed cloud instance type, such as a dedicated 4-vCPU VM;
+or GitHub's hosted `ubuntu-24.04` runner.
+
+**Chosen.** The hosted runner. It is the one machine an outsider can use for free, by forking and
+running the same workflow, which is what `bench/README.md` says the benchmark is for. A maintainer's
+machine cannot be checked by anyone else. A fixed cloud instance is steadier, but it costs money and
+needs an account, so fewer people can reproduce it. The runner's noise is real. Each result records
+the CPU it got and the spread across runs, and a published figure names its result file.
+
+**Done.** `.github/workflows/bench.yml` runs on demand at any scale, and at small scale on pull
+requests that touch `bench/`. `bench/README.md` and G4.3 name the machine.
+
+**Not decided, and why.** Whether the first standard-scale result becomes a regression threshold in
+`scripts/perf_baseline.json`. That file says one unreviewed run is not a baseline, and the review
+belongs to `perf-cost-engineer`, not to the run's author.
+
+**To reverse.** Name another machine in `bench/README.md` and G4.3, and change the workflow's
+`runs-on`.

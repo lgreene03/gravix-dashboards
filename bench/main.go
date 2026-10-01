@@ -172,7 +172,7 @@ func Run(ctx context.Context, opts driverOptions) (*Result, error) {
 	var ingestRates []float64
 	var ingestP99s []float64
 	for i := 0; i < opts.Runs; i++ {
-		rate, latencies, err := measureIngest(factsDir, filepath.Join(opts.WorkDir, "buffer", fmt.Sprintf("run%d.jsonl", i)))
+		rate, latencies, err := measureIngest(factsDir, filepath.Join(opts.WorkDir, "buffer", fmt.Sprintf("run%d.jsonl", i)), machine.NumCPU)
 		if err != nil {
 			return nil, &MeasurementError{Name: "ingest", Err: err}
 		}
@@ -188,6 +188,8 @@ func Run(ctx context.Context, opts driverOptions) (*Result, error) {
 		notes = append(notes, fmt.Sprintf("ingest spread across runs is %.1f%% of the median, above the 20%% "+
 			"threshold; the median is reported and no run was discarded", s*100))
 	}
+	notes = append(notes, fmt.Sprintf("ingest ran on %d parallel workers, one per core, and fsynced the "+
+		"buffer every %d facts, the ingestion service's default group-commit batch", machine.NumCPU, ingestSyncEvery))
 	notes = append(notes, "ingest excludes HTTP framing: it measures decode, schema validation and the "+
 		"durable-buffer append, which is the work Gravix does per fact")
 
