@@ -34,7 +34,7 @@ truncated dataset that every later stage measures as though it were complete.
 
 | Field | What it measures | What it does not |
 |---|---|---|
-| `ingest_events_per_sec_per_core` | Facts decoded, schema-validated and appended to the durable buffer, per second, divided by `machine.num_cpu`. The raw total before the division is in `notes`. | **Not** an HTTP request rate. The ingestion HTTP handler lives in `package main` and cannot be imported, and the benchmark does not restructure production code to measure it. Over a real network this figure is an upper bound you will not reach. |
+| `ingest_events_per_sec_per_core` | Facts decoded and schema-validated on `machine.num_cpu` parallel workers, one per core, and appended to one durable buffer that is fsynced every 512 facts, the ingestion service's default group-commit batch. Per second, divided by `machine.num_cpu`. The raw total before the division is in `notes`. | **Not** an HTTP request rate. The ingestion HTTP handler lives in `package main` and cannot be imported, and the benchmark does not restructure production code to measure it. Over a real network this figure is an upper bound you will not reach. |
 | `ingest_p99_latency_ms` | The 99th percentile of that per-fact work, computed from every observation — not a sketch, not a mean. | Not a client-observed latency; it excludes connection setup, TLS and queueing. |
 | `rollup_events_per_sec` | Facts read per second by `pkg/recompute`, the same code path `gravix recompute` runs. Each repeat starts from an empty warehouse, because recompute is idempotent and would otherwise skip the work being timed. | |
 | `bytes_per_event_raw` | Newline-delimited JSON on disk, divided by fact count. This is what Gravix stores that Prometheus does not. | |
@@ -50,7 +50,15 @@ conditions are recorded, never retried away.
 
 ## The reference machine
 
-There is no reference machine yet. The `machine` block in each result records the one it ran on:
+**A GitHub-hosted `ubuntu-24.04` runner**, through the `bench` workflow in
+`.github/workflows/bench.yml`. It is the reference because it is the one machine anyone can use, at no
+cost, by forking the repository and running the same workflow. A figure from a maintainer's
+workstation cannot be checked by anybody else. The decision and its alternatives are DD-018 in
+`docs/oss/delegated-decisions.md`.
+
+The runner's exact CPU varies between runs, and shared hardware is noisier than a dedicated box. So a
+published figure always names its result file. The `machine` block in each result records what the
+run actually got:
 
 ```json
 "machine": {

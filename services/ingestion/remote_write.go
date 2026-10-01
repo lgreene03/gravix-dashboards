@@ -81,6 +81,25 @@ type seriesView struct {
 // remote-write payload is a batch from one scrape, and accepting half of it
 // would leave the sender with no way to know which half — so a single bad
 // series fails the whole request and the sender retries it entire.
+// noTenantMessage answers an external-metric write that arrives with no tenant,
+// which is every write in legacy single-key mode (API_KEY without
+// TENANT_DB_PATH). ExternalMetricSample requires a tenant, so these writes used
+// to fail validation and answer 500, and Prometheus retries a 500 forever,
+// filling its write-ahead log. A 4xx is dropped and logged on the sender's side,
+// which is right for a server that will never accept the write (SD-027).
+const noTenantMessage = "external metrics need a tenant database: set TENANT_DB_PATH. " +
+	"Legacy single-key mode (API_KEY alone) stores request facts but not external metrics"
+
+// refuseWithoutTenant writes the SD-027 answer and reports true when the request
+// has no tenant.
+func refuseWithoutTenant(w http.ResponseWriter, tenantID string) bool {
+	if tenantID != "" {
+		return false
+	}
+	writeErrorJSON(w, http.StatusBadRequest, noTenantMessage)
+	return true
+}
+
 func handleRemoteWrite(sink *DurableSink, budget *cardinality.Budget) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -114,6 +133,9 @@ func handleRemoteWrite(sink *DurableSink, budget *cardinality.Budget) http.Handl
 		}
 
 		tenantID := getTenantID(r)
+		if refuseWithoutTenant(w, tenantID) {
+			return
+		}
 
 		views, rejection := validateSeries(req.GetTimeseries(), tenantID, budget)
 		if rejection != nil {

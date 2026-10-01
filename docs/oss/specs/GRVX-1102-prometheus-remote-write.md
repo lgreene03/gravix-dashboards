@@ -33,7 +33,7 @@ distributed-tracing side channel or exceed a hard per-tenant, per-metric cardina
   carries an `Exemplar` per sample, whose purpose is to link a metric sample to a trace ID. This is
   the side door this spec must close; see §6 step 5.
 - `proto/gravix.proto:1-20` — existing `RequestFact` message and generation pattern
-  (`protoc --go_out=./gen --go_opt=paths=source_relative proto/gravix.proto`, per `CLAUDE.md`).
+  (`make proto`, which runs `protoc` with `--go_opt=module=github.com/lgreene/gravix-dashboards/gen`; amended 2026-10-01, SD-028).
 - `services/ingestion/main.go:140-228` — the `prometheus.CounterVec`/`HistogramVec` registration
   pattern this spec's new metrics follow.
 - `services/ingestion/main.go:242-326` — `DurableSink.Write(topic string, data []byte) error`, the
@@ -87,7 +87,7 @@ distributed-tracing side channel or exceed a hard per-tenant, per-metric cardina
 | Path | Change |
 |---|---|
 | `proto/gravix.proto` | Append the `ExternalMetricSample` message (§5.1) |
-| `gen/gravix/v1/gravix.pb.go` | Regenerated via the `protoc` command in `CLAUDE.md` |
+| `gen/gravix/v1/gravix.pb.go` | Regenerated with `make proto` (amended 2026-10-01, SD-028) |
 | `go.mod`, `go.sum` | Add `github.com/golang/snappy v0.0.4` |
 | `services/ingestion/main.go` | Add the `externalMetricsBudget` construction, its 24h reset goroutine, the new Prometheus counter registrations, and the `http.Handle("/api/v1/remote_write", ...)` route (§6 steps 1–2) |
 
@@ -302,7 +302,7 @@ var (
    `ExternalMetricSample`:
    - `SampleId`: `uuid.NewV7()` (as used at `services/ingestion/main_test.go:59`).
    - `SampleTime`: `time.UnixMilli(sample.Timestamp).UTC()`.
-   - `TenantId`: the request's tenant ID (empty string in legacy single-key mode).
+   - `TenantId`: the request's tenant ID. It is never empty: a request with no tenant, which is every request in legacy single-key mode, is refused before this step (§6.1; amended 2026-10-01, SD-027).
    - `Source`: `"prometheus_remote_write"`.
    - `MetricName`: the series' `__name__` value.
    - `Labels`: the series' label map with `__name__` removed.
@@ -332,6 +332,7 @@ var (
 | Any series carries an exemplar | 400 | `exemplars are rejected: gravix does not ingest distributed tracing signals (see docs/04-non-goals.md §1)` |
 | A label named `trace_id`/`span_id`/`parent_span_id` (any case) | 400 | `label carries tracing correlation data, which gravix does not ingest (see docs/04-non-goals.md §1): <label>` |
 | Cardinality budget exceeded for any series | 400 | `cardinality budget exceeded: tenant=<t> metric=<m> limit=2000 distinct label-sets per day` |
+| No tenant: legacy single-key mode (`API_KEY` without `TENANT_DB_PATH`) | 400 | `external metrics need a tenant database: set TENANT_DB_PATH. Legacy single-key mode (API_KEY alone) stores request facts but not external metrics` (added 2026-10-01, SD-027) |
 | Durable write fails | 500 | `failed to persist external metric sample` |
 
 ## 7. Acceptance criteria
@@ -365,8 +366,7 @@ go test ./services/ingestion/... -run TestHandleRemoteWrite -v
 # expect: PASS for all 8 TestHandleRemoteWrite* cases
 
 # 2. Regenerate protobuf and confirm no diff beyond the intended addition
-protoc --go_out=./gen --go_opt=paths=source_relative proto/gravix.proto
-protoc --go_out=./gen --go_opt=paths=source_relative proto/remote_write.proto
+make proto   # amended 2026-10-01, SD-028: paths=source_relative wrote gen/proto/ instead
 git status --short gen/
 # expect: gen/gravix/v1/gravix.pb.go modified, gen/remotewrite/v1/remote_write.pb.go added
 

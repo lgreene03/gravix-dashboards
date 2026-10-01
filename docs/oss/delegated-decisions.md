@@ -243,3 +243,360 @@ scheduled exports means writing to customers' buckets. Both are security designs
 stops list below.
 
 **To reverse.** Restore the singular route string in the five places named above.
+
+## DD-012 — F-042: two mechanical readiness checks, gating undispatched specs
+
+**Date** 2026-10-01 · **Tier** routine (process tooling) · **Doc** `11-agent-loops.md`
+
+**Options.** Leave the gate as twelve judgement checks; add the two mechanical checks and run them
+over every spec; or add them and gate only specs not yet dispatched.
+
+**Chosen.** The last. Over every spec they would fail on history already recorded in the registers;
+on `planned` specs they catch a defect while it costs one edit. They report on everything else, which
+surfaced GRVX-1305's wrong path before that spec is dispatched.
+
+**Done.** `scripts/spec_lint.py`, `make spec-lint`, a CI step, two tests, and the gate documentation.
+
+**To reverse.** Remove the CI step; the script is inert without it.
+
+## DD-013 — F-050: correct the published Go install now; leave the module path to the owner
+
+**Date** 2026-10-01 · **Tier** routine (documentation) · **Doc** `findings.md` F-050
+
+**Options.** Leave the pages as they were, with a warning over a command that cannot work; rename
+the root module to `lgreene03` now (option 1); or correct the pages to an install that works today
+and leave the name decision open.
+
+**Chosen.** The last. The pages documented an API that does not exist, which is a documentation bug
+and an implementer's to fix. The module path is the project's canonical name for every future
+consumer. Renaming it to a personal account would mean renaming it again when the repository moves to
+an organisation, and only the owner can create one.
+
+**Done.** `sdk-go.md` rewritten from the exported API, with an install through `replace` directives
+that never fetches the module path. `getting-started.md` and `deployment.md` corrected.
+`TestGoSDKDocsUseTheRealAPI` keeps both pages to the real API and module path.
+
+**Not decided, and why.** Which name the root module and the SDK take. That needs the owner to
+create an organisation (option 2, recommended) or provision `gravix.io` (option 3).
+
+**To reverse.** Restore the three pages from git and delete the test.
+
+## DD-014 — SD-055: keep the 120-byte target, propose raw compression as RFC 0003, leave §5.2 unapplied
+
+**Date** 2026-10-01 · **Tier** routine (spec correction) for this entry; the compression itself is
+design tier · **Spec** GRVX-1003
+
+**Options.** Restate G4.4 to about 210 bytes/event; apply §5.2's Parquet encodings and report the
+miss; or keep the target, propose compressing raw facts, and leave the encodings unapplied.
+
+**Chosen.** The last. Raw JSONL is 203.78 of 206.68 bytes/event, and gzip takes the total to 35.59, so
+the target is reachable and restating it would hide a cheap fix. The encodings act on 2.89 bytes/event
+and cannot move the total. Applying them changes every Parquet file's bytes for no measured benefit.
+
+**Done.** RFC 0003 drafted: compaction writes `.jsonl.gz`, ingestion is untouched, every reader goes
+through one function, and a guard test catches a reader that skips compressed files. GRVX-1003 §11.8
+records each criterion's state. SD-055 and `open-decisions.md` updated.
+
+**Not decided, and why.** RFC 0003 itself. It changes the stored format of the recompute source of
+truth, which is design tier, and needs two maintainer approvals. The project has one.
+
+**To reverse.** Withdraw RFC 0003, and execute GRVX-1003 §6 step 3 from `pkg/encoding`'s table.
+
+## DD-015 — F-003: compaction stays blind to the Hive layout, because nothing there needs merging
+
+**Date** 2026-10-01 · **Tier** routine (finding resolution) · **Finding** F-003
+
+**Options.** Teach `parseWarehouseKey` the Hive layout for the event tables, with the dry-run and
+rollback story F-003 asked for; or show that no partitioned table accumulates files and close it.
+
+**Chosen.** Close it. Each event transform writes the day's file and deletes the rest of the
+partition, so a partition holds one file after every run. The existing idempotency test in each
+transform requires that, and removing the delete fails it. A compaction path for these tables would
+be a data-movement change whose every run merges one file into itself.
+
+**Done.** F-003 marked resolved, with the two consequences recorded: GRVX-810's held-open criterion
+cannot occur, and compaction's merged-manifest code has no production input.
+
+**To reverse.** Reopen F-003 if any warehouse writer starts appending a file per run instead of
+replacing the partition. The idempotency tests are the tripwire.
+
+## DD-016 — GRVX-1506: the foundation evaluation becomes final with its `NOT YET` verdict
+
+**Date** 2026-10-01 · **Tier** routine (closing a recorded window) · **Spec** GRVX-1506
+
+**Options.** Leave the evaluation provisional until the owner announces a new window; or mark it
+final now that the window has closed.
+
+**Chosen.** Final. The window closed on 2026-09-30, and the repository has no issues at all, so no
+comments arrived. The window was never announced outside the repository, so nobody outside was
+asked. That matters less here than it would elsewhere: `NOT YET` changes nothing and commits the
+project to nothing. A donation would need its own charter-tier RFC and its own 14-day window, and the
+evaluation now says that window must be announced.
+
+**Done.** The status row and closing note record the close, the zero comments and the caveat.
+`TestCommentWindowOpened` accepts a closed window only when the evaluation records its closing date
+and the number of comments. It reads the document, never today's date, so CI cannot change colour
+on a day with no commit.
+
+**To reverse.** Restore "not final until the window closes" in the status row and reopen the window
+with new dates. Do that if the owner announces the evaluation and comments arrive.
+
+## DD-017 — F-056: the bench measures ingest on every core, with fsyncs at the service's batch
+
+**Date** 2026-10-01 · **Tier** routine (bug fix in the benchmark) · **Finding** F-056
+
+**Options.** Keep one goroutine and stop dividing by the core count; or run one worker per core and
+keep the division. Separately, keep skipping fsync and say so; or fsync at the service's batch size.
+
+**Chosen.** One worker per core, with an fsync every 512 facts. "Per core" in G4.3 means a loaded
+machine, and one goroutine is only an upper bound on that. Skipping fsync would leave out most of the
+cost of a write, and the README already promised a durable buffer. The service's batcher is in
+`package main` and cannot be imported, so the bench carries its batch size, and a test pins the two
+together.
+
+**Done.** `bench/measure.go`, `bench/main.go`, three tests, and the README's field description.
+
+**To reverse.** Restore the single-goroutine loop. Then also stop dividing by `num_cpu`, or the
+figure is wrong again.
+
+## DD-018 — GRVX-1005: the reference machine is a GitHub-hosted `ubuntu-24.04` runner
+
+**Date** 2026-10-01 · **Tier** routine (measurement setup) · **Spec** GRVX-1005, G4.3
+
+**Options.** A maintainer's own machine; a fixed cloud instance type, such as a dedicated 4-vCPU VM;
+or GitHub's hosted `ubuntu-24.04` runner.
+
+**Chosen.** The hosted runner. It is the one machine an outsider can use for free, by forking and
+running the same workflow, which is what `bench/README.md` says the benchmark is for. A maintainer's
+machine cannot be checked by anyone else. A fixed cloud instance is steadier, but it costs money and
+needs an account, so fewer people can reproduce it. The runner's noise is real. Each result records
+the CPU it got and the spread across runs, and a published figure names its result file.
+
+**Done.** `.github/workflows/bench.yml` runs on demand at any scale, and at small scale on pull
+requests that touch `bench/`. `bench/README.md` and G4.3 name the machine.
+
+**Not decided, and why.** Whether the first standard-scale result becomes a regression threshold in
+`scripts/perf_baseline.json`. That file says one unreviewed run is not a baseline, and the review
+belongs to `perf-cost-engineer`, not to the run's author.
+
+**To reverse.** Name another machine in `bench/README.md` and G4.3, and change the workflow's
+`runs-on`.
+
+## DD-019 — F-026: gate every job the summary waits for; gate the Docker jobs once each has passed
+
+**Date** 2026-10-01 · **Tier** routine (CI repair) · **Finding** F-026
+
+**Options.** Add every Docker job to `ci-summary` now, red or not; add none until all pass; or fix
+what is diagnosed, gate what is green, and gate the rest after its first green run.
+
+**Chosen.** The last. `docker-build` passed on `main` for all four images, so it is gated now.
+`docker-smoke` and `image-scan` failed on configuration, not on Gravix: a missing `.env` variable and a
+tag that no longer resolves. Both are repaired, but neither has run past those errors yet, and gating a
+job before its first real result would turn `main` red on whatever layer comes next. `vuln`,
+`helm-validate` and `docker-lint` were already awaited and simply never checked. That was an oversight,
+not a decision, so they are gated without waiting.
+
+**Done.** The `ci-summary` failure condition, the smoke `.env`, the trivy tag, and two guard tests.
+
+**Not decided, and why.** Whether `image-scan` should fail `main` on a HIGH or CRITICAL finding in a
+base image. That is the security engineer's call under `10-agent-roster.md`, and it should be made
+when there is a first real scan to look at.
+
+**To reverse.** Remove `docker-build` and the three jobs from the failure condition. The guard test
+will then fail, by design.
+
+## DD-020 — F-025: port the bootstrap stack's init container, and boot the full stack on pull requests
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Finding** F-025
+
+**Options.** Keep waiting; set `user: root` on the services that write `./data`; or port the
+bootstrap stack's one-shot init container.
+
+**Chosen.** Port the init container. F-025 said to port it the moment it was seen working, and it has
+worked on every green onboarding run since 2026-09-14. Running the services as root would fix the
+symptom by giving up the reason the images run as `gravix`. `docker-smoke` also runs on pull requests
+now, because the full stack had no other check before merge.
+
+**Done.** `data-init` in `docker-compose.yml`, the dependencies, a guard test, and the
+`docker-smoke` trigger.
+
+**To reverse.** Remove `data-init` and its dependencies. Fresh clones then fail as F-025 describes.
+
+## DD-021 — F-017: report a real p95 from the load generator and gate on it
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Finding** F-017
+
+**Options.** Rename `max_p95_latency_ms` to say "average"; or make the load generator report a p95
+and compare that.
+
+**Chosen.** Report a real p95. The threshold is meant to bound the tail, and a renamed average would
+still let a heavy tail through. Failed requests now count in every latency figure, because leaving
+them out made the numbers improve as the system got worse.
+
+**Done.** The load generator's digest and summary fields, the gate's comparison, two tests, and the
+baseline file's comment.
+
+**Not decided, and why.** New threshold values. The old ones were set loose for the average. Setting
+real ones needs a measured run on the reference machine, and `perf-cost-engineer` reviews it.
+
+**To reverse.** Compare `avg_latency_ms` again in `perf_test.sh`. The extra summary fields are
+harmless.
+
+## DD-022 — F-018: the rollup lock follows the store, and the cron and recompute share it
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Finding** F-018
+
+**Options.** Leave the working-directory lock and document it; derive the lock path from the store
+and have both writers take it; or build a lock object in the store with conditional writes.
+
+**Chosen.** Derive it from the store, and make the cron take the same per-tenant locks as recompute.
+`Run`'s own comment promised that the two could never write a partition at once, and the code did
+not keep that promise in any deployment. This keeps it on one machine without changing the storage
+interface.
+
+**Done.** `LockDir`, `AcquireLocks`, `LocalStore.Root`, the cron's lock, the bench clean-up removed,
+and four tests.
+
+**Not decided, and why.** A lock that holds across machines sharing a bucket. It needs conditional
+writes in the storage interface and an expiry policy, which is a design change for a spec.
+
+**To reverse.** Restore the cron's `leaderelect.NewFileElector(outputDir, …)` and the
+working-directory path in `acquire`. Both defects return.
+
+## DD-023 — F-020: size storage from the measured raw figure and a warehouse range
+
+**Date** 2026-10-01 · **Tier** routine (documentation) · **Finding** F-020
+
+**Options.** Keep the estimate-based tables beside the measured figures; scale the tables by the
+measured averages; or use the raw figure, which is linear, and a range for the warehouse, which is
+not.
+
+**Chosen.** The raw figure and a range. A single warehouse average of 2.9 B would under-provision a
+deployment with few events per row by up to seven times. The upper bound costs a few percent of the
+total and cannot be short.
+
+**Done.** `docs/capacity-planning.md`'s plan-tier, retention, S3, buffer and upload figures, and the
+reference machine's small-scale result committed under `bench/results/`.
+
+**To reverse.** Restore the old tables from git. They over-provision, so reversing is safe but
+wasteful.
+
+## DD-024 — F-041: a changelog row in the spec template, and a release gate on the changelog
+
+**Date** 2026-10-01 · **Tier** routine (process tooling) · **Finding** F-041
+
+**Options.** Rely on the release manager to fill the changelog by hand; or put the question in the
+spec template and refuse a release the changelog does not describe.
+
+**Chosen.** Both mechanisms. The template is where an implementer learns what to touch, so the
+question belongs there. The gate makes the last line of defence mechanical, in the same spirit as
+`check-boundary`.
+
+**Done.** The template's §4.2 row and §9 item, `scripts/changelog_check.sh`, its step in
+`release.yml`, two tests, and this session's entries under `[Unreleased]`.
+
+**To reverse.** Remove the release step. The template row is harmless on its own.
+
+## DD-025 — F-043: run the Postgres backend's tests in CI against a real server
+
+**Date** 2026-10-01 · **Tier** routine (test infrastructure) · **Finding** F-043
+
+**Options.** Run them, with a Postgres service container; delete them; or document that the backend
+is untested.
+
+**Chosen.** Run them. Postgres is the production backend, so its tests are worth the minute of CI.
+Skips fail the job, because a skip is exactly how this file stayed silent.
+
+**Done.** The `postgres` CI job, its place in `ci-summary`, a shared `Restrict` check, and the suite
+test's rule that a tagged file needs a CI job passing its tag.
+
+**To reverse.** Remove the job, and restore the suite test's known exception for the file.
+
+## DD-026 — SD-027: external metrics require a tenant; legacy single-key mode gets a 400
+
+**Date** 2026-10-01 · **Tier** routine (spec correction and bug fix) · **Spec** GRVX-1102, GRVX-1105
+
+**Options.** Drop the `tenant_id` rule so legacy mode writes to the single-tenant layout; or keep the
+rule and refuse legacy-mode writes with a clear 4xx.
+
+**Chosen.** Keep the rule and refuse. The rule is the guard against a multi-tenant bug writing into
+the shared layout. Legacy mode is the older configuration, and the shipped stacks all set
+`TENANT_DB_PATH`. The old 500 was the worst of both, because Prometheus retries a 500 indefinitely.
+
+**Done.** One shared refusal in both handlers, a test over both endpoints, and the two specs amended.
+
+**To reverse.** Remove the `tenant_id` rule from `ValidateExternalMetricSample` and the refusal from
+both handlers. Legacy-mode samples then land in `external_metrics` beside single-tenant facts.
+
+## DD-027 — SD-028: one `make proto` target that reproduces the tracked generated files
+
+**Date** 2026-10-01 · **Tier** routine (tooling and documentation) · **Spec** GRVX-1102
+
+**Options.** Correct the command in `CLAUDE.md`; or encode the whole procedure, including the
+licence header, in a make target and document that.
+
+**Chosen.** The make target. The procedure has three parts, the module flag, both proto files and
+the header, and a command in a document drops whichever part its reader forgets.
+
+**Done.** `make proto`, `CLAUDE.md`, and GRVX-1102's three references, verified against the tracked
+files.
+
+**Not decided, and why.** A CI check that `gen/` matches `proto/`. It needs a pinned `protoc` in CI,
+because the generated header names the `protoc` version. That is a toolchain choice for whoever owns
+CI images.
+
+**To reverse.** Remove the target and restore the old line in `CLAUDE.md`.
+
+## DD-028 — SD-030: Prometheus import reads `promtool tsdb dump` output
+
+**Date** 2026-10-01 · **Tier** routine (product call assigned to the owner, and spec correction) ·
+**Spec** GRVX-1108
+
+**Options.** Depend on `prometheus/prometheus` to read blocks; hand-write a block reader; or read the
+text `promtool tsdb dump` writes.
+
+**Chosen.** The dump. The first is a 296-module dependency, which is design tier and reverses a
+decision a week old. The second is days of core code for a one-time migration. The third costs the
+user one command they can already run.
+
+**Done.** `pkg/importer/prometheus.go` with counter-to-increase conversion and counted skips, seven
+tests, the migration guide's Prometheus section, and GRVX-1108 amended.
+
+**Not decided, and why.** Facts mode for Prometheus (AC-1). No Prometheus source holds per-request
+records, so there is nothing to decide until one exists.
+
+**To reverse.** Point `readerFor` back at an error. The Datadog reader is unaffected.
+
+## DD-029 — SD-041: bring-your-own-bucket gets a README, like every other `ee/` package
+
+**Date** 2026-10-01 · **Tier** routine (documentation; the acceptance a maintainer owns, under the
+delegation) · **Spec** GRVX-1402
+
+**Options.** Add a README to §4.1 and write it; or accept `NO DOCS DELTA REQUIRED` because Cloud's
+customer documentation lives elsewhere.
+
+**Chosen.** Write it. Bring-your-own-bucket is the one paid feature whose whole value is the customer
+knowing where their data goes, and the four sibling packages each have a README.
+
+**Done.** `ee/tenancy/byob/README.md` and GRVX-1402 §4.1.
+
+**To reverse.** Delete the README and accept the waiver on the record.
+
+## DD-030 — F-057: build MinIO from source while its images are gone
+
+**Date** 2026-10-01 · **Tier** routine (build recipe for an existing dependency) · **Finding** F-057
+
+**Options.** Switch registries; replace MinIO with another S3-compatible server; or build the same
+pinned MinIO releases from source.
+
+**Chosen.** Build from source. Docker Hub returns 404 and Quay refuses, so no registry has them.
+Replacing MinIO is a new dependency, which is design tier. Building from source changes how the same
+software arrives. It adds about two minutes to the first `docker compose up --build`, and the
+bootstrap stack, which most people start with, does not use MinIO at all.
+
+**Done.** `deploy/minio/Dockerfile`, both compose services, and the Helm default with build
+instructions, verified by running the source-built binaries against each other.
+
+**Not decided, and why.** Whether to replace MinIO for good. That is a new dependency.
+
+**To reverse.** Point both services back at a published image if MinIO resumes publishing.

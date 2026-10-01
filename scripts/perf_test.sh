@@ -142,6 +142,7 @@ for i in "${!PROFILE_NAMES[@]}"; do
   # Extract metrics from JSON output
   actual_qps="$(json_field "$outfile" "actual_qps")"
   avg_latency="$(json_field "$outfile" "avg_latency_ms")"
+  p95_latency="$(json_field "$outfile" "p95_latency_ms")"
   error_rate="$(json_field "$outfile" "error_rate")"
   total_requests="$(json_field "$outfile" "total_requests")"
 
@@ -161,15 +162,15 @@ for i in "${!PROFILE_NAMES[@]}"; do
   PASS=1
   VIOLATIONS=""
 
-  # Note: the load generator outputs avg_latency_ms, not p95. We use avg as a
-  # proxy here since the generator doesn't track percentiles. In practice, p95
-  # will be higher than avg, so if avg exceeds the threshold it is definitely a
-  # breach; and the thresholds in perf_baseline.json are set generously enough
-  # to accommodate this approximation.
-
-  # Check latency (avg as proxy for p95)
-  if awk "BEGIN { exit !( $avg_latency > $max_p95_lat ) }"; then
-    VIOLATIONS="${VIOLATIONS} latency(${avg_latency}ms > ${max_p95_lat}ms)"
+  # The p95 threshold is compared against the p95. It used to be compared
+  # against the average of successful requests only, which passed any run whose
+  # mean was under the number however heavy its tail (F-017). Failed requests
+  # are in the latency population.
+  if [[ -z "$p95_latency" ]]; then
+    VIOLATIONS="${VIOLATIONS} no p95_latency_ms in the load generator's output"
+    PASS=0
+  elif awk "BEGIN { exit !( $p95_latency > $max_p95_lat ) }"; then
+    VIOLATIONS="${VIOLATIONS} p95_latency(${p95_latency}ms > ${max_p95_lat}ms)"
     PASS=0
   fi
 
@@ -195,8 +196,8 @@ for i in "${!PROFILE_NAMES[@]}"; do
     echo "  SLO: FAIL --${VIOLATIONS}"
   fi
 
-  SUMMARY_LINES+=("$(printf "%-18s | %8s reqs | %8s QPS | %8s ms avg | %8s err | %s" \
-    "$name" "$total_requests" "$actual_qps" "$avg_latency" "$error_rate" "$STATUS")")
+  SUMMARY_LINES+=("$(printf "%-18s | %8s reqs | %8s QPS | %8s ms avg | %8s ms p95 | %8s err | %s" \
+    "$name" "$total_requests" "$actual_qps" "$avg_latency" "$p95_latency" "$error_rate" "$STATUS")")
 done
 
 # ---------------------------------------------------------------------------

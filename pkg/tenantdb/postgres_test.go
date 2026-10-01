@@ -488,3 +488,10 @@ func TestPostgresRetentionPolicy(t *testing.T) {
 		t.Errorf("FactsDays after update = %d, want 45", got.FactsDays)
 	}
 }
+
+// TestPostgresRestrictNarrowsAKey runs SD-013's storage assertions against
+// Postgres, the backend production deployments use. Until F-043 nothing ran
+// this file at all.
+func TestPostgresRestrictNarrowsAKey(t *testing.T) {
+	checkRestrictNarrowsAKey(t, newPostgresTestDB(t))
+}

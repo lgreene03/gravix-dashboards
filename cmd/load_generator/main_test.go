@@ -4,6 +4,9 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"testing"
 	"time"
@@ -120,15 +123,15 @@ func TestServiceSelection(t *testing.T) {
 }
 
 func TestThroughputSummary(t *testing.T) {
-	// Reset counters
-	successCount.Store(0)
-	failureCount.Store(0)
-	totalLatencyNs.Store(0)
+	resetLatencies()
 
-	// Simulate 100 successes and 5 failures
+	// Simulate 100 successes and 5 failures, every one taking 50ms. Failures
+	// are in the latency population (F-017), so the average is still 50ms.
 	successCount.Store(100)
 	failureCount.Store(5)
-	totalLatencyNs.Store(100 * int64(50*time.Millisecond)) // 50ms avg
+	for i := 0; i < 105; i++ {
+		recordLatency(50 * time.Millisecond)
+	}
 
 	summary := computeSummary(10 * time.Second)
 
@@ -152,5 +155,84 @@ func TestThroughputSummary(t *testing.T) {
 	// error rate: 5/105 ≈ 4.76%
 	if summary.ErrorRate < 0.04 || summary.ErrorRate > 0.05 {
 		t.Errorf("error_rate = %.4f, want ~0.0476", summary.ErrorRate)
+	}
+}
+
+// TestSlowFailuresRaiseTheLatencyFigures is F-017. The gate compares a p95
+// threshold, so the summary must report a real p95. Failed requests must count:
+// before, the average divided only successful latencies by successes, so a run
+// whose slowest requests timed out reported a better figure than a healthy one.
+func TestSlowFailuresRaiseTheLatencyFigures(t *testing.T) {
+	resetLatencies()
+	t.Cleanup(resetLatencies)
+
+	// 90 fast successes and 10 failures that took a second each.
+	successCount.Store(90)
+	failureCount.Store(10)
+	for i := 0; i < 90; i++ {
+		recordLatency(10 * time.Millisecond)
+	}
+	for i := 0; i < 10; i++ {
+		recordLatency(time.Second)
+	}
+
+	s := computeSummary(10 * time.Second)
+	// (90*10 + 10*1000) / 100 = 109ms. Counting successes only gave 10ms.
+	if s.AvgLatencyMs < 108 || s.AvgLatencyMs > 110 {
+		t.Errorf("avg_latency_ms = %.1f, want 109: failed requests must be in the average", s.AvgLatencyMs)
+	}
+	if s.P50LatencyMs > 20 {
+		t.Errorf("p50_latency_ms = %.1f, want about 10", s.P50LatencyMs)
+	}
+	if s.P95LatencyMs < 500 {
+		t.Errorf("p95_latency_ms = %.1f, want the slow tail (about 1000): the gate compares this against a p95 threshold", s.P95LatencyMs)
+	}
+	if s.P99LatencyMs < s.P95LatencyMs {
+		t.Errorf("p99 %.1f is below p95 %.1f", s.P99LatencyMs, s.P95LatencyMs)
+	}
+}
+
+// TestEmptySummaryHasZeroLatencies: a run with no requests must not report a
+// percentile it never measured.
+func TestEmptySummaryHasZeroLatencies(t *testing.T) {
+	resetLatencies()
+	s := computeSummary(time.Second)
+	if s.AvgLatencyMs != 0 || s.P95LatencyMs != 0 {
+		t.Errorf("empty run reported avg %.1f, p95 %.1f; want 0 and 0", s.AvgLatencyMs, s.P95LatencyMs)
+	}
+}
+
+// TestSendRequestRecordsFailedLatencies drives sendRequest against a server
+// that refuses every fact and one that is not there at all. Both outcomes are
+// failures, and both took time that belongs in the latency figures (F-017).
+func TestSendRequestRecordsFailedLatencies(t *testing.T) {
+	resetLatencies()
+	t.Cleanup(resetLatencies)
+
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer refusing.Close()
+	gone := httptest.NewServer(http.NotFoundHandler())
+	goneURL := gone.URL
+	gone.Close()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	sendRequest(context.Background(), client, refusing.URL, "", false)
+	sendRequest(context.Background(), client, goneURL, "", false)
+
+	if got := failureCount.Load(); got != 2 {
+		t.Fatalf("failures = %d, want 2", got)
+	}
+	s := computeSummary(time.Second)
+	if s.P95LatencyMs < 15 {
+		t.Errorf("p95_latency_ms = %.1f; the refused request took 20ms and must be counted", s.P95LatencyMs)
+	}
+	latencyMu.Lock()
+	n := latencies.Count()
+	latencyMu.Unlock()
+	if n != 2 {
+		t.Errorf("recorded %v latencies for 2 failed requests, want 2", n)
 	}
 }

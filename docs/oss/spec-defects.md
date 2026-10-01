@@ -1365,7 +1365,7 @@ the ones that enforce fsync ordering. Recorded in `delegated-decisions.md` DD-00
 
 **Severity** medium — affects how much the batcher can actually amortise, and the spec's interface
 does not express it.
-**Status** open; the Batcher is implemented to §5.1's signature and is not yet wired into the
+**Status** resolved 2026-10-01 (DD-009). Originally: open; the Batcher is implemented to §5.1's signature and is not yet wired into the
 handlers, which is where the mismatch bites.
 
 §5.1 specifies:
@@ -1413,7 +1413,7 @@ writers, 3,875 facts/sec at one fsync per call became 21,801 at 64 facts per fsy
 
 **Severity** high — §5.1 is not executable on the bootstrap stack as written, and AC-1 is premised
 on it.
-**Status** open; returned as `SPEC DEFECT: §5.1`. AC-3 remains complete (§11.1); nothing in this
+**Status** resolved 2026-10-01 (DD-008). Originally: open; returned as `SPEC DEFECT: §5.1`. AC-3 remains complete (§11.1); nothing in this
 entry changes it.
 
 ### The mismatch
@@ -1525,7 +1525,7 @@ dashboard showed an empty chart. Fixed in the same change. GRVX-1006 moves from 
 **Affects:** GRVX-1101 §2 (context), and the published column reference the spec asks for
 **Severity:** medium as a spec defect — GRVX-1101 stays executable — but the underlying codebase
 behaviour it mis-describes is high, recorded separately as F-039
-**Status:** open; returned as `SPEC DEFECT: §2 — transforms/request_metrics_minute/main.go and
+**Status:** resolved 2026-10-01, moot after DD-006. Originally: open; returned as `SPEC DEFECT: §2 — transforms/request_metrics_minute/main.go and
 transforms/compaction/main.go MetricRow disagree on latency_sketch, sketch_version,
 user_agent_family, extra_quantile_label and extra_quantile_ms`. This is the escalation §10 row three
 anticipated.
@@ -1588,7 +1588,7 @@ does not change the metric table's columns because it does not write the metric 
 **Affects:** GRVX-1101 §5 (fixture filenames), §6 steps 4 and 8, AC-4
 **Severity:** high — the spec's whole objective is a *verified* published guide, and as written the
 published query fails on real data
-**Status:** open; returned as `SPEC DEFECT: §6 — the mandated published query's glob matches only the
+**Status:** resolved 2026-10-01 (DD-004). Originally: open; returned as `SPEC DEFECT: §6 — the mandated published query's glob matches only the
 test fixture`.
 
 ### What the spec requires
@@ -1653,7 +1653,7 @@ GRVX-1101 §5 and §6 amended. Recorded in `delegated-decisions.md` DD-004.
 **Affects:** GRVX-1102 §5.4, §6 step 7, §6.1 (a missing row), AC-1
 **Severity:** medium — the shipped compose files are unaffected; a legacy `API_KEY` deployment is
 totally broken
-**Status:** open; returned as `SPEC DEFECT: §5.4 — tenant_id is required, but §6 step 7 says it is
+**Status:** resolved 2026-10-01 (DD-026). Originally: open; returned as `SPEC DEFECT: §5.4 — tenant_id is required, but §6 step 7 says it is
 empty in legacy single-key mode`.
 
 ### The contradiction
@@ -1693,6 +1693,23 @@ should be removed — with the endpoint returning a clear 400 in legacy mode rat
 `tenant_id` is not required and `ErrExternalMetricMissingTenant` should be deleted from §5.4 rather
 than left unenforced.
 
+
+### Decided 2026-10-01 — DD-026: external metrics require a tenant, and legacy mode is refused with a 400
+
+The rule stays and the parenthetical goes. `tenant_id` remains required, because it is the guard
+that stops a multi-tenant regression from writing samples into the shared single-tenant layout.
+Both metric endpoints, `/api/v1/remote_write` and `/v1/metrics`, now refuse a request with no tenant
+before validating anything. They answer 400 with a message that names `TENANT_DB_PATH`.
+
+The status code matters more than it looks. Prometheus retries a 5xx forever, so the old 500 filled
+a legacy deployment's write-ahead log with samples that could never be accepted. A 4xx is dropped and
+logged on the sender's side.
+
+`TestExternalMetricsRefuseLegacySingleKeyMode` replaces the test that pinned the 500. It covers both
+endpoints, requires the message to name the fix, and requires nothing to be persisted. Removing the
+check from the OTLP handler fails it: an empty OTLP payload even answered 204 in legacy mode. GRVX-1102
+§6 step 7 and both specs' §6.1 tables are amended.
+
 ---
 
 ## SD-028 — the `protoc` command GRVX-1102 §4.2 points at does not regenerate the file it names
@@ -1700,7 +1717,7 @@ than left unenforced.
 **Found by:** `senior-engineer` executing GRVX-1102
 **Affects:** GRVX-1102 §2, §4.2, §8 step 2; `CLAUDE.md`'s "Regenerate protobuf code" command
 **Severity:** medium — silently produces no change, which is worse than failing
-**Status:** open; returned as `SPEC DEFECT: §4.2 — the named command writes to gen/proto/, not
+**Status:** resolved 2026-10-01 (DD-027). Originally: open; returned as `SPEC DEFECT: §4.2 — the named command writes to gen/proto/, not
 gen/gravix/v1/`.
 
 ### What the spec says
@@ -1737,6 +1754,21 @@ the source of truth; the command beneath it does not keep the derived file in st
 
 `CLAUDE.md` is outside §4.1/§4.2, so it was not edited. Fixing the command there is the actual repair.
 
+
+### Resolved 2026-10-01 — DD-027: `make proto`, verified against the tracked files
+
+`make proto` now runs the module-flag command over both `.proto` files and restores the licence
+header the tracked files carry. `CLAUDE.md` documents it instead of the `paths=source_relative`
+command. GRVX-1102 §2, §4.2 and §8 are amended to match.
+
+Both commands were run, in a copy of `proto/` outside the repository. The old one wrote
+`gen/proto/gravix.pb.go`, as this entry said. `make proto` reproduced
+`gen/gravix/v1/gravix.pb.go` and `gen/remotewrite/v1/remote_write.pb.go` with no differing line
+except the comment that names the `protoc` version. A second run left the header single.
+
+There is still no CI check that the generated files match `proto/`. One needs a pinned `protoc`,
+because the version comment differs between releases. It is noted in DD-027 rather than built here.
+
 ---
 
 ## SD-029 — GRVX-1107 §4 names a file that has no export code, and omits both files the spec cannot be finished without
@@ -1745,7 +1777,7 @@ the source of truth; the command beneath it does not keep the derived file in st
 **Affects:** GRVX-1107 §2, §4.2, §6 steps 1/6/7, AC-9, AC-10, AC-12
 **Severity:** high — half the spec is unreachable, and following §4 literally produces code that
 fails the repository's own lint gate
-**Status:** open; returned as `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and
+**Status:** resolved 2026-10-01 (DD-011); the job endpoint waits on a security design. Originally: open; returned as `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and
 cmd/cli/main.go`. §4.1 was implemented in full; the gateway half was not.
 
 ### The file named does not contain the feature
@@ -1864,7 +1896,7 @@ scheduled export reaches a customer's bucket. Both are recorded on the stops lis
 **Affects:** GRVX-1108 §5.2 (`Options.Input`), §6 step 2, AC-1, AC-2, AC-11, and `pkg/importer/prometheus.go` in §4.1
 **Severity:** high — it is the spec's hardest component, and every route to it costs something the
 project has already ruled out elsewhere
-**Status:** open; returned as `SPEC DEFECT: §6 — no method is given for reading a TSDB block, and
+**Status:** resolved 2026-10-01 (DD-028). Originally: open; returned as `SPEC DEFECT: §6 — no method is given for reading a TSDB block, and
 each available method contradicts a decision already taken`.
 
 ### What the spec asks for
@@ -1946,6 +1978,26 @@ and AC-12 do not depend on it.
 Which input Prometheus importing accepts, stated as a format rather than a directory, and with the
 dependency question answered explicitly given GRVX-1102 §3's precedent.
 
+
+### Decided 2026-10-01 — DD-028: route 3, `promtool tsdb dump` output
+
+Route 1 adds 296 modules and reverses GRVX-1102 §3 one spec later, and a new dependency is design
+tier. Route 2 spends days of core code on a format each user reads once. Route 3 needs nothing new,
+and `promtool` is already on every machine that runs Prometheus. The cost is one extra command in the
+migration guide, and the guide now shows it.
+
+The format was read from Prometheus's own source, `cmd/promtool/tsdb.go` at v2.54.1, fetched through
+the Go module proxy. Each line is `labels.String()`, then `%g`, then the millisecond timestamp.
+Label values are Go-quoted, and native histograms print a structure where the number would be.
+
+One semantic decision came with it. A Prometheus counter is a running total, and the importer writes
+values as per-minute request counts. So the reader turns counters into per-minute increases, treats a
+fall as a reset, and imports only `_total` and `_count` series. Everything else is skipped and
+counted under its own reason. Reset handling, the aggregated flag and the file-only rule each have a
+test that fails when the behaviour is removed.
+
+The two §4 gaps above are unchanged and recorded in GRVX-1108 §11.7.
+
 ---
 
 ## SD-031 — GRVX-1201 §4.2 names two `pkg/notify` files that do not exist
@@ -1954,7 +2006,7 @@ dependency question answered explicitly given GRVX-1102 §3's precedent.
 **Affects:** GRVX-1201 §4.2
 **Severity:** low — the intent is unambiguous and the work was completed; recorded because it is the
 fourth instance of the pattern F-042 describes
-**Status:** open; returned as `SPEC DEFECT: §4.2 — pkg/notify/slack.go and pkg/notify/webhook.go do
+**Status:** resolved 2026-10-01 (spec amended; DD-012 catches the class). Originally: open; returned as `SPEC DEFECT: §4.2 — pkg/notify/slack.go and pkg/notify/webhook.go do
 not exist`.
 
 ### What the spec says
@@ -1994,6 +2046,13 @@ and `cmd_explain.go` omitted; golden fixture omitted), GRVX-1109 (`cmd/cli/main.
 this one. **F-042** proposes the two mechanical checks that would catch all four before dispatch:
 every repo-relative path in §2/§4.2 must resolve, and every file named in §6 or §7 must appear in §4.
 This entry is the fourth data point for it.
+
+
+### Resolved 2026-10-01
+
+GRVX-1201 §4.2 now names `pkg/notify/notify.go`, `pagerduty.go` and `opsgenie.go`, the files that
+hold the four notifiers. The class of defect is caught before dispatch since DD-012: `make spec-lint`
+reported this one as M1 until the amendment.
 
 ---
 
@@ -2713,7 +2772,7 @@ and does not. That is the second time a Phase 13 spec has named something that d
 **Affects:** GRVX-1402 §4.1, §9
 **Severity:** low — the code half of the spec is complete and unambiguous; this is the paperwork
 line
-**Status:** open; needs a maintainer, not an implementer
+**Status:** resolved 2026-10-01 (DD-029). Originally: open; needs a maintainer, not an implementer
 
 ### The contradiction
 
@@ -2763,6 +2822,19 @@ licence cannot name this capability today. Nothing is broken — GRVX-1402 gates
 because the `ee/tenancy/` tree is already covered by the `tenancy-fleet-console` entry's
 placement. But the id will be needed by whichever spec first gates a Cloud feature on a licence
 feature list, and `boundary.yaml` is a core file that §4.2 forbids this spec from touching.
+
+
+### Decided 2026-10-01 — DD-029: option 1, the guide is written
+
+`ee/tenancy/byob/README.md` is added to GRVX-1402 §4.1 and written, matching the four other Phase 13
+packages. It covers the four bucket permissions and why each is needed, why object lock fails
+registration, the three API calls and every response code, and where the secret goes. Each claim was
+read from `config.go` and `cmd/byob-api/main.go`. One draft sentence, about data surviving the end of
+a subscription, was cut because nothing in the code confirmed it.
+
+The second gap, a `boundary.yaml` capability id for bring-your-own-bucket, stays open. Nothing gates
+on it yet, and adding an id to the boundary map belongs to the License & Boundary Auditor when the
+first spec needs one.
 
 ---
 
@@ -3903,8 +3975,8 @@ which needs the reference machine §5 names, not a decision.
 **Found by:** `perf-cost-engineer` executing GRVX-1003
 **Affects:** GRVX-1003 §2, §4.2, §4.3, §5.1, §5.2, §6 step 7
 **Severity:** medium — a spec closed as blocked that its own §6 says how to finish
-**Status:** partial; the measurement harness and the pinned encodings exist, AC-2 and AC-9 proven,
-AC-1 not met and provably not meetable within §4.3
+**Status:** decided as far as one maintainer can (DD-014); AC-1 waits on RFC 0003, which is design
+tier
 
 ### The spec says what to do when the budget is missed
 
@@ -3996,6 +4068,28 @@ take their settings from one shared place "so they cannot drift", and on compres
 already drifted. Left unchanged here because changing it rewrites files for no measured benefit, and
 this spec's own evidence says the storage gain would be nil.
 
+### Decided 2026-10-01 — DD-014
+
+**The target stands.** 120 bytes/event is reachable, so restating it would hide a cheap fix behind a
+bigger number. On the bench run's facts, gzip takes raw JSONL from 203.78 to 32.68 bytes/event and the
+total to 35.59.
+
+**Raw compression is proposed, not made.** It changes the stored format of the recompute source of
+truth and every reader of it, which `GOVERNANCE.md` puts at design tier. RFC 0003 proposes doing it in
+compaction rather than ingestion, so the hot path is untouched, behind one shared reader and a guard
+test. It also names a reader that would have broken silently: `scripts/cleanup_data.sh` deletes
+`*.jsonl` only, so compressed facts would have outlived the 30-day purge. The RFC needs two maintainer
+approvals. The project has one.
+
+**The §5.2 encodings stay pinned and unapplied.** They act on 2.89 bytes/event and cannot move the
+total, with or without RFC 0003. Applying them changes every Parquet file's bytes and adds reader
+compatibility to prove under Axis 3, for no measured benefit. `pkg/encoding` keeps the table ready.
+GRVX-1003 §6 step 3 should be executed when the Parquet term nears its own 45-byte allowance.
+
+**The compression-level drift above is fixed** by DD-007. Every Parquet writer now uses
+`recompute.CompressionLevel`, and `TestEveryParquetWriterUsesTheRecomputeLevel` fails on any other.
+That is AC-8's subject under another name.
+
 ---
 
 ## SD-056 — GRVX-1005's group-commit batcher is implemented, tested, and connected to nothing
@@ -4004,7 +4098,7 @@ this spec's own evidence says the storage gain would be nil.
 **Affects:** GRVX-1005 §4.1, §4.2, §7 AC-1/AC-7
 **Severity:** medium — 761 lines of implemented and tested code are not on the production path, and
 five acceptance criteria pass against it there
-**Status:** partial; AC-2…AC-9 have tests, AC-1 needs the reference machine, and the batcher is not
+**Status:** resolved 2026-10-01 (DD-009); AC-1 is measured on the reference machine named by DD-018. Originally: partial; AC-2…AC-9 have tests, AC-1 needs the reference machine, and the batcher is not
 wired in
 
 ### `NewBatcher` is never constructed outside its own tests

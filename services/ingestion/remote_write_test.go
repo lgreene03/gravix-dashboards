@@ -488,26 +488,37 @@ func TestHandleRemoteWriteIgnoresUndeclaredMetadataField(t *testing.T) {
 	}
 }
 
-// KNOWN DEFECT, registered as SD-027. §5.4 makes tenant_id required while §6
-// step 7 says it is empty in legacy single-key mode, so on a legacy
-// deployment every remote-write request fails at validation. The shipped
-// compose files set TENANT_DB_PATH and are unaffected. This test pins the
-// current behaviour: when the defect is resolved it will fail, which is the
-// point.
-func TestHandleRemoteWriteFailsInLegacySingleKeyMode(t *testing.T) {
-	handler, sink := newRemoteWriteHandler(t, 10)
+// TestExternalMetricsRefuseLegacySingleKeyMode is SD-027's resolution. In
+// legacy single-key mode there is no tenant, and ExternalMetricSample requires
+// one. Both metric endpoints answer 400 with the fix, not 500: Prometheus retries
+// a 500 forever and fills its write-ahead log. Nothing is persisted.
+func TestExternalMetricsRefuseLegacySingleKeyMode(t *testing.T) {
+	remoteWrite, rwSink := newRemoteWriteHandler(t, 10)
+	otlp, otlpSink := newOTLPMetricsHandler(t, 10)
 
 	// No tenant in the context: exactly what getTenantID returns in legacy mode.
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/remote_write", bytes.NewReader(encodeWriteRequest(t, oneSeries())))
-	r.Header.Set("Content-Encoding", "snappy")
+	rw := httptest.NewRequest(http.MethodPost, "/api/v1/remote_write", bytes.NewReader(encodeWriteRequest(t, oneSeries())))
+	rw.Header.Set("Content-Encoding", "snappy")
+	om := httptest.NewRequest(http.MethodPost, "/v1/metrics", strings.NewReader(`{"resourceMetrics":[]}`))
 
-	w := httptest.NewRecorder()
-	handler(w, r)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (see SD-027); if this now succeeds, the defect is fixed and this test should be replaced with one asserting 204", w.Code)
-	}
-	if got := sinkContents(t, sink); got != "" {
-		t.Errorf("a sample that failed validation was persisted: %s", got)
+	for name, c := range map[string]struct {
+		handler http.HandlerFunc
+		req     *http.Request
+		sink    *DurableSink
+	}{
+		"remote_write": {remoteWrite, rw, rwSink},
+		"otlp metrics": {otlp, om, otlpSink},
+	} {
+		w := httptest.NewRecorder()
+		c.handler(w, c.req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400 (SD-027)", name, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "TENANT_DB_PATH") {
+			t.Errorf("%s: the refusal does not say how to fix it: %s", name, w.Body.String())
+		}
+		if got := sinkContents(t, c.sink); got != "" {
+			t.Errorf("%s: a refused write was persisted: %s", name, got)
+		}
 	}
 }

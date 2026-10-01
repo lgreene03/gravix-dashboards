@@ -445,13 +445,27 @@ Two things remain unproven until someone runs it with a daemon:
 | `.gitignore` gained five missing command names | `go build ./cmd/bootstrap_seed` writes `./bootstrap_seed` into the repository root, and it reached the index during this work — F-001 (committed binaries) recurring, caught before the commit. The file's own header states the invariant, "every command in this repo needs covering by name", and five commands were uncovered: `bootstrap_seed` and `gen_facts` (new), `demo_seed`, `status_page` and `trial_expiry` (pre-existing). Adding all five costs five lines; a test asserting the invariant has no home in this spec and is worth one of its own. |
 | `docs/oss/boundary.yaml` **not** modified | `cmd/bootstrap_seed` is unambiguously core (charter §2.1 "Operate"), so a capability entry would be reasonable — but `make check-boundary` passes without one and §9 says no file outside §4. Left for whoever next edits that map. |
 
+### 8.6 Update 2026-10-01 — §8.2's two assumptions, on a real stack
+
+- **UID equality across two images: holds.** `synthetic-traffic` is the only service in the
+  bootstrap stack that sends facts, and it reads `api_key.txt` at mode `0600`. Every green
+  `timed-onboarding` run ends with a populated dashboard, which needs facts, so it needs that read to
+  succeed. The gate has passed on every push since 2026-09-14.
+- **Bind-mount ordering: checked on every run from now on.** The gate logs in through the gateway and
+  never loads `dashboard_config.js`, so a passing run said nothing about the mount. After the budget
+  verdict, `scripts/timed_onboarding_test.sh` now fetches `dashboard_config.js` from the dashboard.
+  It fails unless the file is served with `window.GRAVIX_CONFIG`, and fails if the served key is the
+  write key, which also guards SD-013's fix.
+
 ## 9. Definition of done
 
 - [x] All seven acceptance criteria pass with their named tests — §8.1, plus four beyond the seven
 - [x] Every Verification command run, real output pasted into the report — §8.1
-- [ ] **Not verified: no Docker daemon in this environment.** `docker compose up` was never run, so
-      the four-services-healthy claim is not made. What was checked instead, and the two assumptions
-      that remain untested, are in §8.2. This is the one item a reviewer must confirm by hand.
+- [x] **Verified in CI, 2026-10-01** — not in this environment, which still cannot pull images.
+      `timed-onboarding` on `f6b46a9` ran `docker compose up -d --build` on the bootstrap file.
+      Measured from container creation, after the image build: `bootstrap-init` exited at 0.7 s,
+      ingestion was healthy at 6.5 s, Cube at 12.2 s, and the dashboard started at 12.3 s. §8.6 records
+      where §8.2's two assumptions stand.
 - [x] `make check-boundary` clean
 - [x] `make build-oss && make test-oss` pass with `ee/` deleted
 - [ ] **No** — five files outside §4.1/§4.2 were touched, each listed with its reason in §8.5

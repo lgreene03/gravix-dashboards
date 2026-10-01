@@ -538,9 +538,20 @@ func TestCommentWindowOpened(t *testing.T) {
 		t.Errorf("the comment window is %.0f days; charter §6 requires 14 for a charter-tier proposal", days)
 	}
 
+	// Open, the evaluation must say it is provisional. Closed, it must say so
+	// on the closing date and record how many comments arrived. The check reads
+	// the document's state, never today's date, so CI cannot change colour on a
+	// calendar day with no commit.
 	flat := strings.Join(strings.Fields(body), " ")
-	if !strings.Contains(flat, "not final until the window closes") {
-		t.Error("the evaluation does not say it is provisional while the window is open")
+	closed := regexp.MustCompile(`\*\*final\*\* — the window closed (20[0-9]{2}-[0-9]{2}-[0-9]{2}) with (no|[0-9]+) comments? received`).
+		FindStringSubmatch(flat)
+	switch {
+	case closed != nil:
+		if closed[1] != m[2] {
+			t.Errorf("the evaluation was finalised on %s, but its window closes %s", closed[1], m[2])
+		}
+	case !strings.Contains(flat, "not final until the window closes"):
+		t.Error("the evaluation neither says it is provisional while the window is open nor records the window closing")
 	}
 	if !strings.Contains(flat, "Comment on this evaluation by") {
 		t.Error("the evaluation does not say where to comment, which makes the window decorative")

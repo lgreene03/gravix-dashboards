@@ -5,6 +5,24 @@ networks:
     driver: bridge
 
 services:
+  # The one privileged container in this stack, for the reason the bootstrap
+  # stack has bootstrap-init (F-021): ./data is gitignored, so on a fresh clone
+  # Docker creates it as root:root, and every Gravix image runs as the non-root
+  # `gravix` user, so none could write it. This fixes the ownership once and
+  # exits (F-025). Every service that mounts ./data waits for it; the
+  # long-running services stay non-root.
+  data-init:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-data-init
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown -R gravix:gravix /app/data"]
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+
   ingestion:
     build:
       context: .
@@ -30,6 +48,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     healthcheck:
@@ -60,6 +80,8 @@ services:
       - RAW_DATA_DIR=/app/data/raw
       - INGESTION_URL=http://ingestion:8080
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       cube:
         condition: service_healthy
     healthcheck:
@@ -75,7 +97,12 @@ services:
       - backend
 
   init-minio:
-    image: minio/mc:RELEASE.2024-03-13T23-51-57Z
+    # Built from source, like minio below: MinIO no longer publishes its
+    # images (F-057). The same image carries both mc and the server.
+    build:
+      context: deploy/minio
+    image: gravix-minio:RELEASE.2024-03-15T01-07-19Z
+    pull_policy: build
     container_name: gravix-init-minio
     entrypoint: >
       /bin/sh -c "
@@ -234,6 +261,8 @@ services:
       - ./cube/model:/cube/conf/model
       - ./data:/cube/data:ro
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       trino:
         condition: service_healthy
     healthcheck:
@@ -319,6 +348,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 512m
@@ -360,6 +391,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 512m
@@ -401,6 +434,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 512m
@@ -440,6 +475,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 256m
@@ -544,7 +581,13 @@ services:
       - backend
 
   minio:
-    image: minio/minio:RELEASE.2024-03-15T01-07-19Z
+    # MinIO no longer publishes community images: minio/minio on Docker Hub
+    # returns 404 and quay.io answers "unauthorized" (F-057). This builds the
+    # same pinned release from source; see deploy/minio/Dockerfile.
+    build:
+      context: deploy/minio
+    image: gravix-minio:RELEASE.2024-03-15T01-07-19Z
+    pull_policy: build
     container_name: gravix-minio
     ports:
       - "127.0.0.1:9000:9000"  # localhost only

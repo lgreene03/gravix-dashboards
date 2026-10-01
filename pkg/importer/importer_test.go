@@ -468,22 +468,6 @@ func TestUnknownSourceRejected(t *testing.T) {
 	}
 }
 
-// SD-030: the Prometheus reader is blocked on an owner decision, and says so
-// rather than pretending to work.
-func TestPrometheusSourceReportsItIsNotYetReadable(t *testing.T) {
-	store, _ := newStore(t)
-	opts := baseOptions(t, writeDatadogExport(t, "avg", 60, 1), store, 1)
-	opts.Source = SourcePrometheus
-
-	_, err := Run(context.Background(), opts)
-	if !errors.Is(err, ErrUnknownSource) {
-		t.Fatalf("err = %v, want ErrUnknownSource", err)
-	}
-	if !strings.Contains(err.Error(), "SD-030") {
-		t.Errorf("err = %q, want it to name the open decision", err.Error())
-	}
-}
-
 // A series nobody mapped to a service is skipped and counted, not guessed at:
 // inventing a service name would put rows on a dashboard under a name no one
 // chose.

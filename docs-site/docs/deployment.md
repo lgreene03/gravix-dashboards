@@ -12,7 +12,7 @@ This guide walks through deploying Gravix locally with Docker Compose and in pro
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/lgreene/gravix-dashboards.git
+git clone https://github.com/lgreene03/gravix-dashboards.git
 cd gravix-dashboards
 cp .env.example .env
 ```

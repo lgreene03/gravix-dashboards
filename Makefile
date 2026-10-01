@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check pricing-page pricing-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check charter-evidence bus-factor verify-custody
+.PHONY: proto build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check pricing-page pricing-check relnotes bench build-ee spec-status-check spec-lint incident-audit supported-versions supported-versions-check charter-evidence bus-factor verify-custody
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -148,6 +148,23 @@ contracts-check: ## Fail if the generated doc is stale
 # decision log drifting from the decisions it claims to record, and what enforces
 # the comment window and approval count charter §6 requires.
 
+# The generated Go code lives under gen/<package>/v1/, so protoc needs the
+# module flag. paths=source_relative, which CLAUDE.md used to document, writes
+# gen/proto/*.pb.go instead: a path nothing imports, hidden by the /gen ignore
+# rule, so the tracked files silently stayed behind proto/ (SD-028, F-040).
+# The licence header is added back after generation. New files under gen/ need
+# `git add -f`, because /gen is ignored.
+PROTO_FILES := proto/gravix.proto proto/remote_write.proto
+PROTO_OUT := gen/gravix/v1/gravix.pb.go gen/remotewrite/v1/remote_write.pb.go
+proto: ## Regenerate gen/ from proto/ (needs protoc and protoc-gen-go)
+	protoc --go_out=./gen --go_opt=module=github.com/lgreene/gravix-dashboards/gen $(PROTO_FILES)
+	@for f in $(PROTO_OUT); do \
+	  if ! head -1 "$$f" | grep -q '^// Copyright'; then \
+	    { printf '// Copyright 2026 The Gravix Authors\n// SPDX-License-Identifier: Apache-2.0\n\n'; cat "$$f"; } > "$$f.tmp"; \
+	    mv "$$f.tmp" "$$f"; \
+	  fi; \
+	done
+
 rfc-index: ## Regenerate docs/oss/rfcs/index.md from docs/oss/rfcs/
 	go run ./pkg/rfc/cmd/gen -in docs/oss/rfcs -out docs/oss/rfcs/index.md
 
@@ -176,6 +193,11 @@ pricing-check: ## Fail if either generated pricing page is stale
 
 # A spec marked done whose files do not exist is a published claim that work
 # happened. The register is maintained by hand, so it is checked by machine.
+# Mechanical Spec Readiness checks (F-042): paths in §2/§4.2 exist, and every
+# path §6/§7 names is in §4. Gates "planned" specs; reports on the rest.
+spec-lint:
+	python3 scripts/spec_lint.py
+
 spec-status-check: ## Verify every spec marked done has the files its §4.1 names
 	python3 scripts/audit_spec_status.py
 

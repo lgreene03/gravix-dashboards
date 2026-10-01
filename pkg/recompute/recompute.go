@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -517,21 +519,45 @@ func runCrossDayPartitions(ctx context.Context, opts Options, planned []Partitio
 	return rebuilt, failures
 }
 
-// acquire takes the shared rollup lock for every tenant in the run and returns a
-// release function. Locks are taken in sorted tenant order so two concurrent runs
-// cannot deadlock against each other.
-func acquire(ctx context.Context, opts Options) (func(), error) {
-	tenants := normalizeTenants(opts.TenantIDs)
-	held := make([]*leaderelect.FileElector, 0, len(tenants))
+// LockDir returns the local directory that holds the rollup lock for one
+// metric directory. It is derived from the store, never from the working
+// directory, so every process writing the same data takes the same lock
+// wherever it was started (F-018). A store with a local root puts the lock in
+// the metric directory beside the data. Any other store, such as S3, gets a
+// directory under os.TempDir: the lock then guards one machine only, and two
+// machines sharing a bucket do not contend with each other.
+func LockDir(store storage.ObjectStore, metricDir string) string {
+	rel := filepath.FromSlash(KeyPrefix(metricDir))
+	if rooted, ok := store.(interface{ Root() string }); ok {
+		return filepath.Join(rooted.Root(), rel)
+	}
+	return filepath.Join(os.TempDir(), "gravix-locks", rel)
+}
 
+// AcquireLocks takes the rollup lock for each metric directory and returns a
+// release function. The cron rollup and recompute both call it with the
+// directories they write, which is what makes the two mutually exclusive.
+// Locks are taken in sorted order so two concurrent callers cannot deadlock.
+// A lock another process holds yields ErrLockHeld.
+func AcquireLocks(ctx context.Context, store storage.ObjectStore, metricDirs []string) (func(), error) {
+	dirs := make([]string, 0, len(metricDirs))
+	seen := map[string]bool{}
+	for _, d := range metricDirs {
+		ld := LockDir(store, d)
+		if !seen[ld] {
+			seen[ld] = true
+			dirs = append(dirs, ld)
+		}
+	}
+	sort.Strings(dirs)
+
+	held := make([]*leaderelect.FileElector, 0, len(dirs))
 	release := func() {
 		for i := len(held) - 1; i >= 0; i-- {
 			_ = held[i].Release(context.Background())
 		}
 	}
-
-	for _, tenant := range tenants {
-		dir := MetricDirFor(opts.OutputDir, tenant, opts.Metric)
+	for _, dir := range dirs {
 		elector := leaderelect.NewFileElector(dir, LockName)
 		acquired, err := elector.Acquire(ctx)
 		if err != nil {
@@ -545,6 +571,16 @@ func acquire(ctx context.Context, opts Options) (func(), error) {
 		held = append(held, elector)
 	}
 	return release, nil
+}
+
+// acquire takes the shared rollup lock for every tenant in the run.
+func acquire(ctx context.Context, opts Options) (func(), error) {
+	tenants := normalizeTenants(opts.TenantIDs)
+	dirs := make([]string, 0, len(tenants))
+	for _, tenant := range tenants {
+		dirs = append(dirs, MetricDirFor(opts.OutputDir, tenant, opts.Metric))
+	}
+	return AcquireLocks(ctx, opts.Store, dirs)
 }
 
 // ProcessPartition rebuilds one tenant-day: it reads the day's facts, aggregates

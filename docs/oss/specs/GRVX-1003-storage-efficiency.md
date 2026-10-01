@@ -309,3 +309,21 @@ Every box stays unticked; the spec was not executed.
 - [ ] Both compression levels measured with the size/CPU trade — partially: sizes measured for
       CD-005, CPU not, because the level is not this spec's to change
 - [ ] `docs-engineer` delta merged — nothing shipped to document
+
+### 11.8 Update 2026-10-01 — where each criterion stands (DD-014)
+
+§11.4 is out of date: `bench/storage` and `pkg/encoding` were built afterwards, under SD-055.
+
+| AC | State | Evidence |
+|---|---|---|
+| AC-1 | not met | Waits on RFC 0003, raw compression at rest. Design tier. |
+| AC-2 | pass | `TestFootprintComponentsReported` |
+| AC-3 | deferred | DD-014: the encodings are not applied to the writers |
+| AC-4 | deferred | Nothing to re-verify until AC-3 is done |
+| AC-5 | deferred | Output unchanged. `tests/e2e/bare_parquet_test.go` reads a fixture with the production schema through DuckDB |
+| AC-6 | pass, trivially | No raw fact is touched by anything this spec shipped |
+| AC-7 | half | Pinned in `pkg/encoding` (`TestEveryMetricRowColumnIsPinned`); not applied, so writers still use defaults |
+| AC-8 | pass | `TestEveryParquetWriterUsesTheRecomputeLevel`, under DD-007 |
+| AC-9 | pass | `TestSteadyStateMeasurement` |
+
+The 120 bytes/event target is unchanged. Status stays `partial`.

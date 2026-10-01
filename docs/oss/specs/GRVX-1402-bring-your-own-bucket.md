@@ -69,6 +69,7 @@ by this spec.
 | `ee/tenancy/byob/migrations/0001_bucket_configs.up.sql` | Embedded schema for the `bucket_configs` table |
 | `ee/tenancy/byob/cmd/byob-api/main.go` | Standalone HTTP API for registering and verifying BYOB buckets |
 | `ee/tenancy/byob/cmd/byob-api/main_test.go` | HTTP handler tests |
+| `ee/tenancy/byob/README.md` | The "Bring your own bucket" setup guide §9 asks for (added 2026-10-01, SD-041) |
 
 ### 4.2 Files to modify
 

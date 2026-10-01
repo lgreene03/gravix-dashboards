@@ -5,181 +5,153 @@ sidebar_position: 2
 
 # Go SDK
 
-The Gravix Go SDK provides a lightweight client for sending request facts, plus drop-in middleware for `net/http`, Gin, and Echo.
+The Gravix Go SDK is a small client for sending request facts and service events, with batching,
+retries, path sanitisation, and `net/http` middleware. Every example on this page uses only
+identifiers the SDK exports; `tests/governance/sdk_docs_test.go` fails the build if one stops
+existing.
 
 ## Installation
 
-```bash
-go get github.com/lgreene/gravix-dashboards/sdk/go
-```
+The SDK's module path is `github.com/gravix-io/gravix-go` (it has its own `go.mod` under `sdk/go`).
 
-:::warning This command does not work yet
+:::warning Not yet fetchable with `go get`
 
-`go.mod` declares the module path `github.com/lgreene/gravix-dashboards`, and the repository is at
-`github.com/lgreene03/gravix-dashboards` — a different account. `go get` resolves a module path by
-fetching that URL, so this command cannot install the Gravix SDK, and it must not be run until the
-path is corrected. Tracked as **F-050** in
+The project's canonical import path is not settled — see **F-050** in
 [`docs/oss/findings.md`](https://github.com/lgreene03/gravix-dashboards/blob/main/docs/oss/findings.md).
-
-Until then, vendor the SDK from a clone of the repository.
+Until it is, use the SDK from a clone with a `replace` directive. This is exactly how the tested Gin
+recipe in `examples/recipes/gin` consumes it.
 
 :::
 
-Requires Go 1.21+.
+```bash
+git clone https://github.com/lgreene03/gravix-dashboards
+cd your-service
+go mod edit -require=github.com/gravix-io/gravix-go@v0.0.0 \
+            -replace=github.com/gravix-io/gravix-go=../gravix-dashboards/sdk/go
+go mod tidy
+```
 
-## Creating a Client
+Requires Go 1.22+.
+
+## Creating a client
 
 ```go
 package main
 
 import (
-    gravix "github.com/lgreene/gravix-dashboards/sdk/go"
+    "time"
+
+    gravix "github.com/gravix-io/gravix-go"
 )
 
 func main() {
-    client, err := gravix.NewClient(gravix.Config{
-        APIKey:   "gvx_live_your_api_key_here",
-        Endpoint: "https://ingest.gravix.io/api/v1/facts", // or http://localhost:8090 locally
-        Service:  "payments-api",
-
-        // Optional tuning
-        BatchSize:     100,           // flush after this many events
-        FlushInterval: 5 * time.Second, // or after this duration
-        MaxRetries:    3,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer client.Flush() // flush buffered events on shutdown
+    client := gravix.New(
+        "http://localhost:8090", // the ingestion API
+        "your-api-key",
+        gravix.WithService("payments-api"),
+        gravix.WithBatchSize(100),
+        gravix.WithFlushInterval(5*time.Second),
+        gravix.WithMaxRetries(3),
+    )
+    defer client.Close() // flushes anything still buffered
 }
 ```
 
-## Sending Facts Manually
+| Option | Default | Effect |
+|---|---|---|
+| `WithService(name)` | none | Service name for facts and events that do not set their own |
+| `WithBatchSize(n)` | `100` (`DefaultBatchSize`) | Flush after this many buffered facts |
+| `WithFlushInterval(d)` | `5s` (`DefaultFlushInterval`) | Flush at least this often |
+| `WithMaxRetries(n)` | `3` | Retry attempts on 429, 500, 502, 503 and 504; `0` disables retries |
+| `WithAutoSanitize(bool)` | `true` | Replace raw UUIDs and 4+ digit IDs in `PathTemplate` with `{id}` |
+| `WithHTTPClient(hc)` | 10 s timeout (`DefaultHTTPTimeout`) | Use your own `*http.Client` |
+| `WithOnError(fn)` | none | Called with errors from background batch sends |
 
-If you need to record facts outside of middleware (background jobs, async handlers, etc.):
+## Recording facts
+
+`RecordFact` queues a fact for the next batch and returns immediately. Missing `EventID` (a UUIDv7),
+`EventTime` and `Service` are filled in for you.
 
 ```go
-err := client.Send(context.Background(), gravix.Fact{
-    EventID:         gravix.NewEventID(), // generates a UUIDv7
-    EventTime:       time.Now().UTC(),
-    Method:          "GET",
-    PathTemplate:    "/v1/users/{id}",
-    StatusCode:      200,
-    LatencyMs:       38,
-    UserAgentFamily: "Go-http-client",
+client.RecordFact(context.Background(), gravix.RequestFact{
+    Method:       "GET",
+    PathTemplate: "/v1/users/{id}",
+    StatusCode:   200,
+    LatencyMs:    38,
 })
-if err != nil {
-    log.Printf("gravix send error: %v", err)
+```
+
+Errors from a background batch send go to the `WithOnError` callback, not to the caller. When you need
+to know the fact was accepted, send it synchronously instead:
+
+```go
+if err := client.SendFact(ctx, gravix.RequestFact{
+    Method: "POST", PathTemplate: "/v1/orders", StatusCode: 201, LatencyMs: 54,
+}); err != nil {
+    log.Printf("gravix: fact not accepted: %v", err)
 }
 ```
 
-`Send` is non-blocking — it enqueues the fact into an internal buffer. Call `client.Flush()` to drain the buffer synchronously (e.g., during graceful shutdown).
+`client.Flush(ctx)` sends whatever is buffered now; `client.Close()` flushes and stops the client.
 
-## net/http Middleware
+## Recording events
 
-Wrap your `http.Handler` with `gravix.Middleware` to automatically record every request:
+Service events — deploys, restarts, scaling — are sent synchronously, because they are rare and you
+usually want to know they arrived.
 
 ```go
-package main
-
-import (
-    "net/http"
-
-    gravix "github.com/lgreene/gravix-dashboards/sdk/go"
-)
-
-func main() {
-    client, _ := gravix.NewClient(gravix.Config{
-        APIKey:  "gvx_live_your_api_key_here",
-        Service: "my-service",
-    })
-    defer client.Flush()
-
-    mux := http.NewServeMux()
-    mux.HandleFunc("/v1/users/{id}", handleUser)
-    mux.HandleFunc("/v1/orders/{id}", handleOrder)
-
-    // Wrap the mux — uses the matched pattern as path_template automatically
-    http.ListenAndServe(":8080", gravix.Middleware(client)(mux))
-}
+err := client.RecordEvent(ctx, gravix.ServiceEvent{
+    Service:    "payments-api",
+    EventType:  "deploy_completed",
+    Message:    "Deployed v1.2.3",
+    Properties: map[string]string{"version": "1.2.3"},
+})
 ```
 
-The middleware captures the matched route pattern (e.g., `/v1/users/{id}`), not the raw path, so no UUIDs leak into your metrics.
+## net/http middleware
 
-## Gin Middleware
+`HTTPMiddleware` records one fact per request. Its second argument returns the route template for a
+request; pass `nil` to record the raw path with sanitisation applied.
 
 ```go
-package main
+mux := http.NewServeMux()
+mux.HandleFunc("/v1/users/{id}", handleUser)
 
-import (
-    "github.com/gin-gonic/gin"
-    gravix "github.com/lgreene/gravix-dashboards/sdk/go"
-)
-
-func main() {
-    client, _ := gravix.NewClient(gravix.Config{
-        APIKey:  "gvx_live_your_api_key_here",
-        Service: "my-service",
-    })
-    defer client.Flush()
-
-    r := gin.Default()
-    r.Use(gravix.GinMiddleware(client))
-
-    r.GET("/v1/products/:id", getProduct)
-    r.POST("/v1/orders", createOrder)
-
-    r.Run(":8080")
-}
+handler := gravix.HTTPMiddleware(client, nil)(mux)
+http.ListenAndServe(":8080", handler)
 ```
 
-The Gin middleware reads `c.FullPath()` for the path template, so parameterized routes like `/v1/products/:id` are recorded correctly.
+`TraceMiddleware(client)` additionally records trace spans for sampled requests.
 
-## Echo Middleware
+## Gin
 
-```go
-package main
+The SDK has no Gin dependency. `examples/recipes/gin/main.go` is a complete, tested middleware: it
+reads `c.FullPath()`, turns `:id` into `{id}`, and calls `client.RecordFact` after the handler runs.
+Copy it; CI runs it on every pull request.
 
-import (
-    "github.com/labstack/echo/v4"
-    gravix "github.com/lgreene/gravix-dashboards/sdk/go"
-)
+## OpenTelemetry
 
-func main() {
-    client, _ := gravix.NewClient(gravix.Config{
-        APIKey:  "gvx_live_your_api_key_here",
-        Service: "my-service",
-    })
-    defer client.Flush()
+If you already use OpenTelemetry, the exporter module `github.com/gravix-io/gravix-go/otel` turns
+completed HTTP spans into request facts and skips the rest. It is a separate module with its own
+`go.mod`, so it needs its own `replace` beside the SDK's:
 
-    e := echo.New()
-    e.Use(gravix.EchoMiddleware(client))
-
-    e.GET("/v1/invoices/:id", getInvoice)
-
-    e.Start(":8080")
-}
+```bash
+go mod edit -require=github.com/gravix-io/gravix-go/otel@v0.0.0 \
+            -replace=github.com/gravix-io/gravix-go/otel=../gravix-dashboards/sdk/go/otel
+go mod tidy
 ```
 
-## Configuration Reference
+```go
+exporter := otel.NewExporter(client)
+tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+```
 
-| Field           | Type          | Default    | Description                              |
-|-----------------|---------------|------------|------------------------------------------|
-| `APIKey`        | `string`      | required   | Your Gravix API key                      |
-| `Endpoint`      | `string`      | cloud URL  | Ingestion endpoint                       |
-| `Service`       | `string`      | required   | Service name shown in dashboard          |
-| `BatchSize`     | `int`         | `100`      | Flush after this many buffered events    |
-| `FlushInterval` | `time.Duration` | `5s`    | Flush after this duration                |
-| `MaxRetries`    | `int`         | `3`        | Retry attempts on transient errors       |
-| `Timeout`       | `time.Duration` | `10s`   | HTTP request timeout per attempt         |
+## Path sanitisation
 
-## Error Handling
-
-The SDK never panics. Errors from `Send` indicate the internal queue is full (backpressure). In that case, log and drop — Gravix is designed for sampling, not guaranteed delivery.
+`gravix.SanitizePath` is what `WithAutoSanitize` applies, and it is exported so you can use it in your
+own middleware:
 
 ```go
-if err := client.Send(ctx, fact); err != nil {
-    // queue full — log and continue, do not block the request path
-    log.Printf("gravix: dropped fact: %v", err)
-}
+gravix.SanitizePath("/users/550e8400-e29b-41d4-a716-446655440000/orders") // "/users/{id}/orders"
+gravix.SanitizePath("/api/v1/products/12345")                             // "/api/v1/products/{id}"
 ```

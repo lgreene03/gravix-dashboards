@@ -225,20 +225,31 @@ func TestImportRejectsBadFlags(t *testing.T) {
 	}
 }
 
-// SD-030: the Prometheus reader is blocked on an owner decision. It must say
-// so, not fail in a way that looks like the user's mistake.
-func TestImportPrometheusReportsTheOpenDecision(t *testing.T) {
-	input := writeImportFixture(t, "avg", 60)
-
-	code, _, stderr := runImportCmd(t, "",
-		"prometheus", "--input", input, "--data-root", t.TempDir(),
-		"--service-map", "checkout-prod=checkout", "--yes")
-
-	if code != importExitUsage {
-		t.Fatalf("exit = %d, want %d", code, importExitUsage)
+// SD-030, decided by DD-028: Prometheus imports read `promtool tsdb dump`
+// output. The CLI runs end to end on one, writes rows, and refuses facts mode.
+func TestImportPrometheusDumpEndToEnd(t *testing.T) {
+	dump := filepath.Join(t.TempDir(), "dump.txt")
+	body := `{__name__="http_requests_total", job="checkout-prod", handler="/orders/{id}"} 100 1767225600000
+{__name__="http_requests_total", job="checkout-prod", handler="/orders/{id}"} 160 1767225630000
+{__name__="http_requests_total", job="checkout-prod", handler="/orders/{id}"} 220 1767225660000
+`
+	if err := os.WriteFile(dump, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(stderr, "SD-030") {
-		t.Errorf("stderr = %q, want it to name the open decision", stderr)
+
+	root := t.TempDir()
+	code, stdout, stderr := runImportCmd(t, "",
+		"prometheus", "--input", dump, "--data-root", root,
+		"--service-map", "checkout-prod=checkout", "--path-label", "handler", "--yes")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+
+	code, _, stderr = runImportCmd(t, "",
+		"prometheus", "--input", dump, "--data-root", t.TempDir(), "--mode", "facts",
+		"--service-map", "checkout-prod=checkout", "--yes")
+	if code != importExitUsage {
+		t.Errorf("facts mode over a Prometheus dump: exit = %d, want %d; stderr: %s", code, importExitUsage, stderr)
 	}
 }
 

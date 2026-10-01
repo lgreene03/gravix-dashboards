@@ -27,7 +27,7 @@ Nothing below has shipped in a tagged release yet.
 - **Prometheus remote-write receiver** — with a hard per-metric-per-day series cap, so an import cannot smuggle in high cardinality (GRVX-1102)
 - **OTLP metrics endpoint** — `/v1/metrics` accepts metrics; `/v1/traces` and `/v1/logs` refuse at the door, because tracing and logs are non-goals rather than unfinished features (GRVX-1105)
 - **`gravix export`** — facts, metrics and events as Parquet, CSV or JSONL (GRVX-1107)
-- **`gravix import`** — Datadog metric history, marked as imported, and refusing to invent the facts an aggregate never contained (GRVX-1108, partial)
+- **`gravix import`** — Datadog metric exports and Prometheus history from `promtool tsdb dump`, marked as imported, and refusing to invent the facts an aggregate never contained. Prometheus counters arrive as per-minute increases (GRVX-1108, SD-030)
 - **`gravix export --everything`** — one command writes everything Gravix holds into open formats, with a README and checksums; CI runs it and then reads it back with every Gravix service stopped (GRVX-1109)
 - **Plugin ABI v2** — plugins are subprocesses speaking JSON-RPC 2.0 over stdio, so a plugin built against one release keeps working against the next. Per-call timeout, crash isolation with backoff, a failure budget, a memory limit, and secrets that never reach a log (GRVX-1201)
 - **Plugin registry and `gravix plugin new`** — a JSON file in this repository rather than a service, and a scaffold that builds and passes its tests unedited for all three kinds in Go and Python (GRVX-1202)
@@ -37,11 +37,17 @@ Nothing below has shipped in a tagged release yet.
 - **One-command dev setup and a 5-minute contributor suite** — `./scripts/dev_setup.sh` and `make test-fast`, with the budget enforced in CI. No test was skipped or shortened to fit it (GRVX-1206)
 - **Generated release notes** — every contributor named, first contributions marked, no email addresses, and a `no-credit` list that is honoured by CI rather than by memory (GRVX-1209)
 - **Supply chain** — reproducible builds, release signing, and a CycloneDX SBOM (GRVX-709)
+- **Load generator latency percentiles** — `p50_latency_ms`, `p95_latency_ms` and `p99_latency_ms` in the benchmark summary, over every request, failed ones included (F-017)
+- **Benchmark workflow on a named reference machine** — `.github/workflows/bench.yml` runs `bench/run.sh` on a GitHub-hosted `ubuntu-24.04` runner, which anyone can reproduce on by forking (DD-018)
 
 ### Changed
 
 - **Test suites are split by speed** — `make test-fast` is the contributor suite; `make test-full` and `make test` still run everything. `tests/e2e/`, `tests/correctness/` and `bench/` carry a `//go:build slow` tag, and CI runs every suite on every pull request (GRVX-1206)
 - **`gravix doctor`** — diagnoses setup failures and prints the fix for each rather than the error
+- **Ingestion commits in groups** — concurrent writes to one topic file share an fsync, and a full queue answers `503` with `Retry-After: 1` instead of waiting. Acknowledgement still follows the fsync (SD-023, SD-056)
+- **Compaction no longer rewrites `request_metrics_minute`** — it dropped the latency sketch and averaged percentiles. Rebuild a metric partition with `gravix recompute` instead (F-039)
+- **The gateway's archive download moved to `/api/gateway/exports/archive`** — beside the other export routes, one character away from none of them (SD-029)
+- **`perf_test.sh` compares its p95 threshold with a p95** — it used to compare it with the average of successful requests (F-017)
 
 ### Fixed
 
@@ -49,10 +55,18 @@ Nothing below has shipped in a tagged release yet.
 - **Cube models never read their environment** — every environment conditional in the schema was dead, because Cube evaluates model files in a sandbox with no `process` (F-037)
 - **Pre-aggregations were declared that no shipped stack could build** (F-035, F-036, F-038)
 - **Ingestion and the rollups disagreed about where data lives** (F-027)
+- **The full stack could not start from a fresh clone** — `./data` arrived root-owned and every image runs as a non-root user. A one-shot `data-init` container now fixes the ownership (F-025)
+- **The cron rollup and `gravix recompute` could write one partition at once** — their locks were in different places. Both now take the same lock, found through the store rather than the working directory (F-018)
+- **Every date-ranged dashboard query failed on the DuckDB stack**, and the dashboard showed it as no data (F-053)
+- **The benchmark's per-core ingest figure was a one-core rate divided by every core**, and its durable buffer was never fsynced (F-056)
+- **Metric writes in legacy single-key mode answered 500**, which Prometheus retries forever. They now answer 400 and name the setting that enables them, `TENANT_DB_PATH` (SD-027)
+- **The Postgres backend's tests had never run** — they now run against a real Postgres on every pull request (F-043)
+- **The Go SDK page documented an API that does not exist** — rewritten from the SDK's exports, with an install that works today (F-050)
 
 ### Security
 
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
+- **The dashboard was served an unrestricted API key before login** — `dashboard_config.js` now carries a key scoped to `admin:read`, and existing installs are narrowed on their next boot (SD-013)
 
 ## [1.0.0] - 2026-03-23
 

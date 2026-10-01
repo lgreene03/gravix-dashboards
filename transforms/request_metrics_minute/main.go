@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
@@ -166,15 +165,6 @@ func main() {
 		tenantDBPath = os.Getenv("TENANT_DB_PATH")
 	}
 
-	// Acquire exclusive lock to prevent concurrent runs
-	elector := leaderelect.NewFileElector(outputDir, "request-metrics-rollup")
-	acquired, err := elector.Acquire(context.Background())
-	if err != nil || !acquired {
-		slog.Error("cannot start rollup: another instance is running", "error", err)
-		os.Exit(1)
-	}
-	defer elector.Release(context.Background())
-
 	var days []time.Time
 
 	if startDay != "" && endDay != "" {
@@ -285,6 +275,21 @@ func main() {
 			outputDir: outputDir,
 		})
 	}
+
+	// Take the same per-tenant locks `gravix recompute` takes, located through
+	// the store rather than the working directory, so the cron and a recompute
+	// can never write one partition at the same time (F-018). This also stops a
+	// second cron instance.
+	lockDirs := make([]string, 0, len(configs))
+	for _, cfg := range configs {
+		lockDirs = append(lockDirs, cfg.outputDir)
+	}
+	release, err := recompute.AcquireLocks(ctx, store, lockDirs)
+	if err != nil {
+		slog.Error("cannot start rollup: another rollup or recompute holds the lock", "error", err)
+		os.Exit(1)
+	}
+	defer release()
 
 	for _, cfg := range configs {
 		if ctx.Err() != nil {

@@ -153,6 +153,18 @@ explicitly and records the result in the spec's header.
 Check 12 is the real gate. The test the Lead applies: *could someone who has never heard of Gravix
 execute this correctly?* If not, the missing context goes **in the spec**, not in the dispatch chat.
 
+**Two mechanical checks run before any of the twelve** (`make spec-lint`, in CI on every pull
+request). Check 1 tests that a path is well formed; these test that it is *true* and *complete*,
+which five Phase 11 specs that passed 12/12 were not (F-042):
+
+| # | Check | Fails if… |
+|---|---|---|
+| M1 | Every path in §2 or §4.2 exists in the repository | a context or modify path does not resolve |
+| M2 | Every path §6 or §7 names is listed in §4.1, §4.2 or §2 | a step changes a file §4 never mentions |
+
+They fail the build for specs marked `planned` and report for the rest, whose defects are already in
+the registers. A spec moving to `planned` must pass them.
+
 **Exit:** spec written, gate 12/12, spec ID registered in `SPEC-INDEX.md`.
 **Escalation:** metric semantics unclear → `semantic-modeler`; placement unclear →
 `license-boundary-auditor`; scope unclear → `cpo`.

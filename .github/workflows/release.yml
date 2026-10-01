@@ -40,6 +40,11 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Releasing version: ${VERSION}"
 
+      # A release CHANGELOG.md does not describe is how a user finds out about
+      # a breaking change by hitting it (F-041).
+      - name: Refuse a release the changelog does not describe
+        run: bash scripts/changelog_check.sh "${GITHUB_REF_NAME}"
+
       - name: Generate release notes
         id: notes
         run: |

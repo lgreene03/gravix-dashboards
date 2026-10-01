@@ -202,6 +202,9 @@ func handleOTLPMetrics(sink *DurableSink, budget *cardinality.Budget) http.Handl
 		}
 
 		tenantID := getTenantID(r)
+		if refuseWithoutTenant(w, tenantID) {
+			return
+		}
 
 		points, rejection := validateOTLPMetrics(req, tenantID, budget)
 		if rejection != nil {

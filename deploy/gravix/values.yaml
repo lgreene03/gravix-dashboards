@@ -156,7 +156,13 @@ storage:
   minio:
     enabled: true
     image:
-      repository: minio/minio
+      # MinIO no longer publishes community images: minio/minio on Docker Hub
+      # returns 404 and quay.io answers "unauthorized" (F-057). Build the same
+      # release from deploy/minio/Dockerfile and push it where your cluster
+      # pulls from, then set this repository:
+      #   docker build -t <registry>/gravix-minio:RELEASE.2024-03-15T01-07-19Z deploy/minio
+      # Production values disable this and use managed S3.
+      repository: gravix-minio
       tag: "RELEASE.2024-03-15T01-07-19Z"
     persistence:
       enabled: true

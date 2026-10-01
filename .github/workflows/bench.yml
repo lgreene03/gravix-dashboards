@@ -1,0 +1,62 @@
+name: bench
+
+# Runs ./bench/run.sh on the reference machine (DD-018 in
+# docs/oss/delegated-decisions.md): a GitHub-hosted ubuntu-24.04 runner.
+#
+# That runner is the reference because it is the one machine anyone can run
+# this on, at no cost, by forking the repository and pressing the same button.
+# A figure measured on a maintainer's workstation cannot be reproduced by an
+# outsider, and a figure nobody can reproduce is advertising (bench/README.md).
+# The runner's exact CPU varies between runs; every result's `machine` block
+# records the one it got, and `notes` records the spread.
+#
+# It is its own workflow rather than a job in ci.yml because the published
+# scale takes about fifteen minutes and every pull request does not need it.
+# Pull requests that change the benchmark run the small scale, so a broken
+# harness is caught where it is introduced.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: Dataset scale. The published figures come from standard.
+        required: true
+        default: standard
+        type: choice
+        options: [small, standard, large]
+  pull_request:
+    paths:
+      - 'bench/**'
+      - '.github/workflows/bench.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      # A choice input or a fixed value, passed through the environment rather
+      # than interpolated into the script.
+      SCALE: ${{ github.event_name == 'workflow_dispatch' && inputs.scale || 'small' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Run the benchmark
+        run: ./bench/run.sh --scale "$SCALE" --out bench-result.json
+
+      # Printed as well as uploaded. The artifact's blob host is unreachable
+      # from some networks, and a result that cannot be read is not published.
+      - name: Print the result
+        run: cat bench-result.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ env.SCALE }}-${{ github.sha }}
+          path: bench-result.json

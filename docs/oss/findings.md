@@ -68,6 +68,7 @@ would have made the licence diff unreadable.
 **Found by:** `senior-engineer` executing GRVX-802
 **Owner:** `senior-engineering-lead`
 **Severity:** medium — a scheduled job that silently does nothing
+**Status:** resolved 2026-10-01 (DD-015)
 
 `transforms/compaction/main.go` finds files to merge with `parseWarehouseKey`, which accepts only
 the **flat** warehouse layout:
@@ -121,6 +122,28 @@ this fix and fixing it cannot reintroduce a non-deterministic metric key. What r
 event tables: `service_events_daily` and `service_events_detail` write a UUID-named file per run into
 partitioned directories, and compaction still cannot see them. That is a data-movement change with
 its own dry-run and rollback story, as this entry says, and it is not decided here.
+
+### Resolved 2026-10-01 — DD-015: no partitioned table accumulates files, so there is nothing to merge
+
+The update above assumed the event tables gather a file per run. They do not. Both event transforms
+write the day's new file, then delete every other file in that partition, so a partition holds one
+file after every successful run. `TestProcessDay_Idempotency` in each transform runs it twice and
+requires exactly one file. The metric table has one deterministic file per partition, written by
+recompute alone since DD-006.
+
+So compaction not seeing the Hive layout costs nothing: there is never a second file to merge.
+Teaching it the layout would add a data-movement path whose every run is a no-op, and it would
+rename one file to a UUID name for no gain. It stays as it is. `TestWarehouseKeysAreFlatLayoutOnly`
+now pins intended behaviour rather than a known gap. Compaction's warehouse path still merges
+flat-layout event files written before Phase 5.
+
+Two consequences, recorded rather than acted on:
+
+- **The criterion GRVX-810 was told to hold open is moot.** "Compaction merges a real Hive partition
+  and its manifest survives" cannot occur. Metric partitions are never compacted, and the event
+  tables write no manifests.
+- **Compaction's merged-manifest code has no production input.** It is tested at the function level
+  and is harmless. Removing it is a separate clean-up, not this finding's.
 
 ---
 
@@ -866,7 +889,7 @@ inherit this login.
 scripts already produce before writing a new harness.
 **Severity** medium — no public number depends on it today, but it is a gate that reports PASS on
 runs it was written to fail, and Phase 10 is about to build published figures in this area.
-**Status** open. Not fixed here: GRVX-1001 §3 and §4.2 both forbid removing or rewriting any
+**Status** resolved 2026-10-01 (DD-021). Originally: open. Not fixed here: GRVX-1001 §3 and §4.2 both forbid removing or rewriting any
 existing `scripts/perf_baseline.json` field, and the threshold's *name* is the defect.
 
 **The mismatch.** `scripts/perf_baseline.json` declares, for each profile:
@@ -920,6 +943,27 @@ failed requests in the latency population or state explicitly that it does not, 
 baseline fields to match what is actually compared. Until then `perf_test.sh`'s PASS means "the mean
 of successful requests is under a number labelled p95".
 
+### Resolved 2026-10-01 — DD-021: the gate compares a p95 with a p95
+
+The fence that kept this open was GRVX-1001's, and it binds GRVX-1001's work, not a separate fix. The
+repair this entry describes is now made, without renaming any field, because the field now means
+what it says:
+
+- `cmd/load_generator` records every request's latency in a bounded t-digest, failures included,
+  and reports `p50_latency_ms`, `p95_latency_ms` and `p99_latency_ms`. The digest is bounded because
+  `synthetic-traffic` runs the generator indefinitely.
+- `avg_latency_ms` divides by every request, not by successes.
+- `scripts/perf_test.sh` compares `max_p95_latency_ms` against `p95_latency_ms`, and fails if the
+  output has no p95 at all.
+- `TestSlowFailuresRaiseTheLatencyFigures` and `TestSendRequestRecordsFailedLatencies` guard both
+  defects. The second drives `sendRequest` against a server that refuses and one that is gone.
+  Restoring the successes-only average fails the first, and dropping the failed-request latency
+  fails the second.
+
+The thresholds themselves were set loose to allow for the average. They have not been re-measured,
+so a manual run may now fail profiles that used to pass. That is the gate working. `perf_test.sh` is
+not in CI.
+
 ## F-018 — `recompute` takes its lock on the local filesystem at a path relative to the working directory, while writing its data through the object store
 
 **Found by** GRVX-1001. The benchmark harness kept creating an empty
@@ -928,7 +972,7 @@ driver reproduced it.
 **Severity** medium-high. The stray directory is cosmetic; what it exposes is not. The lock exists to
 stop the cron rollup and a `gravix recompute` writing the same partition at the same time, and in the
 two deployments where that can actually happen it does not.
-**Status** open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
+**Status** resolved for one machine (DD-022); a lock across machines sharing a bucket needs a spec. Originally: open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
 a change to locking semantics that wants its own spec.
 
 **The mismatch**, in one place — `pkg/recompute/recompute.go:534`:
@@ -982,6 +1026,31 @@ guards a single machine has to be documented rather than implied.
 **Worked around in the benchmark** by passing an absolute `OutputDir`, which makes the lock path
 absolute too. That is a workaround in one caller, not a fix: every other caller — the cron rollup and
 `cmd/cli`'s `recompute`, both of which pass relative defaults — still takes a working-directory lock.
+
+### Resolved for one machine 2026-10-01 — DD-022
+
+The lock now lives where the data lives, and the cron and recompute take the same one.
+
+- `recompute.LockDir` derives the lock directory from the store: under `LocalStore.Root()` for a
+  local store, beside the data it guards. It never uses the working directory.
+- `recompute.AcquireLocks` takes one lock per metric directory, in sorted order. `Run` calls it
+  with each tenant's directory. The cron rollup now calls it too, with the directories it writes,
+  instead of its single `leaderelect` lock at `--output-dir`.
+- That second change mattered as much as the first. The cron held one lock for every tenant at a
+  path of its own, and recompute locked per tenant at another, so the two never met in either
+  tenancy mode, even from the same working directory.
+- `TestCronAndRecomputeShareOneLock` holds the lock the way the cron does and requires a recompute
+  over the same store to be refused, single-tenant and multi-tenant, with the working directory
+  elsewhere. `TestLockLivesBesideTheData` requires nothing in the working directory.
+  `TestCronRollupTakesTheSharedLock` keeps the cron on the shared lock. Restoring the old relative
+  path fails three of these checks.
+- The benchmark's cleanup of the stray directory is removed, with the test of that cleanup.
+  `TestHarnessLeavesNoStrayDirectories` still guards the outcome, and now passes because of the fix.
+
+**Still open: more than one machine.** A store with no local root, which means S3, gets a lock under
+`os.TempDir`, so two machines sharing a bucket still do not contend. `LockDir`'s comment says so. A
+real cross-machine lock is an object in the store, taken with a conditional write and given an
+expiry. That changes the storage interface and the locking semantics, so it needs a spec.
 
 ## F-019 — the bootstrap stack has not built at all since Alpine bumped tzdata
 
@@ -1041,7 +1110,7 @@ green runs to show what it costs in minutes.
 measured figures before building a cost calculator on top of it.
 **Severity** medium — the storage numbers are conservative, so nobody under-provisions, but the
 mechanism is described wrongly and that misleads about what Parquet can be used for.
-**Status** open. Not fixed here: GRVX-1004 §4.2 admits `docs/capacity-planning.md` only to "link the
+**Status** resolved 2026-10-01 (DD-023). Originally: open. Not fixed here: GRVX-1004 §4.2 admits `docs/capacity-planning.md` only to "link the
 calculator; remove any figure the model now supersedes", and rewriting the mechanism paragraph is a
 larger edit than that.
 
@@ -1077,6 +1146,24 @@ there was no harness that could have produced the real ones.
 JSONL size (measured), and the aggregation factor with an explicit note that it depends on events per
 bucket-key and is not recoverable per event. Then re-derive the plan-tier tables from the measured
 figure rather than from 300 bytes.
+
+### Resolved 2026-10-01 — DD-023: the plan-tier tables come from a measured result
+
+The mechanism paragraph and the measured per-event table were corrected earlier. The plan-tier
+tables were not: they still multiplied 300 B and 30–50 B. They are now derived from
+`bench/results/20261001T170609Z-small.json`, the reference machine's first result.
+
+- Raw is 210.8 B per event and scales with events alone.
+- The warehouse is given as a range, 2.9 B to about 21 B per event. The measured run averaged 7.3
+  events per row at 21.2 B per row. A low-volume deployment, with one event in most rows, approaches
+  21 B. The totals use the upper bound, so the tables cannot under-provision a small deployment the
+  way a single average would.
+- The old tables gave 44–52% more in every row. The page says so.
+
+Re-deriving found an arithmetic error the page carried independently. It said the 500 MB default
+buffer held "~90 minutes" at 100 events/sec. At its own 300 B estimate that is about 4.6 hours, and
+at the measured size about 6.5 hours. The buffer-full response it describes, 503 with
+`Retry-After: 30`, was checked against `services/ingestion/main.go` and is right.
 
 ## F-021 — the bootstrap stack's data volume arrives root-owned, and every container runs non-root
 
@@ -1308,7 +1395,7 @@ rewritten from a byte-scan to an AST check.
 `docker-compose.yml`, rather than waiting to be told.
 **Severity** high — `docker compose up -d --build` on the full stack, from a fresh clone, should fail
 the same way the bootstrap stack did.
-**Status** open, deliberately unfixed. See "Why this is recorded and not patched" below.
+**Status** fix ported (DD-020); the first full-stack boot on a pull request will confirm it.
 
 **F-021 applies.** Verified, not inferred:
 
@@ -1354,13 +1441,31 @@ before GRVX-910. The argument that produced `timed-onboarding` — *a gate that 
 gates nothing* — applies unchanged to `docker-smoke`, and the evidence for it is now four findings
 deep.
 
+### Update 2026-10-01 — DD-020: the fix is ported, and the full stack now boots on pull requests
+
+The condition this entry waited on has been met. The bootstrap stack's chown init container has
+worked on every green `timed-onboarding` run since 2026-09-14, across the same three images the full
+stack uses.
+
+- `docker-compose.yml` gains `data-init`, a one-shot root container built from the rollup image. It
+  runs `chown -R gravix:gravix /app/data` and exits. The six services that write `./data`, and Cube,
+  which reads it, wait for it with `service_completed_successfully`.
+- `TestFullStackOwnsItsDataDirectory` fails if any service that mounts `./data` does not wait for it,
+  or if `data-init` stops chowning as root. Removing the gateway's dependency fails it.
+- `docker-smoke` now runs on pull requests, which this entry's last paragraph asked for. It is not
+  yet in `ci-summary` (DD-019), so its first results are evidence, not a gate.
+
+Whether the full stack boots is still unobserved. The first `docker-smoke` run past F-026's `.env`
+error will say.
+
 ## F-026 — `ci-summary` reports success while `docker-smoke` and `docker-build` fail, and both have been failing on `main` for months
 
 **Found by** verifying a claim made in F-025 — that `docker-smoke` "would have caught" the full
 stack's volume-ownership defect — instead of leaving it standing.
 **Severity** high. The full-stack smoke test and every container image build have been red on `main`
 since at least 2026-05-24, and the check that is supposed to summarise CI has been green throughout.
-**Status** open. Not fixed here: see below.
+**Status** partly fixed (DD-019). `docker-build` is gated. `docker-smoke` and `image-scan` are
+diagnosed and repaired, and are gated after their first green run.
 
 **The gate does not include them.** `ci-summary`'s `needs`, verbatim from
 `.github/workflows/ci.yml`:
@@ -1423,6 +1528,46 @@ reproduce `docker-smoke`'s failure with a Docker daemon → fix it → *then* ad
 invisible because nothing executed the thing they broke. This one is worse in kind: the check *did*
 execute, it *did* fail, and the gate that aggregates CI simply did not ask. A job whose result is not
 in a required check is a job that does not exist.
+
+
+### Update 2026-10-01 — DD-019: diagnosed on a real run, and the gate's other gaps
+
+PR #23's merge produced the first `main` run with every earlier job green, so the Docker jobs ran at
+last. Run 36895500597 on `97cb9aa`:
+
+| Job | Conclusion | Cause |
+|---|---|---|
+| `docker-build`, all four images | **success** | Fixed somewhere in the September work |
+| `docker-smoke` | failure, in under a second | compose stops before any container: `required variable MINIO_ROOT_PASSWORD is missing a value` |
+| `image-scan` | failure at "Set up job" | `Unable to resolve action aquasecurity/trivy-action@0.28.0`. The action now publishes `v`-prefixed tags |
+| `ci-summary` | **success** | Still not asking |
+
+The smoke failure is the same sub-second signature this entry could not diagnose in May. The job's
+`.env` sets five variables, and `docker-compose.yml` requires three more with `${VAR:?...}`. The old
+`.env` reproduces the error with `docker compose config`, and the new one passes.
+
+**This entry's premise was wrong.** It said adding `docker-smoke` to `ci-summary` "would immediately
+turn a green summary red on every pull request". `docker-smoke` runs only on push to `main`. On a
+pull request it is skipped, and a skipped need does not fail the summary. Gating it would have
+reddened `main` alone.
+
+**Three more jobs had the same defect.** `vuln`, `helm-validate` and `docker-lint` were in
+`ci-summary`'s `needs` and not in its failure condition, so each could fail without turning anything
+red.
+
+**What changed:**
+
+- `vuln`, `helm-validate`, `docker-lint` and `docker-build` now fail `ci-summary`.
+  `TestCISummaryFailsOnEveryJobItWaitsFor` fails on any job in `needs` that the condition does not
+  test. On the old workflow it names the first three.
+- The smoke job's `.env` sets the MinIO and S3 credentials. `TestSmokeEnvSetsEveryRequiredComposeVariable`
+  fails on any variable the compose file requires that the job does not set. On the old workflow it
+  names all three.
+- `image-scan` uses `aquasecurity/trivy-action@v0.36.0`, a tag bound to an immutable release.
+
+**Not yet gated:** `docker-smoke` and `image-scan`. Neither has passed once, and the next layer of the
+full stack is probably F-025. Each should be gated after its first green run. `docker-smoke` should
+also run on pull requests, because a gate that runs only after merge gates nothing.
 
 ---
 
@@ -2582,7 +2727,7 @@ guide requires.
 **Owner** `semantic-modeler`, with `perf-cost-engineer` on the retention consequences.
 **Severity** high — it silently deletes data on the project's first superiority axis, and it makes a
 published correctness claim false for any day old enough to have been compacted.
-**Status** open. Not fixed here: `transforms/compaction/main.go` is on GRVX-1101 §4.3's do-not-touch
+**Status** resolved 2026-10-01 (DD-006). Originally: open. Not fixed here: `transforms/compaction/main.go` is on GRVX-1101 §4.3's do-not-touch
 list, and the fix is a schema decision, not a patch.
 
 ### Two defects, one function
@@ -2732,7 +2877,7 @@ a file that will drift again; this one did so for two fields without anyone noti
 **Found by** `senior-engineer` executing GRVX-1105, which removes a working endpoint's behaviour.
 **Owner** `sre-release-manager` (owns the changelog and semver policy) with `docs-engineer`.
 **Severity** medium — it is how a user finds out about a breaking change by hitting it.
-**Status** open. Not fixable inside any spec as written: `CHANGELOG.md` is outside §4.1/§4.2
+**Status** resolved 2026-10-01 (DD-024). Originally: open. Not fixable inside any spec as written: `CHANGELOG.md` is outside §4.1/§4.2
 everywhere, and §9's "No file outside §4.1/§4.2 modified" is a hard gate.
 
 ### What is wrong
@@ -2772,6 +2917,26 @@ make it self-enforcing, in the same spirit as `check-boundary`.
 Until then, the breaking change in GRVX-1105 is recorded here and in that spec's §11.5, which is the
 wrong place for a user to have to look.
 
+
+### Resolved 2026-10-01 — DD-024: the template asks, and a release cannot ship undescribed
+
+`[Unreleased]` was filled in after this entry was written, so the first of its three asks was
+already met. The other two are now done:
+
+- `docs/oss/specs/_TEMPLATE.md` §4.2 carries a `CHANGELOG.md` row to keep whenever a spec changes a
+  public endpoint, CLI flag, config key or output format. §9 asks for the entry or a stated reason
+  there is none.
+- `scripts/changelog_check.sh` fails unless `CHANGELOG.md` has a non-empty section for the version
+  being tagged, and `release.yml` runs it before anything is built. Two tests cover the script on
+  five fixtures and keep it in the workflow.
+
+`[Unreleased]` also gained this session's user-visible changes, under Added, Changed, Fixed and
+Security.
+
+One correction to the entry above. The trace receiver it describes was never in a tagged release:
+v1.0.0 had no OTLP endpoint and no gateway. So its removal breaks nobody upgrading from a release,
+only someone tracking `main`, and `[Unreleased]` already says the endpoint refuses traces.
+
 ---
 
 ## F-042 — the Spec Readiness Gate checks that paths are well-formed, not that they are right, and Phase 11 shows the cost
@@ -2781,7 +2946,7 @@ sequence, and reading GRVX-1108.
 **Owner** `senior-engineering-lead` (runs the gate) with `orchestrator` (could enforce it).
 **Severity** medium — no defect reached production, but every one cost an implementer a detour, and
 two of them would have produced a red build if followed literally.
-**Status** open.
+**Status** resolved 2026-10-01 (DD-012). Originally: open.
 
 ### The pattern
 
@@ -2840,6 +3005,23 @@ Two mechanical checks, both scriptable in the spirit of `check-boundary`:
 Neither replaces check 12. Both convert "the Lead read it carefully" into something that fails a
 build, which is the difference this project already relies on everywhere else.
 
+### Resolved 2026-10-01 — DD-012: both checks adopted, gating specs not yet dispatched
+
+`scripts/spec_lint.py` implements both, as **M1** and **M2**, and `make spec-lint` runs in CI on every
+pull request. They fail the build for specs marked `planned`, where a defect is still cheap, and only
+report for dispatched specs, whose defects are recorded here already. They are documented beside the
+twelve checks in `11-agent-loops.md` rather than renumbering them.
+
+M2 allows §2 as well as §4: a step that *reads* a context file is not a defect, and without that the
+check fired on GRVX-1107 §6 step 1's "read … in full".
+
+Run over the corpus, it reported drift in eighteen specs not marked `planned`, including two already
+registered (GRVX-1107's `enterprise.go`, SD-029; GRVX-1201's `pkg/notify/slack.go`, SD-031), five
+that name `services/gateway/` files the gateway refactor moved to `pkg/gatewaycore`, and GRVX-1305's
+§2, which named a `gateway_billing.go` that does not exist. GRVX-1305 is `blocked`, not dispatched, so
+that defect was caught before execution and corrected in the same change, leaving seventeen. The two `planned` specs pass. `TestSpecLintCatchesWhatTheGateMissed` reproduces SD-029's
+two defects in fixture specs and requires both to fail.
+
 ---
 
 ## F-043 — `pkg/tenantdb/postgres_test.go` has never run, in CI or anywhere else
@@ -2848,7 +3030,7 @@ build, which is the difference this project already relies on everywhere else.
 some suite.
 **Owner** `qa-engineer`, with `senior-engineering-lead` for the Postgres story.
 **Severity** medium — no defect is known to be hiding there, and nothing would have reported one.
-**Status** open. Not caused by GRVX-1206's partition; found by it.
+**Status** resolved 2026-10-01 (DD-025). Originally: open. Not caused by GRVX-1206's partition; found by it.
 
 ### What is true
 
@@ -2900,6 +3082,26 @@ nobody checks.
 `tests/devenv/suite_test.go` names `postgres || all` as a known exception with this finding's
 number, and fails on any **new** build tag that no suite opts into. A second file drifting out of
 both suites is now a red build; this one is a recorded decision waiting on a person.
+
+
+### Resolved 2026-10-01 — DD-025: option 1, the tests run against a real Postgres on every pull request
+
+Postgres is the backend production deployments use (`values-prod.yaml` sets `gateway.dbDriver:
+"postgres"`), so deleting its tests was never the right answer, and saying they are untested is
+weaker than testing them.
+
+The file was first run against a local Postgres 16. All sixteen tests passed on their first run.
+SD-013's `Restrict`, which only SQLite had covered, now runs on both backends through one shared
+check.
+
+- A `postgres` CI job runs `go test -tags=postgres ./pkg/tenantdb/...` against a `postgres:16-alpine`
+  service container, and fails if any test skips. The file's helper skips when it cannot reach a
+  server, and a skip there would be this finding again with a green tick on it.
+- `ci-summary` waits for the job and fails on it.
+- `tests/devenv/suite_test.go` no longer lists the file as a known exception. It now requires CI to
+  pass `-tags=postgres` for any file behind that tag. Removing the job fails it.
+
+The CI command, run locally against the same server: 107 tests passed and none skipped.
 
 ---
 
@@ -3394,7 +3596,7 @@ The output was accurate the whole time. Nobody was reading it.
 **Found by:** `security-engineer` executing GRVX-1503, enumerating identity assets
 **Affects:** `go.mod`, `docs-site/docs/getting-started.md`, `docs-site/docs/sdk-go.md`, `sdk/go/`
 **Severity:** high — the published install command resolves to an account this project does not control
-**Status:** open; needs an owner decision, recorded in `open-decisions.md`
+**Status:** open; the published commands are corrected (DD-013), and the name decision needs the owner
 
 ### What is true
 
@@ -3462,6 +3664,38 @@ option costs something different:
 
 Until one is chosen, the two published `go get` commands are wrong, and the docs should say so
 rather than print a command that cannot work.
+
+### Update 2026-10-01 — DD-013: the published pages no longer print a command that cannot work
+
+**What was worse than the finding said.** The install command was not the only thing wrong on
+`sdk-go.md`. The page documented `gravix.NewClient(gravix.Config{...})`, `client.Send`,
+`gravix.Fact`, `gravix.Middleware`, `GinMiddleware` and `EchoMiddleware`. None of them exist. The SDK
+exports `gravix.New` with functional options, `RecordFact`, `SendFact`, `RequestFact` and
+`HTTPMiddleware`, and has no Gin or Echo dependency at all. A user who got past the import path would
+have failed at the first line of code.
+
+The SDK also has its own module path, `github.com/gravix-io/gravix-go`, declared in `sdk/go/go.mod`.
+It is not the repository's path, so the page's `go get .../sdk/go` was wrong twice over. The Go module
+proxy reports no repository at `github.com/gravix-io/gravix-go`. Whether the `gravix-io` account
+exists, and who holds it, could not be checked from this session. Treat it as the same exposure as
+the root module's path until the owner confirms it.
+
+**What changed.**
+
+- `sdk-go.md` is rewritten from the SDK's exported API. Install is a clone plus `replace` directives,
+  which never fetch the module path and so cannot resolve to anybody else's code. The OpenTelemetry
+  exporter is its own module and gets its own `replace`.
+- `getting-started.md` uses the same install and links to the SDK page. Its clone URL, and
+  `deployment.md`'s, now name `lgreene03`.
+- `TestGoSDKDocsUseTheRealAPI` parses the SDK and fails if either page names an identifier it does not
+  export, or imports it by anything but the path in `sdk/go/go.mod`. With the old page restored it
+  reports sixteen failures.
+- Both install recipes were followed in a fresh module outside the repository and built.
+
+**What did not change, and why.** The module paths. Option 2 is still the recommendation, and it now
+covers two paths: the root module's and the SDK's. Choosing it means creating an organisation, which
+only the account owner can do. Option 1 would bake a personal account into every consumer's imports
+and then change them again when `succession.md` item 1 is done.
 
 ---
 
@@ -3686,3 +3920,118 @@ Two weaknesses, both fixed. `.mailmap` now folds **every** identity on `noreply@
 matches any `Claude <Family> <version>`. `TestMailmapFoldsEveryModelIdentity` runs
 `git check-mailmap` against a list of names, including one that does not exist yet, so it does not
 depend on which commits a checkout happens to hold. Restoring the one-name `.mailmap` fails it.
+
+---
+
+## F-056 — the benchmark's per-core ingest figure was a one-core rate divided by every core, and its "durable" append never synced
+
+**Found by** reading `bench/measure.go` while choosing GRVX-1005's reference machine
+**Affects** `bench/measure.go`, `bench/main.go`, G4.3, GRVX-1005 AC-1
+**Severity** high — the figure is the named arbiter of a public goal, and it was wrong in two
+directions at once
+**Status** fixed (DD-017)
+
+### What was wrong
+
+`measureIngest` read every fact file on one goroutine and wrote to a buffered file it flushed once at
+the end. `bench/main.go` then divided the rate by `machine.num_cpu`. Two errors, pulling opposite
+ways:
+
+- **The divisor.** One goroutine uses one core. Dividing its rate by four reports a quarter of a
+  one-core rate as a per-core rate. The committed result `bench/results/20260911T224752Z-small.json`
+  shows it: 215,709 events/sec on one goroutine, published in the result as 53,927 per core.
+- **The durability.** The README and the result's notes both said "appended to the durable buffer".
+  Nothing was durable until the final flush, and nothing was ever fsynced. The ingestion service
+  fsyncs every batch before it acknowledges, so the bench left out the one cost `batch.go` measures
+  as about 70% of a single-fact write.
+
+No published claim cites the old figure. G4.3 is recorded as not started, and GRVX-1005 AC-1 was not
+claimed. That is the only reason this is a finding and not a correctness defect.
+
+### Why it was not caught
+
+The bench tests checked that the stage refuses empty and corrupt input, and that the result has
+every field. Nothing checked what the divisor counted or whether the sink was synced. A per-core
+figure is a ratio, and no test looked at its denominator.
+
+### What changed
+
+- The ingest stage runs on `machine.num_cpu` workers, splitting the fact files between them, so the
+  divisor counts cores that did the work.
+- Every 512 appended facts, the shared buffer is flushed and fsynced under one lock, as the service's
+  group commit does at its default batch. The tail is synced before the clock stops.
+- `TestIngestIsDurableAtTheServiceBatchSize` runs one, three and eight workers. It requires every
+  fact in the sink exactly once, and one fsync per 512 facts plus one for the tail.
+  `TestBenchSyncsAtTheServiceBatchSize` fails if the bench's 512 drifts from the service's
+  `DefaultMaxBatchSize`. `TestBenchPerCoreDividesByTheWorkersItRan` fails if the worker count and the
+  divisor are not the same value.
+- Each guard was checked by mutation: no periodic sync, every worker reading every file, and one
+  worker in `main.go`. Each failed its test.
+
+The small scale on this environment's 4-core machine, after the fix:
+
+```
+ingest runs (events/sec): 295503.89, 310683.66, 295147.20
+ingest ran on 4 parallel workers, one per core, and fsynced the buffer every 512 facts
+total ingest throughput before dividing by 4 cores: 295504 events/sec
+ingest_events_per_sec_per_core: 73876
+```
+
+That is not the reference machine and is not a published figure. The figure still excludes HTTP,
+as the README says.
+
+---
+
+## F-057 — the full stack's object store image no longer exists on Docker Hub
+
+**Found by** the first `docker-smoke` run to get past F-026's `.env` error, on PR #24
+**Affects** `docker-compose.yml` (`minio`, `init-minio`), `deploy/gravix/values.yaml`
+**Severity** high — `docker compose up` on the full stack fails before any container starts
+**Status** fixed by building MinIO from source (DD-030); the next `docker-smoke` run confirms the stack boots
+
+### What happened
+
+```
+[1/8] Starting Docker Compose stack...
+Error response from daemon: pull access denied for minio/minio, repository does not exist or may
+require 'docker login': denied: requested access to the resource is denied
+```
+
+`https://hub.docker.com/v2/repositories/minio/minio/` returns 404. The repository the full stack and
+the Helm chart pull from is gone upstream, so every fresh `docker compose up` of the full stack has
+failed at the first image pull, whatever else was right.
+
+Nothing could have caught it. `docker-smoke` was the only job that pulls these images, it ran only on
+`main`, and since at least May it had stopped at the `.env` error before pulling anything (F-026).
+F-026 hid F-025, and both hid this.
+
+### What changed
+
+Both MinIO images now come from `quay.io/minio/`, MinIO's own registry, at the same pinned releases.
+It is the same software, so this is not a new dependency. Quay is unreachable from the environment
+where this was written, so the first `docker-smoke` run on the pull request is what confirms the tags
+exist there. If they do not, replacing MinIO with another S3 server is a new dependency, which is
+design tier.
+
+### Update 2026-10-01 — DD-030: Quay refuses too, so the stack builds MinIO from source
+
+The next `docker-smoke` run failed the same way one registry later:
+
+```
+Error response from daemon: unauthorized: access to the requested resource is not authorized
+```
+
+That is Quay's answer for a repository that is not public. MinIO has stopped publishing its
+community images to both registries, so changing registries cannot fix this.
+
+`deploy/minio/Dockerfile` builds the same two pinned releases, `minio` and `mc`, from source with
+`go install`, statically, into one Alpine image. Both compose services use it. Built here, `minio`
+took 1 minute 43 seconds, and `mc` 25 seconds. The source-built server and client were run against
+each other: `mc ready local` reported ready, `mc mb` created the bucket, and an object round-tripped.
+
+This is the same software at the same releases, so it is not a new dependency. The Helm chart's
+default values now name a locally built image, with the build command beside it. Both production
+values files already disable the bundled MinIO in favour of managed S3.
+
+Replacing MinIO with a maintained S3 server would be a new dependency, which is design tier. It is
+listed in `open-decisions.md` as the long-term answer for whoever owns the full stack.

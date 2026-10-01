@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -280,7 +281,7 @@ func TestCLISucceedsAndPrintsItsCaveats(t *testing.T) {
 // throughput.
 func TestIngestRejectsAnEmptyDataset(t *testing.T) {
 	empty := t.TempDir()
-	_, _, err := measureIngest(empty, filepath.Join(t.TempDir(), "sink.jsonl"))
+	_, _, err := measureIngest(empty, filepath.Join(t.TempDir(), "sink.jsonl"), 2)
 	if err == nil {
 		t.Fatal("measureIngest accepted a directory with no facts")
 	}
@@ -441,7 +442,7 @@ func TestIngestRejectsCorruptFacts(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "facts.jsonl"), []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			_, _, err := measureIngest(dir, filepath.Join(t.TempDir(), "sink.jsonl"))
+			_, _, err := measureIngest(dir, filepath.Join(t.TempDir(), "sink.jsonl"), 2)
 			if err == nil {
 				t.Fatalf("measureIngest accepted %s", name)
 			}
@@ -455,7 +456,7 @@ func TestIngestRejectsCorruptFacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "facts.jsonl"), []byte(valid+"\n\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rate, latencies, err := measureIngest(dir, filepath.Join(t.TempDir(), "sink.jsonl"))
+	rate, latencies, err := measureIngest(dir, filepath.Join(t.TempDir(), "sink.jsonl"), 2)
 	if err != nil {
 		t.Fatalf("measureIngest rejected a valid fact with a trailing blank line: %v", err)
 	}
@@ -773,11 +774,12 @@ func TestFileListingsAreDeterministic(t *testing.T) {
 	}
 }
 
-// TestHarnessLeavesNoStrayDirectories. recompute takes its lock on the local
-// filesystem relative to the working directory rather than through its store
-// (F-018), so an in-process rollup drops an empty ./warehouse wherever the
-// benchmark was started — including inside a clone of the repository. The
-// harness cleans up after itself; this is the guard that it still does.
+// TestHarnessLeavesNoStrayDirectories. recompute used to take its lock on the
+// local filesystem relative to the working directory rather than through its
+// store (F-018), so an in-process rollup dropped an empty ./warehouse wherever
+// the benchmark was started, including inside a clone of the repository. The
+// harness used to clean that up. Since F-018's fix the lock lives under the
+// store's root, and this guards that nothing reaches the working directory.
 func TestHarnessLeavesNoStrayDirectories(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -808,58 +810,6 @@ func TestHarnessLeavesNoStrayDirectories(t *testing.T) {
 			t.Errorf("the benchmark created %q in the working directory; it must write only "+
 				"inside its work directory", e.Name())
 		}
-	}
-}
-
-// TestRemoveStrayLockDirLeavesRealDataAlone. The cleanup must never delete a
-// warehouse that belongs to someone: it removes only empty directories, and
-// only when the path is relative, which is the shape recompute's lock takes.
-func TestRemoveStrayLockDirLeavesRealDataAlone(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage := t.TempDir()
-	if err := os.Chdir(stage); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(cwd) })
-
-	// A warehouse with real content in it.
-	occupied := filepath.Join("warehouse", "request_metrics_minute")
-	if err := os.MkdirAll(occupied, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(occupied, "data.parquet"), []byte("rows"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	removeStrayLockDir("warehouse", "request_metrics_minute")
-
-	if _, err := os.Stat(filepath.Join(occupied, "data.parquet")); err != nil {
-		t.Fatalf("the cleanup deleted a warehouse containing data: %v", err)
-	}
-
-	// An absolute path is not the lock's shape and must be left entirely alone.
-	absDir := filepath.Join(t.TempDir(), "warehouse")
-	if err := os.MkdirAll(filepath.Join(absDir, "request_metrics_minute"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	removeStrayLockDir(absDir, "request_metrics_minute")
-	if _, err := os.Stat(filepath.Join(absDir, "request_metrics_minute")); err != nil {
-		t.Errorf("the cleanup touched an absolute path: %v", err)
-	}
-
-	// And an empty one is removed, or the guard above would pass trivially.
-	if err := os.RemoveAll("warehouse"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(occupied, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	removeStrayLockDir("warehouse", "request_metrics_minute")
-	if _, err := os.Stat("warehouse"); !os.IsNotExist(err) {
-		t.Errorf("an empty stray warehouse was not removed")
 	}
 }
 
@@ -913,5 +863,74 @@ func TestNoCommittedResultIsFromADirtyTree(t *testing.T) {
 
 	if checked == 0 {
 		t.Error("no committed result files; GRVX-1001 §9 requires one --scale small result")
+	}
+}
+
+// TestIngestIsDurableAtTheServiceBatchSize is F-056's guard on the ingest
+// stage. Every fact from every file reaches the sink exactly once whatever the
+// worker count, and the sink is fsynced once per ingestSyncEvery facts plus once
+// for the tail, so durability is paid for at the service's rate.
+func TestIngestIsDurableAtTheServiceBatchSize(t *testing.T) {
+	dir := t.TempDir()
+	const files, perFile = 5, 260 // 1,300 facts: two full batches and a tail
+	want := map[string]bool{}
+	for f := 0; f < files; f++ {
+		var body strings.Builder
+		for i := 0; i < perFile; i++ {
+			id := fmt.Sprintf("0192f9a0-0000-7000-8000-%012d", f*perFile+i)
+			want[id] = true
+			fmt.Fprintf(&body, `{"event_id":"%s","event_time":"2026-03-02T00:00:00Z","service":"a","method":"GET","path_template":"/a/{id}","status_code":200,"latency_ms":5}`+"\n", id)
+		}
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("facts_%02d.jsonl", f)), []byte(body.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, workers := range []int{1, 3, 8} {
+		syncs := 0
+		orig := syncFile
+		syncFile = func(f *os.File) error { syncs++; return f.Sync() }
+		sinkPath := filepath.Join(t.TempDir(), "sink.jsonl")
+		_, latencies, err := measureIngest(dir, sinkPath, workers)
+		syncFile = orig
+		if err != nil {
+			t.Fatalf("workers=%d: %v", workers, err)
+		}
+
+		if len(latencies) != files*perFile {
+			t.Errorf("workers=%d: %d latencies for %d facts", workers, len(latencies), files*perFile)
+		}
+		if wantSyncs := files*perFile/ingestSyncEvery + 1; syncs != wantSyncs {
+			t.Errorf("workers=%d: %d fsyncs for %d facts, want %d (one per %d, plus the tail)",
+				workers, syncs, files*perFile, wantSyncs, ingestSyncEvery)
+		}
+
+		sink, err := os.ReadFile(sinkPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]int{}
+		for _, line := range strings.Split(strings.TrimSpace(string(sink)), "\n") {
+			var f struct {
+				EventID string `json:"event_id"`
+			}
+			if err := json.Unmarshal([]byte(line), &f); err != nil {
+				t.Fatalf("workers=%d: sink line %q: %v", workers, line, err)
+			}
+			seen[f.EventID]++
+		}
+		for id := range want {
+			if seen[id] != 1 {
+				t.Errorf("workers=%d: fact %s reached the sink %d times, want once", workers, id, seen[id])
+			}
+		}
+	}
+}
+
+// TestIngestRefusesZeroWorkers: the per-core figure divides by the worker
+// count, so zero must be an error rather than a division by zero.
+func TestIngestRefusesZeroWorkers(t *testing.T) {
+	if _, _, err := measureIngest(t.TempDir(), filepath.Join(t.TempDir(), "sink.jsonl"), 0); err == nil {
+		t.Fatal("measureIngest accepted zero workers")
 	}
 }

@@ -21,7 +21,7 @@ Gravix reports.
 
 ## 2. Context the implementer needs
 
-- Horizon 1 built Stripe integration under `pkg/billing/` and `services/gateway/gateway_billing.go`.
+- Horizon 1 built Stripe integration under `pkg/billing/` and `pkg/gatewaycore/gateway_billing.go` (moved from `services/gateway/` by the gateway refactor; corrected 2026-10-01, caught by spec-lint M1).
 - `GRVX-1304` provides tenant identity and lifecycle, including `Suspend` as a billing state that leaves data intact and exportable.
 - `GRVX-1303` provides degrade; billing itself must keep reading in `StateReadOnly` so a customer can see what they owe.
 - `docs/oss/01-competitive-thesis.md` §2 Axis 1 criticises cardinality-driven billing units. Gravix's own unit must therefore be a flat event count.

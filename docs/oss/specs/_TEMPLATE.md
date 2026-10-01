@@ -69,6 +69,7 @@ crossed.>
 | Path | Change |
 |---|---|
 | `exact/path.go` | <exactly what changes> |
+| `CHANGELOG.md` | An `[Unreleased]` entry. Keep this row whenever the spec changes a public endpoint, CLI flag, config key or output format, and delete it only when it changes none of them (F-041) |
 
 ### 4.3 Files to NOT touch
 
@@ -145,6 +146,7 @@ make build-oss && make test-oss
 - [ ] `make build-oss && make test-oss` pass with `ee/` deleted
 - [ ] No file outside §4.1/§4.2 modified
 - [ ] `docs-engineer` delta merged, or `NO DOCS DELTA REQUIRED` accepted
+- [ ] `CHANGELOG.md` `[Unreleased]` entry added, or `NO CHANGELOG ENTRY: <why no public surface changed>`
 - [ ] Zero new skipped or quarantined tests
 - [ ] <spec-specific item>
 
