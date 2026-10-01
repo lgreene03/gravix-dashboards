@@ -480,3 +480,19 @@ reference machine's small-scale result committed under `bench/results/`.
 
 **To reverse.** Restore the old tables from git. They over-provision, so reversing is safe but
 wasteful.
+
+## DD-024 — F-041: a changelog row in the spec template, and a release gate on the changelog
+
+**Date** 2026-10-01 · **Tier** routine (process tooling) · **Finding** F-041
+
+**Options.** Rely on the release manager to fill the changelog by hand; or put the question in the
+spec template and refuse a release the changelog does not describe.
+
+**Chosen.** Both mechanisms. The template is where an implementer learns what to touch, so the
+question belongs there. The gate makes the last line of defence mechanical, in the same spirit as
+`check-boundary`.
+
+**Done.** The template's §4.2 row and §9 item, `scripts/changelog_check.sh`, its step in
+`release.yml`, two tests, and this session's entries under `[Unreleased]`.
+
+**To reverse.** Remove the release step. The template row is harmless on its own.

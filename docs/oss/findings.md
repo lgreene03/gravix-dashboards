@@ -2877,7 +2877,7 @@ a file that will drift again; this one did so for two fields without anyone noti
 **Found by** `senior-engineer` executing GRVX-1105, which removes a working endpoint's behaviour.
 **Owner** `sre-release-manager` (owns the changelog and semver policy) with `docs-engineer`.
 **Severity** medium — it is how a user finds out about a breaking change by hitting it.
-**Status** open. Not fixable inside any spec as written: `CHANGELOG.md` is outside §4.1/§4.2
+**Status** resolved 2026-10-01 (DD-024). Originally: open. Not fixable inside any spec as written: `CHANGELOG.md` is outside §4.1/§4.2
 everywhere, and §9's "No file outside §4.1/§4.2 modified" is a hard gate.
 
 ### What is wrong
@@ -2916,6 +2916,26 @@ make it self-enforcing, in the same spirit as `check-boundary`.
 
 Until then, the breaking change in GRVX-1105 is recorded here and in that spec's §11.5, which is the
 wrong place for a user to have to look.
+
+
+### Resolved 2026-10-01 — DD-024: the template asks, and a release cannot ship undescribed
+
+`[Unreleased]` was filled in after this entry was written, so the first of its three asks was
+already met. The other two are now done:
+
+- `docs/oss/specs/_TEMPLATE.md` §4.2 carries a `CHANGELOG.md` row to keep whenever a spec changes a
+  public endpoint, CLI flag, config key or output format. §9 asks for the entry or a stated reason
+  there is none.
+- `scripts/changelog_check.sh` fails unless `CHANGELOG.md` has a non-empty section for the version
+  being tagged, and `release.yml` runs it before anything is built. Two tests cover the script on
+  five fixtures and keep it in the workflow.
+
+`[Unreleased]` also gained this session's user-visible changes, under Added, Changed, Fixed and
+Security.
+
+One correction to the entry above. The trace receiver it describes was never in a tagged release:
+v1.0.0 had no OTLP endpoint and no gateway. So its removal breaks nobody upgrading from a release,
+only someone tracking `main`, and `[Unreleased]` already says the endpoint refuses traces.
 
 ---
 
