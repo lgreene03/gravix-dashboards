@@ -1653,7 +1653,7 @@ GRVX-1101 §5 and §6 amended. Recorded in `delegated-decisions.md` DD-004.
 **Affects:** GRVX-1102 §5.4, §6 step 7, §6.1 (a missing row), AC-1
 **Severity:** medium — the shipped compose files are unaffected; a legacy `API_KEY` deployment is
 totally broken
-**Status:** open; returned as `SPEC DEFECT: §5.4 — tenant_id is required, but §6 step 7 says it is
+**Status:** resolved 2026-10-01 (DD-026). Originally: open; returned as `SPEC DEFECT: §5.4 — tenant_id is required, but §6 step 7 says it is
 empty in legacy single-key mode`.
 
 ### The contradiction
@@ -1692,6 +1692,23 @@ Either remote-write requires a multi-tenant deployment and §6 step 7's parenthe
 should be removed — with the endpoint returning a clear 400 in legacy mode rather than a 500 — or
 `tenant_id` is not required and `ErrExternalMetricMissingTenant` should be deleted from §5.4 rather
 than left unenforced.
+
+
+### Decided 2026-10-01 — DD-026: external metrics require a tenant, and legacy mode is refused with a 400
+
+The rule stays and the parenthetical goes. `tenant_id` remains required, because it is the guard
+that stops a multi-tenant regression from writing samples into the shared single-tenant layout.
+Both metric endpoints, `/api/v1/remote_write` and `/v1/metrics`, now refuse a request with no tenant
+before validating anything. They answer 400 with a message that names `TENANT_DB_PATH`.
+
+The status code matters more than it looks. Prometheus retries a 5xx forever, so the old 500 filled
+a legacy deployment's write-ahead log with samples that could never be accepted. A 4xx is dropped and
+logged on the sender's side.
+
+`TestExternalMetricsRefuseLegacySingleKeyMode` replaces the test that pinned the 500. It covers both
+endpoints, requires the message to name the fix, and requires nothing to be persisted. Removing the
+check from the OTLP handler fails it: an empty OTLP payload even answered 204 in legacy mode. GRVX-1102
+§6 step 7 and both specs' §6.1 tables are amended.
 
 ---
 

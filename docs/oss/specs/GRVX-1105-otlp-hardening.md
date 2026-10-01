@@ -362,6 +362,7 @@ buffer fullness is irrelevant to them, and applying it would make an unrelated s
 | A data point (or the merged `service_name`) has a `trace_id`/`span_id`/`parent_span_id` attribute (any case) | 400 | `label carries tracing correlation data, which gravix does not ingest (see docs/04-non-goals.md §1): <key>` |
 | A data point has neither `asDouble` nor `asInt`, or an unparseable `timeUnixNano` | 400 | `metric "<name>": data point missing asDouble/asInt, or has an invalid or missing timeUnixNano` |
 | Cardinality budget exceeded for any data point | 400 | `cardinality budget exceeded: tenant=<t> metric=<m> limit=2000 distinct label-sets per day` |
+| `/v1/metrics` with no tenant: legacy single-key mode | 400 | `external metrics need a tenant database: set TENANT_DB_PATH. Legacy single-key mode (API_KEY alone) stores request facts but not external metrics` (added 2026-10-01, SD-027) |
 | Durable write fails | 500 | `failed to persist external metric sample` |
 
 ## 7. Acceptance criteria

@@ -59,6 +59,7 @@ Nothing below has shipped in a tagged release yet.
 - **The cron rollup and `gravix recompute` could write one partition at once** — their locks were in different places. Both now take the same lock, found through the store rather than the working directory (F-018)
 - **Every date-ranged dashboard query failed on the DuckDB stack**, and the dashboard showed it as no data (F-053)
 - **The benchmark's per-core ingest figure was a one-core rate divided by every core**, and its durable buffer was never fsynced (F-056)
+- **Metric writes in legacy single-key mode answered 500**, which Prometheus retries forever. They now answer 400 and name the setting that enables them, `TENANT_DB_PATH` (SD-027)
 - **The Postgres backend's tests had never run** — they now run against a real Postgres on every pull request (F-043)
 - **The Go SDK page documented an API that does not exist** — rewritten from the SDK's exports, with an install that works today (F-050)
 

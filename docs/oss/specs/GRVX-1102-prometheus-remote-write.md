@@ -302,7 +302,7 @@ var (
    `ExternalMetricSample`:
    - `SampleId`: `uuid.NewV7()` (as used at `services/ingestion/main_test.go:59`).
    - `SampleTime`: `time.UnixMilli(sample.Timestamp).UTC()`.
-   - `TenantId`: the request's tenant ID (empty string in legacy single-key mode).
+   - `TenantId`: the request's tenant ID. It is never empty: a request with no tenant, which is every request in legacy single-key mode, is refused before this step (§6.1; amended 2026-10-01, SD-027).
    - `Source`: `"prometheus_remote_write"`.
    - `MetricName`: the series' `__name__` value.
    - `Labels`: the series' label map with `__name__` removed.
@@ -332,6 +332,7 @@ var (
 | Any series carries an exemplar | 400 | `exemplars are rejected: gravix does not ingest distributed tracing signals (see docs/04-non-goals.md §1)` |
 | A label named `trace_id`/`span_id`/`parent_span_id` (any case) | 400 | `label carries tracing correlation data, which gravix does not ingest (see docs/04-non-goals.md §1): <label>` |
 | Cardinality budget exceeded for any series | 400 | `cardinality budget exceeded: tenant=<t> metric=<m> limit=2000 distinct label-sets per day` |
+| No tenant: legacy single-key mode (`API_KEY` without `TENANT_DB_PATH`) | 400 | `external metrics need a tenant database: set TENANT_DB_PATH. Legacy single-key mode (API_KEY alone) stores request facts but not external metrics` (added 2026-10-01, SD-027) |
 | Durable write fails | 500 | `failed to persist external metric sample` |
 
 ## 7. Acceptance criteria

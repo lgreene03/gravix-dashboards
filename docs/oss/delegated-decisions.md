@@ -511,3 +511,19 @@ Skips fail the job, because a skip is exactly how this file stayed silent.
 test's rule that a tagged file needs a CI job passing its tag.
 
 **To reverse.** Remove the job, and restore the suite test's known exception for the file.
+
+## DD-026 — SD-027: external metrics require a tenant; legacy single-key mode gets a 400
+
+**Date** 2026-10-01 · **Tier** routine (spec correction and bug fix) · **Spec** GRVX-1102, GRVX-1105
+
+**Options.** Drop the `tenant_id` rule so legacy mode writes to the single-tenant layout; or keep the
+rule and refuse legacy-mode writes with a clear 4xx.
+
+**Chosen.** Keep the rule and refuse. The rule is the guard against a multi-tenant bug writing into
+the shared layout. Legacy mode is the older configuration, and the shipped stacks all set
+`TENANT_DB_PATH`. The old 500 was the worst of both, because Prometheus retries a 500 indefinitely.
+
+**Done.** One shared refusal in both handlers, a test over both endpoints, and the two specs amended.
+
+**To reverse.** Remove the `tenant_id` rule from `ValidateExternalMetricSample` and the refusal from
+both handlers. Legacy-mode samples then land in `external_metrics` beside single-tenant facts.
