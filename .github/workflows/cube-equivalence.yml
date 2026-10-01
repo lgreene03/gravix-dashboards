@@ -1,0 +1,89 @@
+name: cube-equivalence
+
+# Before Cube's version changes, the same questions asked of the same warehouse
+# must get the same answers. F-060 found the pinned Cube stalls on concurrent
+# first queries and a later one does not; this is the other half of the case
+# for upgrading. It starts the bootstrap stack on the pinned Cube, waits for
+# data, stops everything that writes, asks scripts/cube_equivalence.py's
+# queries, swaps only the Cube container for the candidate, asks again, and
+# compares. Dispatched by hand: a measurement, not a gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Cube image to compare with the pinned one
+        required: true
+        default: cubejs/cube:v1.7.48
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      COMPOSE_FILE: docker-compose.bootstrap.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the bootstrap stack on the pinned Cube
+        run: |
+          docker compose up -d --build
+          docker inspect -f '{{.Config.Image}}' gravix-cube
+          for _ in $(seq 1 120); do
+            curl -sf http://localhost:4000/readyz >/dev/null 2>&1 \
+              && curl -sf http://localhost:8091/live >/dev/null 2>&1 && exit 0
+            sleep 5
+          done
+          docker compose ps -a
+          exit 1
+
+      # The tenant the dashboard's queries are scoped to is the directory the
+      # rollup files its metrics under, which exists once a rollup has run.
+      - name: Wait for a rollup, then stop everything that writes
+        run: |
+          for _ in $(seq 1 80); do
+            tenant="$(docker compose exec -T gateway sh -c \
+              'for d in /app/data/warehouse/*/; do [ -d "$d/request_metrics_minute" ] && basename "$d" && break; done' \
+              2>/dev/null || true)"
+            [ -n "$tenant" ] && break
+            sleep 10
+          done
+          [ -n "$tenant" ] || { echo "::error::no rollup output within the wait"; exit 1; }
+          echo "TENANT_ID=$tenant" >> "$GITHUB_ENV"
+          # Rollups first, so none is cut off by losing its input.
+          docker compose stop request-metrics-rollup service-events-rollup purge synthetic-traffic ingestion
+
+      - name: Ask the pinned Cube
+        run: |
+          export SECRET="$(docker compose exec -T gateway cat /app/data/jwt_secret.txt | tr -d '[:space:]')"
+          python3 scripts/cube_equivalence.py capture "$RUNNER_TEMP/pinned.json"
+
+      - name: Swap Cube for the candidate
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          printf 'services:\n  cube:\n    image: "%s"\n' "$CANDIDATE" > "$RUNNER_TEMP/candidate.yml"
+          docker compose -f docker-compose.bootstrap.yml -f "$RUNNER_TEMP/candidate.yml" up -d --no-deps cube
+          docker inspect -f '{{.Config.Image}}' gravix-cube
+          for _ in $(seq 1 90); do
+            curl -sf http://localhost:4000/readyz >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          docker compose logs --tail=40 cube
+          exit 1
+
+      - name: Ask the candidate the same questions
+        run: |
+          export SECRET="$(docker compose exec -T gateway cat /app/data/jwt_secret.txt | tr -d '[:space:]')"
+          read -r from to < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["range"])' "$RUNNER_TEMP/pinned.json")
+          python3 scripts/cube_equivalence.py capture "$RUNNER_TEMP/candidate.json" --range "$from" "$to"
+
+      - name: Compare
+        run: python3 scripts/cube_equivalence.py compare "$RUNNER_TEMP/pinned.json" "$RUNNER_TEMP/candidate.json"
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
