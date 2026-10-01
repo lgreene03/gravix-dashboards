@@ -4,9 +4,13 @@
 package governance
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +56,61 @@ func TestBenchPerCoreDividesByTheWorkersItRan(t *testing.T) {
 	}
 	if !divide {
 		t.Error("bench/main.go does not divide the ingest rate by machine.NumCPU")
+	}
+}
+
+// TestIngestThroughputTarget is GRVX-1005 AC-1: sustained ingest of at least
+// 20,000 events/sec/core on the reference machine, a GitHub-hosted ubuntu-24.04
+// runner (DD-018), as measured by the `bench` workflow at standard scale.
+//
+// It reads the newest committed standard-scale result rather than measuring,
+// because the claim is about the reference machine and a contributor's laptop
+// is not one. A result only counts if it was measured the way F-056 fixed the
+// measurement: one worker per core, fsyncing at the service's batch size. An
+// older result passed by dividing a one-core rate by every core.
+//
+// The figure excludes HTTP framing, as the result's own notes say. It is the
+// per-fact work Gravix does: decode, validation and the durable append.
+func TestIngestThroughputTarget(t *testing.T) {
+	const target = 20000.0
+
+	matches, err := filepath.Glob(filepath.Join(repoRoot(t), "bench", "results", "*-standard.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("no standard-scale result in bench/results; run the bench workflow at standard scale and commit its result")
+	}
+	sort.Strings(matches) // timestamped names sort by time
+	newest := matches[len(matches)-1]
+
+	raw, err := os.ReadFile(newest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Machine struct {
+			OS        string `json:"os"`
+			NumCPU    int    `json:"num_cpu"`
+			Container bool   `json:"container"`
+		} `json:"machine"`
+		Ingest float64  `json:"ingest_events_per_sec_per_core"`
+		Notes  []string `json:"notes"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatalf("%s: %v", newest, err)
+	}
+
+	notes := strings.Join(res.Notes, "\n")
+	workers := fmt.Sprintf("ingest ran on %d parallel workers, one per core", res.Machine.NumCPU)
+	if !strings.Contains(notes, workers) || !strings.Contains(notes, "fsynced the buffer every 512 facts") {
+		t.Fatalf("%s was not measured as F-056 requires (one worker per core, fsync per service batch); it cannot stand for AC-1",
+			filepath.Base(newest))
+	}
+	if res.Machine.OS != "linux" || res.Machine.Container {
+		t.Fatalf("%s is not from the reference machine (linux, not a container)", filepath.Base(newest))
+	}
+	if res.Ingest < target {
+		t.Errorf("%s: %.0f events/sec/core, under GRVX-1005's %.0f", filepath.Base(newest), res.Ingest, target)
 	}
 }

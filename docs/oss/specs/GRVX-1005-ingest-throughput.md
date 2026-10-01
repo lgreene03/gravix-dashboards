@@ -251,3 +251,29 @@ measured end to end on the reference machine, which does not exist, and this fig
 Each was mutation-tested: bypassing the batcher fails the first and AC-7; releasing the lock between
 a batch's write and its fsync fails the rotation test; moving the enqueue back outside the lock
 fails the race test when a yield is placed at the race point.
+
+### 11.2 AC-1 measured on the reference machine (2026-10-01)
+
+DD-018 named the reference machine, a GitHub-hosted `ubuntu-24.04` runner, and F-056 fixed how the
+bench measures ingest. The `bench` workflow then ran at standard scale on `main` at `63f7a48`:
+
+| Field | Value |
+|---|---|
+| `ingest_events_per_sec_per_core` | **73,868** (target ≥20,000) |
+| `ingest_p99_latency_ms` | 0.027 |
+| Runs, total events/sec | 292,387, 295,472, 297,237 |
+| Machine | AMD EPYC 7763, 4 cores, one worker per core, fsync every 512 facts |
+
+The result is `bench/results/20261001T183020Z-standard.json`. `TestIngestThroughputTarget` reads the
+newest standard-scale result and fails if it is under 20,000, or if it was not measured with one
+worker per core and the service's fsync batch, which an older, invalid result was not (F-056).
+Mutation-tested both ways.
+
+**What the figure covers.** It excludes HTTP framing, as the result's own notes say: it is decode,
+schema validation and the durable-buffer append, which is the per-fact work. §8 names the bench as
+the arbiter, so AC-1 passes as written. A claim that a deployed ingestion service sustains this rate
+over HTTP would need an HTTP load driver, which §4.1's `bench/ingest/ingest.go` was meant to be and
+which was not built. No public claim cites the figure.
+
+`scripts/perf_baseline.json` records the achieved figures beside its regression bounds, which stay
+empty until `perf-cost-engineer` has reviewed more than one standard-scale run.
