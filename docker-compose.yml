@@ -5,6 +5,24 @@ networks:
     driver: bridge
 
 services:
+  # The one privileged container in this stack, for the reason the bootstrap
+  # stack has bootstrap-init (F-021): ./data is gitignored, so on a fresh clone
+  # Docker creates it as root:root, and every Gravix image runs as the non-root
+  # `gravix` user, so none could write it. This fixes the ownership once and
+  # exits (F-025). Every service that mounts ./data waits for it; the
+  # long-running services stay non-root.
+  data-init:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-data-init
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown -R gravix:gravix /app/data"]
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+
   ingestion:
     build:
       context: .
@@ -30,6 +48,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     healthcheck:
@@ -60,6 +80,8 @@ services:
       - RAW_DATA_DIR=/app/data/raw
       - INGESTION_URL=http://ingestion:8080
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       cube:
         condition: service_healthy
     healthcheck:
@@ -234,6 +256,8 @@ services:
       - ./cube/model:/cube/conf/model
       - ./data:/cube/data:ro
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       trino:
         condition: service_healthy
     healthcheck:
@@ -319,6 +343,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 512m
@@ -360,6 +386,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 512m
@@ -401,6 +429,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 512m
@@ -440,6 +470,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     mem_limit: 256m

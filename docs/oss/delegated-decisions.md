@@ -404,3 +404,20 @@ when there is a first real scan to look at.
 
 **To reverse.** Remove `docker-build` and the three jobs from the failure condition. The guard test
 will then fail, by design.
+
+## DD-020 — F-025: port the bootstrap stack's init container, and boot the full stack on pull requests
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Finding** F-025
+
+**Options.** Keep waiting; set `user: root` on the services that write `./data`; or port the
+bootstrap stack's one-shot init container.
+
+**Chosen.** Port the init container. F-025 said to port it the moment it was seen working, and it has
+worked on every green onboarding run since 2026-09-14. Running the services as root would fix the
+symptom by giving up the reason the images run as `gravix`. `docker-smoke` also runs on pull requests
+now, because the full stack had no other check before merge.
+
+**Done.** `data-init` in `docker-compose.yml`, the dependencies, a guard test, and the
+`docker-smoke` trigger.
+
+**To reverse.** Remove `data-init` and its dependencies. Fresh clones then fail as F-025 describes.

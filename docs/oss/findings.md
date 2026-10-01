@@ -1331,7 +1331,7 @@ rewritten from a byte-scan to an AST check.
 `docker-compose.yml`, rather than waiting to be told.
 **Severity** high — `docker compose up -d --build` on the full stack, from a fresh clone, should fail
 the same way the bootstrap stack did.
-**Status** open, deliberately unfixed. See "Why this is recorded and not patched" below.
+**Status** fix ported (DD-020); the first full-stack boot on a pull request will confirm it.
 
 **F-021 applies.** Verified, not inferred:
 
@@ -1376,6 +1376,23 @@ common cause is unchanged and is not about any individual defect: `docker-smoke`
 before GRVX-910. The argument that produced `timed-onboarding` — *a gate that only runs after merge
 gates nothing* — applies unchanged to `docker-smoke`, and the evidence for it is now four findings
 deep.
+
+### Update 2026-10-01 — DD-020: the fix is ported, and the full stack now boots on pull requests
+
+The condition this entry waited on has been met. The bootstrap stack's chown init container has
+worked on every green `timed-onboarding` run since 2026-09-14, across the same three images the full
+stack uses.
+
+- `docker-compose.yml` gains `data-init`, a one-shot root container built from the rollup image. It
+  runs `chown -R gravix:gravix /app/data` and exits. The six services that write `./data`, and Cube,
+  which reads it, wait for it with `service_completed_successfully`.
+- `TestFullStackOwnsItsDataDirectory` fails if any service that mounts `./data` does not wait for it,
+  or if `data-init` stops chowning as root. Removing the gateway's dependency fails it.
+- `docker-smoke` now runs on pull requests, which this entry's last paragraph asked for. It is not
+  yet in `ci-summary` (DD-019), so its first results are evidence, not a gate.
+
+Whether the full stack boots is still unobserved. The first `docker-smoke` run past F-026's `.env`
+error will say.
 
 ## F-026 — `ci-summary` reports success while `docker-smoke` and `docker-build` fail, and both have been failing on `main` for months
 

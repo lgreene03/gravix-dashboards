@@ -722,7 +722,9 @@ jobs:
   docker-smoke:
     runs-on: ubuntu-latest
     needs: [build, docker-lint]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Runs on pull requests too. It was main-only, and a gate that runs only
+    # after merge gates nothing: the full stack went unbooted from May to
+    # October 2026 while the summary stayed green (F-025, F-026).
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

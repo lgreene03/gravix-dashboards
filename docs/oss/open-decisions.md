@@ -69,8 +69,7 @@ a rollup in, so the models now declare none.
 That removes the F-037 decision from this page. It does not make the job green — that still needs a
 Docker daemon, and nothing below should be assumed cleared until CI says so.
 
-- **F-025** *(high)* — the full stack has F-021 too, and the fix is the chown init container that has
-  not yet been observed working. Porting it now would be guessing twice.
+- **F-025** *(high)* — *fix ported (DD-020).* The bootstrap stack's init container is now in the full stack, and `docker-smoke` boots the full stack on every pull request. Its first run past F-026's `.env` error will confirm the fix.
 - **GRVX-1003** — *`partial`; decided as far as one maintainer can (DD-014).* The 120 bytes/event target stands, because it is reachable: gzip on raw facts gives 35.59. That change is RFC 0003, design tier, listed under Decisions above. The §5.2 Parquet encodings stay pinned in `pkg/encoding` and unapplied, because they act on 2.89 bytes/event and cannot move the total. See SD-055.
 - **GRVX-1006** — *no longer blocked; now `partial`.* SD-024 was decided on 2026-10-01 (DD-008)
   after measuring with a real Cube on the bootstrap stack's limits: no pre-aggregations, warm p95
