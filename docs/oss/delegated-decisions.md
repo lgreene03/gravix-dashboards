@@ -527,3 +527,22 @@ the shared layout. Legacy mode is the older configuration, and the shipped stack
 
 **To reverse.** Remove the `tenant_id` rule from `ValidateExternalMetricSample` and the refusal from
 both handlers. Legacy-mode samples then land in `external_metrics` beside single-tenant facts.
+
+## DD-027 — SD-028: one `make proto` target that reproduces the tracked generated files
+
+**Date** 2026-10-01 · **Tier** routine (tooling and documentation) · **Spec** GRVX-1102
+
+**Options.** Correct the command in `CLAUDE.md`; or encode the whole procedure, including the
+licence header, in a make target and document that.
+
+**Chosen.** The make target. The procedure has three parts, the module flag, both proto files and
+the header, and a command in a document drops whichever part its reader forgets.
+
+**Done.** `make proto`, `CLAUDE.md`, and GRVX-1102's three references, verified against the tracked
+files.
+
+**Not decided, and why.** A CI check that `gen/` matches `proto/`. It needs a pinned `protoc` in CI,
+because the generated header names the `protoc` version. That is a toolchain choice for whoever owns
+CI images.
+
+**To reverse.** Remove the target and restore the old line in `CLAUDE.md`.

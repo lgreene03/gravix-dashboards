@@ -1717,7 +1717,7 @@ check from the OTLP handler fails it: an empty OTLP payload even answered 204 in
 **Found by:** `senior-engineer` executing GRVX-1102
 **Affects:** GRVX-1102 §2, §4.2, §8 step 2; `CLAUDE.md`'s "Regenerate protobuf code" command
 **Severity:** medium — silently produces no change, which is worse than failing
-**Status:** open; returned as `SPEC DEFECT: §4.2 — the named command writes to gen/proto/, not
+**Status:** resolved 2026-10-01 (DD-027). Originally: open; returned as `SPEC DEFECT: §4.2 — the named command writes to gen/proto/, not
 gen/gravix/v1/`.
 
 ### What the spec says
@@ -1753,6 +1753,21 @@ how a generated file stays behind its source for that long. `CLAUDE.md` calls `p
 the source of truth; the command beneath it does not keep the derived file in step.
 
 `CLAUDE.md` is outside §4.1/§4.2, so it was not edited. Fixing the command there is the actual repair.
+
+
+### Resolved 2026-10-01 — DD-027: `make proto`, verified against the tracked files
+
+`make proto` now runs the module-flag command over both `.proto` files and restores the licence
+header the tracked files carry. `CLAUDE.md` documents it instead of the `paths=source_relative`
+command. GRVX-1102 §2, §4.2 and §8 are amended to match.
+
+Both commands were run, in a copy of `proto/` outside the repository. The old one wrote
+`gen/proto/gravix.pb.go`, as this entry said. `make proto` reproduced
+`gen/gravix/v1/gravix.pb.go` and `gen/remotewrite/v1/remote_write.pb.go` with no differing line
+except the comment that names the `protoc` version. A second run left the header single.
+
+There is still no CI check that the generated files match `proto/`. One needs a pinned `protoc`,
+because the version comment differs between releases. It is noted in DD-027 rather than built here.
 
 ---
 

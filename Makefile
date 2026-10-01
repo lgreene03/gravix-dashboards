@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check pricing-page pricing-check relnotes bench build-ee spec-status-check spec-lint incident-audit supported-versions supported-versions-check charter-evidence bus-factor verify-custody
+.PHONY: proto build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check pricing-page pricing-check relnotes bench build-ee spec-status-check spec-lint incident-audit supported-versions supported-versions-check charter-evidence bus-factor verify-custody
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -147,6 +147,23 @@ contracts-check: ## Fail if the generated doc is stale
 # docs/oss/rfcs/index.md is generated from the RFCs. rfc-check is what stops the
 # decision log drifting from the decisions it claims to record, and what enforces
 # the comment window and approval count charter §6 requires.
+
+# The generated Go code lives under gen/<package>/v1/, so protoc needs the
+# module flag. paths=source_relative, which CLAUDE.md used to document, writes
+# gen/proto/*.pb.go instead: a path nothing imports, hidden by the /gen ignore
+# rule, so the tracked files silently stayed behind proto/ (SD-028, F-040).
+# The licence header is added back after generation. New files under gen/ need
+# `git add -f`, because /gen is ignored.
+PROTO_FILES := proto/gravix.proto proto/remote_write.proto
+PROTO_OUT := gen/gravix/v1/gravix.pb.go gen/remotewrite/v1/remote_write.pb.go
+proto: ## Regenerate gen/ from proto/ (needs protoc and protoc-gen-go)
+	protoc --go_out=./gen --go_opt=module=github.com/lgreene/gravix-dashboards/gen $(PROTO_FILES)
+	@for f in $(PROTO_OUT); do \
+	  if ! head -1 "$$f" | grep -q '^// Copyright'; then \
+	    { printf '// Copyright 2026 The Gravix Authors\n// SPDX-License-Identifier: Apache-2.0\n\n'; cat "$$f"; } > "$$f.tmp"; \
+	    mv "$$f.tmp" "$$f"; \
+	  fi; \
+	done
 
 rfc-index: ## Regenerate docs/oss/rfcs/index.md from docs/oss/rfcs/
 	go run ./pkg/rfc/cmd/gen -in docs/oss/rfcs -out docs/oss/rfcs/index.md
