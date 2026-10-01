@@ -68,6 +68,7 @@ would have made the licence diff unreadable.
 **Found by:** `senior-engineer` executing GRVX-802
 **Owner:** `senior-engineering-lead`
 **Severity:** medium — a scheduled job that silently does nothing
+**Status:** resolved 2026-10-01 (DD-015)
 
 `transforms/compaction/main.go` finds files to merge with `parseWarehouseKey`, which accepts only
 the **flat** warehouse layout:
@@ -121,6 +122,28 @@ this fix and fixing it cannot reintroduce a non-deterministic metric key. What r
 event tables: `service_events_daily` and `service_events_detail` write a UUID-named file per run into
 partitioned directories, and compaction still cannot see them. That is a data-movement change with
 its own dry-run and rollback story, as this entry says, and it is not decided here.
+
+### Resolved 2026-10-01 — DD-015: no partitioned table accumulates files, so there is nothing to merge
+
+The update above assumed the event tables gather a file per run. They do not. Both event transforms
+write the day's new file, then delete every other file in that partition, so a partition holds one
+file after every successful run. `TestProcessDay_Idempotency` in each transform runs it twice and
+requires exactly one file. The metric table has one deterministic file per partition, written by
+recompute alone since DD-006.
+
+So compaction not seeing the Hive layout costs nothing: there is never a second file to merge.
+Teaching it the layout would add a data-movement path whose every run is a no-op, and it would
+rename one file to a UUID name for no gain. It stays as it is. `TestWarehouseKeysAreFlatLayoutOnly`
+now pins intended behaviour rather than a known gap. Compaction's warehouse path still merges
+flat-layout event files written before Phase 5.
+
+Two consequences, recorded rather than acted on:
+
+- **The criterion GRVX-810 was told to hold open is moot.** "Compaction merges a real Hive partition
+  and its manifest survives" cannot occur. Metric partitions are never compacted, and the event
+  tables write no manifests.
+- **Compaction's merged-manifest code has no production input.** It is tested at the function level
+  and is harmless. Removing it is a separate clean-up, not this finding's.
 
 ---
 

@@ -301,3 +301,21 @@ records each criterion's state. SD-055 and `open-decisions.md` updated.
 truth, which is design tier, and needs two maintainer approvals. The project has one.
 
 **To reverse.** Withdraw RFC 0003, and execute GRVX-1003 §6 step 3 from `pkg/encoding`'s table.
+
+## DD-015 — F-003: compaction stays blind to the Hive layout, because nothing there needs merging
+
+**Date** 2026-10-01 · **Tier** routine (finding resolution) · **Finding** F-003
+
+**Options.** Teach `parseWarehouseKey` the Hive layout for the event tables, with the dry-run and
+rollback story F-003 asked for; or show that no partitioned table accumulates files and close it.
+
+**Chosen.** Close it. Each event transform writes the day's file and deletes the rest of the
+partition, so a partition holds one file after every run. The existing idempotency test in each
+transform requires that, and removing the delete fails it. A compaction path for these tables would
+be a data-movement change whose every run merges one file into itself.
+
+**Done.** F-003 marked resolved, with the two consequences recorded: GRVX-810's held-open criterion
+cannot occur, and compaction's merged-manifest code has no production input.
+
+**To reverse.** Reopen F-003 if any warehouse writer starts appending a file per run instead of
+replacing the partition. The idempotency tests are the tripwire.
