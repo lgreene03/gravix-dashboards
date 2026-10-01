@@ -2006,7 +2006,7 @@ The two §4 gaps above are unchanged and recorded in GRVX-1108 §11.7.
 **Affects:** GRVX-1201 §4.2
 **Severity:** low — the intent is unambiguous and the work was completed; recorded because it is the
 fourth instance of the pattern F-042 describes
-**Status:** open; returned as `SPEC DEFECT: §4.2 — pkg/notify/slack.go and pkg/notify/webhook.go do
+**Status:** resolved 2026-10-01 (spec amended; DD-012 catches the class). Originally: open; returned as `SPEC DEFECT: §4.2 — pkg/notify/slack.go and pkg/notify/webhook.go do
 not exist`.
 
 ### What the spec says
@@ -2046,6 +2046,13 @@ and `cmd_explain.go` omitted; golden fixture omitted), GRVX-1109 (`cmd/cli/main.
 this one. **F-042** proposes the two mechanical checks that would catch all four before dispatch:
 every repo-relative path in §2/§4.2 must resolve, and every file named in §6 or §7 must appear in §4.
 This entry is the fourth data point for it.
+
+
+### Resolved 2026-10-01
+
+GRVX-1201 §4.2 now names `pkg/notify/notify.go`, `pagerduty.go` and `opsgenie.go`, the files that
+hold the four notifiers. The class of defect is caught before dispatch since DD-012: `make spec-lint`
+reported this one as M1 until the amendment.
 
 ---
 

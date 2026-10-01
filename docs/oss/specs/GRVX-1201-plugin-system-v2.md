@@ -57,7 +57,7 @@ an ecosystem and a pile of abandoned forks.
 
 | Path | Change |
 |---|---|
-| `pkg/notify/slack.go`, `webhook.go`, `pagerduty.go`, `opsgenie.go` | Implement `plugin.Notifier`. Keep existing behaviour and every existing test passing. |
+| `pkg/notify/notify.go` (the Slack and webhook senders), `pkg/notify/pagerduty.go`, `pkg/notify/opsgenie.go` | Implement `plugin.Notifier`. Keep existing behaviour and every existing test passing. (Amended 2026-10-01, SD-031: `slack.go` and `webhook.go` never existed.) |
 | `docs/plugin-system.md` | Update to describe v2; record what changed |
 
 ### 4.3 Files to NOT touch
