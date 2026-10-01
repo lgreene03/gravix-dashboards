@@ -1352,6 +1352,18 @@ Option 2 is the one that delivers the spec's own throughput goal on a multi-tena
 not what §5.1 describes. Which to build is a design decision with a measurable cost either way, so it
 is recorded rather than guessed.
 
+### Resolved 2026-10-01 — DD-009: option 1, one batcher per topic file
+
+Option 2's advantage, as stated above, does not exist. fsync is per file, so a batch that touches
+*k* files costs *k* syncs whichever design collected it; one batcher per file makes the same number
+and can make them in parallel. The amortisation per file is the same in both, because it depends on
+how many writers share a file within one `MaxBatchDelay` window, not on how many queues there are.
+Option 1 also keeps §5.1's signature and the on-disk layout.
+
+Implemented under SD-056's resolution: measured on a 4-core machine with 64 concurrent single-fact
+writers, 3,875 facts/sec at one fsync per call became 21,801 at 64 facts per fsync. Recorded in
+`delegated-decisions.md` DD-009.
+
 ---
 
 ## SD-024 — GRVX-1006 requires pre-aggregations and names Redis as the optional component, but rollups need an external store no shipped stack provides
@@ -4008,6 +4020,21 @@ under a 120-second limit that the compile exhausted, so two greps matched nothin
 removing an fsync fails AC-7's test, adding a plan branch to the write path fails AC-9's, and
 removing the validation call fails AC-8's. A test whose failure has not been observed is a test
 nobody has checked, and that includes the case where the checking itself timed out.
+
+### Resolved 2026-10-01 — DD-009: wired, measured, and a race fixed on the way
+
+The two reasons above for not wiring it were that the change could not be measured and that
+rotation would replace the file handle a batcher held. Both were answered rather than waived.
+Rotation is safe by construction: the batcher's syncer for a topic writes and fsyncs a whole batch
+under the sink's lock, the lock rotation takes, and `TestDurableSinkRotationLosesNothing` forces
+about 150 rotations under 800 concurrent writes and finds each acknowledged fact exactly once. And
+the change was measured: 3,875 facts/sec at one fsync per call became 21,801 at 64 facts per fsync on
+a 4-core machine, with no HTTP in the path.
+
+All twelve sink call sites now group-commit with no signature change, and every handler answers a
+full queue with §5.2's 503. Wiring exposed a hang in `Append` racing `Close`, fixed and tested. AC-7's
+test now asserts the shared batcher it previously could not. AC-1 remains open for the reason it
+always was: the reference machine. GRVX-1005 §11.1 has the full table.
 
 ---
 

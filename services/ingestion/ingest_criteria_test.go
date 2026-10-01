@@ -33,16 +33,11 @@ func sourceOf(t *testing.T, name string) string {
 // AC-7. §4.2's purpose for this criterion is stated in its own words: both paths
 // "use the same batcher, so both paths share one durability guarantee".
 //
-// What this test proves is the durability guarantee — that the HTTP and OTLP
-// paths both reach disk through DurableSink, and that DurableSink fsyncs before
-// returning, so neither path can acknowledge a fact that is not on disk.
-//
-// What it deliberately does NOT assert is that they share the *Batcher*,
-// because they do not: services/ingestion/batch.go is never constructed outside
-// its own tests. That gap is real and recorded in SD-056; this test is written
-// so that wiring the batcher in later keeps it passing rather than having to be
-// rewritten, because the invariant it checks is the one that must hold either
-// way.
+// It proves both halves now. The HTTP and OTLP paths reach disk only through
+// DurableSink; DurableSink hands every write to its topic's group-commit
+// Batcher; and the one function that writes a buffer file fsyncs before
+// returning. Until SD-056 was resolved the batcher was constructed nowhere
+// outside its own tests, and this test asserted only the durability half.
 func TestBothPathsShareBatcher(t *testing.T) {
 	main := sourceOf(t, "main.go")
 	otlp := sourceOf(t, "otlp.go")
@@ -62,24 +57,40 @@ func TestBothPathsShareBatcher(t *testing.T) {
 		}
 	}
 
-	// The shared mechanism must fsync before returning, or "durable" is a claim
-	// rather than a property.
+	// Both paths now share the group-commit batcher, which SD-056 found they did
+	// not: WriteBatch hands every record to a Batcher, Write goes through
+	// WriteBatch, and the one function that touches a buffer file fsyncs before
+	// returning. Checked through the AST, so a comment or a variable name cannot
+	// satisfy it.
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "main.go", main, 0)
 	if err != nil {
 		t.Fatalf("parsing main.go: %v", err)
 	}
-	for _, method := range []string{"Write", "WriteBatch"} {
-		if !methodCallsSync(file, method) {
-			t.Errorf("DurableSink.%s does not call Sync; docs/00-system-truth.md §6 requires "+
-				"a fact to be on disk before it is acknowledged", method)
-		}
+	if !methodCalls(file, "WriteBatch", "Append") {
+		t.Error("DurableSink.WriteBatch does not hand its records to a Batcher; concurrent " +
+			"requests are back to one fsync each (SD-056)")
+	}
+	if !methodCalls(file, "Write", "WriteBatch") {
+		t.Error("DurableSink.Write does not go through WriteBatch, so single-record writes " +
+			"bypass the batcher")
+	}
+	if !methodCalls(file, "appendAndSync", "Sync") {
+		t.Error("DurableSink.appendAndSync does not call Sync; docs/00-system-truth.md §6 requires " +
+			"a fact to be on disk before it is acknowledged")
+	}
+	batch, err := parser.ParseFile(fset, "batch.go", sourceOf(t, "batch.go"), 0)
+	if err != nil {
+		t.Fatalf("parsing batch.go: %v", err)
+	}
+	if !methodCalls(batch, "Sync", "appendAndSync") {
+		t.Error("the batcher's syncer for a topic does not write through appendAndSync")
 	}
 }
 
-// methodCallsSync reports whether the named DurableSink method contains a
-// .Sync() call.
-func methodCallsSync(file *ast.File, method string) bool {
+// methodCalls reports whether the named method's body calls a function or
+// method named callee.
+func methodCalls(file *ast.File, method, callee string) bool {
 	found := false
 	ast.Inspect(file, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
@@ -91,7 +102,7 @@ func methodCallsSync(file *ast.File, method string) bool {
 			if !ok {
 				return true
 			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Sync" {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == callee {
 				found = true
 			}
 			return true

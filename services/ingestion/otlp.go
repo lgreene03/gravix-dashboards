@@ -214,7 +214,7 @@ func handleOTLPMetrics(sink *DurableSink, budget *cardinality.Budget) http.Handl
 		for _, p := range points {
 			if err := writeOTLPPoint(sink, topic, tenantID, p); err != nil {
 				slog.Error("otlp metrics persist failed", "tenant", tenantID, "metric", p.metricName, "error", err)
-				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist external metric sample")
+				writeSinkError(w, err, "failed to persist external metric sample")
 				return
 			}
 			ingestionOTLPMetricPointsTotal.WithLabelValues(tenantID, otlpResultAccepted).Inc()

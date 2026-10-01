@@ -161,8 +161,8 @@ func handleDeployWebhook(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		topic := topicForTenant(tenantID, "service_events")
 		if err := sink.Write(topic, eventBytes); err != nil {
 			slog.Error("sink write error for deploy event", "error", err)
-			ingestionRequestsTotal.WithLabelValues("/api/v1/deploy", "500", tenantID).Inc()
-			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist deploy event")
+			ingestionRequestsTotal.WithLabelValues("/api/v1/deploy", sinkStatusLabel(err), tenantID).Inc()
+			writeSinkError(w, err, "failed to persist deploy event")
 			return
 		}
 

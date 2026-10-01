@@ -173,3 +173,27 @@ timestamp, which is a design-tier schema change and is listed under the stops be
 
 **To reverse.** Choosing option 1 or 2 later needs no undo: declare the rollups and add the store.
 The pruning and refresh key are independent of that and worth keeping either way.
+
+## DD-009 — SD-023 and SD-056: one batcher per topic file, wired into every write
+
+**Date** 2026-10-01 · **Tier** routine (implementing an approved spec) · **Spec** GRVX-1005
+
+**Options.** SD-023: one `Batcher` per (tenant, topic) file, or one fronting every file. SD-056:
+leave the batcher unwired until a reference machine exists, or wire it now.
+
+**Chosen.** Per-file, and wire it now. SD-023 credited the shared design with better amortisation on
+a multi-tenant node; it has none, because fsync is per file and both designs make one sync per file
+per batch window — the shared one just makes them in sequence. SD-056 held the wiring back because
+it could not be measured and rotation looked risky. Both were answered with tests rather than
+assumed: a rotation stress test and a before-and-after throughput measurement.
+
+**Done.** Every `DurableSink` write goes through its topic's batcher, which writes and fsyncs under
+the lock rotation takes. Full queues answer 503 with `Retry-After: 1`. A hang in `Append` racing
+`Close` was found and fixed. Throughput at the sink on a 4-core machine went from 3,875 to 21,801
+facts/sec with 64 concurrent writers. Six tests, each mutation-tested.
+
+**Cost, stated.** A lone request now waits up to `MaxBatchDelay` (2 ms) for peers before its fsync.
+That is GRVX-1005 §5.1's own trade, and `TestTailLatencyBounded` holds it to that bound.
+
+**To reverse.** Make `WriteBatch` call `appendAndSync` directly; the batcher, the tests of its
+properties and the overload response all stand on their own.
