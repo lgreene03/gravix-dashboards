@@ -102,6 +102,13 @@ for (const rel of walk(MODEL_ROOT)) {
     require: (p) => Module.createRequire(path.join(MODEL_ROOT, 'model.js'))(
       p.startsWith('.') ? path.resolve(MODEL_ROOT, p) : p),
     COMPILE_CONTEXT: { securityContext: {} },
+    // Cube injects FILTER_PARAMS when it transpiles a cube's sql. This stands in
+    // for it with Cube's own shape — FILTER_PARAMS.<Cube>.<member>.filter(fn)
+    // calls fn with the bound parameters — so a model using it evaluates here
+    // and the predicate it builds appears in the SQL under test.
+    FILTER_PARAMS: new Proxy({}, { get: () => new Proxy({}, { get: () => ({
+      filter: (f) => (typeof f === 'function' ? f('?', '?') : f + ' >= ? AND ' + f + ' <= ?'),
+    }) }) }),
   };
   // Cube transpiles a cube's member references (drillMembers: [service, ...])
   // into functions with the symbols injected, so a bare member identifier is
@@ -221,6 +228,64 @@ func TestModelSQLRespondsToTenancy(t *testing.T) {
 	}
 }
 
+// TestDuckDBModelPrunesPartitionsByDateRange pins SD-024's cold-path fix. The
+// date range a dashboard query carries is pushed into the Parquet read, so a
+// one-day query opens one day's partition instead of every day retained. Trino's
+// table has no partition column, so its predicate is a no-op rather than a
+// change nobody measured. tests/e2e/cube_model_sql_test.go proves the DuckDB
+// predicate returns the same numbers and really skips the other partitions.
+func TestDuckDBModelPrunesPartitionsByDateRange(t *testing.T) {
+	duck := compileModelSQL(t, map[string]string{"CUBEJS_DB_TYPE": "duckdb"})
+	trino := compileModelSQL(t, map[string]string{"CUBEJS_DB_TYPE": "trino"})
+
+	want := "event_day BETWEEN CAST(substr(?, 1, 10) AS DATE) AND CAST(substr(?, 1, 10) AS DATE)"
+	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, want) {
+		t.Errorf("RequestMetricsMinute under DuckDB does not prune by date range; want %q in:\n  %s", want, got)
+	}
+	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, "hive_partitioning=true") {
+		t.Errorf("the pruning predicate needs event_day typed from the directory name; "+
+			"hive_partitioning=true is missing:\n  %s", got)
+	}
+	if got := trino["RequestMetricsMinute"]; strings.Contains(got, "event_day BETWEEN") {
+		t.Errorf("Trino's table has no partition column; its SQL should not carry the DuckDB predicate:\n  %s", got)
+	}
+}
+
+// TestTimeColumnsAreCastOnBothEngines is F-053's regression test. bucket_start
+// and event_time are text in Parquet as well as in Trino. timestampSql once
+// returned the bare column for DuckDB, and DuckDB then refused every query with
+// a date range — "Cannot compare values of type VARCHAR and type TIMESTAMP WITH
+// TIME ZONE" — which the dashboard showed as an empty chart.
+func TestTimeColumnsAreCastOnBothEngines(t *testing.T) {
+	for _, engine := range []string{"duckdb", "trino"} {
+		cmd := exec.Command(nodeBin(t), "-e",
+			`const f = require(process.argv[1]); `+
+				`const rk = f.refreshKeyFor('request_metrics_minute'); `+
+				`console.log(JSON.stringify({ts: f.timestampSql('bucket_start'), `+
+				`rk: rk === undefined ? 'none' : typeof rk.sql}))`,
+			filepath.Join(repoRootDir(t), "cube", "model_flags.js"))
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "CUBEJS_DB_TYPE=" + engine}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: evaluating model_flags.js: %v", engine, err)
+		}
+		var got struct{ TS, RK string }
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatalf("%s: %v\n%s", engine, err, out)
+		}
+		if got.TS != "CAST(bucket_start AS TIMESTAMP)" {
+			t.Errorf("%s: timestampSql('bucket_start') = %q; the column is text on this engine and "+
+				"must be cast, or every date-ranged query fails (F-053)", engine, got.TS)
+		}
+		// Cube calls refreshKey.sql; a string there fails every query with
+		// "Can't match args". Trino keeps Cube's default.
+		wantRK := map[string]string{"duckdb": "function", "trino": "none"}[engine]
+		if got.RK != wantRK {
+			t.Errorf("%s: refreshKeyFor().sql is %q, want %q", engine, got.RK, wantRK)
+		}
+	}
+}
+
 // TestModelsDeclareNoPreAggregations records an infrastructure fact as a test,
 // because the alternative is a rollup that fails every query it was meant to serve.
 //
@@ -230,9 +295,10 @@ func TestModelSQLRespondsToTenancy(t *testing.T) {
 // when a matching rollup cannot be built; it fails the query. So a declared rollup
 // is strictly worse than none.
 //
-// This also keeps GRVX-1006 honest: with no pre-aggregations, every latency figure
-// this stack produces is a cold read from Parquet. Quoting one as pre-aggregated
-// would repeat F-020 and F-022.
+// This also keeps GRVX-1006 honest. SD-024 decided against pre-aggregations, so a
+// latency figure from this stack is either a read from Parquet or a hit in Cube's
+// in-memory result cache, never a rollup. Quoting one as pre-aggregated would
+// repeat F-020 and F-022.
 func TestModelsDeclareNoPreAggregations(t *testing.T) {
 	root := repoRootDir(t)
 

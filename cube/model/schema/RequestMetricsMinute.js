@@ -5,12 +5,15 @@
 // own require rather than evaluating in its model sandbox. Reading process.env
 // here instead would silently do nothing: the sandbox has no `process`. See F-037
 // and the comment at the top of that file.
-const { tableSql, timestampSql } = require('../model_flags.js');
-
-const requestMetricsSql = tableSql('request_metrics_minute');
+const { tableSql, timestampSql, dayRangeSql, refreshKeyFor } = require('../model_flags.js');
 
 cube(`RequestMetricsMinute`, {
-  sql: requestMetricsSql,
+  // The date range is pushed into the Parquet read, so a query for one day opens
+  // one day's files rather than every day retained. Results are unchanged:
+  // bucket_start's UTC day is the partition's event_day. See SD-024.
+  sql: `${tableSql('request_metrics_minute')} WHERE ${FILTER_PARAMS.RequestMetricsMinute.bucketStart.filter(dayRangeSql)}`,
+
+  refreshKey: refreshKeyFor('request_metrics_minute'),
 
   joins: {
     // No joins for MVP

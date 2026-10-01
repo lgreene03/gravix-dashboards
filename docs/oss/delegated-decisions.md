@@ -147,3 +147,29 @@ fails on any non-test zstd codec at another level.
 
 **To reverse.** Change the one constant in `pkg/recompute` and re-run GRVX-801's determinism suite;
 every writer follows it.
+
+## DD-008 — SD-024: no pre-aggregations; warm means a result-cache hit
+
+**Date** 2026-10-01 · **Tier** routine (spec correction and implementation) · **Spec** GRVX-1006
+
+**Options.** SD-024 listed three. Add a Cube Store container to the bootstrap stack, which F-035
+rejected and which would raise GRVX-1004's published cost. Run Cube in dev mode, which embeds a Cube
+Store but makes a development flag decide production performance. Or drop the pre-aggregations and
+meet the target reading Parquet directly.
+
+**Chosen.** The third, after measuring it on the bootstrap stack's own limits with a real Cube. Warm
+p95 is 51–100 ms through Cube's in-memory result cache. Cold p95 is 193–593 ms for one day and up to
+3.7 s for a week, which is published rather than hidden. The choice keeps the single-container
+premise, the cost figure and the production configuration all intact, and it is the only option
+whose number was measured rather than assumed.
+
+**Done.** `RequestMetricsMinute` prunes by the query's date range and declares a refresh key read
+from the Parquet footers; `timestampSql` casts on both engines, which also fixed F-053. Five tests
+guard it, each mutation-tested. GRVX-1006 is amended and moves to `partial`.
+
+**Not done.** The cache warmer, the `bench/query` driver that would make the warm figure a CI number,
+and the percentile endpoint's figure. The cold path past one day needs `bucket_start` stored as a
+timestamp, which is a design-tier schema change and is listed under the stops below.
+
+**To reverse.** Choosing option 1 or 2 later needs no undo: declare the rollups and add the store.
+The pruning and refresh key are independent of that and worth keeping either way.

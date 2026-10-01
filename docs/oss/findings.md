@@ -3589,3 +3589,47 @@ that has never refused anything is indistinguishable from one that cannot.
 A cleanup without a guard is a cleanup with a half-life. The 66 MB commit was correct work and it
 bought about a day, because nothing was left behind that would notice the next occurrence. The
 useful output of finding a class of mistake is the check, not the fix.
+
+---
+
+## F-053 — on the bootstrap stack, every date-ranged dashboard query failed, and the dashboard showed it as no data
+
+**Found by:** measuring GRVX-1006's cold path through a real Cube for SD-024
+**Affects:** `cube/model_flags.js` (`timestampSql`), every DuckDB stack, the dashboard's date pickers
+and day-over-day comparison
+**Severity:** high — a core dashboard control silently returned nothing on the free product's stack
+**Status:** fixed; guarded by `TestTimeColumnsAreCastOnBothEngines` and
+`TestCubeDateRangePruningPreservesResults`
+
+### What happened
+
+`timestampSql` returned the bare column for DuckDB, on the belief that Parquet already held a
+`TIMESTAMP`. It does not: `bucket_start` is written as text, `YYYY-MM-DD HH:MM:SS` UTC, and
+`event_time` as RFC 3339 text. Cube's DuckDB dialect compares a time dimension's date range as
+`timestamptz`, so every query carrying a range failed at bind time. Reproduced on `main`'s own model
+files in Cube `v0.35`:
+
+```
+no range            -> OK 1 rows
+dateRange 1d        -> 400 Error: Binder Error: Cannot compare values of type VARCHAR and type TIMESTAMP WITH TIME ZONE
+hourly + dateRange  -> 400 (same)
+```
+
+`dashboards/app.js` handles a 400 from Cube with `return []`, so the user saw an empty chart rather
+than an error.
+
+### Why nothing caught it
+
+Every model test evaluates the model files and inspects the SQL they produce, which was well-formed.
+None executed a date-ranged query against DuckDB, and the onboarding gate's poll carries no range.
+The full stack was unaffected because Trino's branch already cast.
+
+### What changed
+
+`timestampSql` casts on both engines. `TestTimeColumnsAreCastOnBothEngines` evaluates
+`cube/model_flags.js` for each engine and fails on a bare column, and
+`TestCubeDateRangePruningPreservesResults` runs the emitted time expression against DuckDB with a
+`timestamptz` range. Reverting the cast fails both.
+
+Left alone, and worth a separate look: the dashboard's `return []` on a 400 is what made this
+invisible. A failed query and an empty result should not render the same.

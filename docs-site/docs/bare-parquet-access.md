@@ -75,7 +75,7 @@ or not Gravix is still running — and whether or not you are still a Gravix use
 | Column | Type | Meaning |
 |---|---|---|
 | `tenant_id` | `VARCHAR` | Empty in single-tenant deployments |
-| `bucket_start` | `VARCHAR` | RFC3339 start of the one-minute bucket |
+| `bucket_start` | `VARCHAR` | UTC start of the one-minute bucket, as text: `YYYY-MM-DD HH:MM:SS` |
 | `service` | `VARCHAR` | Service name as reported by the caller |
 | `method` | `VARCHAR` | HTTP method |
 | `path_template` | `VARCHAR` | Templated path, e.g. `/orders/{id}` |

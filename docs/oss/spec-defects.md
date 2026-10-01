@@ -1433,6 +1433,35 @@ Even resolved, §6 steps 1 and 4 need a running Cube to measure. The implementat
 Docker daemon. `timed-onboarding` going green (F-037, F-038) cleared the *stack* blocker §11.3 named;
 it did not clear this one.
 
+### Resolved 2026-10-01 — DD-008: option 3, no pre-aggregations, with measurements
+
+A Docker daemon became available, so the option this entry could only describe was measured.
+GRVX-1006 §11.6 has the full method and tables; in short, on the bootstrap stack's half CPU and
+512 MB, with no Redis and no Cube Store, against the standard benchmark's week of data:
+
+| | p95 |
+|---|---|
+| Warm, a result-cache hit, any of the four default-view queries | 51–100 ms |
+| Cold, one-day range | 193–593 ms |
+| Cold, seven-day range | 0.9–3.7 s |
+| New data visible after a write | 6 s |
+
+**Chosen: drop the pre-aggregations.** The warm target is met by Cube's in-memory result cache,
+which costs no container, no development flag and nothing against GRVX-1004's figure. Two model
+changes support it: a refresh key read from the Parquet footers, so a cached answer lasts exactly
+until a rollup writes, and the query's date range pushed into the Parquet read, so a one-day query
+scans one file. A time-based key was rejected because it would hold an empty first answer for up to
+five minutes, which G3.1's onboarding budget cannot absorb.
+
+**Stated plainly: the cold path misses 400 ms beyond one day**, and that is published rather than
+hidden. Its cost is Cube's per-row `timestamptz` arithmetic on a text column, not Parquet I/O.
+Storing `bucket_start` as a timestamp would address it, but that changes a published column type and
+every content digest, so it is design tier and is not decided under this delegation.
+
+Measuring also found **F-053**: on `main`, every date-ranged query on the DuckDB stack failed, and the
+dashboard showed an empty chart. Fixed in the same change. GRVX-1006 moves from `blocked` to
+`partial`; the warmer, the CI query driver and the percentile-endpoint figure remain.
+
 ---
 
 ## SD-025 — GRVX-1101 §2 says compaction does not change column names, and it drops five of them
