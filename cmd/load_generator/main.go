@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/influxdata/tdigest"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
 	"github.com/lgreene/gravix-dashboards/schemas"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -38,7 +39,45 @@ var (
 	successCount   atomic.Int64
 	failureCount   atomic.Int64
 	totalLatencyNs atomic.Int64
+
+	// latencies holds every request's latency in milliseconds, failures
+	// included, in a bounded t-digest: synthetic-traffic runs this binary
+	// indefinitely, so a slice of every observation would grow without limit.
+	// It exists so the summary can report a real p95 (F-017).
+	latencyMu sync.Mutex
+	latencies = tdigest.NewWithCompression(100)
 )
+
+// recordLatency counts one request's latency, whatever its outcome. A failed
+// request took time too, and leaving it out made the average improve as the
+// system degraded (F-017).
+func recordLatency(d time.Duration) {
+	totalLatencyNs.Add(d.Nanoseconds())
+	latencyMu.Lock()
+	latencies.Add(float64(d.Nanoseconds())/1e6, 1)
+	latencyMu.Unlock()
+}
+
+// latencyQuantile returns the q-quantile of recorded latencies in
+// milliseconds, or 0 when nothing has been recorded.
+func latencyQuantile(q float64) float64 {
+	latencyMu.Lock()
+	defer latencyMu.Unlock()
+	if latencies.Count() == 0 {
+		return 0
+	}
+	return latencies.Quantile(q)
+}
+
+// resetLatencies empties the counters and the digest, for tests.
+func resetLatencies() {
+	successCount.Store(0)
+	failureCount.Store(0)
+	totalLatencyNs.Store(0)
+	latencyMu.Lock()
+	latencies = tdigest.NewWithCompression(100)
+	latencyMu.Unlock()
+}
 
 // LoadTestSummary is the structured output for benchmark mode.
 type LoadTestSummary struct {
@@ -46,9 +85,14 @@ type LoadTestSummary struct {
 	Successful    int64   `json:"successful"`
 	Failed        int64   `json:"failed"`
 	ActualQPS     float64 `json:"actual_qps"`
-	AvgLatencyMs  float64 `json:"avg_latency_ms"`
-	ErrorRate     float64 `json:"error_rate"`
-	DurationSecs  float64 `json:"duration_secs"`
+	// Latencies cover every request, failed ones included, measured to the
+	// response headers or to the error.
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	P50LatencyMs float64 `json:"p50_latency_ms"`
+	P95LatencyMs float64 `json:"p95_latency_ms"`
+	P99LatencyMs float64 `json:"p99_latency_ms"`
+	ErrorRate    float64 `json:"error_rate"`
+	DurationSecs float64 `json:"duration_secs"`
 }
 
 func computeSummary(elapsed time.Duration) LoadTestSummary {
@@ -58,8 +102,8 @@ func computeSummary(elapsed time.Duration) LoadTestSummary {
 	lat := totalLatencyNs.Load()
 
 	var avgLatMs float64
-	if s > 0 {
-		avgLatMs = float64(lat) / float64(s) / 1e6
+	if total > 0 {
+		avgLatMs = float64(lat) / float64(total) / 1e6
 	}
 
 	var errRate float64
@@ -73,6 +117,9 @@ func computeSummary(elapsed time.Duration) LoadTestSummary {
 		Failed:        f,
 		ActualQPS:     float64(total) / elapsed.Seconds(),
 		AvgLatencyMs:  avgLatMs,
+		P50LatencyMs:  latencyQuantile(0.50),
+		P95LatencyMs:  latencyQuantile(0.95),
+		P99LatencyMs:  latencyQuantile(0.99),
 		ErrorRate:     errRate,
 		DurationSecs:  elapsed.Seconds(),
 	}
@@ -180,6 +227,7 @@ func main() {
 		"failed", summary.Failed,
 		"actual_qps", fmt.Sprintf("%.1f", summary.ActualQPS),
 		"avg_latency_ms", fmt.Sprintf("%.1f", summary.AvgLatencyMs),
+		"p95_latency_ms", fmt.Sprintf("%.1f", summary.P95LatencyMs),
 		"error_rate", fmt.Sprintf("%.2f%%", summary.ErrorRate*100),
 		"duration", elapsed,
 	)
@@ -237,6 +285,7 @@ func sendRequest(ctx context.Context, client *http.Client, url, apiKey string, v
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		recordLatency(time.Since(start))
 		failureCount.Add(1)
 		if verbose {
 			slog.Warn("request failed", "error", err)
@@ -245,7 +294,7 @@ func sendRequest(ctx context.Context, client *http.Client, url, apiKey string, v
 	}
 	defer resp.Body.Close()
 	dur := time.Since(start)
-	totalLatencyNs.Add(dur.Nanoseconds())
+	recordLatency(dur)
 
 	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
 		successCount.Add(1)

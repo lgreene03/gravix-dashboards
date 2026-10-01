@@ -421,3 +421,23 @@ now, because the full stack had no other check before merge.
 `docker-smoke` trigger.
 
 **To reverse.** Remove `data-init` and its dependencies. Fresh clones then fail as F-025 describes.
+
+## DD-021 — F-017: report a real p95 from the load generator and gate on it
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Finding** F-017
+
+**Options.** Rename `max_p95_latency_ms` to say "average"; or make the load generator report a p95
+and compare that.
+
+**Chosen.** Report a real p95. The threshold is meant to bound the tail, and a renamed average would
+still let a heavy tail through. Failed requests now count in every latency figure, because leaving
+them out made the numbers improve as the system got worse.
+
+**Done.** The load generator's digest and summary fields, the gate's comparison, two tests, and the
+baseline file's comment.
+
+**Not decided, and why.** New threshold values. The old ones were set loose for the average. Setting
+real ones needs a measured run on the reference machine, and `perf-cost-engineer` reviews it.
+
+**To reverse.** Compare `avg_latency_ms` again in `perf_test.sh`. The extra summary fields are
+harmless.

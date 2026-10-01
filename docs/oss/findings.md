@@ -889,7 +889,7 @@ inherit this login.
 scripts already produce before writing a new harness.
 **Severity** medium — no public number depends on it today, but it is a gate that reports PASS on
 runs it was written to fail, and Phase 10 is about to build published figures in this area.
-**Status** open. Not fixed here: GRVX-1001 §3 and §4.2 both forbid removing or rewriting any
+**Status** resolved 2026-10-01 (DD-021). Originally: open. Not fixed here: GRVX-1001 §3 and §4.2 both forbid removing or rewriting any
 existing `scripts/perf_baseline.json` field, and the threshold's *name* is the defect.
 
 **The mismatch.** `scripts/perf_baseline.json` declares, for each profile:
@@ -942,6 +942,27 @@ repository already has one in `pkg/sketch`, used by the rollup), emit real perce
 failed requests in the latency population or state explicitly that it does not, and then rename the
 baseline fields to match what is actually compared. Until then `perf_test.sh`'s PASS means "the mean
 of successful requests is under a number labelled p95".
+
+### Resolved 2026-10-01 — DD-021: the gate compares a p95 with a p95
+
+The fence that kept this open was GRVX-1001's, and it binds GRVX-1001's work, not a separate fix. The
+repair this entry describes is now made, without renaming any field, because the field now means
+what it says:
+
+- `cmd/load_generator` records every request's latency in a bounded t-digest, failures included,
+  and reports `p50_latency_ms`, `p95_latency_ms` and `p99_latency_ms`. The digest is bounded because
+  `synthetic-traffic` runs the generator indefinitely.
+- `avg_latency_ms` divides by every request, not by successes.
+- `scripts/perf_test.sh` compares `max_p95_latency_ms` against `p95_latency_ms`, and fails if the
+  output has no p95 at all.
+- `TestSlowFailuresRaiseTheLatencyFigures` and `TestSendRequestRecordsFailedLatencies` guard both
+  defects. The second drives `sendRequest` against a server that refuses and one that is gone.
+  Restoring the successes-only average fails the first, and dropping the failed-request latency
+  fails the second.
+
+The thresholds themselves were set loose to allow for the average. They have not been re-measured,
+so a manual run may now fail profiles that used to pass. That is the gate working. `perf_test.sh` is
+not in CI.
 
 ## F-018 — `recompute` takes its lock on the local filesystem at a path relative to the working directory, while writing its data through the object store
 
