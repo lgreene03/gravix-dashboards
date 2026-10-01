@@ -17,6 +17,9 @@ data:
     query.max-memory-per-node=800MB
     discovery-server.enabled=true
     discovery.uri=http://localhost:8080
+    # Metabase reaches Trino through Presto's JDBC driver, which Trino
+    # refuses with HTTP 401 unless it answers Presto's protocol headers.
+    protocol.v1.alternate-header-name=Presto
   node.properties: |
     node.environment=production
     node.id=ffffffff-ffff-ffff-ffff-ffffffffffff

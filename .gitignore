@@ -104,3 +104,4 @@ __pycache__/
 # regenerated on every build, and large.
 docs-site/.docusaurus/
 docs-site/build/
+storage/trino/config/catalog/

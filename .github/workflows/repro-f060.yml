@@ -1,0 +1,46 @@
+name: repro-f060
+
+# F-060: two concurrent first queries after Cube starts stall every query for
+# about two minutes. It was found in a lab that cannot run Cube's published
+# image as published, so this runs scripts/repro_f060.sh against the bootstrap
+# stack built the way users build it. Dispatched by hand: it is a measurement
+# for whoever upgrades Cube, not a gate, and it fails when the stall happens.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Polled rather than --wait, which treats the one-shot seed container's
+      # exit as a failure.
+      - name: Start the bootstrap stack
+        run: |
+          docker compose -f docker-compose.bootstrap.yml up -d --build
+          for _ in $(seq 1 120); do
+            curl -sf http://localhost:4000/readyz >/dev/null 2>&1 \
+              && curl -sf http://localhost:8091/live >/dev/null 2>&1 && exit 0
+            sleep 5
+          done
+          docker compose -f docker-compose.bootstrap.yml ps -a
+          exit 1
+
+      - name: Send two concurrent first queries to a fresh Cube, three times
+        run: |
+          status=0
+          for i in 1 2 3; do
+            echo "── trial $i ──"
+            ./scripts/repro_f060.sh || status=1
+          done
+          exit $status
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.bootstrap.yml down -v

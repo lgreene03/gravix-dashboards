@@ -39,6 +39,14 @@ services:
           -api-key-command="docker compose exec -T gateway cat /app/data/api_key.txt"
         status=$$?
         chown -R gravix:gravix /app/data
+        # Trino's Hive file metastore is written by the Trino image's own user,
+        # uid 1000, which is not gravix (uid 100). The chown above gave the
+        # directory to gravix, or Docker created it root-owned, and either way
+        # Trino could not write it: CREATE SCHEMA gravix.raw failed with
+        # "Could not write database schema", init-trino carried on, and the
+        # Hive tables Cube reads were never created (F-068).
+        mkdir -p /app/data/trino-metastore
+        chown -R 1000:1000 /app/data/trino-metastore
         exit $$status
     volumes:
       - ./data:/app/data
@@ -149,6 +157,10 @@ services:
     command:
       - -c
       - |
+        # Stop at the first failed statement. Without this, a CREATE SCHEMA
+        # that failed was followed by the rest and a clean exit, so the stack
+        # came up healthy with no tables (F-068).
+        set -e
         echo "Waiting for Trino to accept connections..."
         until trino --server trino:8080 --execute "SELECT 1" 2>/dev/null; do
           sleep 5
@@ -196,9 +208,9 @@ services:
             external_location = 's3a://gravix/warehouse/service_events_detail/'
           )"
         # The Iceberg catalog's schema only. No CREATE TABLE here:
-        # iceberg-sync's createTableSQL makes the tables on its first run, and
-        # a hadoop-type catalog just needs the namespace directory to exist
-        # first. Creating a schema is idempotent and cheap at boot.
+        # iceberg-sync's createTableSQL makes the tables on its first run, at
+        # <bucket>/iceberg-warehouse/raw/<table>, which is where its schema
+        # puts them. Creating a schema is idempotent and cheap at boot.
         trino --server trino:8080 --execute "CREATE SCHEMA IF NOT EXISTS gravix_iceberg.raw"
         echo "Trino tables initialized."
     depends_on:
@@ -221,25 +233,50 @@ services:
       # path. Defaulted rather than required: a stack without the Iceberg
       # catalog should not fail to start over a variable it does not read.
       - S3_BUCKET=${S3_BUCKET:-gravix}
+    # The config files are mounted one by one, and the catalogs are rendered
+    # into a tmpfs inside the container. /etc/trino used to be one bind mount
+    # of the checkout, so the render wrote into storage/trino/config/catalog/:
+    # on a host whose user is not the image's uid 1000, such as a CI runner,
+    # it could not write there, the error was ignored, and Trino ran on a
+    # rendered copy someone had committed, with stale credentials and no
+    # Iceberg catalog. Where it could write, it put the S3 secret in the
+    # working tree (F-066).
     volumes:
-      - ./storage/trino/config:/etc/trino
+      - ./storage/trino/config/config.properties:/etc/trino/config.properties:ro
+      - ./storage/trino/config/jvm.config:/etc/trino/jvm.config:ro
+      - ./storage/trino/config/node.properties:/etc/trino/node.properties:ro
       - ./storage/trino/catalog:/etc/trino/catalog.tpl:ro
       - ./data/trino-metastore:/data/metastore
       - ./data/raw:/data/raw:ro
+    tmpfs:
+      - /etc/trino/catalog:mode=1777
+    # The metastore directory must exist with Trino's owner, and the Iceberg
+    # catalog keeps its metastore in the bucket, so both must be ready first.
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+      init-minio:
+        condition: service_completed_successfully
     entrypoint:
       - /bin/sh
       - -c
       - |
-        mkdir -p /etc/trino/catalog
-        for f in /etc/trino/catalog.tpl/*; do
+        set -e
+        for f in /etc/trino/catalog.tpl/*.properties; do
           sed -e "s|\$${S3_ACCESS_KEY}|$$S3_ACCESS_KEY|g" \
               -e "s|\$${S3_SECRET_KEY}|$$S3_SECRET_KEY|g" \
               -e "s|\$${S3_BUCKET}|$$S3_BUCKET|g" \
               "$$f" > "/etc/trino/catalog/$$(basename $$f)"
         done
+        # Refuse to start without both catalogs rather than serve a partial set.
+        test -s /etc/trino/catalog/gravix.properties
+        test -s /etc/trino/catalog/gravix_iceberg.properties
         exec /usr/lib/trino/bin/run-trino
+    # /v1/info answers within a second of starting, while the catalogs are
+    # still loading, so an answer alone made Trino healthy before it could
+    # serve a query, or before a bad catalog stopped it (SD-059).
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -527,9 +564,13 @@ services:
       # warehouse files itself — so it needs no data volume and no S3
       # credentials. Trino holds both.
       - S3_BUCKET=${S3_BUCKET:-gravix}
+    # Its tables live in the schema init-trino creates. Started on Trino's
+    # health alone, its first run failed with "Schema raw not found".
     depends_on:
       trino:
         condition: service_healthy
+      init-trino:
+        condition: service_completed_successfully
     mem_limit: 256m
     cpus: 0.25
     networks:

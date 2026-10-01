@@ -4280,3 +4280,137 @@ bucket, so each chart drew nothing at all, with its axes scaled to the data it w
 markers now appear while a series has two points or fewer. Observed: the first dashboard shows an
 error rate of 20%, a P95 of 80 ms and a throughput of 5, which are the five facts sent, one of them a
 500, with latencies from 40 to 80 ms.
+
+### Update 2026-10-01 — a reproduction that runs Cube's published image
+
+`scripts/repro_f060.sh` restarts Cube on a running bootstrap stack, sends the dashboard's two hourly
+queries at the same moment, and exits 1 if neither answers within a minute. Its query logic, run
+against the lab Cube, reproduced the stall: no answer within 40 s for either. The `repro-f060`
+workflow builds the bootstrap stack as users do and runs the script three times. It is dispatched by
+hand, because it measures rather than gates. Its first run on `main` decides whether the published
+image stalls too, which is the evidence a Cube upgrade needs.
+
+## F-066 — the full stack's Trino never had an Iceberg catalog on CI, and ran on a committed copy of its own config
+
+**Found by** the first run of GRVX-1106's Iceberg tests on a live stack, in `docker-smoke` on PR #27
+**Affects** `docker-compose.yml` (`trino`), `storage/trino/config/catalog/gravix.properties` (removed), `.gitignore`
+**Severity** high — the Iceberg tables GRVX-1106 publishes could not exist on any host where this happened
+**Status** fixed
+
+```
+create request_metrics_minute: trino: query failed: "USER_ERROR: line 1:1: Catalog 'gravix_iceberg' does not exist"
+```
+
+The `trino` service bind-mounted `storage/trino/config` over `/etc/trino`, and its entrypoint rendered
+the catalog templates into `/etc/trino/catalog`, which is inside that mount. Trino's image runs as uid
+1000. On a host whose user is not uid 1000, such as GitHub's runner, the render could not write, the
+error was ignored, and Trino started anyway. It found one catalog: a rendered `gravix.properties` that
+had been committed in #18, with `demo.sh`'s local credentials rather than the stack's. So the Hive
+catalog used the wrong S3 credentials and the Iceberg catalog was missing. Where the user is uid
+1000, the render worked and wrote the stack's S3 secret into the working tree.
+
+The committed credential was `demo.sh`'s documented local default, not a real secret.
+
+Trino's config files are now mounted one by one, the catalogs render into a tmpfs inside the
+container, and the entrypoint stops the container if either catalog is missing. The committed render
+is removed, and the directory is in `.gitignore`. `TestTrinoRendersCatalogsInsideTheContainer` fails
+on the old compose file six ways.
+
+Rendered at last, the Iceberg catalog was loaded for the first time, and Trino refused to start on it.
+That is SD-059.
+
+## F-067 — the Spark read check passed with no Iceberg catalog behind it
+
+**Found by** the same run: `TestVerifySparkIcebergRead` passed while Trino reported the catalog missing
+**Affects** `scripts/verify_spark_iceberg_read.sh`, `tests/e2e/iceberg_sync_test.go`
+**Severity** high — GRVX-1106 AC-6, the interoperability claim, had a check that could not fail on a missing table
+**Status** fixed
+
+The script kept every digit of spark-sql's last output line, whatever the line said, and discarded the
+run's exit status. Any line with a number in it, such as a URL or a timestamp, counted as a row count.
+With no Iceberg table in existence, the check reported success.
+
+The script now requires Spark to exit 0 and to print its count on a line of its own, prints the exit
+status and Spark's error when either fails, and the test logs the script's output on success as
+well. The same review added Hadoop's S3 connector and an Ivy cache directory, without which the read
+could not have worked at all. SD-059 then replaced the spark-sql query with a read by metadata file;
+pointed at a table that does not exist, the check exits 1 and prints Spark's
+`FileNotFoundException`.
+
+## F-068 — the full stack's Hive tables were never created, because Trino could not write its metastore
+
+**Found by** reading `data-init` while fixing SD-059, then reproduced against `trinodb/trino:435`
+**Affects** `docker-compose.yml` (`data-init`, `trino`)
+**Severity** high — Cube reads `gravix.raw.*`, so the full stack's dashboard had no tables to query on a fresh clone
+**Status** fixed
+
+`data-init` runs `chown -R gravix:gravix /app/data` on every boot (F-025). In the Gravix images,
+`gravix` is an Alpine system user, uid 100. Trino's image runs as uid 1000 and keeps its Hive
+metastore in `./data/trino-metastore`. So the chown took the metastore away from Trino, and where
+the directory did not exist yet, Docker created it root-owned. Either way Trino could not write it.
+
+Reproduced with the metastore owned by uid 100:
+
+```
+CREATE SCHEMA IF NOT EXISTS gravix.raw
+Query 20261001_212419_00000_rjgq4 failed: Could not write database schema
+```
+
+`init-trino` runs its statements without `set -e` and ends with an `echo`, so it exited 0 and the
+stack came up healthy with no Hive schema and no tables. The smoke test never queried through Trino,
+so nothing noticed. A stack that had created its schema before F-025 kept reading it, because the
+files stayed world-readable.
+
+`data-init` now creates `data/trino-metastore` and gives it to uid 1000 after the `gravix` chown,
+and Trino waits for `data-init` to finish. `init-trino` now stops at the first failed statement, so
+a failure like this one fails the container instead of passing for a clean start.
+`TestTrinoCanWriteItsMetastore` fails on the old compose file twice. The live-stack tests in `docker-smoke` query the Hive tables through Trino, so a
+recurrence would now fail CI.
+
+## F-069 — the iceberg-sync service had no iceberg-sync to run
+
+**Found by** `docker-smoke` on PR #27, in the service's own log: `/bin/sh: ./iceberg-sync: not found`
+**Affects** `services/rollup/Dockerfile`
+**Severity** high — the Iceberg tables GRVX-1106 publishes were never written by the stack itself
+**Status** fixed
+
+SD-050 added `iceberg-sync` to the rollup image's builder stage, and the final stage never copied
+it. The `iceberg-sync` service runs `./iceberg-sync` every five minutes, failed, logged
+`Iceberg sync failed, will retry next cycle`, and stayed up. The e2e tests build and run the job
+themselves, so they could not see that the stack's own copy was missing.
+
+The final stage now copies it. `TestEveryBuiltBinaryIsCopiedIntoTheImage` checks every Gravix
+Dockerfile for a binary the builder writes and no later stage copies, and fails on the old rollup
+Dockerfile.
+
+With the binary in place, the next `docker-smoke` run showed its first sync failing with
+`USER_ERROR: Schema raw not found`. The service started once Trino was healthy, before `init-trino`
+had created the schema. It recovered five minutes later, but a first run that always fails is noise
+an operator learns to ignore. It now waits for `init-trino` to finish.
+
+## F-070 — the full stack's Trino tables cannot see any tenant's data, and have no tenant column to filter on
+
+**Found by** reading the rollup's output paths while fixing F-068
+**Affects** `docker-compose.yml` (`init-trino`), `storage/trino/init.sql`, the warehouse layout
+**Severity** high — on the full stack, a signed-in dashboard has no data, and its queries name a column the table lacks
+**Status** open — the fix changes the warehouse layout, which is design tier (see `open-decisions.md`)
+
+Every data-plane job in the full stack runs multi-tenant (F-027), so the request rollup writes
+`warehouse/<tenant-id>/request_metrics_minute/event_day=<day>/…`. Trino's Hive tables are declared
+over `s3a://gravix/warehouse/request_metrics_minute/`, a prefix nothing in the full stack writes.
+Their columns also stop at `event_day`: the Parquet files carry `tenant_id`, and the tables do not
+expose it.
+
+Cube on Trino reads `SELECT * FROM gravix.raw.request_metrics_minute`, and for a signed-in user its
+`queryRewrite` adds a filter on `tenantId`, whose SQL is `tenant_id`. So each such query names a
+column the table does not have, against a location with no files. The bootstrap stack is not
+affected: Cube there reads the Parquet with DuckDB and a glob that includes the tenant directory.
+
+Neither half can be fixed by pointing the table somewhere else. A Hive table has one location and no
+glob, and the tenant directory is not a `key=value` partition, so Trino cannot discover tenants from
+it. The options are in `open-decisions.md`.
+
+What this does to PR #27's live tests: the Hive tables they read are empty on the full stack, so the
+sync tests would compare two empty tables and the Spark check would count zero rows. CI therefore
+inserts fixture rows into the Hive table first, and says why, so the three tests check a copy of real
+rows. That tests the Iceberg path. It does not fix this.

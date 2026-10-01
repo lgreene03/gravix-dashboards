@@ -2,7 +2,7 @@
 <!-- correctness-defects.md, all append-only. This file points into them and may be rewritten. -->
 # What needs a person
 
-Three registers hold 76 entries between them, most of them resolved. Most are ordinary work an
+Three registers hold 134 entries between them, most of them resolved. Most are ordinary work an
 implementer can pick up. This page lists only the ones that **cannot be closed by implementing
 harder**, because they need a decision, a permission, or an external check.
 
@@ -31,6 +31,7 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 | **F-026** *(high)* | **Partly done (DD-019).** `docker-build` and three jobs the summary awaited but never checked now fail `ci-summary`. `docker-smoke` passed 11 of 11 on PR #25, for the first time since at least May, after F-025, F-057 and F-058 were fixed, and now fails `ci-summary` too. `image-scan`'s action tag is repaired. What still needs a person: whether `image-scan` fails `main` on HIGH or CRITICAL findings in base images, which is the security engineer's call. |
 | **F-018, across machines** *(medium)* | Whether the rollup lock should hold across machines that share an S3 bucket | Fixed for one machine (DD-022): the cron and `gravix recompute` now take the same lock, found through the store. Across machines it needs a lock object in the store, taken with a conditional write and given an expiry. That changes the storage interface and the locking semantics, so it wants a spec, not a patch. |
 | **A pinned `protoc` in CI** *(low)* | Whether CI installs a fixed `protoc` so a job can fail when `gen/` drifts from `proto/` | `make proto` reproduces the tracked files (DD-027), but the generated header names the `protoc` version, so a drift check needs one version everywhere. That is a choice about CI images, owned by whoever owns CI. |
+| **F-070** *(high)* | How the full stack's Trino reads a multi-tenant warehouse. **Recommended: Hive-style tenant partitions**, `warehouse/<metric>/tenant_id=<id>/event_day=<day>/`, with the Trino tables partitioned by `tenant_id` and `event_day` and refreshed with `system.sync_partition_metadata`. The alternatives: keep today's layout and register a Trino partition per tenant from a job that runs whenever a tenant is created; or run the full stack single-tenant, which undoes F-027 and F-058 | The rollup writes `warehouse/<tenant-id>/<metric>/`, which a Hive table cannot read and Trino cannot discover, and the tables have no `tenant_id` for Cube's tenant filter. So the full stack's dashboard has no data for a signed-in user. The recommended layout is one that DuckDB, Trino, Spark and a bare-Parquet reader all discover without help, which is the data-ownership claim. But it moves every object in the warehouse and changes the rollup, recompute, purge, export, compaction, Cube's globs and two published guides. A storage layout is a public data contract, so it is design tier: an RFC and **two maintainer approvals**. |
 | **F-057, long term** *(medium)* | Whether the full stack keeps MinIO, now built from source (DD-030), or moves to a maintained S3-compatible server | MinIO no longer publishes community images. Building from source works and costs about two minutes on first boot. A replacement is a new dependency, which `GOVERNANCE.md` puts at design tier. |
 
 ## Spec text that contradicts what was measured

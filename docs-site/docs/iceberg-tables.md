@@ -6,7 +6,7 @@ sidebar_position: 4
 # Query Gravix from Spark, or anything that reads Iceberg
 
 Gravix's warehouse is also published as Apache Iceberg tables. Any engine that reads Iceberg can
-query them directly — no Gravix process, no Gravix driver, no shared metastore, and no permission
+read them directly — no Gravix process, no Gravix driver, no metastore service, and no permission
 from us.
 
 This page is the companion to [bare-Parquet access](bare-parquet-access.md). That one shows the
@@ -15,13 +15,14 @@ snapshot isolation, by a second engine.
 
 ## Why this exists, and what it is not
 
-The Hive catalog Gravix has always shipped uses Trino's `hive.metastore=file`, which is Trino's own
-embedded format. It works, it needs no metastore service, and **no other engine can read it.** That
-is fine for Gravix's own dashboard and a dead end for anybody with a Spark cluster.
+The Hive tables Gravix has always shipped are plain Parquet directories that Trino describes in its
+own metastore. Another engine can read the files, but it has to be told their schema and
+partitioning, and nothing stops it reading a directory while a rollup is rewriting it.
 
-A `hadoop`-type Iceberg catalog needs no metastore service either, and is a published format. Every
-table's location and its current metadata pointer live inside the warehouse path. Point any engine
-at the same path with the same credentials and it sees the same tables.
+An Iceberg table carries all of that itself. Its `metadata/` directory holds a `metadata.json` for
+every version Trino has written, and each one names the table's schema, partitioning and exact set of
+data files. Any Iceberg reader, given the newest one and the S3 credentials, reads a consistent
+snapshot of the table.
 
 The Hive tables are unchanged and remain the primary read path. Iceberg is an additional one.
 
@@ -31,8 +32,9 @@ The Hive tables are unchanged and remain the primary read path. Iceberg is an ad
 
 ```properties
 connector.name=iceberg
-iceberg.catalog.type=hadoop
-iceberg.catalog.warehouse=s3a://${S3_BUCKET}/iceberg-warehouse
+iceberg.catalog.type=TESTING_FILE_METASTORE
+hive.metastore.catalog.dir=s3a://${S3_BUCKET}/iceberg-warehouse
+iceberg.unique-table-location=false
 iceberg.file-format=PARQUET
 hive.s3.endpoint=http://minio:9000
 hive.s3.aws-access-key=${S3_ACCESS_KEY}
@@ -43,6 +45,20 @@ hive.s3.ssl.enabled=false
 
 Trino's entrypoint substitutes the three variables from the environment. Nothing else is needed — no
 Hive Metastore, no Glue, no Nessie.
+
+The catalog uses Trino's file metastore, the same one the Hive catalog uses, with its directory in the
+bucket beside the tables. Trino names it `TESTING_FILE_METASTORE`; it is what
+`hive.metastore=file` selects for the primary catalog too. With `iceberg.unique-table-location=false`,
+each table lives at a fixed path:
+
+```
+s3a://<bucket>/iceberg-warehouse/raw/request_metrics_minute/
+s3a://<bucket>/iceberg-warehouse/raw/service_events_daily/
+```
+
+Other engines do not read Trino's metastore, so they cannot list these tables by name. They read
+each one from its path, as below. Iceberg's `hadoop` catalog type would have let them list the tables,
+but Trino has no such type, and Trino 435 refuses to start with it.
 
 ## The sync job
 
@@ -100,30 +116,43 @@ Raw facts are not published as Iceberg tables. They are JSONL, and they are your
 This is the part that matters, because Trino reading back what Trino wrote proves only that Trino
 is self-consistent.
 
+Spark needs no catalog. Give it the table's newest metadata file:
+
 ```bash
-spark-sql \
-  --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1 \
-  --conf spark.sql.catalog.gravix_iceberg=org.apache.iceberg.spark.SparkCatalog \
-  --conf spark.sql.catalog.gravix_iceberg.type=hadoop \
-  --conf spark.sql.catalog.gravix_iceberg.warehouse=s3a://gravix/iceberg-warehouse \
+spark-shell \
+  --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1,org.apache.hadoop:hadoop-aws:3.3.4 \
   --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
   --conf spark.hadoop.fs.s3a.access.key=$S3_ACCESS_KEY \
   --conf spark.hadoop.fs.s3a.secret.key=$S3_SECRET_KEY \
-  --conf spark.hadoop.fs.s3a.path.style.access=true \
-  -e "SELECT COUNT(*) FROM gravix_iceberg.raw.request_metrics_minute"
+  --conf spark.hadoop.fs.s3a.path.style.access=true
 ```
 
-Nothing in that command mentions Gravix except the bucket name. Swap Spark for Flink, Dremio,
-DuckDB's Iceberg extension or anything else that reads the format, and the same warehouse path
-works.
+```scala
+import org.apache.hadoop.fs.Path
+val table = "s3a://gravix/iceberg-warehouse/raw/request_metrics_minute"
+val fs = new Path(table).getFileSystem(spark.sparkContext.hadoopConfiguration)
+// Each metadata file is named <version>-<uuid>.metadata.json. The highest version is the table now.
+val versions = fs.listStatus(new Path(table + "/metadata")).map(_.getPath).filter(_.getName.endsWith(".metadata.json"))
+val newest = versions.maxBy(_.getName.takeWhile(_ != '-').toLong).toString
+spark.read.format("iceberg").load(newest).count()
+```
+
+That reads the table as it was when that version was written. To query it by name, register the same
+metadata file in an Iceberg catalog of your own, with the `register_table` procedure where your
+catalog supports it. A table registered that way does not follow Gravix's later versions until it is
+registered again. This repository verifies the read above, not registration.
+
+Nothing in those commands mentions Gravix except the bucket name. Other Iceberg readers, such as
+Flink or DuckDB's Iceberg extension, also open a table from its metadata file. Spark is the one this
+repository verifies.
 
 ```bash
 ./scripts/verify_spark_iceberg_read.sh
 ```
 
-runs exactly that against a running stack, in an ephemeral container, and exits non-zero if the
-query fails. Spark is deliberately **not** a permanent service in `docker-compose.yml`: it is a
-verification, not a component.
+runs that read against a running stack, in an ephemeral container, and exits non-zero if it fails.
+Spark is deliberately **not** a permanent service in `docker-compose.yml`: it is a verification,
+not a component.
 
 ## What is proven, and what is not
 
@@ -138,6 +167,7 @@ Honest scope, because this page is read by somebody deciding whether to depend o
 | Re-running does not double rows | Needs a running stack — `TestIcebergSyncIsIdempotent` |
 | Spark can read the tables | Needs a running stack and Docker — `TestVerifySparkIcebergRead` |
 
-The last three skip when no stack is reachable. They have not yet been run in an environment that
-had one, so treat the Spark interoperability claim as **designed and not yet demonstrated** until
-that test has passed somewhere you can see. `docs/oss/spec-defects.md` SD-050 records why.
+The last three skip when no stack is reachable. The Spark read has been run by hand against Trino
+435, MinIO and Spark 3.5.3, outside the full stack (`docs/oss/spec-defects.md` SD-059). Until
+`TestVerifySparkIcebergRead` passes on the full stack, treat the Spark interoperability claim as
+**not yet demonstrated end to end**. SD-050 records why it took this long.

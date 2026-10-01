@@ -174,4 +174,7 @@ func TestVerifySparkIcebergRead(t *testing.T) {
 	if !strings.Contains(string(out), "row(s)") {
 		t.Errorf("the script succeeded without reporting a row count:\n%s", out)
 	}
+	// Logged on success too: a pass that nobody can read is how this check
+	// once passed with no Iceberg catalog behind it (F-067).
+	t.Logf("verify_spark_iceberg_read.sh:\n%s", out)
 }
