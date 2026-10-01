@@ -4280,3 +4280,12 @@ bucket, so each chart drew nothing at all, with its axes scaled to the data it w
 markers now appear while a series has two points or fewer. Observed: the first dashboard shows an
 error rate of 20%, a P95 of 80 ms and a throughput of 5, which are the five facts sent, one of them a
 500, with latencies from 40 to 80 ms.
+
+### Update 2026-10-01 — a reproduction that runs Cube's published image
+
+`scripts/repro_f060.sh` restarts Cube on a running bootstrap stack, sends the dashboard's two hourly
+queries at the same moment, and exits 1 if neither answers within a minute. Its query logic, run
+against the lab Cube, reproduced the stall: no answer within 40 s for either. The `repro-f060`
+workflow builds the bootstrap stack as users do and runs the script three times. It is dispatched by
+hand, because it measures rather than gates. Its first run on `main` decides whether the published
+image stalls too, which is the evidence a Cube upgrade needs.
