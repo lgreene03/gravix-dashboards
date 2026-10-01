@@ -4097,3 +4097,13 @@ Getting Started and `CLAUDE.md` tell people to read the key from `data/api_key.t
 The verification gate on key creation is right, and the no-op mailer is the right default for a
 stack with no mail server. What was missing was a seeded key, which the bootstrap stack has had
 since GRVX-901.
+
+### Update 2026-10-01 — the seeded key works, and the next refusal was the rate limit
+
+The next `docker-smoke` run read the seeded key and passed every other step: Prometheus had three
+healthy targets and Grafana seven dashboards. Step 5 then reported 31 of 50 facts accepted.
+
+The other 19 were answered `429`. The seeded tenant is on the free plan, limited to 10 requests a
+second with a burst of 20, and the step sent 50 single-fact requests in about a second. Ingestion was
+right, so the step changed: it paces its requests under the limit, retries a `429` once a second
+later, and now requires all 50 facts, since every one of them is valid.

@@ -137,6 +137,12 @@ fi
 echo "[5/8] Sending test request facts..."
 
 FACTS_SENT=0
+RATE_LIMITED=0
+# The seeded tenant is on the free plan: 10 requests a second, with a burst of
+# 20. Fifty requests in a tight loop exceed that, and ingestion rightly answers
+# 429 to the rest, which this step once counted as refused facts. So it paces
+# itself under the limit and retries a 429 once, a second later, by which time
+# the tenant's bucket has refilled.
 if [ -n "$API_KEY" ]; then
     for i in $(seq 1 50); do
         STATUS_CODE=$((200 + (i % 5 == 0 ? 300 : 0)))
@@ -144,20 +150,30 @@ if [ -n "$API_KEY" ]; then
         EVENT_ID=$(python3 -c "import uuid,time,os; t=int(time.time()*1000); b=bytearray(t.to_bytes(6,'big')+os.urandom(10)); b[6]=(b[6]&0x0f)|0x70; b[8]=(b[8]&0x3f)|0x80; print(uuid.UUID(bytes=bytes(b)))")
         FACT="{\"event_id\":\"$EVENT_ID\",\"event_time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"service\":\"smoke-svc\",\"method\":\"GET\",\"path_template\":\"/api/smoke/{id}\",\"status_code\":$STATUS_CODE,\"latency_ms\":$LATENCY}"
 
-        RESP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8090/api/v1/facts \
-            -H "Content-Type: application/json" \
-            -H "X-API-Key: $API_KEY" \
-            -d "$FACT" 2>&1) || RESP="000"
+        post_fact() {
+            curl -s -o /dev/null -w "%{http_code}" http://localhost:8090/api/v1/facts \
+                -H "Content-Type: application/json" \
+                -H "X-API-Key: $API_KEY" \
+                -d "$FACT" 2>&1 || echo "000"
+        }
+        RESP=$(post_fact)
+        if [ "$RESP" = "429" ]; then
+            RATE_LIMITED=$((RATE_LIMITED + 1))
+            sleep 1
+            RESP=$(post_fact)
+        fi
 
         if [ "${RESP:0:1}" = "2" ]; then
             FACTS_SENT=$((FACTS_SENT + 1))
         fi
+        sleep 0.15
     done
 
-    if [ $FACTS_SENT -ge 40 ]; then
-        pass "Sent $FACTS_SENT/50 request facts"
+    # Every fact is valid, so every one must be accepted.
+    if [ $FACTS_SENT -eq 50 ]; then
+        pass "Sent 50/50 request facts ($RATE_LIMITED retried after a 429)"
     else
-        fail "Only $FACTS_SENT/50 facts accepted"
+        fail "Only $FACTS_SENT/50 facts accepted ($RATE_LIMITED answered 429 first)"
     fi
 else
     fail "Skipped — no API key"
