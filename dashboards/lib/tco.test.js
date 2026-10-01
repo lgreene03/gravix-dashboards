@@ -232,7 +232,7 @@ test('AC-6: BytesPerEvent must come from a bench result', () => {
 
 // ─── SD-021, mirrored ───
 
-test('the computed multiple accompanies the "roughly 10x" caveat', () => {
+test('the computed multiple accompanies the at-scale caveat', () => {
     const estimates = estimateAll(inputsFor(fixtures.cases[1]), prices, asOf);
     const bootstrap = estimates.find(e => e.deployment === DEPLOYMENT_BOOTSTRAP_VPS);
 
@@ -247,6 +247,18 @@ test('the computed multiple accompanies the "roughly 10x" caveat', () => {
         const actual = (e.totalUSDMonth / bootstrap.totalUSDMonth).toFixed(1);
         assert.equal(stated, actual,
             `${e.deployment} caveat says ${stated}x but the estimates give ${actual}x`);
+    }
+});
+
+test('no caveat quotes a fixed multiple (SD-021)', () => {
+    const fixed = /(roughly|about|around|approximately)\s+\d+(\.\d+)?\s*[x×]/i;
+    for (const c of fixtures.cases) {
+        for (const e of estimateAll(inputsFor(c), prices, asOf)) {
+            for (const caveat of e.caveats) {
+                assert.ok(!fixed.test(caveat),
+                    `${e.deployment} caveat quotes a fixed multiple: ${caveat}`);
+            }
+        }
     }
 });
 

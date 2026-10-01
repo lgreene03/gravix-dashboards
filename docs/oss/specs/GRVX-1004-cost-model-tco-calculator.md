@@ -130,7 +130,15 @@ There is deliberately no `Estimate(one Deployment)` function.
 Every `Estimate` carries at least these, verbatim:
 
 - Bootstrap VPS: `You operate this yourself. There is no SLA, no on-call rotation but yours, and no managed backups. That labour is a real cost this figure does not include.`
-- AWS single-region: `This is the shape Gravix moves to at scale. It is roughly 10x the bootstrap figure and is the honest number for a team past a few million events a month.`
+- AWS single-region: `This is the shape Gravix moves to at scale and is the honest number for a team past a few million events a month. Most of it is fixed cost, so it is many times the bootstrap figure at low volume and closer to it at high volume.`
+
+Every non-bootstrap estimate also carries the multiple computed from its own figures: `For these inputs the multiple is <m>x. It is not a constant: …`. No caveat may state a fixed multiple.
+
+> **Amended 2026-10-01 (SD-021).** The AWS single-region sentence previously read "It is roughly
+> 10x the bootstrap figure". Measured against this spec's own model the multiple is ~44× at a million
+> events a month and ~4× at a billion, so a fixed figure is wrong at almost every volume and wrong in
+> the under-budgeting direction for the reader it addresses. Guarded by
+> `TestNoCaveatQuotesAFixedMultiple` and its JS twin.
 - AWS multi-region: `Multi-region adds a full deployment per region. Choose it for latency or residency, not for cost.`
 
 Plus, on every estimate: `Line items marked "list_price" are the vendor's published rate on the date shown, not a negotiated rate and not a measurement.`

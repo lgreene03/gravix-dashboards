@@ -86,11 +86,12 @@ the moment any future change makes the warehouse layout unreadable by a generic 
 // tests/e2e/testdata/bare_parquet/write_fixture.go
 
 // WriteFixture writes one Hive-partitioned MetricRow Parquet file per day in
-// days to <dir>/request_metrics_minute/event_day=<day>/part-0.parquet using
+// days to <dir>/request_metrics_minute/event_day=<day>/request_metrics_minute_<YYYYMMDD>.parquet
+// (the name pkg/recompute.DeterministicKey gives a rollup's output) using
 // the identical column set and parquet tags as
 // transforms/request_metrics_minute/main.go:75-87, and one
 // EventSummaryRow Parquet file per day to
-// <dir>/service_events_daily/event_day=<day>/part-0.parquet using the
+// <dir>/service_events_daily/event_day=<day>/events_<uuid>.parquet using the
 // identical column set as transforms/compaction/main.go:40-46. rowsPerDay
 // MetricRow rows and rowsPerDay EventSummaryRow rows are written per day,
 // with RequestCount = int64(i+1) for the i-th row (0-indexed), so the sum of
@@ -131,9 +132,15 @@ func runDuckDB(t *testing.T, dir, query string) string
    `docs-site/docs/bare-parquet-access.md`'s first fenced code block:
    ```sql
    SELECT event_day, SUM(request_count) AS total_requests
-   FROM read_parquet('request_metrics_minute/event_day=*/part-0.parquet', hive_partitioning=true)
+   FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true)
    GROUP BY event_day ORDER BY event_day;
    ```
+
+   > **Amended 2026-10-01 (SD-026).** The fixture previously wrote `part-0.parquet` and this step
+   > published a glob matching only that name. Nothing in Gravix writes `part-0.parquet`, so the
+   > published query failed on every real warehouse with "No files found that match the pattern"
+   > while CI passed. The fixture now writes production file names and the published glob is
+   > `*.parquet`, which matches rollup and compaction output alike.
 5. The test asserts the CSV output is exactly:
    ```
    event_day,total_requests

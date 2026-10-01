@@ -39,10 +39,17 @@ budget.
   can read the Parquet output — this is the one condition this spec polls for, rather than checking
   ingestion/gateway/cube/dashboard health individually.
 - GRVX-901's `cmd/bootstrap_seed` writes `<base-dir>/api_key.txt`, needed to authenticate the poll
-  request if the query endpoint requires it (Cube's `load` endpoint in this stack's configuration is
-  unauthenticated per `docker-compose.bootstrap.yml`'s `cube` service env — no `CUBEJS_API_SECRET`
-  is set in the bootstrap `.env.bootstrap.example` by default — so the poll needs no key; verify this
-  assumption during implementation and record the finding in the report).
+  request if the query endpoint requires it. Cube's `load` endpoint **is authenticated**:
+  `cube/cube.js`'s `checkAuth` verifies a JWT against the secret in `JWT_SECRET_FILE` (or
+  `JWT_SECRET` when no file is named) before it ever consults `CUBEJS_API_SECRET`, and the bootstrap
+  stack sets `JWT_SECRET_FILE` on the `cube` service to the secret `bootstrap_seed` generates. The
+  poll therefore authenticates the way the dashboard does: log in to the gateway with the generated
+  credentials and send the returned JWT as a bearer token.
+
+  > **Amended 2026-10-01 (SD-019).** This bullet previously said the endpoint was unauthenticated
+  > because no `CUBEJS_API_SECRET` was set. That named the wrong variable: `checkAuth` tests the JWT
+  > secret first, which the compose file set inline (and, since F-029, through a generated file), so
+  > reading `.env.bootstrap.example` could not see it.
 - `.github/workflows/ci.yml`'s existing `docker-smoke` job (push-to-main only, `timeout-minutes: 20`)
   is the closest existing pattern: creates a throwaway `.env`, runs a script, uploads
   `docker compose logs` on failure. This spec's new job follows the same shape but must additionally

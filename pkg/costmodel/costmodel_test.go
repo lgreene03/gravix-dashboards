@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -373,11 +374,11 @@ func TestStorageScalesWithRetention(t *testing.T) {
 	}
 }
 
-// TestComputedMultipleAccompaniesTheCaveat. CaveatAWSSingle quotes "roughly
-// 10x". Measured against this model the real multiple is ~44x at a million
-// events a month and ~4x at a billion, because the AWS baseline is mostly fixed
-// cost. A reader who budgets from "10x" at small volume is out by four times,
-// so the computed figure prints beside the mandatory sentence. See SD-021.
+// TestComputedMultipleAccompaniesTheCaveat. The bootstrap-to-at-scale multiple
+// is ~44x at a million events a month and ~4x at a billion, because the AWS
+// baseline is mostly fixed cost. §5.2 once quoted a fixed "roughly 10x", which
+// put a small-volume reader out by four times; SD-021 replaced it with the
+// multiple computed from the figures on screen.
 func TestComputedMultipleAccompaniesTheCaveat(t *testing.T) {
 	prices := testPrices(t)
 	estimates, err := EstimateAll(testInputs(), prices)
@@ -403,8 +404,8 @@ func TestComputedMultipleAccompaniesTheCaveat(t *testing.T) {
 			}
 		}
 		if found == "" {
-			t.Errorf("%s does not state its computed multiple; the reader is left with "+
-				"\"roughly 10x\", which is wrong at this volume", e.Deployment)
+			t.Errorf("%s does not state its computed multiple; the reader is left to "+
+				"guess one, and a guessed constant is wrong at most volumes", e.Deployment)
 			continue
 		}
 		if !strings.Contains(found, "Budget from this figure, not from the multiple.") {
@@ -413,7 +414,7 @@ func TestComputedMultipleAccompaniesTheCaveat(t *testing.T) {
 		}
 		// The stated multiple must match the numbers actually rendered, or the
 		// correction is its own inaccuracy.
-		want := strings.TrimSpace(strings.Split(strings.Split(found, "the multiple is ")[1], "x,")[0])
+		want := strings.TrimSpace(strings.Split(strings.Split(found, "the multiple is ")[1], "x.")[0])
 		got := e.TotalUSDMonth / bootstrap
 		if want != strings.TrimSpace(trimTo1dp(got)) {
 			t.Errorf("%s caveat says %sx but the estimates give %.1fx", e.Deployment, want, got)
@@ -424,6 +425,30 @@ func TestComputedMultipleAccompaniesTheCaveat(t *testing.T) {
 	for _, e := range estimates {
 		if e.Deployment == DeploymentAWSSingle && !hasCaveat(e.Caveats, CaveatAWSSingle) {
 			t.Error("the mandatory at-scale caveat was replaced rather than supplemented")
+		}
+	}
+}
+
+// TestNoCaveatQuotesAFixedMultiple guards SD-021's amendment. §5.2 once
+// mandated "roughly 10x the bootstrap figure", which was 44x at the volume the
+// sentence addressed. The only multiple a caveat may state is the computed one,
+// which TestComputedMultipleAccompaniesTheCaveat checks against the totals.
+func TestNoCaveatQuotesAFixedMultiple(t *testing.T) {
+	fixed := regexp.MustCompile(`(?i)(roughly|about|around|approximately)\s+\d+(\.\d+)?\s*[x×]`)
+	for _, events := range []int64{1_000_000, 50_000_000, 1_000_000_000} {
+		in := testInputs()
+		in.EventsPerMonth = events
+		estimates, err := EstimateAll(in, testPrices(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range estimates {
+			for _, c := range e.Caveats {
+				if m := fixed.FindString(c); m != "" {
+					t.Errorf("%s caveat quotes a fixed multiple %q; the multiple is a curve, "+
+						"so state the computed one (SD-021): %q", e.Deployment, m, c)
+				}
+			}
 		}
 	}
 }
@@ -465,8 +490,8 @@ func TestMultipleVariesWithVolume(t *testing.T) {
 			"the model's fixed-cost shape has changed", small, large)
 	}
 	if small < 20 {
-		t.Errorf("the small-volume multiple is %.1fx; if it has genuinely come down near the "+
-			"\"roughly 10x\" the caveat quotes, SD-021 can be closed and this test retired", small)
+		t.Errorf("the small-volume multiple is %.1fx; the model's fixed-cost floor has moved, "+
+			"so re-read SD-021 before trusting any multiple stated in prose", small)
 	}
 }
 

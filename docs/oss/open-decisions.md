@@ -6,6 +6,10 @@ Three registers hold 76 entries between them, most of them resolved. Most are or
 implementer can pick up. This page lists only the ones that **cannot be closed by implementing
 harder**, because they need a decision, a permission, or an external check.
 
+**Decisions made under the owner's delegation of 2026-10-01 are logged in
+[`delegated-decisions.md`](delegated-decisions.md)**, each with the options, the choice, and how to
+reverse it. Rows below are removed as they are decided there.
+
 Regenerate the underlying counts with:
 
 ```bash
@@ -27,28 +31,15 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 | **F-039** *(high)* | Whether compaction preserves and merges `latency_sketch`, or whether compacted days are documented as scalar-only with percentiles dropped rather than averaged | Compaction rewrites `request_metrics_minute` through its own twelve-field `MetricRow`, silently deleting the five columns Phase 8 added — `latency_sketch` among them — and then sets each merged percentile to the arithmetic mean of the per-bucket percentiles. That is the exact error the sketch exists to prevent, committed by the job that deletes the sketch. It is a schema and retention trade, and it makes the correctness axis true for fresh data and false for compacted data. |
 | **SD-029** *(high)* | Whether `/api/gateway/export` (exists today, streams a tar.gz of raw JSONL) and GRVX-1107 §5.4's new `/api/gateway/exports` are reconciled or kept as two endpoints one character apart | GRVX-1107 §2 names `services/gateway/enterprise.go` as holding the scheduled-export code; it holds none — the code is in `gateway_platform.go`, which §4 does not permit touching, so AC-7/8/9/10/12 are unreachable. §4 also omits `cmd/cli/main.go`, without which the new subcommand is dead code that fails `staticcheck`. The engine and CLI are built and tested; the gateway half needs the file list corrected and the endpoint collision decided. |
 | **F-042** *(medium)* | Whether to add two mechanical checks to the Spec Readiness Gate: every §2/§4.2 path must resolve in the repository, and every file named in §6 or §7 must appear in §4 | Every Phase 11 spec records 12/12 PASS, and four of the five executed carried a §2 or §4 defect anyway. Check 1 tests that paths are well-formed, not that they are right or complete. Two of the defects would have produced a red build if followed literally. Both proposed checks are scriptable, in the spirit of `check-boundary`. |
-| **SD-026** *(high)* | Whether `docs-site/docs/bare-parquet-access.md` publishes GRVX-1101 §6's `part-0.parquet` query, the `*.parquet` query that actually works on a warehouse, or both | §6 mandates a query whose glob matches only the test fixture; on real data DuckDB fails it with "No files found that match the pattern". Both are published for now, the wide one flagged as the one to use, and both are held under test. Which one a public page leads with is a product call. |
 | **SD-023** *(medium)* | One `Batcher` per (tenant, topic) file, or one fronting all files and fsyncing each it touched | Per-file preserves the on-disk layout and loses most of the amortisation on a multi-tenant node; all-files keeps the throughput and is not what §5.1 describes. Measured curve: 1 fact/fsync ≈ 4,500/sec/core, 8 ≈ 43,000, 512 ≈ 500,000. |
 | **SD-016** *(medium)* | Whether the cardinality budget stays per-process when the shipped Helm chart runs ingestion at 2–10 replicas | The bound is up to 10× looser than documented and segment collapsing is non-deterministic across pods. Either the budget is wrong or the chart is. |
-| **SD-015** | Which key result owns Phase 9's "one alert rule armed" exit criterion | A CPO call. An exit criterion no KR measures cannot be said to have been met. |
 | **F-026** *(high)* | When to add `docker-smoke` and `docker-build` to `ci-summary`'s `needs` | One line, and it turns every pull request red immediately — correctly, but for a failure nobody has diagnosed and whose logs have expired. Sequencing, not code. |
 
 ## Spec text that contradicts what was measured
 
-These need an edit to the spec (and in one case the thesis), not to the code. The implementations
-already work around them and say so.
-
-| Item | The spec says | What was measured | How the shipped code handles it |
-|---|---|---|---|
-| **SD-021** *(medium)* | GRVX-1004 §5.2's mandatory caveat: the at-scale figure "is roughly 10x the bootstrap figure" | 43× at 1M events/month, 43× at 50M, 4× at 1B — wrong in the dangerous direction for the reader the sentence addresses. Also in `01-competitive-thesis.md` §2 Axis 4. | **Mitigated and tested.** `withComputedMultiple` appends the real multiple next to the mandated sentence in both `pkg/costmodel` and `dashboards/lib/tco.js`, so the "10x" never appears alone. Guarded by `TestComputedMultipleAccompaniesTheCaveat` and its JS twin, with Go/JS agreement to $0.01 by `TestGoJSParity`. The thesis carries no "10x" figure; its Axis 4 requires at-scale figures beside bootstrap ones, which `tco.html` does — `TestPageShowsAllDeployments`. **Nothing is unguarded; what remains is amending §5.2's text.** |
-| **SD-022** *(medium)* | GRVX-1005 §5.3: the SIGKILL test "is the only test that actually proves §6; a unit test asserting `fsync` was called does not" | The reverse. Against a batcher that acknowledges before fsyncing, `TestDurabilityUnderKill` passes three times out of three and the two unit tests fail. SIGKILL does not discard the page cache. | **Both kinds of test are kept**, so the spec's wrong ranking costs nothing: `batch_test.go` holds the SIGKILL test *and* the unit tests it dismisses. Separately, SD-056 found the batcher all of them exercise is not on the production path, which matters more than which test is stronger. |
-| **SD-019** *(high)* | GRVX-910 §2: Cube's `load` endpoint is unauthenticated because no `CUBEJS_API_SECRET` is set | `checkAuth` tests `JWT_SECRET` first, and the bootstrap compose sets it inline rather than through `.env`. Cleared in implementation; §2's sentence is still wrong. | **Cleared in implementation.** The endpoint authenticates. Only §2's sentence is stale. |
-
-**Read this table as spec-text debt, not as live defects.** Every row's behaviour is already correct in
-the shipped code and covered by a named test; what is outstanding is an edit to the spec so that a
-future implementer reading it is not misled. Treating these as user-facing bugs overstates them —
-which has happened, so the mitigation column now states the evidence rather than asking a reader to
-trust the paragraph above it.
+**None outstanding.** SD-019, SD-021 and SD-022 were amended on 2026-10-01 (DD-001 to DD-003). SD-021
+was more than text: the mandated "roughly 10x" sentence was removed from both cost-model
+implementations, and a guard test now fails on any fixed multiple in a caveat.
 
 ## Permissions and external checks
 
