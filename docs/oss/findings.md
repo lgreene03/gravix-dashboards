@@ -4150,7 +4150,7 @@ Cube, the endpoints query that failed now answers in 2,255 ms cold, and 14 ms on
 **Found by** a soak test of GRVX-1006's cache warmer against Cube `v0.35` on the bootstrap stack's settings
 **Affects** Cube on the bootstrap stack; the full stack's Trino path is untested
 **Severity** medium — after a Cube restart, two simultaneous first visitors wait about two minutes for anything
-**Status** open; reproduced in a lab, not yet on the published image
+**Status** open; reproduced on the published image in CI, two trials of three
 
 ### What happens
 
@@ -4188,6 +4188,22 @@ removed, because that download is blocked here. The published image could not be
 The next step is to reproduce it on the bootstrap stack in CI, which can download the extension, and
 then to try a later Cube release. A Cube upgrade changes the semantic layer every query passes
 through, so it needs its own measurement, not a version bump.
+
+### Reproduced on the published image, 2026-10-01
+
+`repro-f060` ran the bootstrap stack as users build it, with `cubejs/cube:v0.35` as published, on a
+GitHub-hosted `ubuntu-24.04` runner ([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36936672672)).
+Each trial restarts Cube, waits for `/readyz`, and sends the dashboard's two hourly-series queries at
+once:
+
+| Trial | `error_rate` | `request_count` |
+|---|---|---|
+| 1 | no answer within 60 s | no answer within 60 s |
+| 2 | no answer within 60 s | no answer within 60 s |
+| 3 | 0.4 s | 0.3 s |
+
+So the lab's stall is real on the image users run, and not every time. The workflow now takes a
+`cube_image` input, so a later Cube can be measured the same way before anyone proposes upgrading.
 
 ## F-061 — a fresh install told its first visitor to adjust filters they never set
 

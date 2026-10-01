@@ -5,9 +5,17 @@ name: repro-f060
 # image as published, so this runs scripts/repro_f060.sh against the bootstrap
 # stack built the way users build it. Dispatched by hand: it is a measurement
 # for whoever upgrades Cube, not a gate, and it fails when the stall happens.
+# It reproduced on the pinned image in two of three trials, so the next
+# question is whether a later Cube has it, which cube_image answers without
+# changing the compose file anyone runs.
 
 on:
   workflow_dispatch:
+    inputs:
+      cube_image:
+        description: Cube image to measure instead of the pinned one, such as cubejs/cube:v1.7.48. Empty measures the pinned image.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -22,8 +30,17 @@ jobs:
       # Polled rather than --wait, which treats the one-shot seed container's
       # exit as a failure.
       - name: Start the bootstrap stack
+        env:
+          CUBE_IMAGE: ${{ inputs.cube_image }}
         run: |
-          docker compose -f docker-compose.bootstrap.yml up -d --build
+          files=(-f docker-compose.bootstrap.yml)
+          if [ -n "$CUBE_IMAGE" ]; then
+            printf 'services:\n  cube:\n    image: "%s"\n' "$CUBE_IMAGE" > "$RUNNER_TEMP/cube-image.yml"
+            files+=(-f "$RUNNER_TEMP/cube-image.yml")
+          fi
+          docker compose "${files[@]}" up -d --build
+          # Which Cube this run measured, read from the container, not the input.
+          docker inspect -f '{{.Config.Image}}' gravix-cube
           for _ in $(seq 1 120); do
             curl -sf http://localhost:4000/readyz >/dev/null 2>&1 \
               && curl -sf http://localhost:8091/live >/dev/null 2>&1 && exit 0

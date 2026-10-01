@@ -163,11 +163,17 @@ Honest scope, because this page is read by somebody deciding whether to depend o
 | The SQL the job builds | **Unit-tested** — exact statements, explicit column lists, idempotent DELETE |
 | Column lists match the Hive tables | **Tested** against `storage/trino/init.sql` |
 | `-days 0` refuses before issuing SQL | **Tested** |
-| Row counts survive the copy | Needs a running stack — `TestIcebergSyncPreservesRowCount` |
-| Re-running does not double rows | Needs a running stack — `TestIcebergSyncIsIdempotent` |
-| Spark can read the tables | Needs a running stack and Docker — `TestVerifySparkIcebergRead` |
+| Row counts survive the copy | **Tested in CI** — `TestIcebergSyncPreservesRowCount`, on the full stack |
+| Re-running does not double rows | **Tested in CI** — `TestIcebergSyncIsIdempotent`, on the full stack |
+| Spark can read the tables | **Tested in CI** — `TestVerifySparkIcebergRead`, on the full stack |
 
-The last three skip when no stack is reachable. The Spark read has been run by hand against Trino
-435, MinIO and Spark 3.5.3, outside the full stack (`docs/oss/spec-defects.md` SD-059). Until
-`TestVerifySparkIcebergRead` passes on the full stack, treat the Spark interoperability claim as
-**not yet demonstrated end to end**. SD-050 records why it took this long.
+The last three run in `docker-smoke` on every pull request, against the whole stack, and fail rather
+than skip there. They first passed on 2026-10-01 ([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36934275599)): the
+sync copied three rows, a second sync left three, and Spark, given only the table's path and the S3
+credentials, read the same three.
+
+Those three rows are fixtures CI writes into the Hive table first. On the full stack nothing else
+writes there yet, because the rollup files each tenant's metrics in a directory the Hive tables
+cannot name (`docs/oss/findings.md` F-070). Until that is fixed, the Iceberg tables on a full stack
+are copies of empty tables. What CI proves is the path from Hive to Iceberg to Spark, not that your
+traffic reaches it.
