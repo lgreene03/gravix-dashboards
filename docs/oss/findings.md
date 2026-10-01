@@ -1110,7 +1110,7 @@ green runs to show what it costs in minutes.
 measured figures before building a cost calculator on top of it.
 **Severity** medium — the storage numbers are conservative, so nobody under-provisions, but the
 mechanism is described wrongly and that misleads about what Parquet can be used for.
-**Status** open. Not fixed here: GRVX-1004 §4.2 admits `docs/capacity-planning.md` only to "link the
+**Status** resolved 2026-10-01 (DD-023). Originally: open. Not fixed here: GRVX-1004 §4.2 admits `docs/capacity-planning.md` only to "link the
 calculator; remove any figure the model now supersedes", and rewriting the mechanism paragraph is a
 larger edit than that.
 
@@ -1146,6 +1146,24 @@ there was no harness that could have produced the real ones.
 JSONL size (measured), and the aggregation factor with an explicit note that it depends on events per
 bucket-key and is not recoverable per event. Then re-derive the plan-tier tables from the measured
 figure rather than from 300 bytes.
+
+### Resolved 2026-10-01 — DD-023: the plan-tier tables come from a measured result
+
+The mechanism paragraph and the measured per-event table were corrected earlier. The plan-tier
+tables were not: they still multiplied 300 B and 30–50 B. They are now derived from
+`bench/results/20261001T170609Z-small.json`, the reference machine's first result.
+
+- Raw is 210.8 B per event and scales with events alone.
+- The warehouse is given as a range, 2.9 B to about 21 B per event. The measured run averaged 7.3
+  events per row at 21.2 B per row. A low-volume deployment, with one event in most rows, approaches
+  21 B. The totals use the upper bound, so the tables cannot under-provision a small deployment the
+  way a single average would.
+- The old tables gave 44–52% more in every row. The page says so.
+
+Re-deriving found an arithmetic error the page carried independently. It said the 500 MB default
+buffer held "~90 minutes" at 100 events/sec. At its own 300 B estimate that is about 4.6 hours, and
+at the measured size about 6.5 hours. The buffer-full response it describes, 503 with
+`Retry-After: 30`, was checked against `services/ingestion/main.go` and is right.
 
 ## F-021 — the bootstrap stack's data volume arrives root-owned, and every container runs non-root
 

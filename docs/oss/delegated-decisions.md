@@ -462,3 +462,21 @@ writes in the storage interface and an expiry policy, which is a design change f
 
 **To reverse.** Restore the cron's `leaderelect.NewFileElector(outputDir, …)` and the
 working-directory path in `acquire`. Both defects return.
+
+## DD-023 — F-020: size storage from the measured raw figure and a warehouse range
+
+**Date** 2026-10-01 · **Tier** routine (documentation) · **Finding** F-020
+
+**Options.** Keep the estimate-based tables beside the measured figures; scale the tables by the
+measured averages; or use the raw figure, which is linear, and a range for the warehouse, which is
+not.
+
+**Chosen.** The raw figure and a range. A single warehouse average of 2.9 B would under-provision a
+deployment with few events per row by up to seven times. The upper bound costs a few percent of the
+total and cannot be short.
+
+**Done.** `docs/capacity-planning.md`'s plan-tier, retention, S3, buffer and upload figures, and the
+reference machine's small-scale result committed under `bench/results/`.
+
+**To reverse.** Restore the old tables from git. They over-provision, so reversing is safe but
+wasteful.

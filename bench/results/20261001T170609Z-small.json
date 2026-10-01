@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "run_at": "2026-10-01T17:06:09Z",
+  "scale": "small",
+  "machine": {
+    "os": "linux",
+    "arch": "amd64",
+    "num_cpu": 4,
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "mem_total_bytes": 16766414848,
+    "disk_type": "hdd",
+    "go_version": "go1.25.14",
+    "gravix_commit": "15e20ecbd12b1dd2b631b45d49b06b65fca788cb",
+    "container": false
+  },
+  "dataset": {
+    "seed": 1001,
+    "facts": 1008000,
+    "days": 2,
+    "services": 3,
+    "paths_per_service": 4
+  },
+  "ingest_events_per_sec_per_core": 70862.05670210527,
+  "ingest_p99_latency_ms": 0.031244,
+  "rollup_events_per_sec": 102551.29414954611,
+  "bytes_per_event_raw": 210.7807132936508,
+  "bytes_per_event_rolled_up": 2.902580357142857,
+  "bytes_per_event_compacted": 2.902580357142857,
+  "query_p50_ms": 166.78056,
+  "query_p95_ms": 171.830438,
+  "query_p99_ms": 171.830438,
+  "query_cold_p95_ms": 171.617607,
+  "peak_resident_bytes": 685207552,
+  "notes": [
+    "ingest runs (events/sec): 270551.49, 283469.62, 283448.23",
+    "ingest ran on 4 parallel workers, one per core, and fsynced the buffer every 512 facts, the ingestion service's default group-commit batch",
+    "ingest excludes HTTP framing: it measures decode, schema validation and the durable-buffer append, which is the work Gravix does per fact",
+    "rollup runs (events/sec): 102141.76, 102551.29, 103466.12",
+    "cold query is the first read of freshly written files by a process that has not touched them; the OS page cache is NOT cleared, which needs root, so the true cold figure on a fresh machine is worse than this",
+    "query read 138141 metric rows per call; warm runs (ms): 166.78, 171.83, 165.49",
+    "compaction: 2925801 bytes -> 2925801 bytes (100.0% of the rolled-up size); compaction did not reduce the warehouse at this scale, which is reported rather than omitted",
+    "total ingest throughput before dividing by 4 cores: 283448 events/sec"
+  ]
+}

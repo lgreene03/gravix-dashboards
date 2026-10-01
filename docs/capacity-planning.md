@@ -38,6 +38,9 @@ Events/sec averages assume uniform distribution across 30 days (events / 2,592,0
 | Parquet (warehouse) | **2.89 B** | ~30-50 B | See the note below — this is not a compression ratio |
 | Total per event | **206.68 B** | ~330-350 B | |
 
+Those measured figures are from the GRVX-1001 bench run. The plan-tier tables below use a later
+result from the reference machine, 210.8 B raw and 2.9 B warehouse per event, about 3% apart.
+
 **The Parquet figure is not compression, and the old table's "Compression Ratio" column was
 misleading.** The rollup **aggregates**: many facts collapse into one minute-bucket row per
 service/method/path_template. Most of the reduction is fewer rows, not smaller ones. Two consequences
@@ -59,23 +62,37 @@ A single `RequestFact` event is approximately 200-400 bytes as JSONL (varies wit
 
 ### Monthly storage by plan tier
 
-| Plan       | Monthly Events | Raw JSONL   | Warehouse (Parquet) | Total (raw + warehouse) |
-|------------|---------------|-------------|---------------------|------------------------|
-| Free       | 500K          | 150 MB      | 15-25 MB            | ~175 MB                |
-| Team       | 10M           | 3 GB        | 300-500 MB          | ~3.5 GB                |
-| Business   | 50M           | 15 GB       | 1.5-2.5 GB          | ~17.5 GB               |
-| Scale      | 200M          | 60 GB       | 6-10 GB             | ~70 GB                 |
+Derived from a measured result, not from the estimates above:
+[`bench/results/20261001T170609Z-small.json`](../bench/results/20261001T170609Z-small.json), from the
+reference machine (a GitHub-hosted `ubuntu-24.04` runner).
+
+- **Raw JSONL: about 210 B per event.** Measured at 210.8 B. It scales with event count and nothing
+  else, so it is the figure to size from.
+- **Warehouse Parquet: between 2.9 B and about 21 B per event.** The measured run averaged 7.3 events
+  per minute-bucket row, at 21.2 B per row, which is 2.9 B per event. The figure depends on events
+  per row. A low-volume deployment, where most rows hold a single event, approaches the 21 B worst
+  case. The upper bound is what these tables use for totals.
+
+| Plan       | Monthly Events | Raw JSONL | Warehouse (Parquet) | Total, upper bound |
+|------------|---------------|-----------|---------------------|--------------------|
+| Free       | 500K          | 105 MB    | 1.4–10 MB           | ~116 MB            |
+| Team       | 10M           | 2.1 GB    | 29–210 MB           | ~2.3 GB            |
+| Business   | 50M           | 10.5 GB   | 145 MB–1.1 GB       | ~12 GB             |
+| Scale      | 200M          | 42 GB     | 580 MB–4.2 GB       | ~46 GB             |
 
 ### Storage with retention applied
 
-Multiply monthly storage by retention period (in months) to get steady-state disk usage:
+Multiply monthly storage by retention in months (days ÷ 30) to get steady-state disk usage:
 
-| Plan       | Retention | Steady-State Raw | Steady-State Warehouse | Total      |
-|------------|-----------|------------------|------------------------|------------|
-| Free       | 7 days    | 35 MB            | 4 MB                   | ~40 MB     |
-| Team       | 30 days   | 3 GB             | 400 MB                 | ~3.5 GB    |
-| Business   | 90 days   | 45 GB            | 6 GB                   | ~51 GB     |
-| Scale      | 365 days  | 720 GB           | 90 GB                  | ~810 GB    |
+| Plan       | Retention | Steady-State Raw | Steady-State Warehouse | Total, upper bound |
+|------------|-----------|------------------|------------------------|--------------------|
+| Free       | 7 days    | 24 MB            | 0.3–2.5 MB             | ~27 MB             |
+| Team       | 30 days   | 2.1 GB           | 29–210 MB              | ~2.3 GB            |
+| Business   | 90 days   | 32 GB            | 0.4–3.1 GB             | ~35 GB             |
+| Scale      | 365 days  | 511 GB           | 7–51 GB                | ~562 GB            |
+
+These tables replaced ones built from the 300 B and 30–50 B estimates, which gave 44–52% more
+in every row (F-020). Anything sized from the old tables is over-provisioned, not short.
 
 ---
 
@@ -147,13 +164,14 @@ For self-hosted MinIO, size the backing volume for raw + warehouse data with ret
 Total S3 storage = (raw_monthly * retention_months) + (warehouse_monthly * retention_months) + 20% headroom
 ```
 
-Example for a Business plan customer (50M events/month, 90-day retention):
+Example for a Business plan customer (50M events/month, 90-day retention), with the warehouse at
+its upper bound:
 
 ```
-Raw:       15 GB/month * 3 months  = 45 GB
-Warehouse: 2 GB/month  * 3 months  = 6 GB
-Headroom:  51 GB * 0.2             = 10 GB
-Total:                               ~61 GB
+Raw:       10.5 GB/month * 3 months  = 32 GB
+Warehouse: 1.05 GB/month * 3 months  = 3.2 GB
+Headroom:  35 GB * 0.2               = 7 GB
+Total:                                 ~42 GB
 ```
 
 For multi-tenant deployments, multiply per-tenant estimates by active tenant count. Use S3 lifecycle policies (template at `deploy/gravix/templates/s3-lifecycle.yaml`) to automate expiration.
@@ -166,13 +184,14 @@ The ingestion buffer holds JSONL files between fsync and S3 upload. Files rotate
 Buffer PVC = events_per_second * avg_event_bytes * max_outage_seconds
 ```
 
-Example: 100 events/sec, 300 bytes/event, 1-hour outage tolerance:
+Example: 100 events/sec, 210 bytes/event (measured; see above), 1-hour outage tolerance:
 
 ```
-100 * 300 * 3600 = ~103 MB
+100 * 210 * 3600 = ~76 MB
 ```
 
-The default `MAX_BUFFER_SIZE_MB=500` provides ~90 minutes of buffer at 100 events/sec. When the buffer is full, ingestion returns HTTP 503 with `Retry-After: 30`.
+The default `MAX_BUFFER_SIZE_MB=500` holds about six and a half hours at 100 events/sec. This page
+used to say "~90 minutes", which was wrong even at the old 300-byte estimate (about 4.6 hours). When the buffer is full, ingestion returns HTTP 503 with `Retry-After: 30`.
 
 ---
 
@@ -284,10 +303,10 @@ Ingestion traffic is low-bandwidth. Network is rarely the bottleneck.
 JSONL batch files upload every 60 seconds. Each upload is the accumulated data for that rotation period:
 
 ```
-Upload size per rotation = events_per_second * 300 bytes * 60 seconds
+Upload size per rotation = events_per_second * 210 bytes * 60 seconds
 ```
 
-At 1,000 events/sec: ~18 MB per rotation per replica.
+At 1,000 events/sec: ~13 MB per rotation per replica.
 
 ### Cube.js query patterns
 
