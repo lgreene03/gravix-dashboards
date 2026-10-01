@@ -37,6 +37,7 @@ Nothing below has shipped in a tagged release yet.
 - **One-command dev setup and a 5-minute contributor suite** — `./scripts/dev_setup.sh` and `make test-fast`, with the budget enforced in CI. No test was skipped or shortened to fit it (GRVX-1206)
 - **Generated release notes** — every contributor named, first contributions marked, no email addresses, and a `no-credit` list that is honoured by CI rather than by memory (GRVX-1209)
 - **Supply chain** — reproducible builds, release signing, and a CycloneDX SBOM (GRVX-709)
+- **Dashboard cache warming** — the gateway keeps the dashboard's default view in Cube's cache, so the first load after a Cube restart or at the start of a UTC day answers in under 100 ms rather than up to about 3 seconds. One query at a time, so it never takes the last slot from a user. `CACHE_WARM_ENABLED`, `CACHE_WARM_INTERVAL`, `CACHE_WARM_MAX_DURATION` (GRVX-1006)
 - **Load generator latency percentiles** — `p50_latency_ms`, `p95_latency_ms` and `p99_latency_ms` in the benchmark summary, over every request, failed ones included (F-017)
 - **Benchmark workflow on a named reference machine** — `.github/workflows/bench.yml` runs `bench/run.sh` on a GitHub-hosted `ubuntu-24.04` runner, which anyone can reproduce on by forking (DD-018)
 
@@ -62,6 +63,7 @@ Nothing below has shipped in a tagged release yet.
 - **Metric writes in legacy single-key mode answered 500**, which Prometheus retries forever. They now answer 400 and name the setting that enables them, `TENANT_DB_PATH` (SD-027)
 - **The Postgres backend's tests had never run** — they now run against a real Postgres on every pull request (F-043)
 - **The Go SDK page documented an API that does not exist** — rewritten from the SDK's exports, with an install that works today (F-050)
+- **Every endpoints table was empty on the bootstrap stack** — date-range pruning wrote a missing bound into the SQL whenever a query filtered time with `gte` or `lte`, which the endpoints views do. Such queries are no longer pruned (F-059)
 - **The full stack had no working API key** — ingestion ignores `.env`'s `API_KEY` once a tenant database is configured, and key creation needs a verified email that the default mailer never sends. The full stack is now seeded on first boot like the bootstrap stack, with its write key in `data/api_key.txt` (F-058)
 
 ### Security

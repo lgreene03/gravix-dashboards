@@ -377,3 +377,60 @@ showed no data. Fixed here; `TestTimeColumnsAreCastOnBothEngines` guards it.
 | AC-6, AC-7 warmer | Not built. `cache_warm.go` needs the gateway to mint a Cube JWT, which it can |
 | AC-8, AC-9, AC-10 | **Done** — the named tests above, each mutation-tested |
 | Cold path beyond one day | Needs `bucket_start` stored as a timestamp. That changes a published column type and every content digest: design tier, not decided here |
+
+### 11.7 The warmer, built and measured against Cube (2026-10-01)
+
+**AC-6 and AC-7 are done.** `pkg/gatewaycore/cache_warm.go` implements §5.2, started from
+`gatewaycore.Run`, not `services/gateway/`, which is one line that calls it (SD-058). It warms every
+active tenant with a token for that tenant, because `cube/cube.js` adds the tenant filter from the
+token and the cache is keyed by the resulting SQL. Settings and their defaults are documented in
+`self-hosting.md`. Three choices the spec left open are DD-032.
+
+| Test | Proves | Mutation that fails it |
+|---|---|---|
+| `TestWarmingDoesNotStarveUsers` (AC-6) | a user query never waits for a Cube slot because of the warmer, measured at the slot | warming a tenant's queries in parallel |
+| `TestWarmCycleAbandonedOnTimeout` (AC-7) | a cycle past `MaxDuration` sends nothing more, logs §6.1's message once, and leaves nothing running | removing the deadline |
+| `TestOverrunningCyclesDoNotQueue` | overrunning cycles never overlap | — |
+| `TestAbandonedCycleResumesWhereItStopped` | every tenant is reached when one cycle cannot reach them all | restarting each cycle at the first tenant |
+| `TestWarmQueriesMatchTheDashboard` | every line of `app.js` that decides the default view's queries, and the warm queries for a fixed day | changing the endpoints limit |
+| `TestWarmQueriesFollowTheUTCDay`, `TestWarmerWaitsThroughContinueWait`, `TestWarmerSendsEachTenantItsOwnToken`, `TestWarmerCountsCubeErrors`, `TestWarmerIsQuietBeforeTheFirstRollup`, `TestDisabledWarmerReturnsAtOnce`, `TestWarmerConfigFromEnv` | the remaining behaviour | — |
+
+A CPU-loaded stress run of the first version failed `TestOverrunningCyclesDoNotQueue` 9 times in 30:
+cancelling an abandoned query's request does not stop it in Cube, so the next cycle overlapped it.
+Abandoning now lets the query in flight finish. The same stress run, 330 executions, then passed.
+
+**Measured against Cube** `v0.35`, on the bootstrap stack's limits and the standard bench warehouse,
+§11.6's lab. The dashboard's queries were transcribed from `app.js` by hand, separately from the Go.
+
+| Default-view query | Cold, fresh Cube | After one warm cycle |
+|---|---:|---:|
+| services | 233 ms | 5 ms |
+| endpoints | 2,255 ms | 14 ms |
+| error rate, hourly | 3,013 ms | 44 ms |
+| request count, hourly | 3,057 ms | 95 ms |
+
+A four-minute soak per arm, loading the default view every two to three seconds with a simulated
+rollup write every minute:
+
+| | View p50 | View p95 | Cache-miss query p95 |
+|---|---:|---:|---:|
+| No warmer | 34 ms | 99 ms | 564 ms |
+| Warmer every 30 s | 34 ms | 80 ms | 556 ms |
+
+Warming did not slow users down. It also did not speed up an active one, because Cube serves a query
+it has seen from its cache across rollup writes. That is what SD-058 corrects in §5.2's premise. The
+warmer's measured effect is on the first load after Cube starts, and on the first load of each UTC
+day.
+
+**Found on the way.** F-059: since #23, the endpoints table, the endpoints page and the endpoint
+summary failed on the DuckDB stack. Fixed, with `TestSingleBoundTimeFiltersCompile`. F-060: two
+concurrent first queries after Cube starts stall it for about two minutes. Open, and recorded with
+its reproduction.
+
+| Item | State |
+|---|---|
+| AC-1 warm ≤400 ms | **met in the lab**, 5 to 95 ms. `bench/query` and `TestWarmQueryP95WithoutRedis`, which would make it a CI number, are not written |
+| AC-2, AC-4 | measured in §11.6 and above; not yet in `scripts/perf_baseline.json` |
+| AC-5 percentile endpoint | not measured |
+| AC-6, AC-7 | **done** |
+| §6 step 4, the full stack with Redis | not measured |

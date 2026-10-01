@@ -78,10 +78,19 @@ function tableSql(table) {
 // a no-op, because its table declares event_day as an ordinary column rather
 // than a partition, and a predicate that buys nothing there was not changed
 // without a Trino stack to measure it on.
+//
+// Cube calls this with both bounds only for a date range. For a single-bound
+// filter on the time column — the dashboard's endpoints table sends its range as
+// a "gte" and an "lte" filter — it calls it once per filter with ONE value, and
+// does not say which bound that value is. No predicate is safe then, so nothing
+// is pruned; the query's own filter still applies to the rows. Writing the
+// missing bound into the SQL put a column named "undefined" in front of DuckDB,
+// and every such query failed (F-059).
 function dayRangeSql(from, to) {
-  return isDuckDB
-    ? `event_day BETWEEN CAST(substr(${from}, 1, 10) AS DATE) AND CAST(substr(${to}, 1, 10) AS DATE)`
-    : '1 = 1';
+  if (!isDuckDB || to === undefined) {
+    return '1 = 1';
+  }
+  return `event_day BETWEEN CAST(substr(${from}, 1, 10) AS DATE) AND CAST(substr(${to}, 1, 10) AS DATE)`;
 }
 
 // How Cube decides a cached result is stale. On DuckDB the key is read from the

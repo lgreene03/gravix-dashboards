@@ -78,8 +78,10 @@ Docker daemon, and nothing below should be assumed cleared until CI says so.
   after measuring with a real Cube on the bootstrap stack's limits: no pre-aggregations, warm p95
   51–100 ms from Cube's result cache, cold p95 193–593 ms for one day and up to 3.7 s for a week.
   The cold figure is published, not hidden. Measuring also found and fixed F-053, which broke every
-  date-ranged query on the DuckDB stack. The warmer, the CI query driver and the percentile
-  endpoint's figure remain.
+  date-ranged query on the DuckDB stack. The warmer is built and measured against Cube (DD-032):
+  one cycle made the default view's queries cache hits, 5 to 95 ms against up to 3 s cold. Doing it
+  found F-059, now fixed, and F-060, open. The CI query driver and the percentile endpoint's figure
+  remain.
 
 ### Every spec has now been audited against its own criteria
 
@@ -95,6 +97,8 @@ maintainer (SD-040), an external auditor (GRVX-1407), a pricing audit the implem
 self-verify (GRVX-1002), or a dependency on one of those (GRVX-1007, GRVX-1008). GRVX-1005's AC-1
 waited on a reference machine until DD-018 named one, a GitHub-hosted `ubuntu-24.04` runner. Choosing
 it found F-056: the benchmark's per-core ingest figure was a one-core rate divided by every core.
+Measured correctly at standard scale, it is 73,868 events/sec/core against a target of 20,000, with
+HTTP framing excluded, and AC-1 passes (GRVX-1005 §11.2).
 
 **An unexplained status is indistinguishable from a spec nobody looked at.** That is what hid four of
 these, and it is why every entry on this page now names its cause.

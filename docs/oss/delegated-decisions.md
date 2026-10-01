@@ -625,3 +625,34 @@ F-058 does not need it.
 
 **To reverse.** Restore `data-init`'s command to the bare `chown`. The full stack then has no
 working write key again, so a reversal needs another way to issue one.
+
+## DD-032 — SD-058: warm every 30 seconds, build the queries per cycle, and let an abandoned query finish
+
+**Date** 2026-10-01 · **Tier** routine (implementing an approved spec; a default value) · **Spec** GRVX-1006
+
+**Options.** Warm every four minutes, as §5.2 says. Warm every 30 seconds. Or warm only when data
+changes.
+
+**Chosen.** Every 30 seconds. Cube already serves a query it has seen from its cache across rollup
+writes (SD-058), so the interval only bounds how long the default view stays cold after a Cube
+restart or at the start of a UTC day. Four minutes leaves it cold for up to four minutes; 30 seconds
+for up to 30, and a cycle of cache hits costs four cached answers per tenant. Warming on data change
+was not chosen, because Cube already refreshes on data change, and the gateway cannot see Cube's
+refresh keys.
+
+With it, three choices the spec left open. The queries are built per cycle from today's UTC date,
+which is the date the dashboard's date inputs report. An abandoned cycle sends no further query and
+lets the one in flight finish, because Cube would run it anyway. And the next cycle starts at the
+tenant the last one stopped on, so with more tenants than a cycle can reach, all are reached in turn.
+
+**Done.** `pkg/gatewaycore/cache_warm.go` and its tests, started by `gatewaycore.Run`, with three
+settings documented in `self-hosting.md`. Verified against Cube on the bootstrap stack's limits: one
+warm cycle made the dashboard's own default-view queries cache hits, 5 to 95 ms against 233 to
+3,057 ms cold. A soak with simulated rollups showed no rise in user latency.
+
+**Not decided, and why.** What to do about F-060, Cube stalling when its first two queries arrive
+together. It is not reproduced on the published image yet, and the likely fix is a Cube upgrade,
+which needs measuring first.
+
+**To reverse.** `CACHE_WARM_INTERVAL=4m` restores the spec's interval with no code change.
+`CACHE_WARM_ENABLED=false` turns warming off.

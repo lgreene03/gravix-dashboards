@@ -4107,3 +4107,84 @@ The other 19 were answered `429`. The seeded tenant is on the free plan, limited
 second with a burst of 20, and the step sent 50 single-fact requests in about a second. Ingestion was
 right, so the step changed: it paces its requests under the limit, retries a `429` once a second
 later, and now requires all 50 facts, since every one of them is valid.
+
+## F-059 — on the bootstrap stack, every endpoints table failed once date-range pruning landed
+
+**Found by** checking that GRVX-1006's cache warmer sends the dashboard's exact queries, against a real Cube
+**Affects** `cube/model_flags.js` (`dayRangeSql`), `cmd/onboarding_gate/cube_model_env_test.go`
+**Severity** high — the overview's endpoints table, the endpoints page and the endpoint summary were empty on the stack most people start with
+**Status** fixed; reached `main` in #23 on 2026-10-01 and was in no release
+
+### What happened
+
+SD-024's decision (DD-008) pushed a query's date range into the Parquet read, through Cube's
+`FILTER_PARAMS`. Cube calls the predicate with two values for a date range. For a single-bound filter
+such as `gte` or `lte` it calls it once per filter, with one value, and does not say which bound that
+value is. The predicate wrote the missing bound into the SQL as `undefined`:
+
+```
+Binder Error: Referenced column "undefined" not found in FROM clause!
+```
+
+The dashboard sends its date range two ways. The hourly series send a date range, and worked. The
+endpoints table, the endpoints page and the endpoint summary send it as a `gte` and an `lte` filter
+on `bucketStart`, and the overview opens with the last seven days selected. So those three failed on
+every load. Cube answered 400, and the dashboard reads a 400 as "no data yet", so the tables were
+silently empty.
+
+### Why the tests passed
+
+`TestDuckDBModelPrunesPartitionsByDateRange` compiles the models in a harness that stands in for
+Cube's `FILTER_PARAMS`. The stand-in always passed two values, which is only Cube's shape for a date
+range. The single-bound shape was never compiled.
+
+### What changed
+
+`dayRangeSql` returns the no-op `1 = 1` when it is given one value. Nothing is pruned then, and the
+query's own filter still selects the rows. The harness now passes Cube's one-value shape when asked,
+and `TestSingleBoundTimeFiltersCompile` fails on the old predicate with the SQL above. Against the lab
+Cube, the endpoints query that failed now answers in 2,255 ms cold, and 14 ms once warm.
+
+## F-060 — two concurrent first queries after Cube starts stall every query for about two minutes
+
+**Found by** a soak test of GRVX-1006's cache warmer against Cube `v0.35` on the bootstrap stack's settings
+**Affects** Cube on the bootstrap stack; the full stack's Trino path is untested
+**Severity** medium — after a Cube restart, two simultaneous first visitors wait about two minutes for anything
+**Status** open; reproduced in a lab, not yet on the published image
+
+### What happens
+
+On a freshly started Cube, if the first two queries arrive at once, every query, including later and
+unrelated ones, is answered `Continue wait` while Cube sits at 0% CPU. It recovers on its own, after
+124 s and 132 s in two trials.
+
+| First requests after start | Trials stalled |
+|---|---|
+| Four dashboard queries at once | 3 of 3 |
+| The same, on two CPUs instead of half of one | 2 of 2 |
+| The same, with `CUBEJS_CONCURRENCY=1` | 3 of 3 |
+| Two queries at once | 2 of 2 |
+| One query, then four at once | 0 of 2 |
+| `GET /cubejs-api/v1/meta`, then four at once | 0 of 2 |
+| Two at once, with Gravix's model helpers inlined instead of loaded through `require` | 2 of 2 |
+
+So it is Cube compiling the data model for concurrent first requests, not CPU, queue concurrency, or
+the way Gravix's models load `cube/model_flags.js`. Any single request first prevents it.
+
+### Who meets it
+
+The dashboard's own first load sends one query, the service list, and waits for it before sending the
+rest. One browser alone does not trigger this. Two visitors opening the dashboard in the same second
+after a Cube restart do, and so would any client that opens with parallel queries.
+
+GRVX-1006's warmer sends one query at a time and starts with the gateway, so after a restart of the
+whole stack it usually compiles the model before anyone arrives. It cannot help when Cube restarts on
+its own.
+
+### Not yet known
+
+The lab ran Cube's published image with the two lines that download DuckDB's `httpfs` extension
+removed, because that download is blocked here. The published image could not be run as published.
+The next step is to reproduce it on the bootstrap stack in CI, which can download the extension, and
+then to try a later Cube release. A Cube upgrade changes the semantic layer every query passes
+through, so it needs its own measurement, not a version bump.
