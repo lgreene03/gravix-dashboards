@@ -55,6 +55,10 @@ CORS_ALLOWED_ORIGINS=https://app.gravix.io,https://dashboard.gravix.io
 
 Never use `*` in production. This prevents cross-origin attacks against your gateway endpoints.
 
+Ingestion reads the same variable. It allows cross-origin reads only, which the dashboard needs for
+its service list, and never cross-origin writes, so set it to the origin your dashboard is served
+from on both services.
+
 ## Storage: S3 instead of MinIO
 
 The Docker Compose setup uses MinIO as an S3-compatible local store. In production, use a managed object storage service such as AWS S3, Google Cloud Storage, or DigitalOcean Spaces.

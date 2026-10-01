@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 	"github.com/lgreene/gravix-dashboards/pkg/sketch"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
@@ -467,6 +468,62 @@ func TestPercentileRequiresAPIKey(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rr.Code)
+	}
+}
+
+// TestPercentileAcceptsTheDashboardSession is F-062. A signed-in dashboard
+// sends the session token the gateway issued at login, because nothing in the
+// dashboard stores an API key. The endpoint accepted only keys, so every
+// latency chart was empty for everyone who signed in.
+func TestPercentileAcceptsTheDashboardSession(t *testing.T) {
+	gw, store, tenantID, _ := percentileGateway(t)
+	minutes, _ := skewedMinutes(7)
+	seedPartition(t, store, tenantID, percentileDay, latencyRows(t, percentileDay, minutes, true))
+
+	call := func(bearer string) *httptest.ResponseRecorder {
+		params := windowParams("0.95")
+		q := make([]string, 0, len(params))
+		for k, v := range params {
+			q = append(q, k+"="+v)
+		}
+		sort.Strings(q)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/percentile?"+strings.Join(q, "&"), nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		rr := httptest.NewRecorder()
+		gw.handleWindowPercentile(rr, req)
+		return rr
+	}
+
+	session, err := gw.tokens.Generate(tenantID, "user-1", "user@example.com", "viewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := call(session); rr.Code != http.StatusOK {
+		t.Fatalf("the dashboard's session token: status %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+
+	// Another tenant's session reads that tenant's data, not this one's.
+	other, _ := gw.tokens.Generate("some-other-tenant", "user-2", "other@example.com", "viewer")
+	if rr := call(other); rr.Code == http.StatusOK && strings.Contains(rr.Body.String(), `"sketches_merged":60`) {
+		t.Errorf("another tenant's session read this tenant's sketches: %s", rr.Body.String())
+	}
+
+	// A token signed with a different secret is not a session.
+	forged, _ := auth.NewTokenService("a-different-secret-of-32-chars!!", time.Hour).Generate(tenantID, "x", "x@example.com", "admin")
+	if rr := call(forged); rr.Code != http.StatusUnauthorized {
+		t.Errorf("a token signed with another secret: status %d, want 401", rr.Code)
+	}
+
+	// A session revoked at logout is refused.
+	claims, err := gw.tokens.Validate(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.db.RevokedTokens().Revoke(context.Background(), claims.ID, claims.ExpiresAt.Time); err != nil {
+		t.Fatal(err)
+	}
+	if rr := call(session); rr.Code != http.StatusUnauthorized {
+		t.Errorf("a revoked session: status %d, want 401", rr.Code)
 	}
 }
 

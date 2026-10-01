@@ -152,12 +152,27 @@ func parsePercentileRequest(r *http.Request) (percentileRequest, int, string) {
 // writing the 401 itself when the key is missing or revoked.
 func gatewayTenantFromAPIKey(g *gateway, w http.ResponseWriter, r *http.Request) (string, bool) {
 	rawKey := r.Header.Get("X-Gravix-Key")
+	bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if rawKey == "" {
-		rawKey = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		rawKey = bearer
 	}
 	if rawKey == "" {
 		writeError(w, http.StatusUnauthorized, "API key required (X-Gravix-Key or Authorization: Bearer)")
 		return "", false
+	}
+	// A signed-in dashboard holds the session token the gateway issued at
+	// login, not an API key: nothing in the dashboard stores one. Accepting
+	// only keys refused every percentile the dashboard asked for, so its
+	// latency charts and cards were empty for everyone who signed in (F-062).
+	// The token names its tenant, as a key does, and a revoked one is refused.
+	if rawKey == bearer && g.tokens != nil {
+		if claims, err := g.tokens.Validate(bearer); err == nil {
+			if g.isTokenBlacklisted(claims.ID) {
+				writeError(w, http.StatusUnauthorized, "token has been revoked")
+				return "", false
+			}
+			return claims.TenantID, true
+		}
 	}
 	info, err := g.db.APIKeys().ValidateKey(r.Context(), rawKey)
 	if err != nil || info.Status != "active" {

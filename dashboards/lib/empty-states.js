@@ -20,6 +20,23 @@ export const FALLBACK_CURL_NOTE =
     '(see dashboards/dashboard_config.js) to render a working command here. ' +
     'Until then, replace $API_KEY below with your own key:';
 
+// filtersAreActive says whether the visitor has narrowed the view, which decides
+// between "no data for these filters" and the onboarding prompt with its
+// countdown. The page opens with the last seven days selected; that range is
+// the page's choice, not the visitor's, so it does not count. This once compared
+// the dates with today, which made the page's own default look like a filter:
+// a fresh install told its first visitor to adjust filters they never set, and
+// never showed how to send a first event or the countdown to the first rollup
+// (F-061).
+export function filtersAreActive(current, defaults) {
+    const c = current || {};
+    const d = defaults || {};
+    if (c.service) return true;
+    if (c.dateFrom && c.dateFrom !== d.dateFrom) return true;
+    if (c.dateTo && c.dateTo !== d.dateTo) return true;
+    return false;
+}
+
 // The host used when the dashboard has no configured ingestion URL. Matches
 // app.js's own default, so the two cannot disagree.
 const DEFAULT_INGESTION_URL = 'http://localhost:8090';

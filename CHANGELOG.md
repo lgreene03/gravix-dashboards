@@ -63,6 +63,11 @@ Nothing below has shipped in a tagged release yet.
 - **Metric writes in legacy single-key mode answered 500**, which Prometheus retries forever. They now answer 400 and name the setting that enables them, `TENANT_DB_PATH` (SD-027)
 - **The Postgres backend's tests had never run** — they now run against a real Postgres on every pull request (F-043)
 - **The Go SDK page documented an API that does not exist** — rewritten from the SDK's exports, with an install that works today (F-050)
+- **A fresh install told its first visitor to adjust filters they never set** — the page's own seven-day default counted as a filter, so the onboarding prompt and the first-run countdown never appeared (F-061)
+- **Latency percentiles were refused for signed-in users** — the percentile endpoint accepted only API keys, and a signed-in dashboard holds a session token, so the P50, P95 and P99 charts were empty (F-062)
+- **The quick-start wizard opened over the sign-in form** (F-063)
+- **Browsers could not read ingestion's service list** — ingestion sent no CORS headers, so the first-run countdown never started and the SLO tab was empty. Ingestion now allows cross-origin reads, not writes, from `CORS_ALLOWED_ORIGINS` (F-064)
+- **The first dashboard after the countdown looked blank** — one hourly bucket is one point, and the charts drew no points (F-065)
 - **Every endpoints table was empty on the bootstrap stack** — date-range pruning wrote a missing bound into the SQL whenever a query filtered time with `gte` or `lte`, which the endpoints views do. Such queries are no longer pruned (F-059)
 - **The full stack had no working API key** — ingestion ignores `.env`'s `API_KEY` once a tenant database is configured, and key creation needs a verified email that the default mailer never sends. The full stack is now seeded on first boot like the bootstrap stack, with its write key in `data/api_key.txt` (F-058)
 
