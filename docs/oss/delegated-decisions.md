@@ -566,3 +566,18 @@ tests, the migration guide's Prometheus section, and GRVX-1108 amended.
 records, so there is nothing to decide until one exists.
 
 **To reverse.** Point `readerFor` back at an error. The Datadog reader is unaffected.
+
+## DD-029 — SD-041: bring-your-own-bucket gets a README, like every other `ee/` package
+
+**Date** 2026-10-01 · **Tier** routine (documentation; the acceptance a maintainer owns, under the
+delegation) · **Spec** GRVX-1402
+
+**Options.** Add a README to §4.1 and write it; or accept `NO DOCS DELTA REQUIRED` because Cloud's
+customer documentation lives elsewhere.
+
+**Chosen.** Write it. Bring-your-own-bucket is the one paid feature whose whole value is the customer
+knowing where their data goes, and the four sibling packages each have a README.
+
+**Done.** `ee/tenancy/byob/README.md` and GRVX-1402 §4.1.
+
+**To reverse.** Delete the README and accept the waiver on the record.

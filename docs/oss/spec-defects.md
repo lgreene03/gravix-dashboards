@@ -2772,7 +2772,7 @@ and does not. That is the second time a Phase 13 spec has named something that d
 **Affects:** GRVX-1402 §4.1, §9
 **Severity:** low — the code half of the spec is complete and unambiguous; this is the paperwork
 line
-**Status:** open; needs a maintainer, not an implementer
+**Status:** resolved 2026-10-01 (DD-029). Originally: open; needs a maintainer, not an implementer
 
 ### The contradiction
 
@@ -2822,6 +2822,19 @@ licence cannot name this capability today. Nothing is broken — GRVX-1402 gates
 because the `ee/tenancy/` tree is already covered by the `tenancy-fleet-console` entry's
 placement. But the id will be needed by whichever spec first gates a Cloud feature on a licence
 feature list, and `boundary.yaml` is a core file that §4.2 forbids this spec from touching.
+
+
+### Decided 2026-10-01 — DD-029: option 1, the guide is written
+
+`ee/tenancy/byob/README.md` is added to GRVX-1402 §4.1 and written, matching the four other Phase 13
+packages. It covers the four bucket permissions and why each is needed, why object lock fails
+registration, the three API calls and every response code, and where the secret goes. Each claim was
+read from `config.go` and `cmd/byob-api/main.go`. One draft sentence, about data surviving the end of
+a subscription, was cut because nothing in the code confirmed it.
+
+The second gap, a `boundary.yaml` capability id for bring-your-own-bucket, stays open. Nothing gates
+on it yet, and adding an id to the boundary map belongs to the License & Boundary Auditor when the
+first spec needs one.
 
 ---
 
