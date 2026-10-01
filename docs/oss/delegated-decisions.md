@@ -319,3 +319,24 @@ cannot occur, and compaction's merged-manifest code has no production input.
 
 **To reverse.** Reopen F-003 if any warehouse writer starts appending a file per run instead of
 replacing the partition. The idempotency tests are the tripwire.
+
+## DD-016 — GRVX-1506: the foundation evaluation becomes final with its `NOT YET` verdict
+
+**Date** 2026-10-01 · **Tier** routine (closing a recorded window) · **Spec** GRVX-1506
+
+**Options.** Leave the evaluation provisional until the owner announces a new window; or mark it
+final now that the window has closed.
+
+**Chosen.** Final. The window closed on 2026-09-30, and the repository has no issues at all, so no
+comments arrived. The window was never announced outside the repository, so nobody outside was
+asked. That matters less here than it would elsewhere: `NOT YET` changes nothing and commits the
+project to nothing. A donation would need its own charter-tier RFC and its own 14-day window, and the
+evaluation now says that window must be announced.
+
+**Done.** The status row and closing note record the close, the zero comments and the caveat.
+`TestCommentWindowOpened` accepts a closed window only when the evaluation records its closing date
+and the number of comments. It reads the document, never today's date, so CI cannot change colour
+on a day with no commit.
+
+**To reverse.** Restore "not final until the window closes" in the status row and reopen the window
+with new dates. Do that if the owner announces the evaluation and comments arrive.

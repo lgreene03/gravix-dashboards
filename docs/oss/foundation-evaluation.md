@@ -7,7 +7,7 @@
 |---|---|
 | **Produced by** | `cpo`, with `oss-steward` and `license-boundary-auditor` (`GRVX-1506`) |
 | **Comment window** | **opened 2026-09-16, closes 2026-09-30** — 14 days, per charter §6 |
-| **Status** | not final until the window closes |
+| **Status** | **final** — the window closed 2026-09-30 with no comments received. It was never announced outside this repository, so that silence is weak evidence. See the note at the end. |
 | **Sources retrieved** | 2026-09-16 |
 
 This is a decision document, not a survey. A survey of foundations would have been easier to write
@@ -346,5 +346,9 @@ for the reasons listed here. If they do not close, that is the evidence that it 
 ---
 
 *Comment on this evaluation by opening an issue against `docs/oss/foundation-evaluation.md`. The
-window closes 2026-09-30. Announcing it more widely is the repository owner's call, and is recorded
-in [`open-decisions.md`](open-decisions.md).*
+window closed 2026-09-30 with no issues opened, and the evaluation became final under DD-016 in
+[`delegated-decisions.md`](delegated-decisions.md). It was not announced outside this repository, so
+nobody outside it was asked. That is acceptable for this verdict only because `NOT YET` changes
+nothing and commits the project to nothing. A donation would need its own charter-tier RFC with its
+own 14-day window, and that window must be announced. A comment that changes one of the five
+conditions reopens this evaluation.*
