@@ -1383,7 +1383,8 @@ deep.
 stack's volume-ownership defect — instead of leaving it standing.
 **Severity** high. The full-stack smoke test and every container image build have been red on `main`
 since at least 2026-05-24, and the check that is supposed to summarise CI has been green throughout.
-**Status** open. Not fixed here: see below.
+**Status** partly fixed (DD-019). `docker-build` is gated. `docker-smoke` and `image-scan` are
+diagnosed and repaired, and are gated after their first green run.
 
 **The gate does not include them.** `ci-summary`'s `needs`, verbatim from
 `.github/workflows/ci.yml`:
@@ -1446,6 +1447,46 @@ reproduce `docker-smoke`'s failure with a Docker daemon → fix it → *then* ad
 invisible because nothing executed the thing they broke. This one is worse in kind: the check *did*
 execute, it *did* fail, and the gate that aggregates CI simply did not ask. A job whose result is not
 in a required check is a job that does not exist.
+
+
+### Update 2026-10-01 — DD-019: diagnosed on a real run, and the gate's other gaps
+
+PR #23's merge produced the first `main` run with every earlier job green, so the Docker jobs ran at
+last. Run 36895500597 on `97cb9aa`:
+
+| Job | Conclusion | Cause |
+|---|---|---|
+| `docker-build`, all four images | **success** | Fixed somewhere in the September work |
+| `docker-smoke` | failure, in under a second | compose stops before any container: `required variable MINIO_ROOT_PASSWORD is missing a value` |
+| `image-scan` | failure at "Set up job" | `Unable to resolve action aquasecurity/trivy-action@0.28.0`. The action now publishes `v`-prefixed tags |
+| `ci-summary` | **success** | Still not asking |
+
+The smoke failure is the same sub-second signature this entry could not diagnose in May. The job's
+`.env` sets five variables, and `docker-compose.yml` requires three more with `${VAR:?...}`. The old
+`.env` reproduces the error with `docker compose config`, and the new one passes.
+
+**This entry's premise was wrong.** It said adding `docker-smoke` to `ci-summary` "would immediately
+turn a green summary red on every pull request". `docker-smoke` runs only on push to `main`. On a
+pull request it is skipped, and a skipped need does not fail the summary. Gating it would have
+reddened `main` alone.
+
+**Three more jobs had the same defect.** `vuln`, `helm-validate` and `docker-lint` were in
+`ci-summary`'s `needs` and not in its failure condition, so each could fail without turning anything
+red.
+
+**What changed:**
+
+- `vuln`, `helm-validate`, `docker-lint` and `docker-build` now fail `ci-summary`.
+  `TestCISummaryFailsOnEveryJobItWaitsFor` fails on any job in `needs` that the condition does not
+  test. On the old workflow it names the first three.
+- The smoke job's `.env` sets the MinIO and S3 credentials. `TestSmokeEnvSetsEveryRequiredComposeVariable`
+  fails on any variable the compose file requires that the job does not set. On the old workflow it
+  names all three.
+- `image-scan` uses `aquasecurity/trivy-action@v0.36.0`, a tag bound to an immutable release.
+
+**Not yet gated:** `docker-smoke` and `image-scan`. Neither has passed once, and the next layer of the
+full stack is probably F-025. Each should be gated after its first green run. `docker-smoke` should
+also run on pull requests, because a gate that runs only after merge gates nothing.
 
 ---
 

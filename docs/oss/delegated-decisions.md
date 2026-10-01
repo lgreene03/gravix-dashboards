@@ -381,3 +381,26 @@ belongs to `perf-cost-engineer`, not to the run's author.
 
 **To reverse.** Name another machine in `bench/README.md` and G4.3, and change the workflow's
 `runs-on`.
+
+## DD-019 — F-026: gate every job the summary waits for; gate the Docker jobs once each has passed
+
+**Date** 2026-10-01 · **Tier** routine (CI repair) · **Finding** F-026
+
+**Options.** Add every Docker job to `ci-summary` now, red or not; add none until all pass; or fix
+what is diagnosed, gate what is green, and gate the rest after its first green run.
+
+**Chosen.** The last. `docker-build` passed on `main` for all four images, so it is gated now.
+`docker-smoke` and `image-scan` failed on configuration, not on Gravix: a missing `.env` variable and a
+tag that no longer resolves. Both are repaired, but neither has run past those errors yet, and gating a
+job before its first real result would turn `main` red on whatever layer comes next. `vuln`,
+`helm-validate` and `docker-lint` were already awaited and simply never checked. That was an oversight,
+not a decision, so they are gated without waiting.
+
+**Done.** The `ci-summary` failure condition, the smoke `.env`, the trivy tag, and two guard tests.
+
+**Not decided, and why.** Whether `image-scan` should fail `main` on a HIGH or CRITICAL finding in a
+base image. That is the security engineer's call under `10-agent-roster.md`, and it should be made
+when there is a first real scan to look at.
+
+**To reverse.** Remove `docker-build` and the three jobs from the failure condition. The guard test
+will then fail, by design.
