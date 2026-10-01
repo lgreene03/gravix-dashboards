@@ -882,7 +882,7 @@ jobs:
 
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules, docs-site, docker-build, postgres]
+    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules, docs-site, docker-build, postgres, docker-smoke]
     if: always()
     steps:
       - name: Check job results
@@ -905,6 +905,9 @@ jobs:
           # skipped and cannot fail this check. On main it can (F-026).
           echo "Docker build:  ${{ needs.docker-build.result }}"
           echo "Postgres:      ${{ needs.postgres.result }}"
+          # Gated from its first green run, on PR #25. Before that it had not
+          # passed since at least May 2026 (F-025, F-026, F-057, F-058).
+          echo "Docker smoke:  ${{ needs.docker-smoke.result }}"
 
           # Fail if any required job failed
           if [[ "${{ needs.timed-onboarding.result }}" == "failure" ]] || \
@@ -922,7 +925,8 @@ jobs:
              [[ "${{ needs.helm-validate.result }}" == "failure" ]] || \
              [[ "${{ needs.docker-lint.result }}" == "failure" ]] || \
              [[ "${{ needs.docker-build.result }}" == "failure" ]] || \
-             [[ "${{ needs.postgres.result }}" == "failure" ]]; then
+             [[ "${{ needs.postgres.result }}" == "failure" ]] || \
+             [[ "${{ needs.docker-smoke.result }}" == "failure" ]]; then
             echo "::error::One or more required CI jobs failed"
             exit 1
           fi

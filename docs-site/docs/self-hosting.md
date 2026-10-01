@@ -55,6 +55,10 @@ CORS_ALLOWED_ORIGINS=https://app.gravix.io,https://dashboard.gravix.io
 
 Never use `*` in production. This prevents cross-origin attacks against your gateway endpoints.
 
+Ingestion reads the same variable. It allows cross-origin reads only, which the dashboard needs for
+its service list, and never cross-origin writes, so set it to the origin your dashboard is served
+from on both services.
+
 ## Storage: S3 instead of MinIO
 
 The Docker Compose setup uses MinIO as an S3-compatible local store. In production, use a managed object storage service such as AWS S3, Google Cloud Storage, or DigitalOcean Spaces.
@@ -164,6 +168,30 @@ In production, connect Prometheus to Alertmanager for notification delivery:
 Grafana is pre-provisioned with a Prometheus data source. Default credentials are `admin`/`admin` -- change these immediately in production.
 
 The Helm chart includes `grafana-dashboards.yaml` for provisioning dashboards automatically.
+
+## Dashboard cache warming
+
+The gateway asks Cube for the dashboard's default view, the last seven days, every 30 seconds and
+once per active tenant. A view is slow only when nobody has asked for it since Cube started, or
+since the date changed at midnight UTC. Once it has been asked, Cube answers from its cache and
+refreshes in the background when a rollup writes. Warming means the first person to open the
+dashboard after a restart, or on a new day, gets that cached answer too. Measured on the bootstrap
+stack's limits, the default view's queries took up to about 3 seconds cold and under 100 ms warm.
+
+It keeps at most one query in Cube at a time. Cube runs two at once, so warming never takes the last
+slot from a user. A cycle still running at its time limit sends no further query and is logged as
+`cache warm cycle abandoned after <limit>`. The query already running is allowed to finish, because
+Cube would keep running it anyway.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CACHE_WARM_ENABLED` | `true` | Set `false` to turn warming off |
+| `CACHE_WARM_INTERVAL` | `30s` | Time between cycle starts. It bounds how long the default view stays cold after a Cube restart or a new day |
+| `CACHE_WARM_MAX_DURATION` | `60s` | A cycle still running after this is abandoned |
+
+With many tenants, one cycle may not reach them all within the limit. The next cycle resumes at the
+tenant the last one stopped on, so every tenant is reached in turn, but not every 30 seconds. Raise
+`CACHE_WARM_MAX_DURATION` if each tenant needs to stay warm, or turn warming off.
 
 ## External secrets
 

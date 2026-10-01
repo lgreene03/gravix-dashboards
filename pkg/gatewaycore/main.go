@@ -371,6 +371,9 @@ func Run() {
 	// Start alert evaluator background loop
 	go gw.alertEvaluatorLoop(bgCtx)
 
+	// Keep the dashboard's default view warm in Cube's result cache (GRVX-1006).
+	gw.startCacheWarmer(bgCtx)
+
 	// Start onboarding email drip loop
 	go gw.onboardingEmailLoop(bgCtx)
 

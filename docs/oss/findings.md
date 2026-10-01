@@ -4107,3 +4107,176 @@ The other 19 were answered `429`. The seeded tenant is on the free plan, limited
 second with a burst of 20, and the step sent 50 single-fact requests in about a second. Ingestion was
 right, so the step changed: it paces its requests under the limit, retries a `429` once a second
 later, and now requires all 50 facts, since every one of them is valid.
+
+## F-059 — on the bootstrap stack, every endpoints table failed once date-range pruning landed
+
+**Found by** checking that GRVX-1006's cache warmer sends the dashboard's exact queries, against a real Cube
+**Affects** `cube/model_flags.js` (`dayRangeSql`), `cmd/onboarding_gate/cube_model_env_test.go`
+**Severity** high — the overview's endpoints table, the endpoints page and the endpoint summary were empty on the stack most people start with
+**Status** fixed; reached `main` in #23 on 2026-10-01 and was in no release
+
+### What happened
+
+SD-024's decision (DD-008) pushed a query's date range into the Parquet read, through Cube's
+`FILTER_PARAMS`. Cube calls the predicate with two values for a date range. For a single-bound filter
+such as `gte` or `lte` it calls it once per filter, with one value, and does not say which bound that
+value is. The predicate wrote the missing bound into the SQL as `undefined`:
+
+```
+Binder Error: Referenced column "undefined" not found in FROM clause!
+```
+
+The dashboard sends its date range two ways. The hourly series send a date range, and worked. The
+endpoints table, the endpoints page and the endpoint summary send it as a `gte` and an `lte` filter
+on `bucketStart`, and the overview opens with the last seven days selected. So those three failed on
+every load. Cube answered 400, and the dashboard reads a 400 as "no data yet", so the tables were
+silently empty.
+
+### Why the tests passed
+
+`TestDuckDBModelPrunesPartitionsByDateRange` compiles the models in a harness that stands in for
+Cube's `FILTER_PARAMS`. The stand-in always passed two values, which is only Cube's shape for a date
+range. The single-bound shape was never compiled.
+
+### What changed
+
+`dayRangeSql` returns the no-op `1 = 1` when it is given one value. Nothing is pruned then, and the
+query's own filter still selects the rows. The harness now passes Cube's one-value shape when asked,
+and `TestSingleBoundTimeFiltersCompile` fails on the old predicate with the SQL above. Against the lab
+Cube, the endpoints query that failed now answers in 2,255 ms cold, and 14 ms once warm.
+
+## F-060 — two concurrent first queries after Cube starts stall every query for about two minutes
+
+**Found by** a soak test of GRVX-1006's cache warmer against Cube `v0.35` on the bootstrap stack's settings
+**Affects** Cube on the bootstrap stack; the full stack's Trino path is untested
+**Severity** medium — after a Cube restart, two simultaneous first visitors wait about two minutes for anything
+**Status** open; reproduced in a lab, not yet on the published image
+
+### What happens
+
+On a freshly started Cube, if the first two queries arrive at once, every query, including later and
+unrelated ones, is answered `Continue wait` while Cube sits at 0% CPU. It recovers on its own, after
+124 s and 132 s in two trials.
+
+| First requests after start | Trials stalled |
+|---|---|
+| Four dashboard queries at once | 3 of 3 |
+| The same, on two CPUs instead of half of one | 2 of 2 |
+| The same, with `CUBEJS_CONCURRENCY=1` | 3 of 3 |
+| Two queries at once | 2 of 2 |
+| One query, then four at once | 0 of 2 |
+| `GET /cubejs-api/v1/meta`, then four at once | 0 of 2 |
+| Two at once, with Gravix's model helpers inlined instead of loaded through `require` | 2 of 2 |
+
+So it is Cube compiling the data model for concurrent first requests, not CPU, queue concurrency, or
+the way Gravix's models load `cube/model_flags.js`. Any single request first prevents it.
+
+### Who meets it
+
+The dashboard's own first load sends one query, the service list, and waits for it before sending the
+rest. One browser alone does not trigger this. Two visitors opening the dashboard in the same second
+after a Cube restart do, and so would any client that opens with parallel queries.
+
+GRVX-1006's warmer sends one query at a time and starts with the gateway, so after a restart of the
+whole stack it usually compiles the model before anyone arrives. It cannot help when Cube restarts on
+its own.
+
+### Not yet known
+
+The lab ran Cube's published image with the two lines that download DuckDB's `httpfs` extension
+removed, because that download is blocked here. The published image could not be run as published.
+The next step is to reproduce it on the bootstrap stack in CI, which can download the extension, and
+then to try a later Cube release. A Cube upgrade changes the semantic layer every query passes
+through, so it needs its own measurement, not a version bump.
+
+## F-061 — a fresh install told its first visitor to adjust filters they never set
+
+**Found by** watching the bootstrap dashboard's first run in a browser, for GRVX-908's last open item
+**Affects** `dashboards/app.js` (`hasActiveFilters`), `dashboards/lib/empty-states.js`
+**Severity** high — the onboarding prompt and GRVX-908's countdown never appeared on the default view
+**Status** fixed
+
+The overview opens with the last seven days selected. `hasActiveFilters` counted any date other than
+today as a filter the visitor chose, so the page's own default counted. An empty dashboard therefore
+showed "No data for selected filters. Try adjusting your date range or service filter" instead of
+the command that sends a first event, before and after facts arrived. The countdown lives inside the
+onboarding block, so it was never visible either.
+
+`filtersAreActive` now compares against the range the page selected at load. It lives in
+`lib/empty-states.js` so `node --test` can reach it, with two tests. In the browser, a fresh install
+now shows the waiting state, then the countdown once traffic arrives.
+
+## F-062 — the dashboard's latency percentiles were refused for everyone who signed in
+
+**Found by** the same browser observation
+**Affects** `pkg/gatewaycore/percentile_handler.go` (`gatewayTenantFromAPIKey`)
+**Severity** high — the P50, P95 and P99 charts and cards were empty on every stack with a login
+**Status** fixed
+
+GRVX-808 routes percentiles to the gateway's `GET /api/v1/percentile`, which accepted only an API
+key. A signed-in dashboard holds the session token the gateway issued at login, and nothing in the
+dashboard stores an API key, so it sent the token and got `401 invalid or revoked API key` for every
+percentile. The charts were blank with data present.
+
+The endpoint now accepts the gateway's own session token as well. The token names its tenant, as a
+key does, and a token revoked at logout is refused. `TestPercentileAcceptsTheDashboardSession` fails
+on the old code with the production error, and covers another tenant's token, a forged one and a
+revoked one. The lineage endpoint shares the check and gains the same.
+
+## F-063 — the quick-start wizard opened over the sign-in form
+
+**Found by** the same browser observation
+**Affects** `dashboards/app.js` (wizard auto-show)
+**Severity** low — a first visitor had to close a wizard asking for an SDK key before they could sign in
+**Status** fixed
+
+The wizard's comment said "auto-show on first login", and it opened 800 ms after page load. The
+sign-in form appears after that check, so the wizard opened over it. It now checks at the moment of
+opening, and waits for sign-in if the form is showing. Observed: no wizard at landing, the wizard
+after sign-in.
+
+## F-064 — browsers could not read ingestion's service list, so the countdown and the SLO tab were empty
+
+**Found by** the same browser observation, once F-061 let the countdown try
+**Affects** `services/ingestion` (no CORS), `docs-site/docs/self-hosting.md`
+**Severity** high — the countdown never started and the SLO tab listed no service, in every browser
+**Status** fixed
+
+The dashboard is served from one origin and reads `GET /api/v1/services` from ingestion on another.
+The request carries an API key header, so the browser sends a preflight first. Ingestion sent no CORS
+headers at all, and its authentication refused the key-less preflight, so every browser blocked the
+read. GRVX-908's tests and the SLO tab's tests stub that call, so all of them passed.
+
+Ingestion now answers preflights and sets `Access-Control-Allow-Origin` from `CORS_ALLOWED_ORIGINS`,
+the variable the gateway reads, with the same `*` default. It allows `GET` only: a page on another
+origin still cannot send facts. Three tests cover the preflight, the refusal of cross-origin writes
+and the allow-list, and a fourth fails if the server is not wrapped in the middleware.
+
+### How this was observed
+
+GRVX-908 asked for the countdown to be watched against a live stack. Docker Hub refuses image pulls
+here, so the bootstrap stack ran as its own binaries, built from this tree: the seed, the gateway,
+ingestion and the five-minute rollup loop, with the same flags and environment as the compose file.
+Cube ran in §11.6's lab image with the bootstrap settings, a static server stood in for nginx, and
+Chromium was driven by Playwright. One change to the served page: the CDN is blocked here, so Chart.js
+4.4.7 came from npm, and its integrity attribute, which pins the CDN's minified build, was removed.
+
+| Moment | Before these fixes | After |
+|---|---|---|
+| Landing | the wizard over the sign-in form | the sign-in form |
+| Signed in, no facts | "No data for selected filters" | "send your first event", waiting |
+| Five facts sent | unchanged | "Traffic received — building your first chart. First rollup completes in ~3:53" |
+| After the first rollup | charts drawn, P95 empty, four `401`s | see GRVX-908 §9 |
+
+## F-065 — the first dashboard after the countdown looked blank
+
+**Found by** the same browser observation, after F-061 to F-064 were fixed
+**Affects** `dashboards/app.js`, `dashboards/lib/chart-helpers.js`
+**Severity** medium — the moment the countdown promises ends on three empty-looking charts
+**Status** fixed
+
+Every line chart set `pointRadius: 0`. A line needs two points, and a first hour of data is one hourly
+bucket, so each chart drew nothing at all, with its axes scaled to the data it was not showing. Point
+markers now appear while a series has two points or fewer. Observed: the first dashboard shows an
+error rate of 20%, a P95 of 80 ms and a throughput of 5, which are the five facts sent, one of them a
+500, with latencies from 40 to 80 ms.

@@ -25,5 +25,11 @@
     "max_bytes_per_event_compacted": null,
     "max_query_p95_ms": null,
     "max_query_cold_p95_ms": null
+  },
+  "bench_standard_measured": {
+    "_comment": "What the reference machine measured, recorded beside the bounds rather than as them. GRVX-1005 asks for the achieved throughput and p99 here. The bounds above stay empty until perf-cost-engineer reviews more than one standard-scale run; tests/governance TestIngestThroughputTarget checks the target against the committed result.",
+    "source": "bench/results/20261001T183020Z-standard.json",
+    "ingest_events_per_sec_per_core": 73868,
+    "ingest_p99_latency_ms": 0.027
   }
 }

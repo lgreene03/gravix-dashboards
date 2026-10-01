@@ -1349,8 +1349,8 @@
         import { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY } from './lib/slo-cards.js';
         window.GravixSLO = { loadSLOPage, renderSLOCard, SLO_TARGET_AVAILABILITY };
 
-        import { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE } from './lib/empty-states.js';
-        window.GravixEmptyStates = { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE };
+        import { buildCurlCommand, renderEmptyStateCommand, filtersAreActive, FALLBACK_CURL_NOTE } from './lib/empty-states.js';
+        window.GravixEmptyStates = { buildCurlCommand, renderEmptyStateCommand, filtersAreActive, FALLBACK_CURL_NOTE };
 
         import {
             checkFirstRunState, startCountdown, computeCountdownText, formatCountdown,

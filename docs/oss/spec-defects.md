@@ -4254,3 +4254,41 @@ It is not. Its line 7 carries a prominent banner naming `docs/oss/20-roadmap-hor
 current roadmap, stating which two things below it are out of date and citing SD-001. The document
 is honestly maintained, and calling it a risk was a judgement made without reading it closely — the
 second documentation risk overstated in the same session, after SD-021.
+
+## SD-058 — GRVX-1006's warmer was specified against a model of Cube's cache that Cube does not follow
+
+**Found by:** `senior-engineer` executing GRVX-1006 §5.2, measured against Cube `v0.35`
+**Affects:** GRVX-1006 §4.1, §4.2, §5.2, §6.1
+**Severity:** low — each point had a safe reading, and none changes what the warmer is for
+**Status:** resolved 2026-10-01 (DD-032)
+
+### The interval's premise
+
+§5.2 sets `Interval` to four minutes because "the cache is invalidated by each rollup write". Cube
+does not invalidate on a write. When a cube's refresh key moves, Cube answers from the entry it has
+and refreshes it in the background. Over four minutes with a simulated rollup write every minute, a
+user loading the default view every few seconds never waited longer than 161 ms, with no warmer.
+
+A query is cold only when nobody has asked it since Cube started, or when its SQL is new. The
+dashboard's default view is the last seven days, so its SQL changes at midnight UTC. The interval
+therefore bounds how long the default view stays cold after a restart or on a new day, and a cycle
+that finds everything cached costs four cached answers per tenant. Measured: 113 ms for a full cycle.
+
+### The queries are not constant
+
+§5.2 types `Queries` as `[]WarmQuery`, built once. The default view's range is relative to today, so
+a fixed query would warm yesterday's view from midnight on. Each `WarmQuery` now builds its query at
+the moment it is sent.
+
+### Cube does not cancel an abandoned query
+
+§6.1 says a cycle over `MaxDuration` is abandoned. Cancelling the HTTP request does not stop the
+query in Cube, and a stress test caught the result: the next cycle put a second warm query beside
+the one still running, which is the starvation §5.2 forbids. Abandoning now means sending no further
+query. The one in flight finishes, bounded by Cube's own ten-minute query timeout.
+
+### The files
+
+§4.1 puts the warmer in `services/gateway/`, which is `package main` with one line,
+`gatewaycore.Run()`. The gateway is `pkg/gatewaycore`, so the warmer is there, and §4.2's "start the
+cache warmer" happens in `gatewaycore.Run`.

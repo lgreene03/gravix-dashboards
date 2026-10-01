@@ -232,6 +232,7 @@
 
         function hideAuthGate() {
             document.getElementById('authOverlay').classList.add('hidden');
+            document.dispatchEvent(new Event('gravix:signed-in'));
         }
 
         // Tab switching
@@ -659,13 +660,13 @@
             const datasets = [
                 { label: 'P50', data: p50Data.map(d => d["RequestMetricsMinute.bucketP50LatencyMs"]),
                   borderColor: '#22c55e', backgroundColor: 'transparent', fill: false, tension: 0.4,
-                  pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5 },
+                  pointRadius: sparsePointRadius, pointHoverRadius: 4, borderWidth: 1.5 },
                 { label: 'P95', data: p95Data.map(d => d["RequestMetricsMinute.bucketP95LatencyMs"]),
                   borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)', fill: true, tension: 0.4,
-                  pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 },
+                  pointRadius: sparsePointRadius, pointHoverRadius: 4, borderWidth: 2 },
                 { label: 'P99', data: p99Data.map(d => d["RequestMetricsMinute.bucketP99LatencyMs"]),
                   borderColor: '#ef4444', backgroundColor: 'transparent', fill: false, tension: 0.4,
-                  pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5, borderDash: [4, 4] }
+                  pointRadius: sparsePointRadius, pointHoverRadius: 4, borderWidth: 1.5, borderDash: [4, 4] }
             ];
             if (charts['epLatency']) {
                 charts['epLatency'].data.labels = labels;
@@ -1210,13 +1211,20 @@
             hasConnectionError = show;
         }
 
+        // The range the page selects for itself at load. Set in INIT below.
+        let defaultDateRange = { dateFrom: '', dateTo: '' };
+
+        // Whether the visitor narrowed the view. See filtersAreActive (F-061).
         function hasActiveFilters() {
-            const service = document.getElementById('serviceFilter').value;
-            const dateFrom = document.getElementById('dateFrom').value;
-            const dateTo = document.getElementById('dateTo').value;
-            const today = new Date().toISOString().split('T')[0];
-            // Filters are "active" if a service is selected or dates differ from today
-            return !!service || (dateFrom && dateFrom !== today) || (dateTo && dateTo !== today);
+            const current = {
+                service: document.getElementById('serviceFilter').value,
+                dateFrom: document.getElementById('dateFrom').value,
+                dateTo: document.getElementById('dateTo').value
+            };
+            if (window.GravixEmptyStates && window.GravixEmptyStates.filtersAreActive) {
+                return window.GravixEmptyStates.filtersAreActive(current, defaultDateRange);
+            }
+            return !!current.service;
         }
 
         function showEmpty(show) {
@@ -1527,6 +1535,14 @@
             button.addEventListener('click', () => openLineageFor(Number(select.value) || 0, button));
         }
 
+        // A line needs two points to be drawn, and a first hour of data is one
+        // bucket. With no point markers, the first dashboard a new install shows
+        // after its countdown looked blank (F-065). Markers appear while a
+        // series has two points or fewer, and go once it has a line.
+        function sparsePointRadius(ctx) {
+            return ctx.dataset && ctx.dataset.data && ctx.dataset.data.length <= 2 ? 4 : 0;
+        }
+
         function updateChart(key, canvasId, label, labels, data, options) {
             const ctx = document.getElementById(canvasId).getContext('2d');
 
@@ -1544,7 +1560,7 @@
                 backgroundColor: currentGradient,
                 fill: true,
                 tension: 0.4,
-                pointRadius: 0,
+                pointRadius: sparsePointRadius,
                 pointHoverRadius: 6,
                 borderWidth: 2
             });
@@ -1558,7 +1574,7 @@
                     backgroundColor: 'transparent',
                     fill: false,
                     tension: 0.4,
-                    pointRadius: 0,
+                    pointRadius: sparsePointRadius,
                     pointHoverRadius: 4,
                     borderWidth: 1,
                     borderDash: [5, 5]
@@ -1770,6 +1786,10 @@
         initSevenDaysAgo.setDate(initSevenDaysAgo.getDate() - 7);
         document.getElementById('dateFrom').valueAsDate = initSevenDaysAgo;
         document.getElementById('dateTo').valueAsDate = new Date();
+        defaultDateRange = {
+            dateFrom: document.getElementById('dateFrom').value,
+            dateTo: document.getElementById('dateTo').value
+        };
 
         function initDashboard() {
             loadFiltersFromHash(); // Restore from URL before first fetch
@@ -3038,10 +3058,23 @@ app.listen(8080, () => {
             }
         }
 
-        // Auto-show wizard on first login (if not previously completed)
-        if (!localStorage.getItem('gravix_wizard_done')) {
+        // Auto-show wizard on first login (if not previously completed). Only
+        // once signed in: opened at page load, it covered the sign-in form, and a
+        // first visitor had to close a wizard asking for an SDK key before they
+        // could sign in at all (F-063).
+        let wizardAutoShown = false;
+        function autoShowWizard() {
+            if (wizardAutoShown || localStorage.getItem('gravix_wizard_done')) return;
             // Delay slightly to ensure the dashboard is loaded
             setTimeout(() => {
+                // The sign-in form may appear after this was scheduled; checked
+                // here, at the moment of opening, not at page load.
+                if (!document.getElementById('authOverlay').classList.contains('hidden')) {
+                    document.addEventListener('gravix:signed-in', autoShowWizard, { once: true });
+                    return;
+                }
+                if (wizardAutoShown) return;
+                wizardAutoShown = true;
                 const epInput = document.getElementById('wizEndpoint');
                 if (!epInput.value) {
                     epInput.value = (window.GRAVIX_ENDPOINT || 'http://localhost:8090');
@@ -3056,6 +3089,7 @@ app.listen(8080, () => {
                 overlay.classList.add('open');
             }, 800);
         }
+        autoShowWizard();
 
         // Mark wizard done when user closes it or completes step 4
         function markWizardDone() {

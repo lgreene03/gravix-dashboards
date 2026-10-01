@@ -1178,7 +1178,7 @@ func main() {
 	addr := fmt.Sprintf(":%d", *port)
 	srv := &http.Server{
 		Addr:           addr,
-		Handler:        logging.RequestIDMiddleware(securityHeadersMiddleware(http.DefaultServeMux)),
+		Handler:        logging.RequestIDMiddleware(securityHeadersMiddleware(corsMiddleware(os.Getenv("CORS_ALLOWED_ORIGINS"), http.DefaultServeMux))),
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		IdleTimeout:    60 * time.Second,

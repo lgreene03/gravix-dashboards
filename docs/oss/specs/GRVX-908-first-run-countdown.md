@@ -417,6 +417,17 @@ does not fix it; it is what made four minutes of silence legible enough to notic
       watches reaching a populated dashboard on every push. The countdown itself has still never
       been watched in a browser. A Docker daemon is now available here, but Docker Hub refuses the
       image pulls with `429 Too Many Requests`, so the stack cannot be built locally. Still open.
+      *Update 2026-10-01, later:* **watched in a browser**, on the bootstrap stack run as its own
+      binaries beside a real Cube, with Chromium driven by Playwright (F-064 records how). It never
+      appeared. Four defects stood between this spec and a browser, and none was in its code:
+      the page's own seven-day default counted as a filter, so the onboarding block was hidden
+      (F-061); ingestion sent no CORS headers, so the service list this spec polls was unreadable
+      (F-064); the wizard covered the sign-in form (F-063); and the first chart after the countdown
+      drew nothing (F-065). With those fixed, the observed sequence is the one §6 describes:
+      "send your first event"; then, five seconds after five facts, "Traffic received — building
+      your first chart. First rollup completes in ~3:53"; then "Almost there — checking for
+      data..."; then the populated dashboard, 5 minutes 12 seconds after the first fact. The
+      unit tests passed throughout, because each stubs the call that failed.
 
 ## 10. Escalation
 

@@ -56,6 +56,11 @@ var ChartHelpers = (function() {
         gradient.addColorStop(0, params.backgroundColor);
         gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
 
+        // See sparsePointRadius in app.js (F-065).
+        var sparsePointRadius = function(c) {
+            return c.dataset && c.dataset.data && c.dataset.data.length <= 2 ? 4 : 0;
+        };
+
         var datasets = [{
             label: params.label + ' (Current)',
             data: params.data.current || params.data,
@@ -63,7 +68,7 @@ var ChartHelpers = (function() {
             backgroundColor: gradient,
             fill: true,
             tension: 0.4,
-            pointRadius: 0,
+            pointRadius: sparsePointRadius,
             pointHoverRadius: 6,
             borderWidth: 2
         }];
@@ -76,7 +81,7 @@ var ChartHelpers = (function() {
                 backgroundColor: 'transparent',
                 fill: false,
                 tension: 0.4,
-                pointRadius: 0,
+                pointRadius: sparsePointRadius,
                 borderWidth: 1,
                 borderDash: [5, 5]
             });

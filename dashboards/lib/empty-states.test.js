@@ -9,9 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-    buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE, uuidv7
-} from './empty-states.js';
+import { buildCurlCommand, renderEmptyStateCommand, FALLBACK_CURL_NOTE, uuidv7, filtersAreActive } from './empty-states.js';
 import { loadSLOPage } from './slo-cards.js';
 
 const CONFIG = { ingestionApiUrl: 'http://localhost:8090', apiKey: 'grvx_test-key' };
@@ -272,4 +270,18 @@ test('TestEventIDsAreUUIDv7', () => {
     // No crypto available: still a v7, never a v4 placeholder.
     const fallback = uuidv7({ crypto: { getRandomValues: () => { throw new Error('blocked'); } } });
     assert.match(fallback, uuidRe, `the fallback placeholder is not a v7: ${fallback}`);
+});
+
+// F-061: the page's own default range is not a filter.
+test('filtersAreActive is false for the range the page selected itself', () => {
+    const defaults = { dateFrom: '2026-09-24', dateTo: '2026-10-01' };
+    assert.equal(filtersAreActive({ service: '', dateFrom: '2026-09-24', dateTo: '2026-10-01' }, defaults), false);
+    assert.equal(filtersAreActive({ service: '', dateFrom: '', dateTo: '' }, defaults), false);
+});
+
+test('filtersAreActive is true once the visitor narrows the view', () => {
+    const defaults = { dateFrom: '2026-09-24', dateTo: '2026-10-01' };
+    assert.equal(filtersAreActive({ service: 'checkout', dateFrom: '2026-09-24', dateTo: '2026-10-01' }, defaults), true);
+    assert.equal(filtersAreActive({ service: '', dateFrom: '2026-09-30', dateTo: '2026-10-01' }, defaults), true);
+    assert.equal(filtersAreActive({ service: '', dateFrom: '2026-09-24', dateTo: '2026-09-30' }, defaults), true);
 });

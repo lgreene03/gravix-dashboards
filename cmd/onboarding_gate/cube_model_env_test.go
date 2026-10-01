@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -85,6 +86,9 @@ func nodeBin(t *testing.T) string {
 const modelEvalHarness = `
 const fs = require('fs'), path = require('path'), vm = require('vm'), Module = require('module');
 const MODEL_ROOT = process.argv[2];
+// How many values FILTER_PARAMS hands a filter callback. Cube passes two for a
+// date range and one for a single-bound filter such as gte or lte.
+const FILTER_PARAM_COUNT = Number(process.argv[3] || 2);
 function walk(d, b) { let o = [];
   for (const f of fs.readdirSync(path.join(d, b || ''))) {
     const r = b ? path.join(b, f) : f;
@@ -104,10 +108,14 @@ for (const rel of walk(MODEL_ROOT)) {
     COMPILE_CONTEXT: { securityContext: {} },
     // Cube injects FILTER_PARAMS when it transpiles a cube's sql. This stands in
     // for it with Cube's own shape — FILTER_PARAMS.<Cube>.<member>.filter(fn)
-    // calls fn with the bound parameters — so a model using it evaluates here
-    // and the predicate it builds appears in the SQL under test.
+    // calls fn with the bound parameters, two for a date range and one for a
+    // single-bound filter — so a model using it evaluates here and the
+    // predicate it builds appears in the SQL under test. Always passing two hid
+    // F-059 for as long as the predicate existed.
     FILTER_PARAMS: new Proxy({}, { get: () => new Proxy({}, { get: () => ({
-      filter: (f) => (typeof f === 'function' ? f('?', '?') : f + ' >= ? AND ' + f + ' <= ?'),
+      filter: (f) => (typeof f === 'function'
+        ? f(...Array(FILTER_PARAM_COUNT).fill('?'))
+        : f + ' >= ? AND ' + f + ' <= ?'),
     }) }) }),
   };
   // Cube transpiles a cube's member references (drillMembers: [service, ...])
@@ -129,8 +137,17 @@ for (const rel of walk(MODEL_ROOT)) {
 console.log(JSON.stringify(out));
 `
 
-// compileModelSQL evaluates the models under env and returns cube name -> sql.
+// compileModelSQL evaluates the models under env and returns cube name -> sql,
+// with FILTER_PARAMS shaped as for a date range.
 func compileModelSQL(t *testing.T, env map[string]string) map[string]string {
+	t.Helper()
+	return compileModelSQLWithParams(t, env, 2)
+}
+
+// compileModelSQLWithParams is compileModelSQL with FILTER_PARAMS handing each
+// filter callback params values, as Cube does: two for a date range, one for a
+// single-bound filter.
+func compileModelSQLWithParams(t *testing.T, env map[string]string, params int) map[string]string {
 	t.Helper()
 	dir := t.TempDir()
 	harness := filepath.Join(dir, "harness.js")
@@ -138,7 +155,7 @@ func compileModelSQL(t *testing.T, env map[string]string) map[string]string {
 		t.Fatalf("write harness: %v", err)
 	}
 
-	cmd := exec.Command(nodeBin(t), harness, modelRoot(t))
+	cmd := exec.Command(nodeBin(t), harness, modelRoot(t), strconv.Itoa(params))
 	// A closed environment, so the test cannot pass by inheriting a variable the
 	// case did not set.
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
@@ -248,6 +265,28 @@ func TestDuckDBModelPrunesPartitionsByDateRange(t *testing.T) {
 	}
 	if got := trino["RequestMetricsMinute"]; strings.Contains(got, "event_day BETWEEN") {
 		t.Errorf("Trino's table has no partition column; its SQL should not carry the DuckDB predicate:\n  %s", got)
+	}
+}
+
+// TestSingleBoundTimeFiltersCompile is F-059's regression test. Cube hands the
+// pruning predicate one value, not two, when a query filters bucketStart with
+// gte or lte instead of a date range, and the dashboard's endpoints table does
+// exactly that on its default seven-day view. The predicate wrote the missing
+// bound into the SQL as `undefined`, and DuckDB refused every such query with
+// "Referenced column "undefined" not found". It must prune nothing instead.
+func TestSingleBoundTimeFiltersCompile(t *testing.T) {
+	for _, engine := range []string{"duckdb", "trino"} {
+		sql := compileModelSQLWithParams(t, map[string]string{"CUBEJS_DB_TYPE": engine}, 1)
+		got := sql["RequestMetricsMinute"]
+		if strings.Contains(got, "undefined") {
+			t.Errorf("%s: a single-bound time filter compiles to SQL naming `undefined`:\n  %s", engine, got)
+		}
+		if strings.Contains(got, "event_day BETWEEN") {
+			t.Errorf("%s: a single-bound filter cannot say which bound it is, so it must not prune:\n  %s", engine, got)
+		}
+		if !strings.Contains(got, "WHERE 1 = 1") {
+			t.Errorf("%s: want the no-op predicate for a single-bound filter in:\n  %s", engine, got)
+		}
 	}
 }
 
