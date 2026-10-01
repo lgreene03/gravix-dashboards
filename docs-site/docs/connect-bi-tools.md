@@ -35,8 +35,10 @@ The tables are in the `raw` schema. `storage/trino/init.sql` defines them.
    around 30–60 seconds while it migrates its internal database.
 
 2. **Add the database.** In Metabase, *Admin → Databases → Add database*, and choose **Presto** from
-   the engine dropdown. That is not a mistake: Metabase's driver for Trino is still listed under its
-   former name.
+   the engine dropdown. Metabase has no Trino driver of its own. This option is Presto's JDBC
+   driver, and Trino accepts it because Gravix's Trino is configured to answer Presto's protocol
+   headers (`protocol.v1.alternate-header-name=Presto` in `storage/trino/config/config.properties`).
+   A Trino without that setting refuses it with HTTP 401.
 
    | Field | Value |
    |---|---|
@@ -44,7 +46,7 @@ The tables are in the `raw` schema. `storage/trino/init.sql` defines them.
    | Port | `8081` |
    | Catalog | `gravix` |
    | Schema | `raw` |
-   | Authentication | none |
+   | Username | any name, such as `metabase`. There is no password |
 
    `host.docker.internal` rather than `localhost`, because `localhost` inside the Metabase container
    is the container, not your machine. On Linux, run the container with
@@ -66,7 +68,18 @@ The tables are in the `raw` schema. `storage/trino/init.sql` defines them.
    docker run -d --name superset -p 8088:8088 apache/superset:3.1.1
    ```
 
-2. **Initialise it.** Superset needs a one-time setup before it will accept a login:
+2. **Install Trino's driver.** The image does not include one. It does include a `presto://`
+   dialect, but that sends Presto's request headers, and Trino refuses them with HTTP 401. Trino's
+   own Python client is the driver:
+
+   ```bash
+   docker exec -u root superset pip install trino==0.328.0
+   ```
+
+   That lasts as long as the container. For a Superset you keep, add `trino` to the image you build
+   it from, the way Superset's documentation adds any database driver.
+
+3. **Initialise it.** Superset needs a one-time setup before it will accept a login:
 
    ```bash
    docker exec -it superset superset fab create-admin \
@@ -76,7 +89,7 @@ The tables are in the `raw` schema. `storage/trino/init.sql` defines them.
    docker exec -it superset superset init
    ```
 
-3. **Add the database.** *Settings → Database Connections → + Database → Other*, with the SQLAlchemy
+4. **Add the database.** *Settings → Database Connections → + Database → Other*, with the SQLAlchemy
    URI:
 
    ```
@@ -86,7 +99,7 @@ The tables are in the `raw` schema. `storage/trino/init.sql` defines them.
    The `trino@` is a username with no password — Trino in this deployment has authentication
    disabled, which is also why it should not be exposed beyond localhost.
 
-4. **Query it** in SQL Lab:
+5. **Query it** in SQL Lab:
 
    ```sql
    SELECT COUNT(*) FROM request_metrics_minute

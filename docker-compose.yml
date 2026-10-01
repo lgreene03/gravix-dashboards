@@ -157,6 +157,10 @@ services:
     command:
       - -c
       - |
+        # Stop at the first failed statement. Without this, a CREATE SCHEMA
+        # that failed was followed by the rest and a clean exit, so the stack
+        # came up healthy with no tables (F-068).
+        set -e
         echo "Waiting for Trino to accept connections..."
         until trino --server trino:8080 --execute "SELECT 1" 2>/dev/null; do
           sleep 5
@@ -560,9 +564,13 @@ services:
       # warehouse files itself — so it needs no data volume and no S3
       # credentials. Trino holds both.
       - S3_BUCKET=${S3_BUCKET:-gravix}
+    # Its tables live in the schema init-trino creates. Started on Trino's
+    # health alone, its first run failed with "Schema raw not found".
     depends_on:
       trino:
         condition: service_healthy
+      init-trino:
+        condition: service_completed_successfully
     mem_limit: 256m
     cpus: 0.25
     networks:

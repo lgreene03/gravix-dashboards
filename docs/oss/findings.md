@@ -4362,8 +4362,9 @@ so nothing noticed. A stack that had created its schema before F-025 kept readin
 files stayed world-readable.
 
 `data-init` now creates `data/trino-metastore` and gives it to uid 1000 after the `gravix` chown,
-and Trino waits for `data-init` to finish. `TestTrinoCanWriteItsMetastore` fails on the old compose
-file twice. The live-stack tests in `docker-smoke` query the Hive tables through Trino, so a
+and Trino waits for `data-init` to finish. `init-trino` now stops at the first failed statement, so
+a failure like this one fails the container instead of passing for a clean start.
+`TestTrinoCanWriteItsMetastore` fails on the old compose file twice. The live-stack tests in `docker-smoke` query the Hive tables through Trino, so a
 recurrence would now fail CI.
 
 ## F-069 — the iceberg-sync service had no iceberg-sync to run
@@ -4381,3 +4382,35 @@ themselves, so they could not see that the stack's own copy was missing.
 The final stage now copies it. `TestEveryBuiltBinaryIsCopiedIntoTheImage` checks every Gravix
 Dockerfile for a binary the builder writes and no later stage copies, and fails on the old rollup
 Dockerfile.
+
+With the binary in place, the next `docker-smoke` run showed its first sync failing with
+`USER_ERROR: Schema raw not found`. The service started once Trino was healthy, before `init-trino`
+had created the schema. It recovered five minutes later, but a first run that always fails is noise
+an operator learns to ignore. It now waits for `init-trino` to finish.
+
+## F-070 — the full stack's Trino tables cannot see any tenant's data, and have no tenant column to filter on
+
+**Found by** reading the rollup's output paths while fixing F-068
+**Affects** `docker-compose.yml` (`init-trino`), `storage/trino/init.sql`, the warehouse layout
+**Severity** high — on the full stack, a signed-in dashboard has no data, and its queries name a column the table lacks
+**Status** open — the fix changes the warehouse layout, which is design tier (see `open-decisions.md`)
+
+Every data-plane job in the full stack runs multi-tenant (F-027), so the request rollup writes
+`warehouse/<tenant-id>/request_metrics_minute/event_day=<day>/…`. Trino's Hive tables are declared
+over `s3a://gravix/warehouse/request_metrics_minute/`, a prefix nothing in the full stack writes.
+Their columns also stop at `event_day`: the Parquet files carry `tenant_id`, and the tables do not
+expose it.
+
+Cube on Trino reads `SELECT * FROM gravix.raw.request_metrics_minute`, and for a signed-in user its
+`queryRewrite` adds a filter on `tenantId`, whose SQL is `tenant_id`. So each such query names a
+column the table does not have, against a location with no files. The bootstrap stack is not
+affected: Cube there reads the Parquet with DuckDB and a glob that includes the tenant directory.
+
+Neither half can be fixed by pointing the table somewhere else. A Hive table has one location and no
+glob, and the tenant directory is not a `key=value` partition, so Trino cannot discover tenants from
+it. The options are in `open-decisions.md`.
+
+What this does to PR #27's live tests: the Hive tables they read are empty on the full stack, so the
+sync tests would compare two empty tables and the Spark check would count zero rows. CI therefore
+inserts fixture rows into the Hive table first, and says why, so the three tests check a copy of real
+rows. That tests the Iceberg path. It does not fix this.

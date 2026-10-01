@@ -74,6 +74,7 @@ Nothing below has shipped in a tagged release yet.
 - **The full stack's Hive tables were never created** — `data-init` gave Trino's metastore directory to the `gravix` user, uid 100, and Trino runs as uid 1000, so `CREATE SCHEMA` failed and the failure was skipped. Cube had no tables to read on a fresh clone (F-068)
 - **The Iceberg catalog stopped Trino from starting** — it asked for a `hadoop` catalog type, which Trino has never had. It now uses Trino's file metastore, kept in the bucket, and other engines read each table from its metadata file (SD-059, DD-033)
 - **The stack never ran its Iceberg sync** — the binary was built and left out of the image, so the `iceberg-sync` service failed every five minutes (F-069)
+- **The Metabase and Superset guide's steps could not connect to Trino** — Metabase 0.50 has no `presto` engine, the Superset image has no Trino driver, and both tools' Presto clients were refused by Trino. Trino now also answers Presto's protocol headers, and the guide installs Superset's driver (SD-060)
 - **The Spark read check could not fail** — it took any number on Spark's last output line as a row count, whatever the exit status. It now needs a clean exit and an explicit row count, and prints Spark's error when it fails (F-067)
 
 ### Security

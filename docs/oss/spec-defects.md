@@ -4361,3 +4361,52 @@ containers cannot reach Maven Central. CI resolves them with `--packages` as the
 
 `TestIcebergCatalogTypeExistsInPinnedTrino` holds the catalog type to Trino 435's list and holds the
 two settings the Spark read depends on. Against §5.1's template it reports three errors.
+
+## SD-060 — GRVX-1103's connection steps cannot connect either tool to the pinned Trino
+
+**Found by:** running `verify_bi_connections.sh` against `trinodb/trino:435` for the first time, while driving PR #27's live-stack tests
+**Affects:** GRVX-1103 §6 steps 2, 3d and 4
+**Severity:** high — AC-1 and AC-2 could not pass, and the published guide's steps did not work
+**Status:** resolved 2026-10-01
+
+### Superset
+
+§6 step 2(b) has Superset connect with `trino://trino@host:8081/gravix/raw`. `apache/superset:3.1.1`
+has no `trino` package, so SQLAlchemy cannot load the dialect
+(`NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:trino`), and Superset answers the
+database `POST` with `422 Connection failed`. The image does have PyHive's `presto://` dialect. It
+sends `X-Presto-User`, and Trino 435 answers
+`401 Basic authentication or X-Trino-Original-User or X-Trino-User must be sent`.
+
+Before either of those, §6 step 4's API calls were refused with `400 The CSRF token is missing`.
+Superset checks a CSRF token on writes even with a bearer token.
+
+The script now installs `trino==0.328.0` into its throwaway container, fetches a CSRF token with a
+cookie jar, and sends both. Against the lab Trino with three fixture rows, SQL Lab returned
+`[{'c': 3}]` and the script exited 0. The guide gains the install step and says to build it into the
+image for a Superset that is kept.
+
+### Metabase
+
+§6 step 3d sets `engine: "presto"`. Metabase v0.50.34 has no such engine. Its driver list
+(`modules/drivers/deps.edn` at that tag) has `presto-jdbc`, shown as "Presto" in the UI, built on
+`com.facebook.presto/presto-jdbc 0.288`. That driver sends Presto's headers too, so it meets the
+same 401.
+
+Trino 435 still supports `protocol.v1.alternate-header-name=Presto`, which makes it answer
+Presto's headers while still answering Trino's. With it set, `X-Presto-User` went from 401 to 200,
+`X-Trino-User` stayed 200, and Presto JDBC 0.288 counted the fixture rows and listed the three
+tables and eleven columns that Metabase's sync reads. The option is now in the compose and Helm
+Trino configs. The script uses `engine: "presto-jdbc"` and passes a user name, which Presto JDBC
+requires.
+
+Metabase itself was not run here: Docker Hub refused the image pull on its anonymous rate limit.
+The setup and query calls are unchanged from the spec apart from the engine name and the user, and
+`docker-smoke` runs them.
+
+### Why the fix is not the Starburst driver
+
+Starburst publishes a Metabase driver for Trino, and it would avoid the Trino setting. It is a
+plugin jar downloaded from a third party into Metabase's plugins directory, which the guide's claim
+of "no custom connector" rules out, and its release page could not be read from here to pin a
+version compatible with v0.50.34.

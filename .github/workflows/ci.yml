@@ -770,9 +770,11 @@ jobs:
       # on a Trino that exited a few seconds later (SD-059).
       - name: Wait for Trino
         run: |
+          started=false
           for _ in $(seq 1 36); do
             if curl -sf http://localhost:8081/v1/info | grep -q '"starting":false'; then
-              exit 0
+              started=true
+              break
             fi
             if [ "$(docker inspect -f '{{.State.Running}}' gravix-trino 2>/dev/null)" = false ]; then
               echo "::error::Trino exited while starting"
@@ -780,8 +782,20 @@ jobs:
             fi
             sleep 5
           done
-          echo "::error::Trino did not finish starting on localhost:8081 within three minutes"
-          exit 1
+          if [ "$started" != true ]; then
+            echo "::error::Trino did not finish starting on localhost:8081 within three minutes"
+            exit 1
+          fi
+          # init-trino creates the tables the tests read, and exits when done.
+          for _ in $(seq 1 24); do
+            [ "$(docker inspect -f '{{.State.Status}}' gravix-init-trino)" = exited ] && break
+            sleep 5
+          done
+          code="$(docker inspect -f '{{.State.ExitCode}} {{.State.Status}}' gravix-init-trino)"
+          if [ "$code" != "0 exited" ]; then
+            echo "::error::init-trino did not finish creating the tables (exit code, state: $code)"
+            exit 1
+          fi
 
       # Tests that need a running Trino and MinIO, which only this job has:
       # GRVX-1106 AC-4 to AC-6 (SD-050), GRVX-1104 AC-4 (SD-051) and GRVX-1103
@@ -800,6 +814,18 @@ jobs:
           # landing between them, or the stack's own sync interleaving its
           # DELETE and INSERT with the test's, would fail them on a correct sync.
           docker compose stop load-generator request-metrics-rollup iceberg-sync
+          # Nothing in the full stack writes where Trino's Hive tables read
+          # (F-070), so they are empty: the sync tests would compare two empty
+          # tables and Spark would count nothing. Three rows for today give
+          # them a real copy to check. This tests the Iceberg path; it does
+          # not fix F-070.
+          day="$(date -u +%F)"
+          docker compose exec -T trino trino --execute "INSERT INTO gravix.raw.request_metrics_minute
+            (bucket_start, service, method, path_template, request_count, error_count, error_rate,
+             p50_latency_ms, p95_latency_ms, p99_latency_ms, event_day) VALUES
+            ('${day}T00:00:00Z', 'ci-fixture', 'GET', '/fixture/{id}', 10, 1, 0.1, 5.0, 9.0, 12.0, '${day}'),
+            ('${day}T00:01:00Z', 'ci-fixture', 'GET', '/fixture/{id}', 20, 0, 0.0, 4.0, 8.0, 11.0, '${day}'),
+            ('${day}T00:02:00Z', 'ci-fixture', 'POST', '/fixture', 3, 0, 0.0, 6.0, 7.0, 9.0, '${day}')"
           go test -tags=slow -count=1 -v ./tests/e2e/ \
             -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset' \
             | tee /tmp/live-e2e.txt
