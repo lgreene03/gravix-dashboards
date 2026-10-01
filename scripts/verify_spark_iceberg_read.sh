@@ -27,6 +27,7 @@ MINIO_URL="${MINIO_URL:-http://localhost:9000/minio/health/live}"
 
 SPARK_IMAGE="apache/spark:3.5.3"
 ICEBERG_RUNTIME="org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1"
+HADOOP_AWS="org.apache.hadoop:hadoop-aws:3.3.4"
 WAREHOUSE="s3a://${S3_BUCKET}/iceberg-warehouse"
 
 if ! curl -sf "$TRINO_URL" >/dev/null 2>&1 || ! curl -sf "$MINIO_URL" >/dev/null 2>&1; then
@@ -43,9 +44,16 @@ fi
 NETWORK="$(docker network ls --filter name=backend --format '{{.Name}}' | head -1)"
 NETWORK="${NETWORK:-bridge}"
 
+# The image ships Hadoop's client but not its S3 connector, so s3a:// needs
+# hadoop-aws at the image's Hadoop version, which brings the AWS SDK with it.
+# --packages resolves through Ivy, whose default cache is under a home
+# directory the image's user does not have, so it is pointed at /tmp.
+SPARK_ERR="$(mktemp)"
+trap 'rm -f "$SPARK_ERR"' EXIT
 OUT="$(docker run --rm --network "$NETWORK" "$SPARK_IMAGE" \
   /opt/spark/bin/spark-sql \
-    --packages "$ICEBERG_RUNTIME" \
+    --packages "$ICEBERG_RUNTIME,$HADOOP_AWS" \
+    --conf spark.jars.ivy=/tmp/.ivy2 \
     --conf spark.sql.catalog.gravix_iceberg=org.apache.iceberg.spark.SparkCatalog \
     --conf spark.sql.catalog.gravix_iceberg.type=hadoop \
     --conf "spark.sql.catalog.gravix_iceberg.warehouse=${WAREHOUSE}" \
@@ -53,12 +61,14 @@ OUT="$(docker run --rm --network "$NETWORK" "$SPARK_IMAGE" \
     --conf "spark.hadoop.fs.s3a.access.key=${S3_ACCESS_KEY}" \
     --conf "spark.hadoop.fs.s3a.secret.key=${S3_SECRET_KEY}" \
     --conf spark.hadoop.fs.s3a.path.style.access=true \
-    -e "SELECT COUNT(*) FROM gravix_iceberg.raw.request_metrics_minute" 2>/dev/null | tail -1 || true)"
+    -e "SELECT COUNT(*) FROM gravix_iceberg.raw.request_metrics_minute" 2>"$SPARK_ERR" | tail -1 || true)"
 
 COUNT="$(echo "$OUT" | tr -dc '0-9')"
 if [[ -z "$COUNT" ]]; then
   echo "spark-sql query failed or returned non-numeric output" >&2
   echo "  output: ${OUT:-<empty>}" >&2
+  echo "  last lines Spark wrote to stderr:" >&2
+  grep -v ' INFO ' "$SPARK_ERR" | tail -25 | sed 's/^/    /' >&2
   exit 1
 fi
 

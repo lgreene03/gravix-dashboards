@@ -24,11 +24,20 @@ readonly SUPERSET_NAME="gravix-verify-superset"
 STARTED=()
 
 cleanup() {
+    local status=$?
     for name in "${STARTED[@]:-}"; do
-        [ -n "$name" ] && docker rm -f "$name" >/dev/null 2>&1 || true
+        [ -n "$name" ] || continue
+        # Every failure below reports the same sentence, so the container's
+        # own log is the only place the reason can be read.
+        if [ "$status" -ne 0 ]; then
+            echo "--- last 30 log lines of $name ---" >&2
+            docker logs --tail 30 "$name" >&2 2>&1 || true
+        fi
+        docker rm -f "$name" >/dev/null 2>&1 || true
     done
 }
 trap cleanup EXIT
+
 
 die() { echo "$1" >&2; exit "$2"; }
 
@@ -48,10 +57,31 @@ wait_for_http() {
     return 1
 }
 
+# How the BI containers reach Trino. The full stack publishes Trino on
+# 127.0.0.1 only, which a container cannot reach through host.docker.internal,
+# so when the stack's network exists the containers join it and use Trino's own
+# name and port, as Cube does. Without it, a Trino published on all interfaces
+# is reached through the host. Decided when a tool is verified, after the
+# argument and Trino checks, so those still answer with their own exit codes.
+pick_trino_route() {
+    local net
+    net="$(docker network ls --filter name=backend --format '{{.Name}}' 2>/dev/null | head -1)" || net=""
+    if [ -n "$net" ]; then
+        NET_ARGS=(--network "$net")
+        TRINO_HOST=trino
+        TRINO_PORT=8080
+    else
+        NET_ARGS=(--add-host=host.docker.internal:host-gateway)
+        TRINO_HOST=host.docker.internal
+        TRINO_PORT=8081
+    fi
+}
+
 verify_metabase() {
+    pick_trino_route
     echo "==> metabase: starting $METABASE_IMAGE"
     docker run -d --name "$METABASE_NAME" \
-        --add-host=host.docker.internal:host-gateway \
+        "${NET_ARGS[@]}" \
         -p 3001:3000 "$METABASE_IMAGE" >/dev/null
     STARTED+=("$METABASE_NAME")
 
@@ -74,7 +104,7 @@ verify_metabase() {
  "user":{"first_name":"Gravix","last_name":"Verify","email":"verify@example.com",
          "site_name":"gravix-verify","password":"Gravix-verify-1"},
  "database":{"engine":"presto","name":"gravix",
-             "details":{"host":"host.docker.internal","port":8081,
+             "details":{"host":"$TRINO_HOST","port":$TRINO_PORT,
                         "catalog":"gravix","schema":"raw","ssl":false}}}
 JSON
 )
@@ -110,9 +140,10 @@ sys.exit(0 if isinstance(n, (int, float)) and n >= 0 else 1)' \
 }
 
 verify_superset() {
+    pick_trino_route
     echo "==> superset: starting $SUPERSET_IMAGE"
     docker run -d --name "$SUPERSET_NAME" \
-        --add-host=host.docker.internal:host-gateway \
+        "${NET_ARGS[@]}" \
         -e SUPERSET_SECRET_KEY=gravix-verify-not-a-real-secret \
         -p 8088:8088 "$SUPERSET_IMAGE" >/dev/null
     STARTED+=("$SUPERSET_NAME")
@@ -139,8 +170,8 @@ verify_superset() {
     local db_id
     db_id=$(curl -sf -X POST http://localhost:8088/api/v1/database/ \
         -H "Authorization: Bearer $access" -H 'Content-Type: application/json' \
-        -d '{"database_name":"gravix",
-             "sqlalchemy_uri":"trino://trino@host.docker.internal:8081/gravix/raw"}' \
+        -d "{\"database_name\":\"gravix\",
+             \"sqlalchemy_uri\":\"trino://trino@${TRINO_HOST}:${TRINO_PORT}/gravix/raw\"}" \
         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')
     [ -n "$db_id" ] || die "superset: connection or query verification failed" 1
 
