@@ -258,3 +258,25 @@ surfaced GRVX-1305's wrong path before that spec is dispatched.
 **Done.** `scripts/spec_lint.py`, `make spec-lint`, a CI step, two tests, and the gate documentation.
 
 **To reverse.** Remove the CI step; the script is inert without it.
+
+## DD-013 — F-050: correct the published Go install now; leave the module path to the owner
+
+**Date** 2026-10-01 · **Tier** routine (documentation) · **Doc** `findings.md` F-050
+
+**Options.** Leave the pages as they were, with a warning over a command that cannot work; rename
+the root module to `lgreene03` now (option 1); or correct the pages to an install that works today
+and leave the name decision open.
+
+**Chosen.** The last. The pages documented an API that does not exist, which is a documentation bug
+and an implementer's to fix. The module path is the project's canonical name for every future
+consumer. Renaming it to a personal account would mean renaming it again when the repository moves to
+an organisation, and only the owner can create one.
+
+**Done.** `sdk-go.md` rewritten from the exported API, with an install through `replace` directives
+that never fetches the module path. `getting-started.md` and `deployment.md` corrected.
+`TestGoSDKDocsUseTheRealAPI` keeps both pages to the real API and module path.
+
+**Not decided, and why.** Which name the root module and the SDK take. That needs the owner to
+create an organisation (option 2, recommended) or provision `gravix.io` (option 3).
+
+**To reverse.** Restore the three pages from git and delete the test.

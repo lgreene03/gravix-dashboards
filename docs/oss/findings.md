@@ -2850,11 +2850,11 @@ twelve checks in `11-agent-loops.md` rather than renumbering them.
 M2 allows §2 as well as §4: a step that *reads* a context file is not a defect, and without that the
 check fired on GRVX-1107 §6 step 1's "read … in full".
 
-Run over the corpus, it reports drift in eighteen dispatched specs, including two already registered
-(GRVX-1107's `enterprise.go`, SD-029; GRVX-1201's `pkg/notify/slack.go`, SD-031), five that name
-`services/gateway/` files the gateway refactor moved to `pkg/gatewaycore`, and GRVX-1305's §2, which
-names a `gateway_billing.go` that does not exist — a defect in a spec not yet executed, caught before
-dispatch. The two `planned` specs pass. `TestSpecLintCatchesWhatTheGateMissed` reproduces SD-029's
+Run over the corpus, it reported drift in eighteen specs not marked `planned`, including two already
+registered (GRVX-1107's `enterprise.go`, SD-029; GRVX-1201's `pkg/notify/slack.go`, SD-031), five
+that name `services/gateway/` files the gateway refactor moved to `pkg/gatewaycore`, and GRVX-1305's
+§2, which named a `gateway_billing.go` that does not exist. GRVX-1305 is `blocked`, not dispatched, so
+that defect was caught before execution and corrected in the same change, leaving seventeen. The two `planned` specs pass. `TestSpecLintCatchesWhatTheGateMissed` reproduces SD-029's
 two defects in fixture specs and requires both to fail.
 
 ---
@@ -3411,7 +3411,7 @@ The output was accurate the whole time. Nobody was reading it.
 **Found by:** `security-engineer` executing GRVX-1503, enumerating identity assets
 **Affects:** `go.mod`, `docs-site/docs/getting-started.md`, `docs-site/docs/sdk-go.md`, `sdk/go/`
 **Severity:** high — the published install command resolves to an account this project does not control
-**Status:** open; needs an owner decision, recorded in `open-decisions.md`
+**Status:** open; the published commands are corrected (DD-013), and the name decision needs the owner
 
 ### What is true
 
@@ -3479,6 +3479,38 @@ option costs something different:
 
 Until one is chosen, the two published `go get` commands are wrong, and the docs should say so
 rather than print a command that cannot work.
+
+### Update 2026-10-01 — DD-013: the published pages no longer print a command that cannot work
+
+**What was worse than the finding said.** The install command was not the only thing wrong on
+`sdk-go.md`. The page documented `gravix.NewClient(gravix.Config{...})`, `client.Send`,
+`gravix.Fact`, `gravix.Middleware`, `GinMiddleware` and `EchoMiddleware`. None of them exist. The SDK
+exports `gravix.New` with functional options, `RecordFact`, `SendFact`, `RequestFact` and
+`HTTPMiddleware`, and has no Gin or Echo dependency at all. A user who got past the import path would
+have failed at the first line of code.
+
+The SDK also has its own module path, `github.com/gravix-io/gravix-go`, declared in `sdk/go/go.mod`.
+It is not the repository's path, so the page's `go get .../sdk/go` was wrong twice over. The Go module
+proxy reports no repository at `github.com/gravix-io/gravix-go`. Whether the `gravix-io` account
+exists, and who holds it, could not be checked from this session. Treat it as the same exposure as
+the root module's path until the owner confirms it.
+
+**What changed.**
+
+- `sdk-go.md` is rewritten from the SDK's exported API. Install is a clone plus `replace` directives,
+  which never fetch the module path and so cannot resolve to anybody else's code. The OpenTelemetry
+  exporter is its own module and gets its own `replace`.
+- `getting-started.md` uses the same install and links to the SDK page. Its clone URL, and
+  `deployment.md`'s, now name `lgreene03`.
+- `TestGoSDKDocsUseTheRealAPI` parses the SDK and fails if either page names an identifier it does not
+  export, or imports it by anything but the path in `sdk/go/go.mod`. With the old page restored it
+  reports sixteen failures.
+- Both install recipes were followed in a fresh module outside the repository and built.
+
+**What did not change, and why.** The module paths. Option 2 is still the recommendation, and it now
+covers two paths: the root module's and the SDK's. Choosing it means creating an organisation, which
+only the account owner can do. Option 1 would bake a personal account into every consumer's imports
+and then change them again when `succession.md` item 1 is done.
 
 ---
 

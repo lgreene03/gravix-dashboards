@@ -22,7 +22,7 @@ Gravix is a lightweight, data-first HTTP observability platform. It captures raw
 The fastest way to run Gravix locally is with Docker Compose. This starts the ingestion service, rollup ETL, Trino query engine, and dashboard.
 
 ```bash
-git clone https://github.com/lgreene/gravix-dashboards.git
+git clone https://github.com/lgreene03/gravix-dashboards.git
 cd gravix-dashboards
 cp .env.example .env
 # Edit .env and set GRAVIX_API_KEY to your API key
@@ -71,21 +71,18 @@ For production use, instrument your service with an SDK rather than raw HTTP cal
 
 **Go**
 
+The Go SDK's module path is `github.com/gravix-io/gravix-go`, and it is not fetchable with `go get`
+until the project's canonical import path is settled (**F-050**). Use it from a clone:
+
 ```bash
-go get github.com/lgreene/gravix-dashboards/sdk/go
+git clone https://github.com/lgreene03/gravix-dashboards
+cd your-service
+go mod edit -require=github.com/gravix-io/gravix-go@v0.0.0 \
+            -replace=github.com/gravix-io/gravix-go=../gravix-dashboards/sdk/go
+go mod tidy
 ```
 
-:::warning This command does not work yet
-
-`go.mod` declares the module path `github.com/lgreene/gravix-dashboards`, and the repository is at
-`github.com/lgreene03/gravix-dashboards` — a different account. `go get` resolves a module path by
-fetching that URL, so this command cannot install the Gravix SDK, and it must not be run until the
-path is corrected. Tracked as **F-050** in
-[`docs/oss/findings.md`](https://github.com/lgreene03/gravix-dashboards/blob/main/docs/oss/findings.md).
-
-Until then, vendor the SDK from a clone of the repository.
-
-:::
+See the [Go SDK](sdk-go.md) page for the client API.
 
 **Python**
 
