@@ -31,10 +31,10 @@ varchar to a date and Trino rejects it; cast explicitly, as below.
 
 | PromQL intent | PromQL | Gravix SQL |
 |---|---|---|
-| Request rate | `rate(http_requests_total[5m])` | <pre>SELECT service, SUM(request_count) / 300.0 AS rps<br/>FROM gravix.raw.request_metrics_minute<br/>WHERE event_day = CAST(current_date AS varchar)<br/>  AND bucket_start >= format_datetime(<br/>        (current_timestamp - INTERVAL '5' MINUTE) AT TIME ZONE 'UTC',<br/>        'yyyy-MM-dd HH:mm:ss')<br/>GROUP BY service</pre> |
+| Request rate | `rate(http_requests_total[5m])` | <pre>SELECT service, CAST(SUM(request_count) AS double) / 300 AS rps<br/>FROM gravix.raw.request_metrics_minute<br/>WHERE event_day = CAST(current_date AS varchar)<br/>  AND bucket_start >= format_datetime(<br/>        (current_timestamp - INTERVAL '5' MINUTE) AT TIME ZONE 'UTC',<br/>        'yyyy-MM-dd HH:mm:ss')<br/>GROUP BY service</pre> |
 | p95 latency | `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))` | <pre>SELECT service, p95_latency_ms FROM (<br/>  SELECT service, p95_latency_ms,<br/>         ROW_NUMBER() OVER (PARTITION BY service<br/>                            ORDER BY bucket_start DESC) AS rn<br/>  FROM gravix.raw.request_metrics_minute<br/>  WHERE event_day = CAST(current_date AS varchar)<br/>) WHERE rn = 1</pre> |
 | Error ratio | `sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))` | <pre>SELECT service,<br/>       CAST(SUM(error_count) AS double)<br/>         / NULLIF(SUM(request_count), 0) AS error_ratio<br/>FROM gravix.raw.request_metrics_minute<br/>WHERE event_day = CAST(current_date AS varchar)<br/>  AND bucket_start >= format_datetime(<br/>        (current_timestamp - INTERVAL '5' MINUTE) AT TIME ZONE 'UTC',<br/>        'yyyy-MM-dd HH:mm:ss')<br/>GROUP BY service</pre> |
-| Per-endpoint breakdown | `sum by (path) (rate(http_requests_total[5m]))` | <pre>SELECT path_template, SUM(request_count) / 300.0 AS rps<br/>FROM gravix.raw.request_metrics_minute<br/>WHERE event_day = CAST(current_date AS varchar)<br/>  AND bucket_start >= format_datetime(<br/>        (current_timestamp - INTERVAL '5' MINUTE) AT TIME ZONE 'UTC',<br/>        'yyyy-MM-dd HH:mm:ss')<br/>GROUP BY path_template</pre> |
+| Per-endpoint breakdown | `sum by (path) (rate(http_requests_total[5m]))` | <pre>SELECT path_template, CAST(SUM(request_count) AS double) / 300 AS rps<br/>FROM gravix.raw.request_metrics_minute<br/>WHERE event_day = CAST(current_date AS varchar)<br/>  AND bucket_start >= format_datetime(<br/>        (current_timestamp - INTERVAL '5' MINUTE) AT TIME ZONE 'UTC',<br/>        'yyyy-MM-dd HH:mm:ss')<br/>GROUP BY path_template</pre> |
 | Raw request inspection | *not expressible — Prometheus discards the raw observation* | <pre>SELECT * FROM gravix.raw.request_facts<br/>WHERE service = 'checkout' LIMIT 100</pre> |
 
 ## Three places the translation is not literal
@@ -65,8 +65,23 @@ sketch column rather than averaging this one.
 | All five intents are present with a SQL equivalent | **Tested** — `TestSQLPromQLGuideHasAllRows` |
 | No query compares `event_day` to a bare `current_date` | **Tested** — the type error that made the original draft unrunnable |
 | Every rate filters `bucket_start` to its window | **Tested** — guards against the 144× error above |
-| The queries return correct numbers against a live Trino | **Not run** — needs a running warehouse |
+| No rate divides an integer sum without a cast | **Tested** — guards against rates rounding to zero, below |
+| The four metric queries run on Trino and return rates as doubles | **Tested in CI** — `TestSQLGuideQueriesRunOnTrino`, against the full stack's Trino |
+| They return the right numbers | **Run by hand** against Trino 435, with rows chosen to expose rounding |
+| The raw-inspection query runs on the full stack | **No** — see below |
 
-The last row is the honest one. These queries are reasoned from the column types in
-`storage/trino/init.sql` and the project's own working SQL, not executed against a live Trino in CI.
+The hand run inserted ten requests for one service in the last five minutes, three of them on one
+endpoint, and an older row of 900 that the window must exclude. The rate came back 0.0333, the
+endpoint rate 0.01, the error ratio exactly 1/10, and the p95 that of the latest minute. The first
+version of this page divided by `300.0`, which Trino reads as `DECIMAL(4,1)`, and the same rows gave
+a rate of `0.0`. Every rate was rounded to the nearest 0.1 per second, so any service with fewer
+than 15 requests in five minutes showed as idle.
+`docs/oss/correctness-defects.md` CD-006 has the detail.
+
+**The raw-inspection row does not run on the full stack yet.** `gravix.raw.request_facts` is defined
+in `storage/trino/init.sql`, but the full stack does not create it, and raw facts are stored under a
+directory per tenant, which a Hive table cannot name. `docs/oss/findings.md` F-070 is the same
+problem for the metric tables, and fixing it is waiting on a decision about the warehouse layout.
+The query is right for a single-tenant warehouse with the table created from `init.sql`.
+
 `docs/oss/spec-defects.md` SD-052 records what was wrong with the first draft and how it was found.
