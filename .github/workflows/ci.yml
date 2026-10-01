@@ -773,6 +773,8 @@ jobs:
           set -o pipefail
           # The Spark check reads the S3 credentials the stack was started with.
           set -a; . ./.env; set +a
+          # The BI checks boot Metabase and Superset, so they also ask for this.
+          export BI_CONNECTIONS_E2E=1
           go test -tags=slow -count=1 -v ./tests/e2e/ \
             -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset' \
             | tee /tmp/live-e2e.txt

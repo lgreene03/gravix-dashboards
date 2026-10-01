@@ -61,11 +61,18 @@ OUT="$(docker run --rm --network "$NETWORK" "$SPARK_IMAGE" \
     --conf "spark.hadoop.fs.s3a.access.key=${S3_ACCESS_KEY}" \
     --conf "spark.hadoop.fs.s3a.secret.key=${S3_SECRET_KEY}" \
     --conf spark.hadoop.fs.s3a.path.style.access=true \
-    -e "SELECT COUNT(*) FROM gravix_iceberg.raw.request_metrics_minute" 2>"$SPARK_ERR" | tail -1 || true)"
+    -e "SELECT COUNT(*) FROM gravix_iceberg.raw.request_metrics_minute" 2>"$SPARK_ERR")" \
+  && STATUS=0 || STATUS=$?
 
-COUNT="$(echo "$OUT" | tr -dc '0-9')"
-if [[ -z "$COUNT" ]]; then
+# The answer is the last line spark-sql prints to stdout, and it must be a bare
+# integer. This once kept every digit of that line, whatever it said, after
+# discarding the run's exit status, so any line with a number in it passed:
+# the check reported success on a stack whose Iceberg catalog did not exist
+# (F-067).
+COUNT="$(printf '%s\n' "$OUT" | sed '/^[[:space:]]*$/d' | tail -1 | tr -d '[:space:]')"
+if [[ "$STATUS" -ne 0 || ! "$COUNT" =~ ^[0-9]+$ ]]; then
   echo "spark-sql query failed or returned non-numeric output" >&2
+  echo "  exit status: $STATUS" >&2
   echo "  output: ${OUT:-<empty>}" >&2
   echo "  last lines Spark wrote to stderr:" >&2
   grep -v ' INFO ' "$SPARK_ERR" | tail -25 | sed 's/^/    /' >&2

@@ -4289,3 +4289,45 @@ against the lab Cube, reproduced the stall: no answer within 40 s for either. Th
 workflow builds the bootstrap stack as users do and runs the script three times. It is dispatched by
 hand, because it measures rather than gates. Its first run on `main` decides whether the published
 image stalls too, which is the evidence a Cube upgrade needs.
+
+## F-066 — the full stack's Trino never had an Iceberg catalog on CI, and ran on a committed copy of its own config
+
+**Found by** the first run of GRVX-1106's Iceberg tests on a live stack, in `docker-smoke` on PR #27
+**Affects** `docker-compose.yml` (`trino`), `storage/trino/config/catalog/gravix.properties` (removed), `.gitignore`
+**Severity** high — the Iceberg tables GRVX-1106 publishes could not exist on any host where this happened
+**Status** fixed
+
+```
+create request_metrics_minute: trino: query failed: "USER_ERROR: line 1:1: Catalog 'gravix_iceberg' does not exist"
+```
+
+The `trino` service bind-mounted `storage/trino/config` over `/etc/trino`, and its entrypoint rendered
+the catalog templates into `/etc/trino/catalog`, which is inside that mount. Trino's image runs as uid
+1000. On a host whose user is not uid 1000, such as GitHub's runner, the render could not write, the
+error was ignored, and Trino started anyway. It found one catalog: a rendered `gravix.properties` that
+had been committed in #18, with `demo.sh`'s local credentials rather than the stack's. So the Hive
+catalog used the wrong S3 credentials and the Iceberg catalog was missing. Where the user is uid
+1000, the render worked and wrote the stack's S3 secret into the working tree.
+
+The committed credential was `demo.sh`'s documented local default, not a real secret.
+
+Trino's config files are now mounted one by one, the catalogs render into a tmpfs inside the
+container, and the entrypoint stops the container if either catalog is missing. The committed render
+is removed, and the directory is in `.gitignore`. `TestTrinoRendersCatalogsInsideTheContainer` fails
+on the old compose file six ways.
+
+## F-067 — the Spark read check passed with no Iceberg catalog behind it
+
+**Found by** the same run: `TestVerifySparkIcebergRead` passed while Trino reported the catalog missing
+**Affects** `scripts/verify_spark_iceberg_read.sh`, `tests/e2e/iceberg_sync_test.go`
+**Severity** high — GRVX-1106 AC-6, the interoperability claim, had a check that could not fail on a missing table
+**Status** fixed
+
+The script kept every digit of spark-sql's last output line, whatever the line said, and discarded the
+run's exit status. Any line with a number in it, such as a URL or a timestamp, counted as a row count.
+With no Iceberg table in existence, the check reported success.
+
+The script now requires spark-sql to exit 0 and its last line to be a bare integer, prints the exit
+status, the output and Spark's errors when either fails, and the test logs the script's output on
+success as well. The same review added Hadoop's S3 connector and an Ivy cache directory, without
+which the read could not have worked at all.

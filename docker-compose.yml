@@ -221,22 +221,37 @@ services:
       # path. Defaulted rather than required: a stack without the Iceberg
       # catalog should not fail to start over a variable it does not read.
       - S3_BUCKET=${S3_BUCKET:-gravix}
+    # The config files are mounted one by one, and the catalogs are rendered
+    # into a tmpfs inside the container. /etc/trino used to be one bind mount
+    # of the checkout, so the render wrote into storage/trino/config/catalog/:
+    # on a host whose user is not the image's uid 1000, such as a CI runner,
+    # it could not write there, the error was ignored, and Trino ran on a
+    # rendered copy someone had committed, with stale credentials and no
+    # Iceberg catalog. Where it could write, it put the S3 secret in the
+    # working tree (F-066).
     volumes:
-      - ./storage/trino/config:/etc/trino
+      - ./storage/trino/config/config.properties:/etc/trino/config.properties:ro
+      - ./storage/trino/config/jvm.config:/etc/trino/jvm.config:ro
+      - ./storage/trino/config/node.properties:/etc/trino/node.properties:ro
       - ./storage/trino/catalog:/etc/trino/catalog.tpl:ro
       - ./data/trino-metastore:/data/metastore
       - ./data/raw:/data/raw:ro
+    tmpfs:
+      - /etc/trino/catalog:mode=1777
     entrypoint:
       - /bin/sh
       - -c
       - |
-        mkdir -p /etc/trino/catalog
-        for f in /etc/trino/catalog.tpl/*; do
+        set -e
+        for f in /etc/trino/catalog.tpl/*.properties; do
           sed -e "s|\$${S3_ACCESS_KEY}|$$S3_ACCESS_KEY|g" \
               -e "s|\$${S3_SECRET_KEY}|$$S3_SECRET_KEY|g" \
               -e "s|\$${S3_BUCKET}|$$S3_BUCKET|g" \
               "$$f" > "/etc/trino/catalog/$$(basename $$f)"
         done
+        # Refuse to start without both catalogs rather than serve a partial set.
+        test -s /etc/trino/catalog/gravix.properties
+        test -s /etc/trino/catalog/gravix_iceberg.properties
         exec /usr/lib/trino/bin/run-trino
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]

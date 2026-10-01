@@ -6,6 +6,7 @@ package governance
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,5 +116,57 @@ func TestFullStackSeedsAnAPIKey(t *testing.T) {
 	}
 	if strings.Contains(string(smoke), "grep '^API_KEY=' .env") {
 		t.Error("smoke_test.sh falls back to the .env API_KEY, which ingestion ignores in this stack")
+	}
+}
+
+// TestTrinoRendersCatalogsInsideTheContainer is F-066. The full stack's Trino
+// rendered its catalog templates into a bind mount of the checkout. Where the
+// image's user could not write there, the render failed silently and Trino ran
+// on a rendered copy someone had committed, with stale credentials and no
+// Iceberg catalog; where it could, it wrote the S3 secret into the working
+// tree. The catalogs now go to a tmpfs, the render stops the container if it
+// fails, and no rendered catalog may sit in the repository.
+func TestTrinoRendersCatalogsInsideTheContainer(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(raw)
+	start := strings.Index(compose, "\n  trino:\n")
+	if start < 0 {
+		t.Fatal("no trino service in docker-compose.yml")
+	}
+	end := strings.Index(compose[start+1:], "\n  cube:\n")
+	if end < 0 {
+		t.Fatal("cannot find the end of the trino service")
+	}
+	trino := compose[start : start+1+end]
+
+	for _, want := range []string{
+		"- /etc/trino/catalog:mode=1777",
+		"set -e",
+		"test -s /etc/trino/catalog/gravix.properties",
+		"test -s /etc/trino/catalog/gravix_iceberg.properties",
+	} {
+		if !strings.Contains(trino, want) {
+			t.Errorf("the trino service lacks %q", want)
+		}
+	}
+	if strings.Contains(trino, "./storage/trino/config:/etc/trino") {
+		t.Error("the trino service bind-mounts the whole config directory over /etc/trino again")
+	}
+
+	// Tracked files only: a checkout that ran the old compose file has
+	// untracked renders there, which .gitignore now keeps out of commits.
+	cmd := exec.Command("git", "ls-files", "--", "storage/trino/config/catalog")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Logf("git ls-files unavailable (%v); not checking for committed renders", err)
+		return
+	}
+	if tracked := strings.TrimSpace(string(out)); tracked != "" {
+		t.Errorf("rendered catalogs are committed, where Trino would never read them:\n%s", tracked)
 	}
 }
