@@ -18,7 +18,28 @@ services:
     container_name: gravix-data-init
     user: root
     entrypoint: ["/bin/sh", "-c"]
-    command: ["chown -R gravix:gravix /app/data"]
+    # It also seeds the stack the way bootstrap-init does: one tenant, a write
+    # API key in data/api_key.txt and a login in data/login.txt. Ingestion
+    # ignores API_KEY once TENANT_DB_PATH is set, and a newly registered user
+    # cannot create a key until their email is verified, which the default
+    # no-op mailer never makes possible (F-058). Without this seed the full
+    # stack had no working way to send it data. A second boot finds the stack
+    # provisioned and changes nothing. The seed also writes jwt_secret.txt and
+    # dashboard_config.js, which only the bootstrap stack reads: this stack's
+    # gateway signs with JWT_SECRET from .env.
+    command:
+      - |
+        chown -R gravix:gravix /app/data
+        ./bootstrap_seed \
+          -db=/app/data/gravix.db \
+          -api-key-file=/app/data/api_key.txt \
+          -dashboard-config=/app/data/dashboard_config.js \
+          -login-file=/app/data/login.txt \
+          -jwt-secret-file=/app/data/jwt_secret.txt \
+          -api-key-command="docker compose exec -T gateway cat /app/data/api_key.txt"
+        status=$$?
+        chown -R gravix:gravix /app/data
+        exit $$status
     volumes:
       - ./data:/app/data
     restart: "no"

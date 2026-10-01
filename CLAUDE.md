@@ -78,7 +78,7 @@ helm install gravix ./deploy/gravix
 | Gateway API | http://localhost:8091 |
 | MinIO Console | http://localhost:9001 |
 
-Local API key: set in `.env` (see `.env.example`)
+Local API key: written to `data/api_key.txt` on first boot; read it with `docker compose exec -T gateway cat /app/data/api_key.txt`. The `API_KEY` in `.env` is ignored once a tenant database is configured (F-058).
 
 ## Architecture
 

@@ -62,6 +62,7 @@ Nothing below has shipped in a tagged release yet.
 - **Metric writes in legacy single-key mode answered 500**, which Prometheus retries forever. They now answer 400 and name the setting that enables them, `TENANT_DB_PATH` (SD-027)
 - **The Postgres backend's tests had never run** — they now run against a real Postgres on every pull request (F-043)
 - **The Go SDK page documented an API that does not exist** — rewritten from the SDK's exports, with an install that works today (F-050)
+- **The full stack had no working API key** — ingestion ignores `.env`'s `API_KEY` once a tenant database is configured, and key creation needs a verified email that the default mailer never sends. The full stack is now seeded on first boot like the bootstrap stack, with its write key in `data/api_key.txt` (F-058)
 
 ### Security
 
