@@ -1490,6 +1490,12 @@ noticed by hand.
 That the rollup and compaction write different column sets, which of the two the reader is looking
 at, and — once F-039 is fixed — that they agree again.
 
+### Resolved 2026-10-01 — moot after DD-006
+
+Compaction no longer touches `request_metrics_minute` at all (F-039, DD-006), so no compaction
+path can drop these columns. GRVX-1101 §2's sentence is now true for a different reason: compaction
+does not change the metric table's columns because it does not write the metric table.
+
 ---
 
 ## SD-026 — the query GRVX-1101 requires the guide to publish matches no file in a real warehouse

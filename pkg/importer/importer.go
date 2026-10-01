@@ -360,7 +360,7 @@ func writePartitions(ctx context.Context, opts Options, source Source, rows []Me
 		}
 
 		var buf bytes.Buffer
-		w := parquet.NewGenericWriter[MetricRow](&buf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
+		w := parquet.NewGenericWriter[MetricRow](&buf, parquet.Compression(&zstd.Codec{Level: recompute.CompressionLevel}))
 		if _, err := w.Write(dayRows); err != nil {
 			return fmt.Errorf("importer: encode %s: %w", day, err)
 		}

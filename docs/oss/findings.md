@@ -114,6 +114,14 @@ would otherwise rename merged output to `metrics_<uuid>_<date>.parquet`, reintro
 non-deterministic key. A spec that fixes `parseWarehouseKey` must fix that naming in the same
 change, or it will undo GRVX-801.
 
+### Update 2026-10-01 — the metric half is closed by DD-006
+
+`request_metrics_minute` is off compaction's list (F-039), so the metric table no longer depends on
+this fix and fixing it cannot reintroduce a non-deterministic metric key. What remains open is the
+event tables: `service_events_daily` and `service_events_detail` write a UUID-named file per run into
+partitioned directories, and compaction still cannot see them. That is a data-movement change with
+its own dry-run and rollback story, as this entry says, and it is not decided here.
+
 ---
 
 ## F-004 — GO-2026-5764 was reachable from `pkg/storage/s3.go` and CI had been red on it
@@ -2638,6 +2646,32 @@ Whether compaction preserves `latency_sketch` and merges sketches (correct, larg
 compacted days are documented as scalar-only with percentiles dropped rather than averaged. Averaging
 them is not one of the options: a wrong number is worse than an absent one, and this project's whole
 argument is that it knows the difference.
+
+### Resolved 2026-10-01 — DD-006: compaction no longer rewrites `request_metrics_minute`
+
+Neither option in "What the fix has to decide" was taken, because a third one removes the defect
+instead of choosing which way to be wrong. Compaction now refuses the table outright and returns
+`ErrMetricsNotCompacted`, which names `gravix recompute` as the way to rebuild a partition.
+
+Why that is the right call rather than an evasion:
+
+- **There is nothing to compact.** `pkg/recompute` writes one deterministic file per partition, so a
+  metric partition never accumulates the small files compaction exists to merge.
+- **There is no correct merge without the facts.** Merging two sketches gives a correct cross-file
+  sketch, but the per-bucket p50/p95/p99 columns are documented as exact, and an exact percentile of
+  a union needs the observations. The only writer that has them is recompute.
+- **The path never ran.** F-003 established that compaction cannot parse the partitioned layout the
+  rollup has written since Phase 5, so this code only ever reached legacy flat files. Fixing F-003
+  for the event tables can now never reach the metric table by accident, which also keeps GRVX-801's
+  deterministic key safe (F-003's "Related" note).
+
+Done: the twelve-column `MetricRow`, its key and `mergeMetricRows` are deleted from
+`transforms/compaction`; `request_metrics_minute` is off the compactable list; and
+`TestCompactionLeavesMetricPartitionsToRecompute` seeds two metric files carrying a sketch, asserts
+the refusal in both normal and dry-run modes, and asserts both files are byte-identical afterwards.
+Removing the refusal fails it. The GRVX-802 manifest tests (AC-12, AC-13 and two others) that used the
+metric table as their example now use `service_events_daily`, which goes through the same manifest
+code. The bare-Parquet guide's warning about compacted partitions is replaced by the guarantee.
 
 ---
 

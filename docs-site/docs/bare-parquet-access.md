@@ -102,10 +102,11 @@ be arbitrarily wrong. To get a correct p95 over a range, merge the `latency_sket
 column exists for precisely this reason. A single bucket's scalar percentile is exact and can be read
 directly.
 
-Note also that compacted partitions currently carry the eleven scalar columns and `event_day` only:
-compaction drops `latency_sketch`, `sketch_version`, `user_agent_family`, `extra_quantile_label` and
-`extra_quantile_ms`, so a correct cross-bucket percentile is not recoverable from a day that has been
-compacted. This is a known defect, not a design decision.
+Every `request_metrics_minute` partition carries `latency_sketch`, however old it is. Compaction
+never rewrites this table: the rollup writes one deterministic file per partition, so there is
+nothing to merge, and the only correct way to rebuild a partition is to recompute it from the facts.
+An earlier compaction job did rewrite it, dropped the sketch, and averaged the percentiles; it never
+reached a partitioned warehouse, and it has been removed (F-039).
 
 :::
 

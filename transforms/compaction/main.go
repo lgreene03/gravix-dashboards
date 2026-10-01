@@ -19,26 +19,32 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/manifest"
+	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 )
 
-// MetricRow represents a 1-minute bucket for a specific service/path/method tuple.
-type MetricRow struct {
-	TenantID     string  `json:"tenant_id" parquet:"tenant_id"`
-	BucketStart  string  `json:"bucket_start" parquet:"bucket_start"`
-	Service      string  `json:"service" parquet:"service"`
-	Method       string  `json:"method" parquet:"method"`
-	PathTemplate string  `json:"path_template" parquet:"path_template"`
-	RequestCount int64   `json:"request_count" parquet:"request_count"`
-	ErrorCount   int64   `json:"error_count" parquet:"error_count"`
-	ErrorRate    float64 `json:"error_rate" parquet:"error_rate"`
-	P50LatencyMs float64 `json:"p50_latency_ms" parquet:"p50_latency_ms"`
-	P95LatencyMs float64 `json:"p95_latency_ms" parquet:"p95_latency_ms"`
-	P99LatencyMs float64 `json:"p99_latency_ms" parquet:"p99_latency_ms"`
-	EventDay     string  `json:"event_day" parquet:"event_day"`
+// request_metrics_minute is deliberately absent from this file. Compaction
+// once rewrote it through its own twelve-column MetricRow, which deleted
+// latency_sketch and four other columns and replaced each percentile with a
+// request-weighted mean of per-file percentiles (F-039). Metric partitions are
+// written only by pkg/recompute, which emits one deterministic file per
+// partition, so there is nothing for compaction to merge and nothing it could
+// merge correctly: an exact percentile needs the facts, not the files.
+const metricTopic = "request_metrics_minute"
+
+// ErrMetricsNotCompacted is returned when compaction is asked to rewrite a
+// request_metrics_minute partition. Rebuild a metric partition with
+// `gravix recompute` instead.
+var ErrMetricsNotCompacted = errors.New("compaction: request_metrics_minute is written only by recompute and is never compacted (F-039); rebuild it with gravix recompute")
+
+// compactableTopics are the warehouse tables compaction may merge. Each is a
+// table whose rows combine by summation or de-duplication, with no percentile.
+var compactableTopics = map[string]bool{
+	"service_events_daily":  true,
+	"service_events_detail": true,
 }
 
 // EventSummaryRow represents a daily summary of service events by type.
@@ -61,14 +67,6 @@ type EventDetailRow struct {
 	Properties string `json:"properties" parquet:"properties"` // JSON-encoded map
 }
 
-type MetricKey struct {
-	TenantID     string
-	BucketStart  string
-	Service      string
-	Method       string
-	PathTemplate string
-}
-
 type EventSummaryKey struct {
 	TenantID  string
 	EventDay  string
@@ -82,84 +80,6 @@ type EventDetailKey struct {
 	Service   string
 	EventType string
 	EntityID  string
-}
-
-func mergeMetricRows(rows []MetricRow) []MetricRow {
-	groups := make(map[MetricKey][]MetricRow)
-	for _, r := range rows {
-		k := MetricKey{
-			TenantID:     r.TenantID,
-			BucketStart:  r.BucketStart,
-			Service:      r.Service,
-			Method:       r.Method,
-			PathTemplate: r.PathTemplate,
-		}
-		groups[k] = append(groups[k], r)
-	}
-
-	var merged []MetricRow
-	for k, grp := range groups {
-		var reqs int64
-		var errs int64
-		var sumP50, sumP95, sumP99 float64
-		var eventDay string
-		for _, r := range grp {
-			reqs += r.RequestCount
-			errs += r.ErrorCount
-			sumP50 += r.P50LatencyMs * float64(r.RequestCount)
-			sumP95 += r.P95LatencyMs * float64(r.RequestCount)
-			sumP99 += r.P99LatencyMs * float64(r.RequestCount)
-			if eventDay == "" {
-				eventDay = r.EventDay
-			}
-		}
-
-		var p50, p95, p99 float64
-		if reqs > 0 {
-			p50 = sumP50 / float64(reqs)
-			p95 = sumP95 / float64(reqs)
-			p99 = sumP99 / float64(reqs)
-		} else if len(grp) > 0 {
-			var s50, s95, s99 float64
-			for _, r := range grp {
-				s50 += r.P50LatencyMs
-				s95 += r.P95LatencyMs
-				s99 += r.P99LatencyMs
-			}
-			p50 = s50 / float64(len(grp))
-			p95 = s95 / float64(len(grp))
-			p99 = s99 / float64(len(grp))
-		}
-
-		rate := 0.0
-		if reqs > 0 {
-			rate = float64(errs) / float64(reqs)
-		}
-
-		merged = append(merged, MetricRow{
-			TenantID:     k.TenantID,
-			BucketStart:  k.BucketStart,
-			Service:      k.Service,
-			Method:       k.Method,
-			PathTemplate: k.PathTemplate,
-			RequestCount: reqs,
-			ErrorCount:   errs,
-			ErrorRate:    rate,
-			P50LatencyMs: p50,
-			P95LatencyMs: p95,
-			P99LatencyMs: p99,
-			EventDay:     eventDay,
-		})
-	}
-
-	sort.Slice(merged, func(i, j int) bool {
-		if merged[i].BucketStart == merged[j].BucketStart {
-			return merged[i].Service < merged[j].Service
-		}
-		return merged[i].BucketStart < merged[j].BucketStart
-	})
-
-	return merged
 }
 
 func mergeEventSummaryRows(rows []EventSummaryRow) []EventSummaryRow {
@@ -342,6 +262,9 @@ func compactJSONLGroup(ctx context.Context, store storage.ObjectStore, groupKeys
 }
 
 func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic string, groupKeys []string, destKey string, dryRun bool) error {
+	if topic == metricTopic {
+		return ErrMetricsNotCompacted
+	}
 	if dryRun {
 		log.Printf("[dry-run] would merge parquet files: %v into %s", groupKeys, destKey)
 		return nil
@@ -363,49 +286,6 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 	var rowCount int64
 
 	switch topic {
-	case "request_metrics_minute":
-		var allRows []MetricRow
-		for _, key := range groupKeys {
-			rc, err := store.Get(ctx, key)
-			if err != nil {
-				return fmt.Errorf("failed to get %s: %w", key, err)
-			}
-			data, err := io.ReadAll(rc)
-			rc.Close()
-			if err != nil {
-				return fmt.Errorf("failed to read %s: %w", key, err)
-			}
-
-			file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-			if err != nil {
-				return fmt.Errorf("failed to open parquet %s: %w", key, err)
-			}
-
-			reader := parquet.NewGenericReader[MetricRow](file)
-			rows := make([]MetricRow, reader.NumRows())
-			n, err := reader.Read(rows)
-			if err != nil && err != io.EOF {
-				return fmt.Errorf("failed to read rows from %s: %w", key, err)
-			}
-			allRows = append(allRows, rows[:n]...)
-		}
-
-		merged := mergeMetricRows(allRows)
-		mergedRows, rowCount = merged, int64(len(merged))
-
-		var parquetBuf bytes.Buffer
-		writer := parquet.NewGenericWriter[MetricRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
-		if _, err := writer.Write(merged); err != nil {
-			return fmt.Errorf("failed to write merged rows: %w", err)
-		}
-		if err := writer.Close(); err != nil {
-			return fmt.Errorf("failed to close merged writer: %w", err)
-		}
-
-		if err := store.Put(ctx, destKey, bytes.NewReader(parquetBuf.Bytes())); err != nil {
-			return fmt.Errorf("failed to put merged parquet: %w", err)
-		}
-
 	case "service_events_daily":
 		var allRows []EventSummaryRow
 		for _, key := range groupKeys {
@@ -437,7 +317,7 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 		mergedRows, rowCount = merged, int64(len(merged))
 
 		var parquetBuf bytes.Buffer
-		writer := parquet.NewGenericWriter[EventSummaryRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
+		writer := parquet.NewGenericWriter[EventSummaryRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: recompute.CompressionLevel}))
 		if _, err := writer.Write(merged); err != nil {
 			return fmt.Errorf("failed to write merged rows: %w", err)
 		}
@@ -480,7 +360,7 @@ func compactParquetGroup(ctx context.Context, store storage.ObjectStore, topic s
 		mergedRows, rowCount = merged, int64(len(merged))
 
 		var parquetBuf bytes.Buffer
-		writer := parquet.NewGenericWriter[EventDetailRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
+		writer := parquet.NewGenericWriter[EventDetailRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: recompute.CompressionLevel}))
 		if _, err := writer.Write(merged); err != nil {
 			return fmt.Errorf("failed to write merged rows: %w", err)
 		}
@@ -737,7 +617,7 @@ func main() {
 			continue
 		}
 
-		if topic != "request_metrics_minute" && topic != "service_events_daily" && topic != "service_events_detail" {
+		if !compactableTopics[topic] {
 			continue
 		}
 
@@ -780,8 +660,6 @@ func main() {
 		u := uuid.New().String()
 		var filename string
 		switch grpTopic {
-		case "request_metrics_minute":
-			filename = fmt.Sprintf("metrics_%s_%s.parquet", u, grpDate)
 		case "service_events_daily":
 			filename = fmt.Sprintf("events_%s_%s.parquet", u, grpDate)
 		case "service_events_detail":

@@ -106,3 +106,44 @@ the wrong thing.
 
 **To reverse.** Delete the G3.8 row and its note. A CPO who wants a different owner or target edits
 the row; the measurement sources are the part that should survive.
+
+## DD-006 — F-039: compaction never rewrites `request_metrics_minute`
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Code** `transforms/compaction`
+
+**Options.** F-039 offered two: compaction preserves and merges `latency_sketch` (correct sketches,
+larger files), or compacted days are documented as scalar-only with percentiles dropped. Averaging
+percentiles, what the code did, was ruled out by the finding itself.
+
+**Chosen.** Neither: compaction refuses the metric table. `pkg/recompute` writes one deterministic
+file per partition, so there is nothing to compact; an exact per-bucket percentile over a union of
+files needs the facts, which only recompute reads; and F-003 showed the metric path never reached a
+partitioned warehouse anyway. Making an unreachable path merge sketches would have been more code
+for no user, and it would have left two writers for one table.
+
+**Done.** The twelve-column struct and `mergeMetricRows` are deleted. `ErrMetricsNotCompacted`
+names `gravix recompute` as the way to rebuild a partition. A test seeds sketch-bearing metric files,
+asserts the refusal and asserts the files are byte-identical afterwards; removing the refusal fails
+it. The guide's warning about compacted partitions is replaced by the guarantee.
+
+**To reverse.** Restore the metric branch from git history, and then fix both halves of F-039 in it
+before it runs: merge sketches, and include `user_agent_family` in the merge key.
+
+## DD-007 — CD-005: every Parquet writer uses `recompute.CompressionLevel`
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Code** five writers, one guard test
+
+**Options.** Every writer at `SpeedFastest` (recompute's pinned level), or every writer at
+`SpeedDefault` (about 3% smaller files).
+
+**Chosen.** `SpeedFastest`. Changing recompute's constant changes every content digest already
+recorded and, under GRVX-801 §5.3, needs determinism re-verified; moving the other writers changes
+nothing anyone has recorded. Three percent of a warehouse that is already a few bytes per event is
+not worth a broken digest.
+
+**Done.** Compaction's event tables, both service-events transforms, the importer and the exporter
+now take their level from `recompute.CompressionLevel`. `TestEveryParquetWriterUsesTheRecomputeLevel`
+fails on any non-test zstd codec at another level.
+
+**To reverse.** Change the one constant in `pkg/recompute` and re-run GRVX-801's determinism suite;
+every writer follows it.

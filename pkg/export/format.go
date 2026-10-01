@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 
+	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 )
@@ -187,7 +188,7 @@ type parquetWriter[T any] struct {
 
 func newParquetWriter[T any](w io.Writer) *parquetWriter[T] {
 	return &parquetWriter[T]{
-		w: parquet.NewGenericWriter[T](w, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault})),
+		w: parquet.NewGenericWriter[T](w, parquet.Compression(&zstd.Codec{Level: recompute.CompressionLevel})),
 	}
 }
 
