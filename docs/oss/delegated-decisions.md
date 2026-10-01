@@ -546,3 +546,23 @@ because the generated header names the `protoc` version. That is a toolchain cho
 CI images.
 
 **To reverse.** Remove the target and restore the old line in `CLAUDE.md`.
+
+## DD-028 — SD-030: Prometheus import reads `promtool tsdb dump` output
+
+**Date** 2026-10-01 · **Tier** routine (product call assigned to the owner, and spec correction) ·
+**Spec** GRVX-1108
+
+**Options.** Depend on `prometheus/prometheus` to read blocks; hand-write a block reader; or read the
+text `promtool tsdb dump` writes.
+
+**Chosen.** The dump. The first is a 296-module dependency, which is design tier and reverses a
+decision a week old. The second is days of core code for a one-time migration. The third costs the
+user one command they can already run.
+
+**Done.** `pkg/importer/prometheus.go` with counter-to-increase conversion and counted skips, seven
+tests, the migration guide's Prometheus section, and GRVX-1108 amended.
+
+**Not decided, and why.** Facts mode for Prometheus (AC-1). No Prometheus source holds per-request
+records, so there is nothing to decide until one exists.
+
+**To reverse.** Point `readerFor` back at an error. The Datadog reader is unaffected.

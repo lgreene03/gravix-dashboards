@@ -27,7 +27,7 @@ Nothing below has shipped in a tagged release yet.
 - **Prometheus remote-write receiver** — with a hard per-metric-per-day series cap, so an import cannot smuggle in high cardinality (GRVX-1102)
 - **OTLP metrics endpoint** — `/v1/metrics` accepts metrics; `/v1/traces` and `/v1/logs` refuse at the door, because tracing and logs are non-goals rather than unfinished features (GRVX-1105)
 - **`gravix export`** — facts, metrics and events as Parquet, CSV or JSONL (GRVX-1107)
-- **`gravix import`** — Datadog metric history, marked as imported, and refusing to invent the facts an aggregate never contained (GRVX-1108, partial)
+- **`gravix import`** — Datadog metric exports and Prometheus history from `promtool tsdb dump`, marked as imported, and refusing to invent the facts an aggregate never contained. Prometheus counters arrive as per-minute increases (GRVX-1108, SD-030)
 - **`gravix export --everything`** — one command writes everything Gravix holds into open formats, with a README and checksums; CI runs it and then reads it back with every Gravix service stopped (GRVX-1109)
 - **Plugin ABI v2** — plugins are subprocesses speaking JSON-RPC 2.0 over stdio, so a plugin built against one release keeps working against the next. Per-call timeout, crash isolation with backoff, a failure budget, a memory limit, and secrets that never reach a log (GRVX-1201)
 - **Plugin registry and `gravix plugin new`** — a JSON file in this repository rather than a service, and a scaffold that builds and passes its tests unedited for all three kinds in Go and Python (GRVX-1202)

@@ -44,7 +44,7 @@ would violate the cardinality constraint or misrepresent imported data as native
 |---|---|
 | `pkg/importer/importer.go` | Common import pipeline and provenance |
 | `pkg/importer/importer_test.go` | Tests |
-| `pkg/importer/prometheus.go` | Prometheus TSDB block reader |
+| `pkg/importer/prometheus.go` | Reader for `promtool tsdb dump` output (amended 2026-10-01, SD-030) |
 | `pkg/importer/prometheus_test.go` | Tests |
 | `pkg/importer/datadog.go` | Datadog metric export reader |
 | `pkg/importer/datadog_test.go` | Tests |
@@ -121,7 +121,7 @@ const (
 type Options struct {
     Source      Source
     Mode        Mode
-    Input       string            // path to a TSDB dir or an export file
+    Input       string            // path to a `promtool tsdb dump` file or a Datadog export (amended, SD-030)
     Store       storage.ObjectStore
     TenantID    string
     ServiceMap  map[string]string // source label value -> Gravix service name
@@ -189,7 +189,7 @@ Exit codes: `0` success; `1` partial failure; `2` invalid flags or a refused mod
 ## 6. Behaviour
 
 1. Implement `Plan` and `Run`, with `Plan` writing nothing.
-2. Implement the Prometheus reader over TSDB blocks; detect whether samples are per-request or aggregated and refuse `ModeFacts` for the latter.
+2. Implement the Prometheus reader over the text `promtool tsdb dump` writes; treat every series as aggregated and refuse `ModeFacts`. Import counters (`_total`, `_count`) as per-minute increases and count every other series as skipped (amended 2026-10-01, SD-030).
 3. Implement the Datadog export reader with the same detection.
 4. Enforce the cardinality budget using GRVX-1102's enforcement; count rejections in `Report`.
 5. Write `Provenance` into every imported partition's manifest; bump manifest `SchemaVersion` to 3.
@@ -390,3 +390,20 @@ precisely the confusion AC-12 exists to prevent.
 
 `pkg/manifest/testdata/golden_manifest.json` was updated although §4.2 lists only `manifest.go` —
 §9 requires the v3 fixture by name, so the intent is unambiguous.
+
+### 11.8 Update 2026-10-01 — the Prometheus reader (SD-030, DD-028)
+
+SD-030 was decided for route 3: read `promtool tsdb dump` output. It needs no dependency, keeps
+AC-11, and `promtool` ships with every Prometheus. The line format was read from
+`cmd/promtool/tsdb.go` in Prometheus v2.54.1 rather than assumed.
+
+`pkg/importer/prometheus.go` is written. Every series is marked aggregated, so facts mode is refused.
+Counters become per-minute increases, with resets handled. Gauges, native histograms and nameless
+series are skipped under their own reasons. `TestImportPrometheusReportsTheOpenDecision` and
+`TestPrometheusSourceReportsItIsNotYetReadable` pinned the blocked state and are replaced by six
+reader tests and a CLI end-to-end test. Package coverage is 92.6%.
+
+| AC | State now |
+|---|---|
+| AC-1 | **still blocked**: facts mode needs a source of per-request records, and neither reader has one |
+| AC-11 | **PASS** for both readers: `TestImportersReadFilesOnly` and `TestPrometheusReaderReadsFilesOnly` |

@@ -1896,7 +1896,7 @@ scheduled export reaches a customer's bucket. Both are recorded on the stops lis
 **Affects:** GRVX-1108 §5.2 (`Options.Input`), §6 step 2, AC-1, AC-2, AC-11, and `pkg/importer/prometheus.go` in §4.1
 **Severity:** high — it is the spec's hardest component, and every route to it costs something the
 project has already ruled out elsewhere
-**Status:** open; returned as `SPEC DEFECT: §6 — no method is given for reading a TSDB block, and
+**Status:** resolved 2026-10-01 (DD-028). Originally: open; returned as `SPEC DEFECT: §6 — no method is given for reading a TSDB block, and
 each available method contradicts a decision already taken`.
 
 ### What the spec asks for
@@ -1977,6 +1977,26 @@ and AC-12 do not depend on it.
 
 Which input Prometheus importing accepts, stated as a format rather than a directory, and with the
 dependency question answered explicitly given GRVX-1102 §3's precedent.
+
+
+### Decided 2026-10-01 — DD-028: route 3, `promtool tsdb dump` output
+
+Route 1 adds 296 modules and reverses GRVX-1102 §3 one spec later, and a new dependency is design
+tier. Route 2 spends days of core code on a format each user reads once. Route 3 needs nothing new,
+and `promtool` is already on every machine that runs Prometheus. The cost is one extra command in the
+migration guide, and the guide now shows it.
+
+The format was read from Prometheus's own source, `cmd/promtool/tsdb.go` at v2.54.1, fetched through
+the Go module proxy. Each line is `labels.String()`, then `%g`, then the millisecond timestamp.
+Label values are Go-quoted, and native histograms print a structure where the number would be.
+
+One semantic decision came with it. A Prometheus counter is a running total, and the importer writes
+values as per-minute request counts. So the reader turns counters into per-minute increases, treats a
+fall as a reset, and imports only `_total` and `_count` series. Everything else is skipped and
+counted under its own reason. Reset handling, the aggregated flag and the file-only rule each have a
+test that fails when the behaviour is removed.
+
+The two §4 gaps above are unchanged and recorded in GRVX-1108 §11.7.
 
 ---
 

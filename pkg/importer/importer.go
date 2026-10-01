@@ -124,6 +124,9 @@ type series struct {
 	// Aggregated records whether the source itself says this series holds
 	// pre-aggregated values.
 	Aggregated bool
+	// Skip, when set, is why the reader could not use this series. It is
+	// counted in the report under that reason, never dropped silently.
+	Skip string
 }
 
 type sample struct {
@@ -146,7 +149,7 @@ func readerFor(s Source) (reader, error) {
 	case SourceDatadog:
 		return datadogReader{}, nil
 	case SourcePrometheus:
-		return nil, fmt.Errorf("%w: %q is not yet readable; see SD-030", ErrUnknownSource, s)
+		return prometheusReader{}, nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSource, s)
 	}
@@ -211,6 +214,12 @@ func run(ctx context.Context, opts Options) (*Report, error) {
 	for _, s := range all {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+
+		if s.Skip != "" {
+			report.SeriesSkipped++
+			report.SkipReasons[s.Skip]++
+			continue
 		}
 
 		if _, mapped := serviceFor(s, opts); !mapped {

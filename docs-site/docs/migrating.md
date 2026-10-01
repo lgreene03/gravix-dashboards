@@ -112,14 +112,28 @@ Skipped series are counted and reported; they never fail the whole import.
 
 ## Prometheus
 
-Prometheus import is **not yet available**. Reading a TSDB block means implementing Prometheus's
-on-disk index and chunk formats, and the obvious shortcut — depending on `prometheus/prometheus` —
-pulls in 296 modules including the whole Kubernetes client library, which is not a reasonable cost
-for a core package that reads a directory of files once per user. The decision between that, a
-hand-written reader, and accepting `promtool tsdb dump` output instead is open.
+Gravix reads the text that `promtool tsdb dump` writes, not the TSDB directory itself. `promtool`
+ships with every Prometheus release, so you already have it:
 
-Asking for it names the open decision rather than failing obscurely:
+```bash
+promtool tsdb dump /path/to/prometheus/data > prometheus-dump.txt
+gravix import prometheus --input prometheus-dump.txt \
+  --service-map checkout-prod=checkout --path-label handler --dry-run
+```
 
-```
-importer: unknown source: "prometheus" is not yet readable; see SD-030
-```
+Reading the block format directly would mean either reimplementing Prometheus's index and chunk
+encoding, or depending on `prometheus/prometheus`, which brings 296 modules into a core package. The
+dump is a stable text format, and the importer still reads only a file. It never contacts a running
+Prometheus.
+
+What the importer does with it:
+
+- **Only counters are imported**, meaning series whose names end in `_total` or `_count`. Each
+  becomes per-minute request counts: the counter's increase in each minute, with a reset treated as
+  starting from zero. A raw counter value is a running total and would put a meaningless number in
+  every row.
+- **Everything else is skipped and counted**, under its own reason in the report. That covers
+  gauges, native histogram samples, and series with no metric name.
+- **Facts mode is always refused.** Every Prometheus series is an aggregate, so there are no
+  per-request records to import.
+- Map only request counters to services. A counter of bytes or of errors would be read as requests.
