@@ -51,10 +51,14 @@ jobs:
 
       - name: Send two concurrent first queries to a fresh Cube, three times
         run: |
+          # 0 no stall, 1 stall, 2 setup failed, 3 inconclusive (an error, not data).
           status=0
           for i in 1 2 3; do
             echo "── trial $i ──"
-            ./scripts/repro_f060.sh || status=1
+            rc=0
+            ./scripts/repro_f060.sh || rc=$?
+            echo "trial $i: exit $rc"
+            [ "$rc" -eq 0 ] || status=1
           done
           exit $status
 

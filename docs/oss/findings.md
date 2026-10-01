@@ -4205,6 +4205,18 @@ once:
 So the lab's stall is real on the image users run, and not every time. The workflow now takes a
 `cube_image` input, so a later Cube can be measured the same way before anyone proposes upgrading.
 
+The same day, `cubejs/cube:v1.7.48` answered both queries in 6.5 to 6.7 s in all three trials
+([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36938012441)). That is not yet
+evidence that it fixes anything. The script counted any reply other than `Continue wait` as an
+answer, including an error, and the trials started about a minute after the stack did, before the
+first five-minute rollup had written anything to query. A query that fails fast never reaches the
+model compile the stall lives in, and v0.35's third trial (0.3 s) may be the same case. The two
+stalled trials stand, because a stall is no reply at all.
+
+The script now waits until the warehouse returns data before it restarts Cube, prints what each
+query returned, and exits 3, inconclusive, when either answer is an error rather than data. Both
+images are measured again with it below.
+
 ## F-061 — a fresh install told its first visitor to adjust filters they never set
 
 **Found by** watching the bootstrap dashboard's first run in a browser, for GRVX-908's last open item
