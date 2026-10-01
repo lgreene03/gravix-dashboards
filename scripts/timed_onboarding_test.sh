@@ -286,9 +286,48 @@ done
 END=$(date +%s)
 ELAPSED=$((END - START))
 
+# check_served_config proves what a populated chart cannot. The poll above logs in
+# through the gateway and never loads the dashboard's own credential, which nginx
+# serves from one bind-mounted file. Had that file not existed when the container
+# started, Docker would have made a directory in its place and the browser would get
+# no config at all (GRVX-901 §8.2). And since SD-013 the file must carry a read-only
+# key, never the write key synthetic-traffic sends with. Neither key is ever printed:
+# this log is public.
+check_served_config() {
+    local served="" write_key="" i
+    for i in 1 2 3 4 5 6; do
+        served="$(curl -s "http://localhost:8000/dashboard_config.js" 2>/dev/null)" || served=""
+        case "$served" in *window.GRAVIX_CONFIG*) break ;; esac
+        sleep 5
+    done
+    case "$served" in
+        *window.GRAVIX_CONFIG*) ;;
+        *)
+            echo "FAIL: the dashboard does not serve dashboard_config.js (GRVX-901 §8.2); got: ${served:0:200}"
+            return 1
+            ;;
+    esac
+    write_key="$($COMPOSE exec -T gateway cat /app/data/api_key.txt 2>/dev/null)" || write_key=""
+    if [ -z "$write_key" ] && [ -r ./data/api_key.txt ]; then
+        write_key="$(cat ./data/api_key.txt)"
+    fi
+    if [ -z "$write_key" ]; then
+        echo "FAIL: api_key.txt could not be read, so the served key cannot be checked against it"
+        return 1
+    fi
+    case "$served" in
+        *"$write_key"*)
+            echo "FAIL: dashboard_config.js serves the write API key (SD-013)"
+            return 1
+            ;;
+    esac
+    echo "dashboard_config.js is served, and its key is not the write key"
+}
+
 if [ "$TIMED_OUT" -eq 1 ]; then
     diagnose
     go run ./cmd/onboarding_gate -elapsed-seconds "$ELAPSED" -timed-out
 else
     go run ./cmd/onboarding_gate -elapsed-seconds "$ELAPSED"
+    check_served_config
 fi

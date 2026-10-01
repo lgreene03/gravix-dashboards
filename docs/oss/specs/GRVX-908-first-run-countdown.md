@@ -413,6 +413,10 @@ does not fix it; it is what made four minutes of silence legible enough to notic
       writes to, so that observation would have ended at "Almost there" and stayed there. §8.5 has
       the reproduction. **This item must be redone by a reviewer with Docker, after F-015 is
       fixed.**
+      *Update 2026-10-01:* F-015 is fixed, and `timed-onboarding` shows the stack the countdown
+      watches reaching a populated dashboard on every push. The countdown itself has still never
+      been watched in a browser. A Docker daemon is now available here, but Docker Hub refuses the
+      image pulls with `429 Too Many Requests`, so the stack cannot be built locally. Still open.
 
 ## 10. Escalation
 

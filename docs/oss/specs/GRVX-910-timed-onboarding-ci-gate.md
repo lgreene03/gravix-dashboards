@@ -373,13 +373,15 @@ govern; the second table is residue from an earlier draft.
 
 - [x] All six acceptance criteria pass with their named tests
 - [x] Every Verification command run, real output above
-- [ ] **A full, real `bash scripts/timed_onboarding_test.sh` run with measured elapsed seconds** —
-      open; no Docker daemon in this environment, first measurement is the job's own first CI run
+- [x] **A full, real `bash scripts/timed_onboarding_test.sh` run with measured elapsed seconds** —
+      done in CI, not here. `PASS: time to populated dashboard 466s (budget: 600s)` on `497c757` and
+      `82745b0` (2026-09-14, F-038), and `477s` on `f6b46a9` (2026-10-01), build time included
 - [x] `make check-boundary` clean
 - [x] `make build-oss && make test-oss` pass with `ee/` deleted
 - [x] No file outside §4.1/§4.2 modified by this spec (the F-015 and F-016 fixes are separate commits)
 - [x] Zero new skipped or quarantined tests
 - [x] `docs-engineer` delta merged — `docs/oss/12-goal-tree.md` G3.1 now cites this job by name
-- [ ] Confirmed by inspection of a real PR run to block merge — pending the first run; AC-6 asserts
-      the three properties that make it blocking (runs on `pull_request`, not `continue-on-error`,
-      in `ci-summary`'s `needs` and failure condition)
+- [x] Confirmed by inspection of real PR runs to block merge — on 27 runs of this branch between
+      2026-09-11 and 2026-09-14 where `timed-onboarding` failed, `ci-summary` failed too, read from
+      the Actions API on 2026-10-01. AC-6 asserts the three properties that make it so (runs on
+      `pull_request`, not `continue-on-error`, in `ci-summary`'s `needs` and failure condition)
