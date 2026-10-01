@@ -2043,3 +2043,19 @@ func scanScheduledExports(rows *sql.Rows) ([]*ScheduledExport, error) {
 	}
 	return out, rows.Err()
 }
+
+// Restrict narrows a key to scopes. See APIKeyRepo.Restrict.
+func (r *sqliteAPIKeyRepo) Restrict(ctx context.Context, keyID string, scopes []string) error {
+	column, err := scopeColumn(scopes)
+	if err != nil {
+		return err
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE api_keys SET scopes = ? WHERE id = ?`, column, keyID)
+	if err != nil {
+		return fmt.Errorf("restrict api key: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("restrict api key: no key with id %s", keyID)
+	}
+	return nil
+}

@@ -69,6 +69,31 @@ test('TestBuildCurlCommandFact', () => {
     assert.ok(age >= 0 && age < 60_000, `event_time is ${age}ms old; it must be generated at render`);
 });
 
+// SD-013: the bootstrap stack serves the dashboard a read-only key and names
+// the command that prints the write key instead. The rendered command must use
+// that, never the served key: a curl carrying the read-only key would be
+// refused with "API key missing required scope: ingest:write".
+test('TestBuildCurlCommandUsesTheKeyCommandNotTheServedKey', () => {
+    const config = {
+        ingestionApiUrl: 'http://localhost:8090',
+        apiKey: 'grvx_read-only',
+        apiKeyCommand: 'docker compose -f docker-compose.bootstrap.yml exec -T gateway cat /app/data/api_key.txt',
+    };
+    for (const kind of ['fact', 'event']) {
+        const got = buildCurlCommand(kind, config);
+        const lines = got.split('\n');
+        assert.equal(lines[0],
+            'export GRAVIX_API_KEY="$(docker compose -f docker-compose.bootstrap.yml exec -T gateway cat /app/data/api_key.txt)"',
+            `the first line does not fetch the write key:\n${got}`);
+        assert.ok(got.includes('X-API-Key: $GRAVIX_API_KEY'), `the curl does not use the fetched key:\n${got}`);
+        assert.ok(!got.includes('grvx_read-only'), `the read-only served key leaked into the command:\n${got}`);
+        assert.ok(!got.includes(FALLBACK_CURL_NOTE), 'a configured command fell back to the note');
+        // Still a valid payload.
+        const p = payloadOf(got);
+        assert.equal(p.event_id[14], '7');
+    }
+});
+
 test('TestBuildCurlCommandIsFreshEachRender', () => {
     const a = payloadOf(buildCurlCommand('fact', CONFIG));
     const b = payloadOf(buildCurlCommand('fact', CONFIG));

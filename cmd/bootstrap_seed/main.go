@@ -31,6 +31,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -52,7 +53,22 @@ type provisionConfig struct {
 	GatewayURL      string
 	LoginFile       string
 	JWTSecretFile   string
+	APIKeyCommand   string
 }
+
+// dashboardScopes is everything the dashboard does with its configured key:
+// list discovered services (GET /api/v1/services, admin:read). Nothing more is
+// granted, because dashboard_config.js is served to anyone who can load the
+// page — before they log in (SD-013).
+var dashboardScopes = []string{"admin:read"}
+
+// defaultAPIKeyCommand prints the write key from the running bootstrap stack.
+// The dashboard's empty states run it rather than embedding the key, so the
+// command a user pastes still works and the key is never served over HTTP.
+// Through the gateway container because the host user often cannot read a
+// 0600 file owned by the image's user — the same reason the onboarding gate
+// reads login.txt this way.
+const defaultAPIKeyCommand = "docker compose -f docker-compose.bootstrap.yml exec -T gateway cat /app/data/api_key.txt"
 
 func main() {
 	var cfg provisionConfig
@@ -65,6 +81,7 @@ func main() {
 	flag.StringVar(&cfg.GatewayURL, "gateway-url", "http://localhost:8091", "Value written into dashboard_config.js as gatewayUrl")
 	flag.StringVar(&cfg.LoginFile, "login-file", "./data/login.txt", "Path to write the generated dashboard login (mode 0600)")
 	flag.StringVar(&cfg.JWTSecretFile, "jwt-secret-file", "./data/jwt_secret.txt", "Path to write the generated JWT signing secret (mode 0600)")
+	flag.StringVar(&cfg.APIKeyCommand, "api-key-command", defaultAPIKeyCommand, "Shell command the dashboard's empty states show for reading the write key")
 	flag.Parse()
 
 	if err := provision(context.Background(), cfg, os.Stdout); err != nil {
@@ -81,11 +98,19 @@ func main() {
 // provision performs the idempotent seed. It is the unit under test; main()
 // parses flags and calls it.
 func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error {
+	if cfg.APIKeyCommand == "" {
+		cfg.APIKeyCommand = defaultAPIKeyCommand
+	}
 	// The API key file is the marker for "already provisioned" rather than the
 	// database, because the database exists the moment anything opens it and
 	// would make every subsequent run a no-op before a key was ever written.
 	if _, err := os.Stat(cfg.APIKeyFile); err == nil {
 		fmt.Fprintf(stdout, "bootstrap already provisioned (api key file exists at %s)\n", cfg.APIKeyFile)
+		if err := narrowServedKey(ctx, cfg, stdout); err != nil {
+			// Not fatal: failing here leaves the stack exactly as it was before
+			// this check existed, and refusing to boot over it would be worse.
+			fmt.Fprintf(stdout, "warning: could not replace the write key in %s: %v\n", cfg.DashboardConfig, err)
+		}
 		return ErrAlreadyProvisioned
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("bootstrap_seed: %w", err)
@@ -193,7 +218,19 @@ func provision(ctx context.Context, cfg provisionConfig, stdout io.Writer) error
 		return fmt.Errorf("bootstrap_seed: %w", err)
 	}
 
-	config, err := dashboardConfig(cfg.IngestionURL, cfg.GatewayURL, plainKey)
+	// The dashboard gets its own key, restricted to what the page does. The
+	// write key above stays in the 0600 file: dashboard_config.js is served by
+	// nginx to every visitor, before login, so an unrestricted key in it was a
+	// way round the login for anyone who could reach port 8000 (SD-013).
+	dashKey, dashRecord, err := db.APIKeys().Create(ctx, tenant.ID, "dashboard (read-only)", nil)
+	if err != nil {
+		return fmt.Errorf("bootstrap_seed: create dashboard key: %w", err)
+	}
+	if err := db.APIKeys().Restrict(ctx, dashRecord.ID, dashboardScopes); err != nil {
+		return fmt.Errorf("bootstrap_seed: restrict dashboard key: %w", err)
+	}
+
+	config, err := dashboardConfig(cfg.IngestionURL, cfg.GatewayURL, dashKey, cfg.APIKeyCommand)
 	if err != nil {
 		return fmt.Errorf("bootstrap_seed: %w", err)
 	}
@@ -259,12 +296,13 @@ func generatePassword() (string, error) {
 // Values go through encoding/json rather than %q: a key or URL containing a
 // quote would otherwise produce a file that does not parse, and a dashboard
 // that fails to load is harder to diagnose than one that shows no data.
-func dashboardConfig(ingestionURL, gatewayURL, apiKey string) (string, error) {
-	fields := make([]string, 0, 3)
+func dashboardConfig(ingestionURL, gatewayURL, apiKey, apiKeyCommand string) (string, error) {
+	fields := make([]string, 0, 4)
 	for _, f := range []struct{ name, value string }{
 		{"ingestionApiUrl", ingestionURL},
 		{"gatewayUrl", gatewayURL},
 		{"apiKey", apiKey},
+		{"apiKeyCommand", apiKeyCommand},
 	} {
 		encoded, err := json.Marshal(f.value)
 		if err != nil {
@@ -272,5 +310,58 @@ func dashboardConfig(ingestionURL, gatewayURL, apiKey string) (string, error) {
 		}
 		fields = append(fields, fmt.Sprintf("  %s: %s", f.name, encoded))
 	}
-	return "window.GRAVIX_CONFIG = {\n" + fields[0] + ",\n" + fields[1] + ",\n" + fields[2] + "\n};\n", nil
+	return "window.GRAVIX_CONFIG = {\n" + strings.Join(fields, ",\n") + "\n};\n", nil
+}
+
+// narrowServedKey upgrades a stack provisioned before SD-013 was resolved, whose
+// dashboard_config.js still carries the unrestricted write key. It mints the
+// restricted dashboard key and rewrites the config. A config that does not
+// contain the write key is left alone, so this is a no-op on every later boot.
+//
+// The write key itself is not rotated: instrumented services and the synthetic
+// traffic generator use it. If the dashboard was reachable by anyone else while
+// it served that key, rotate it by hand; the message below says so.
+func narrowServedKey(ctx context.Context, cfg provisionConfig, stdout io.Writer) error {
+	writeKey, err := os.ReadFile(cfg.APIKeyFile)
+	if err != nil {
+		return err
+	}
+	served, err := os.ReadFile(cfg.DashboardConfig)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	key := strings.TrimSpace(string(writeKey))
+	if key == "" || !strings.Contains(string(served), key) {
+		return nil
+	}
+
+	db, err := tenantdb.Open(cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	info, err := db.APIKeys().ValidateKey(ctx, key)
+	if err != nil {
+		return fmt.Errorf("validate write key: %w", err)
+	}
+	dashKey, dashRecord, err := db.APIKeys().Create(ctx, info.TenantID, "dashboard (read-only)", nil)
+	if err != nil {
+		return err
+	}
+	if err := db.APIKeys().Restrict(ctx, dashRecord.ID, dashboardScopes); err != nil {
+		return err
+	}
+	config, err := dashboardConfig(cfg.IngestionURL, cfg.GatewayURL, dashKey, cfg.APIKeyCommand)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(cfg.DashboardConfig, []byte(config), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "replaced the write key in %s with a read-only dashboard key (SD-013); "+
+		"if this dashboard was reachable by others, rotate the key in %s\n", cfg.DashboardConfig, cfg.APIKeyFile)
+	return nil
 }

@@ -1571,3 +1571,19 @@ func (r *pgScheduledExportRepo) UpdateLastRun(ctx context.Context, id string, t 
 		t.UTC(), errMsg, time.Now().UTC(), id)
 	return err
 }
+
+// Restrict narrows a key to scopes. See APIKeyRepo.Restrict.
+func (r *pgAPIKeyRepo) Restrict(ctx context.Context, keyID string, scopes []string) error {
+	column, err := scopeColumn(scopes)
+	if err != nil {
+		return err
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE api_keys SET scopes = $1 WHERE id = $2`, column, keyID)
+	if err != nil {
+		return fmt.Errorf("restrict api key: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("restrict api key: no key with id %s", keyID)
+	}
+	return nil
+}

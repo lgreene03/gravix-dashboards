@@ -905,6 +905,35 @@ the dashboard asks "is my data arriving?" and it authenticates with the generate
 
 Item 2 is the reason this entry stays open rather than being marked fixed.
 
+### Resolved 2026-10-01 — DD-010: the served key is read-only, and the write key is never in the browser
+
+Item 2 was worse than this entry recorded. The scopes column has existed since migration 4, but
+nothing ever wrote it, so every key in the system was unrestricted — the served key held
+`admin:write` and `ingest:write`. The dashboard's charts sit behind a login; this file, served to
+anyone who could reach port 8000, did not. On the `$5` VPS that GRVX-1004 prices the bootstrap stack
+on, that is an unauthenticated write and admin credential on the public internet.
+
+**Decided:** least privilege, without losing the pasteable command.
+
+- `pkg/tenantdb` gains `Restrict`, which narrows a key and refuses an empty or unknown scope list,
+  because an empty column means unrestricted.
+- `bootstrap_seed` mints a second key, restricted to `admin:read` — the only thing the page does with
+  it is list discovered services — and writes that into `dashboard_config.js`. The write key stays in
+  the 0600 file.
+- The config gains `apiKeyCommand`, the exact command that prints the write key on the machine
+  running the stack. The empty states render `export GRAVIX_API_KEY="$(…)"` and a curl that uses it,
+  so G3.7's one-paste command still runs, and no write key is ever in the browser.
+- A stack provisioned earlier is upgraded on its next boot: if the served config holds the write
+  key, it is replaced and the log says to rotate the write key if the dashboard was reachable by
+  others. The write key is not rotated automatically, because instrumented services use it.
+
+**No released version is affected.** The only tag, `v1.0.0` (2026-02-28), predates GRVX-901 and has
+no `bootstrap_seed`, so SECURITY.md's advisory process does not apply; anyone running `main` since
+GRVX-901 gets the upgrade step on their next boot.
+
+Six tests cover it, including the upgrade and its idempotence. Item 1, the Cube queries reading their
+key from `localStorage`, is unaffected: those use a JWT from login, not this key.
+
 ---
 
 ## SD-014 — GRVX-902 records batch facts before they are persisted, and single facts after

@@ -118,12 +118,22 @@ export function buildCurlCommand(kind, config = {}, deps = {}) {
     const now = deps.now ? deps.now() : new Date().toISOString();
     const body = JSON.stringify(examplePayload(kind, uuid, now));
 
+    // The bootstrap stack serves this page a read-only key, so the key that can
+    // write is not in the browser at all (SD-013). It names, instead, the exact
+    // command that prints the write key on the machine running the stack, and
+    // the curl reads it from a variable. Still one paste, still runs as shown.
+    const keyCommand = config.apiKeyCommand || '';
+    const keyHeader = keyCommand ? '$GRAVIX_API_KEY' : (apiKey || '$API_KEY');
+
     const command =
         `curl -X POST ${host}${path} \\\n` +
         `  -H "Content-Type: application/json" \\\n` +
-        `  -H "X-API-Key: ${apiKey || '$API_KEY'}" \\\n` +
+        `  -H "X-API-Key: ${keyHeader}" \\\n` +
         `  -d '${body}'`;
 
+    if (keyCommand) {
+        return `export GRAVIX_API_KEY="$(${keyCommand})"\n${command}`;
+    }
     if (apiKey) {
         return command;
     }

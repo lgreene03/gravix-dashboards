@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -149,15 +150,18 @@ func TestProvisionWritesDashboardConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read api key: %v", err)
 	}
-	if !strings.Contains(got, string(key)) {
-		t.Error("AC-3 FAILED: the dashboard config does not carry the key that was written to " +
-			"the key file, so the dashboard would authenticate as nobody")
+	// AC-3, as amended by SD-013: the config carries a working key, and it is
+	// NOT the write key. nginx serves this file to every visitor before login.
+	if strings.Contains(got, string(key)) {
+		t.Error("AC-3 FAILED: the dashboard config carries the write key from the key file; " +
+			"it is served to anyone who can load the page (SD-013)")
 	}
 
 	for _, want := range []string{
 		`ingestionApiUrl: "http://localhost:8090"`,
 		`gatewayUrl: "http://localhost:8091"`,
 		"apiKey: ",
+		`apiKeyCommand: "docker compose -f docker-compose.bootstrap.yml exec -T gateway cat /app/data/api_key.txt"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("AC-3 FAILED: the config is missing %q:\n%s", want, got)
@@ -176,7 +180,7 @@ func TestProvisionWritesDashboardConfig(t *testing.T) {
 // produce a file that fails to parse, because a dashboard that silently loads
 // no config is indistinguishable from one with no data.
 func TestDashboardConfigEscapesValues(t *testing.T) {
-	got, err := dashboardConfig(`http://x/"`, "http://y", "key\"with\\quote")
+	got, err := dashboardConfig(`http://x/"`, "http://y", "key\"with\\quote", "cat k")
 	if err != nil {
 		t.Fatalf("dashboardConfig: %v", err)
 	}
@@ -185,8 +189,8 @@ func TestDashboardConfigEscapesValues(t *testing.T) {
 			t.Errorf("a value containing a quote was not escaped (%q missing):\n%s", want, got)
 		}
 	}
-	// Exactly three fields, one per line, and a terminating semicolon.
-	if n := strings.Count(got, "\n"); n != 5 {
+	// Exactly four fields, one per line, and a terminating semicolon.
+	if n := strings.Count(got, "\n"); n != 6 {
 		t.Errorf("want one field per line, got %d newlines:\n%s", n, got)
 	}
 	if !strings.HasSuffix(got, "};\n") {
@@ -588,5 +592,92 @@ func TestReprovisionKeepsTheSameJWTSecret(t *testing.T) {
 			"Every token already issued becomes invalid, and if Cube has not restarted it is\n" +
 			"still verifying with the old value — which shows up as an empty dashboard rather\n" +
 			"than as an authentication error.")
+	}
+}
+
+// servedKey extracts apiKey from a written dashboard_config.js.
+func servedKey(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read dashboard config: %v", err)
+	}
+	m := regexp.MustCompile(`apiKey: "([^"]+)"`).FindStringSubmatch(string(body))
+	if m == nil {
+		t.Fatalf("no apiKey in the dashboard config:\n%s", body)
+	}
+	return m[1]
+}
+
+// TestServedDashboardKeyIsReadOnly is SD-013. dashboard_config.js is served by
+// nginx to anyone who can reach the dashboard, before they log in, and it used
+// to carry the unrestricted key — admin and write, a way round the login. The
+// served key must validate for the provisioned tenant and hold admin:read and
+// nothing else, which is all the page uses it for.
+func TestServedDashboardKeyIsReadOnly(t *testing.T) {
+	cfg := seedIn(t)
+	if _, err := run(t, cfg); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	db := openSeeded(t, cfg)
+	info, err := db.APIKeys().ValidateKey(context.Background(), servedKey(t, cfg.DashboardConfig))
+	if err != nil {
+		t.Fatalf("the served key does not validate, so the services panel cannot load: %v", err)
+	}
+	if !info.HasScope("admin:read") {
+		t.Error("the served key cannot read the services list, which is what the dashboard uses it for")
+	}
+	for _, s := range []string{"ingest:write", "traces:write", "admin:write"} {
+		if info.HasScope(s) {
+			t.Errorf("the served key holds %s; anyone who can load the page could use it (SD-013)", s)
+		}
+	}
+}
+
+// TestUpgradeNarrowsAServedWriteKey covers a stack provisioned before SD-013:
+// api_key.txt exists, so provision returns early, but dashboard_config.js
+// still serves the write key. The next boot must replace it, and a boot after
+// that must change nothing.
+func TestUpgradeNarrowsAServedWriteKey(t *testing.T) {
+	cfg := seedIn(t)
+	if _, err := run(t, cfg); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	writeKey, err := os.ReadFile(cfg.APIKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the pre-SD-013 file.
+	old, err := dashboardConfig(cfg.IngestionURL, cfg.GatewayURL, string(writeKey), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.DashboardConfig, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := run(t, cfg)
+	if !errors.Is(err, ErrAlreadyProvisioned) {
+		t.Fatalf("second run: err = %v, want ErrAlreadyProvisioned", err)
+	}
+	if !strings.Contains(out, "replaced the write key") {
+		t.Errorf("the upgrade did not say what it did:\n%s", out)
+	}
+	served := servedKey(t, cfg.DashboardConfig)
+	if served == strings.TrimSpace(string(writeKey)) {
+		t.Fatal("the write key is still served after the upgrade boot")
+	}
+	info, err := openSeeded(t, cfg).APIKeys().ValidateKey(context.Background(), served)
+	if err != nil || info.HasScope("ingest:write") || !info.HasScope("admin:read") {
+		t.Errorf("the replacement key is not the read-only dashboard key (err %v)", err)
+	}
+
+	before, _ := os.ReadFile(cfg.DashboardConfig)
+	if _, err := run(t, cfg); !errors.Is(err, ErrAlreadyProvisioned) {
+		t.Fatalf("third run: %v", err)
+	}
+	after, _ := os.ReadFile(cfg.DashboardConfig)
+	if string(before) != string(after) {
+		t.Error("a boot after the upgrade rewrote the config again; every boot would mint a new key")
 	}
 }

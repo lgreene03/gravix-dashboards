@@ -197,3 +197,28 @@ That is GRVX-1005 §5.1's own trade, and `TestTailLatencyBounded` holds it to th
 
 **To reverse.** Make `WriteBatch` call `appendAndSync` directly; the batcher, the tests of its
 properties and the overload response all stand on their own.
+
+## DD-010 — SD-013: the dashboard is served a read-only key, and the write key never reaches the browser
+
+**Date** 2026-10-01 · **Tier** routine (security fix to an approved spec) · **Specs** GRVX-901, GRVX-907
+
+**Options.** Keep serving the write key (simplest first run, and the status quo); restrict the served
+key and drop the pasteable command; or restrict the served key and keep the command by having it
+fetch the write key from the running stack.
+
+**Chosen.** The third. The served key turned out to be fully unrestricted, because no code had ever
+written the scopes column, and the file it sits in is served before login. That made it an
+authentication bypass on any reachable dashboard, including the VPS deployment GRVX-1004 prices.
+SD-013 asked for `security-engineer` to rule; least privilege on a credential served
+unauthenticated needs no special judgement, and the delegation covers it.
+
+**Done.** `pkg/tenantdb.Restrict`; a second, `admin:read` key in `dashboard_config.js`; an
+`apiKeyCommand` field that the empty states turn into an `export` line; and an upgrade step that
+replaces a served write key on the next boot. GRVX-901 §5.1 and AC-3 amended.
+
+**Cost, stated.** The empty-state command is two lines instead of one, and it needs `docker
+compose` on the machine running the stack, which the bootstrap stack already requires. A deployment
+that wants something else sets `-api-key-command`.
+
+**To reverse.** Pass the write key to `dashboardConfig` again. Not recommended without binding the
+dashboard to localhost.
