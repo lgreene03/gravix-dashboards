@@ -1071,6 +1071,20 @@ states it, and so does the comment where the `Learner` is constructed in `servic
 A single-replica deployment — the default, and every self-hoster following the bootstrap path — has
 the exact bound the spec claims.
 
+### Update 2026-10-01 — documented where it is configured; the choice stays open
+
+Under the owner's delegation this was examined and **not** decided, because no option dominates.
+Option 1 cannot be built as described, since facts carry the service in the body, which a load
+balancer does not route on. Option 2 puts a shared write on the hot path. Option 3 keeps the total
+bound but over-collapses paths whenever replicas are idle, and leaves templates non-deterministic.
+Option 4 is honest but changes nothing. Running one replica fixes both effects and gives up
+horizontal scale and rolling-restart availability. Which of those a production deployment should
+pay for needs someone who runs one.
+
+What was done: both production values files now say, beside `autoscaling`, that templates are
+learned per replica, what that does to the bound and to determinism, and that one replica avoids it.
+Group commit (DD-009) makes a single replica a far more realistic choice than when this was filed.
+
 ---
 
 ## SD-017 — GRVX-907's mandated `crypto.randomUUID()` produces a command that always fails
@@ -1820,6 +1834,27 @@ role checks), **AC-9** (schedule mutation stays admin-only), **AC-10** (schedule
 `cmd/cli/main.go` added to §4.2 for the dispatch line; and a decision recorded about
 `/api/gateway/export` versus `/api/gateway/exports` — reconcile them, or name the difference in
 §5.4 so both can coexist deliberately rather than by accident.
+
+### Resolved 2026-10-01 — DD-011: reconciled into one family; the job endpoint waits on a design
+
+**The collision.** Reconciled, not kept. No release has shipped the gateway — `v1.0.0` predates it —
+so moving the singular route cost nothing outside this repository, and two specs (GRVX-1107 §5.4 and
+GRVX-1303 §5.3) already named the plural. The raw-archive download is now
+`/api/gateway/exports/archive`, beside `/api/gateway/exports/scheduled`; the dashboard, `gravix
+migrate export`, the OpenAPI document and `ee/degrade.ExportEndpoint` follow it.
+`TestExportRoutesAreOneFamily` keeps every export route under `/api/gateway/exports/`.
+
+**The file list.** §2 and §4.2 corrected to `pkg/gatewaycore/gateway_platform.go`; `cmd/cli/main.go`
+was already wired by GRVX-1109.
+
+**The criteria.** AC-7, AC-8, AC-9 and AC-12 now pass with named tests, mutation-checked. AC-10 cannot:
+looking for the scheduled path to route through `pkg/export` found that nothing runs scheduled
+exports at all (**F-054**).
+
+**Not decided:** §5.4's on-demand endpoint takes a `destination` from any role, which would let a
+viewer have the gateway write a path on its own host or a bucket with its credentials. Whether the
+destination is server-chosen, allow-listed or something else is a security design, and so is how a
+scheduled export reaches a customer's bucket. Both are recorded on the stops list.
 
 ---
 

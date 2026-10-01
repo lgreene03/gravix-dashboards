@@ -3633,3 +3633,30 @@ The full stack was unaffected because Trino's branch already cast.
 
 Left alone, and worth a separate look: the dashboard's `return []` on a 400 is what made this
 invisible. A failed query and an empty result should not render the same.
+
+---
+
+## F-054 — scheduled exports are stored, listed and validated, and nothing ever runs them
+
+**Found by:** looking for the scheduled-export path GRVX-1107 §6 step 6 says to route through
+`pkg/export`, while resolving SD-029
+**Affects:** `/api/gateway/exports/scheduled`, `tenantdb.ScheduledExport`, GRVX-1107 AC-10
+**Severity:** high — a user can create a nightly export to their bucket, see it listed as `active`,
+and receive nothing, ever
+**Status:** open; needs a design, recorded on the stops list
+
+### What is there
+
+Full CRUD in `pkg/gatewaycore/gateway_platform.go`, with a 5-field cron, an `s3://` destination, a
+format, a lookback and a status. The model has `LastRunAt` and `LastError`. Nothing reads a schedule
+back except the CRUD handlers: no goroutine, cron loop, job or binary in the repository lists due
+schedules or writes an export. `LastRunAt` is never set.
+
+### Why it is not fixed here
+
+An executor is not hard to write; deciding what it may do is. It would write to a customer-named
+`s3://` bucket, which means either the gateway's own credentials reach arbitrary buckets, or
+per-schedule credentials are stored, encrypted and rotated. Both are security designs that the spec
+did not make. Until one is made, the honest interim is to say on the schedule itself that it does
+not run. That copy change is small, but it sits in the dashboard and the API, and is left with the
+design so the two land together.

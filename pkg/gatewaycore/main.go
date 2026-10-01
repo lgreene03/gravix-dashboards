@@ -446,7 +446,11 @@ func Run() {
 	mux.HandleFunc("/api/gateway/dlq/replay", gw.requireAuth(gw.rateLimitMiddleware(gw.handleDLQReplay)))
 	mux.HandleFunc("/api/gateway/audit-log", gw.requireAuth(gw.rateLimitMiddleware(gw.handleAuditLog)))
 	mux.HandleFunc("/api/gateway/retention", gw.requireAuth(gw.rateLimitMiddleware(gw.handleRetention)))
-	mux.HandleFunc("/api/gateway/export", gw.requireAuth(gw.rateLimitMiddleware(gw.handleExport)))
+	// The raw-archive download lives in the /exports family with the schedules,
+	// one segment away rather than one character: "/api/gateway/export" beside
+	// "/api/gateway/exports" was a trap for every client (SD-029). No release
+	// shipped the singular path.
+	mux.HandleFunc("/api/gateway/exports/archive", gw.requireAuth(gw.rateLimitMiddleware(gw.handleExport)))
 	mux.HandleFunc("/api/gateway/invitations", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleInvitations))))
 	mux.HandleFunc("/api/gateway/invitations/accept", gw.ipRateLimitMiddleware(bodyLimit(gw.handleAcceptInvitation)))
 	mux.HandleFunc("/api/gateway/team", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTeam))))

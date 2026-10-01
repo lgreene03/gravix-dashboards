@@ -138,7 +138,7 @@ not. HTTP surfaces return **`402 Payment Required`** with:
   "message": "Your Gravix Enterprise licence expired on 2026-11-04. Existing configuration is readable and exportable. Renew to make changes.",
   "expired_at": "2026-11-04T00:00:00Z",
   "core_unaffected": true,
-  "export_endpoint": "/api/gateway/exports"
+  "export_endpoint": "/api/gateway/exports/archive"
 }
 ```
 

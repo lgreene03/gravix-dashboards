@@ -70,6 +70,12 @@ logging:
   loki:
     enabled: true
 
+# Path templates are learned per ingestion replica (SD-016). With more than one
+# replica the per-service template budget multiplies by the replica count, and
+# two pods can turn the same raw path into different templates until both have
+# seen enough of it. Run ingestion at one replica if identical templates
+# matter more than horizontal scale; since group commit (GRVX-1005), one
+# replica sustains tens of thousands of facts per second.
 autoscaling:
   enabled: true
   minReplicas: 2

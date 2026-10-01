@@ -29,7 +29,7 @@ CI that the exit path is real, not documentation.
 
 - `services/gateway/main.go:1251` — `handleExport(w http.ResponseWriter, r *http.Request)`,
   registered at `services/gateway/main.go:425` as
-  `POST /api/gateway/export`. Request body `{"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","data_type":"request_facts"|"service_events"}`
+  `POST /api/gateway/exports/archive` (`/api/gateway/export` until SD-029 moved it). Request body `{"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","data_type":"request_facts"|"service_events"}`
   (`services/gateway/main.go:1259-1263`). Requires JWT bearer auth via `gw.requireAuth` (the
   handler is wrapped by it at registration). Caps the range at 30 days
   (`services/gateway/main.go:1290-1293`: `"export range cannot exceed 30 days"`). Returns `404`
@@ -131,7 +131,7 @@ type dateWindow struct {
 // not be after until (the caller validates this before calling).
 func dateWindows(since, until time.Time, maxDays int) []dateWindow
 
-// fetchExportWindow calls POST <gatewayEndpoint>/api/gateway/export with
+// fetchExportWindow calls POST <gatewayEndpoint>/api/gateway/exports/archive with
 // body {"start_date","end_date","data_type"} set from w and dataType, header
 // "Authorization: Bearer "+token, decodes the gzip+tar response body, and
 // writes every tar entry to filepath.Join(outDir, hdr.Name), creating parent

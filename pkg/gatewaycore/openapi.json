@@ -1076,7 +1076,7 @@
         }
       }
     },
-    "/api/gateway/export": {
+    "/api/gateway/exports/archive": {
       "post": {
         "summary": "Export raw data",
         "description": "Stream a tar.gz archive of raw JSONL files for a date range. Max 30 days, 1 concurrent export per tenant.",

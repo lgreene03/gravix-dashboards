@@ -222,3 +222,24 @@ that wants something else sets `-api-key-command`.
 
 **To reverse.** Pass the write key to `dashboardConfig` again. Not recommended without binding the
 dashboard to localhost.
+
+## DD-011 — SD-029: one `/exports` family; the job endpoint waits on a destination design
+
+**Date** 2026-10-01 · **Tier** routine (route rename before first release; tests) · **Spec** GRVX-1107
+
+**Options.** Keep `/api/gateway/export` and add `/api/gateway/exports` beside it, documenting the
+difference; or move the existing download into the plural family.
+
+**Chosen.** Move it, to `/api/gateway/exports/archive`. Nothing released depends on the singular
+path, two specs already named the plural, and a client one character from the wrong endpoint gets
+no error to tell it so. The dashboard, the migrate CLI, the OpenAPI document and the `ee/` degrade
+guard follow the move, and a test keeps every export route in the family.
+
+**Done.** AC-7, AC-8, AC-9 and AC-12 of GRVX-1107 pass with named tests. Found F-054: scheduled
+exports never run.
+
+**Not decided, and why.** §5.4's endpoint lets any role name a write destination, and running
+scheduled exports means writing to customers' buckets. Both are security designs. They are on the
+stops list below.
+
+**To reverse.** Restore the singular route string in the five places named above.
