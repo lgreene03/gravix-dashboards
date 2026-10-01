@@ -3030,7 +3030,7 @@ two defects in fixture specs and requires both to fail.
 some suite.
 **Owner** `qa-engineer`, with `senior-engineering-lead` for the Postgres story.
 **Severity** medium — no defect is known to be hiding there, and nothing would have reported one.
-**Status** open. Not caused by GRVX-1206's partition; found by it.
+**Status** resolved 2026-10-01 (DD-025). Originally: open. Not caused by GRVX-1206's partition; found by it.
 
 ### What is true
 
@@ -3082,6 +3082,26 @@ nobody checks.
 `tests/devenv/suite_test.go` names `postgres || all` as a known exception with this finding's
 number, and fails on any **new** build tag that no suite opts into. A second file drifting out of
 both suites is now a red build; this one is a recorded decision waiting on a person.
+
+
+### Resolved 2026-10-01 — DD-025: option 1, the tests run against a real Postgres on every pull request
+
+Postgres is the backend production deployments use (`values-prod.yaml` sets `gateway.dbDriver:
+"postgres"`), so deleting its tests was never the right answer, and saying they are untested is
+weaker than testing them.
+
+The file was first run against a local Postgres 16. All sixteen tests passed on their first run.
+SD-013's `Restrict`, which only SQLite had covered, now runs on both backends through one shared
+check.
+
+- A `postgres` CI job runs `go test -tags=postgres ./pkg/tenantdb/...` against a `postgres:16-alpine`
+  service container, and fails if any test skips. The file's helper skips when it cannot reach a
+  server, and a skip there would be this finding again with a green tick on it.
+- `ci-summary` waits for the job and fails on it.
+- `tests/devenv/suite_test.go` no longer lists the file as a known exception. It now requires CI to
+  pass `-tags=postgres` for any file behind that tag. Removing the job fails it.
+
+The CI command, run locally against the same server: 107 tests passed and none skipped.
 
 ---
 

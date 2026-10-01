@@ -1705,7 +1705,18 @@ func TestRetentionPolicyRepoNotNil(t *testing.T) {
 // column — present since migration 4 — had no writer at all, so every key in
 // the system was unrestricted.
 func TestRestrictNarrowsAKey(t *testing.T) {
-	db := newTestDB(t)
+	checkRestrictNarrowsAKey(t, newTestDB(t))
+}
+
+// restrictBackend is what checkRestrictNarrowsAKey needs from a backend, so
+// the SQLite and Postgres tests run the same assertions (F-043).
+type restrictBackend interface {
+	Tenants() TenantRepo
+	APIKeys() APIKeyRepo
+}
+
+func checkRestrictNarrowsAKey(t *testing.T, db restrictBackend) {
+	t.Helper()
 	ctx := context.Background()
 	tenant := &Tenant{Name: "Scoped", Email: "scoped@example.com", Plan: "free", Status: "active"}
 	if err := db.Tenants().Create(ctx, tenant); err != nil {

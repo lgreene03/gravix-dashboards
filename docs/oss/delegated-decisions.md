@@ -496,3 +496,18 @@ question belongs there. The gate makes the last line of defence mechanical, in t
 `release.yml`, two tests, and this session's entries under `[Unreleased]`.
 
 **To reverse.** Remove the release step. The template row is harmless on its own.
+
+## DD-025 — F-043: run the Postgres backend's tests in CI against a real server
+
+**Date** 2026-10-01 · **Tier** routine (test infrastructure) · **Finding** F-043
+
+**Options.** Run them, with a Postgres service container; delete them; or document that the backend
+is untested.
+
+**Chosen.** Run them. Postgres is the production backend, so its tests are worth the minute of CI.
+Skips fail the job, because a skip is exactly how this file stayed silent.
+
+**Done.** The `postgres` CI job, its place in `ci-summary`, a shared `Restrict` check, and the suite
+test's rule that a tagged file needs a CI job passing its tag.
+
+**To reverse.** Remove the job, and restore the suite test's known exception for the file.

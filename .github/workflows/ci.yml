@@ -834,9 +834,50 @@ jobs:
       - name: Run the recipe tests
         run: go test ./examples/recipes/... -v -timeout 300s
 
+  # ─── Postgres backend ───
+  # pkg/tenantdb/postgres_test.go is behind `postgres || all` and ran nowhere,
+  # in CI or anywhere else, until F-043. Postgres is the production backend
+  # (values-prod.yaml), so its tests run against a real server on every pull
+  # request. A skipped test fails the job: the file's helper skips when it
+  # cannot reach a server, and a skip here would be the old gap with a green
+  # tick on it.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: gravix_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_TEST_URL: postgres://postgres:testpass@localhost:5432/gravix_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Postgres backend tests
+        run: |
+          set -o pipefail
+          go test -tags=postgres -count=1 -v ./pkg/tenantdb/... | tee /tmp/postgres-tests.txt
+          if grep -q -- '--- SKIP' /tmp/postgres-tests.txt; then
+            echo "::error::a Postgres test skipped; it must run against the service container"
+            exit 1
+          fi
+
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules, docs-site, docker-build]
+    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules, docs-site, docker-build, postgres]
     if: always()
     steps:
       - name: Check job results
@@ -858,6 +899,7 @@ jobs:
           # docker-build runs only on push to main, so on a pull request it is
           # skipped and cannot fail this check. On main it can (F-026).
           echo "Docker build:  ${{ needs.docker-build.result }}"
+          echo "Postgres:      ${{ needs.postgres.result }}"
 
           # Fail if any required job failed
           if [[ "${{ needs.timed-onboarding.result }}" == "failure" ]] || \
@@ -874,7 +916,8 @@ jobs:
              [[ "${{ needs.vuln.result }}" == "failure" ]] || \
              [[ "${{ needs.helm-validate.result }}" == "failure" ]] || \
              [[ "${{ needs.docker-lint.result }}" == "failure" ]] || \
-             [[ "${{ needs.docker-build.result }}" == "failure" ]]; then
+             [[ "${{ needs.docker-build.result }}" == "failure" ]] || \
+             [[ "${{ needs.postgres.result }}" == "failure" ]]; then
             echo "::error::One or more required CI jobs failed"
             exit 1
           fi

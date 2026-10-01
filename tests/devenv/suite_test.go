@@ -296,16 +296,16 @@ func TestEveryTestIsInASuite(t *testing.T) {
 		}
 	}
 
-	// And nothing new carries a tag no suite opts into. `slow` is the only tag
-	// this repository runs.
-	//
-	// pkg/tenantdb/postgres_test.go is a known exception, recorded as F-043:
-	// it carries `postgres || all`, nothing passes either tag, and so it has
-	// never run — in CI or anywhere else. It is listed here rather than
-	// tolerated silently, so a SECOND file drifting out of both suites is a red
-	// build while this one waits on a decision.
-	knownUnrunTags := map[string]string{
-		"pkg/tenantdb/postgres_test.go": "postgres || all",
+	// And nothing carries a tag no suite opts into. `slow` runs in every suite.
+	// Any other tag must be passed by a named CI job, or the file runs nowhere:
+	// pkg/tenantdb/postgres_test.go sat behind `postgres || all` from the day the
+	// Postgres backend landed until F-043, never compiled by anything.
+	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	tagsRunByCI := map[string]string{
+		"postgres || all": "-tags=postgres",
 	}
 
 	tagRe := regexp.MustCompile(`(?m)^//go:build (.+)$`)
@@ -320,8 +320,10 @@ func TestEveryTestIsInASuite(t *testing.T) {
 			if tag == "slow" {
 				continue
 			}
-			if known, ok := knownUnrunTags[filepath.ToSlash(rel)]; ok && known == tag {
-				t.Logf("%s carries %q and runs in no suite — F-043, awaiting a decision", rel, tag)
+			if flag, ok := tagsRunByCI[tag]; ok {
+				if !strings.Contains(string(ci), flag) {
+					t.Errorf("%s carries %q, and no CI job passes %s, so it runs nowhere (F-043)", rel, tag, flag)
+				}
 				continue
 			}
 			t.Errorf("%s carries the build tag %q, which no suite opts into; it would run nowhere", rel, tag)
