@@ -972,7 +972,7 @@ driver reproduced it.
 **Severity** medium-high. The stray directory is cosmetic; what it exposes is not. The lock exists to
 stop the cron rollup and a `gravix recompute` writing the same partition at the same time, and in the
 two deployments where that can actually happen it does not.
-**Status** open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
+**Status** resolved for one machine (DD-022); a lock across machines sharing a bucket needs a spec. Originally: open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
 a change to locking semantics that wants its own spec.
 
 **The mismatch**, in one place — `pkg/recompute/recompute.go:534`:
@@ -1026,6 +1026,31 @@ guards a single machine has to be documented rather than implied.
 **Worked around in the benchmark** by passing an absolute `OutputDir`, which makes the lock path
 absolute too. That is a workaround in one caller, not a fix: every other caller — the cron rollup and
 `cmd/cli`'s `recompute`, both of which pass relative defaults — still takes a working-directory lock.
+
+### Resolved for one machine 2026-10-01 — DD-022
+
+The lock now lives where the data lives, and the cron and recompute take the same one.
+
+- `recompute.LockDir` derives the lock directory from the store: under `LocalStore.Root()` for a
+  local store, beside the data it guards. It never uses the working directory.
+- `recompute.AcquireLocks` takes one lock per metric directory, in sorted order. `Run` calls it
+  with each tenant's directory. The cron rollup now calls it too, with the directories it writes,
+  instead of its single `leaderelect` lock at `--output-dir`.
+- That second change mattered as much as the first. The cron held one lock for every tenant at a
+  path of its own, and recompute locked per tenant at another, so the two never met in either
+  tenancy mode, even from the same working directory.
+- `TestCronAndRecomputeShareOneLock` holds the lock the way the cron does and requires a recompute
+  over the same store to be refused, single-tenant and multi-tenant, with the working directory
+  elsewhere. `TestLockLivesBesideTheData` requires nothing in the working directory.
+  `TestCronRollupTakesTheSharedLock` keeps the cron on the shared lock. Restoring the old relative
+  path fails three of these checks.
+- The benchmark's cleanup of the stray directory is removed, with the test of that cleanup.
+  `TestHarnessLeavesNoStrayDirectories` still guards the outcome, and now passes because of the fix.
+
+**Still open: more than one machine.** A store with no local root, which means S3, gets a lock under
+`os.TempDir`, so two machines sharing a bucket still do not contend. `LockDir`'s comment says so. A
+real cross-machine lock is an object in the store, taken with a conditional write and given an
+expiry. That changes the storage interface and the locking semantics, so it needs a spec.
 
 ## F-019 — the bootstrap stack has not built at all since Alpine bumped tzdata
 

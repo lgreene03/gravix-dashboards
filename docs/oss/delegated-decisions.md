@@ -441,3 +441,24 @@ real ones needs a measured run on the reference machine, and `perf-cost-engineer
 
 **To reverse.** Compare `avg_latency_ms` again in `perf_test.sh`. The extra summary fields are
 harmless.
+
+## DD-022 — F-018: the rollup lock follows the store, and the cron and recompute share it
+
+**Date** 2026-10-01 · **Tier** routine (bug fix) · **Finding** F-018
+
+**Options.** Leave the working-directory lock and document it; derive the lock path from the store
+and have both writers take it; or build a lock object in the store with conditional writes.
+
+**Chosen.** Derive it from the store, and make the cron take the same per-tenant locks as recompute.
+`Run`'s own comment promised that the two could never write a partition at once, and the code did
+not keep that promise in any deployment. This keeps it on one machine without changing the storage
+interface.
+
+**Done.** `LockDir`, `AcquireLocks`, `LocalStore.Root`, the cron's lock, the bench clean-up removed,
+and four tests.
+
+**Not decided, and why.** A lock that holds across machines sharing a bucket. It needs conditional
+writes in the storage interface and an expiry policy, which is a design change for a spec.
+
+**To reverse.** Restore the cron's `leaderelect.NewFileElector(outputDir, …)` and the
+working-directory path in `acquire`. Both defects return.

@@ -28,6 +28,11 @@ func NewLocalStore(baseDir string) (*LocalStore, error) {
 	return &LocalStore{baseDir: abs}, nil
 }
 
+// Root returns the absolute directory every key is resolved under. Callers
+// that need a local path beside the data, such as the rollup lock (F-018), use
+// it rather than the process's working directory.
+func (l *LocalStore) Root() string { return l.baseDir }
+
 // sanitizeKey rejects keys that would escape the base directory via path traversal.
 func (l *LocalStore) sanitizeKey(key string) (string, error) {
 	cleaned := filepath.Clean(key)

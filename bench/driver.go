@@ -133,40 +133,10 @@ func rollupOnce(ctx context.Context, dir string, s Scale, origin time.Time) (tim
 	res, err := recompute.Run(ctx, opts)
 	elapsed := time.Since(start)
 
-	// recompute takes its lock on the LOCAL filesystem at OutputDir joined to
-	// the process working directory, rather than through the store it writes
-	// data to — F-018. So an in-process call leaves an empty
-	// ./warehouse/request_metrics_minute/ wherever the benchmark was started,
-	// including inside a clone of the repository.
-	//
-	// Removing it here is housekeeping for the mess this harness causes, not a
-	// repair: the cron rollup and `gravix recompute` still take a
-	// working-directory lock, and two processes sharing a data root from
-	// different directories still both acquire it.
-	removeStrayLockDir(opts.OutputDir, opts.Metric)
-
 	if err != nil {
 		return 0, nil, err
 	}
 	return elapsed, res, nil
-}
-
-// removeStrayLockDir deletes the lock directory recompute created relative to
-// the working directory, and only if it is empty — an existing warehouse
-// belonging to someone else must never be touched. See F-018.
-func removeStrayLockDir(outputDir, metric string) {
-	if filepath.IsAbs(outputDir) {
-		return
-	}
-	// Innermost first: request_metrics_minute, then warehouse, each only if the
-	// lock file is gone and nothing else is inside.
-	metricDir := filepath.Join(outputDir, metric)
-	if entries, err := os.ReadDir(metricDir); err == nil && len(entries) == 0 {
-		_ = os.Remove(metricDir)
-	}
-	if entries, err := os.ReadDir(outputDir); err == nil && len(entries) == 0 {
-		_ = os.Remove(outputDir)
-	}
 }
 
 // peakResidentBytes reports the high-water mark of this process's resident set,

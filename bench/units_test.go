@@ -774,11 +774,12 @@ func TestFileListingsAreDeterministic(t *testing.T) {
 	}
 }
 
-// TestHarnessLeavesNoStrayDirectories. recompute takes its lock on the local
-// filesystem relative to the working directory rather than through its store
-// (F-018), so an in-process rollup drops an empty ./warehouse wherever the
-// benchmark was started — including inside a clone of the repository. The
-// harness cleans up after itself; this is the guard that it still does.
+// TestHarnessLeavesNoStrayDirectories. recompute used to take its lock on the
+// local filesystem relative to the working directory rather than through its
+// store (F-018), so an in-process rollup dropped an empty ./warehouse wherever
+// the benchmark was started, including inside a clone of the repository. The
+// harness used to clean that up. Since F-018's fix the lock lives under the
+// store's root, and this guards that nothing reaches the working directory.
 func TestHarnessLeavesNoStrayDirectories(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -809,58 +810,6 @@ func TestHarnessLeavesNoStrayDirectories(t *testing.T) {
 			t.Errorf("the benchmark created %q in the working directory; it must write only "+
 				"inside its work directory", e.Name())
 		}
-	}
-}
-
-// TestRemoveStrayLockDirLeavesRealDataAlone. The cleanup must never delete a
-// warehouse that belongs to someone: it removes only empty directories, and
-// only when the path is relative, which is the shape recompute's lock takes.
-func TestRemoveStrayLockDirLeavesRealDataAlone(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage := t.TempDir()
-	if err := os.Chdir(stage); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(cwd) })
-
-	// A warehouse with real content in it.
-	occupied := filepath.Join("warehouse", "request_metrics_minute")
-	if err := os.MkdirAll(occupied, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(occupied, "data.parquet"), []byte("rows"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	removeStrayLockDir("warehouse", "request_metrics_minute")
-
-	if _, err := os.Stat(filepath.Join(occupied, "data.parquet")); err != nil {
-		t.Fatalf("the cleanup deleted a warehouse containing data: %v", err)
-	}
-
-	// An absolute path is not the lock's shape and must be left entirely alone.
-	absDir := filepath.Join(t.TempDir(), "warehouse")
-	if err := os.MkdirAll(filepath.Join(absDir, "request_metrics_minute"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	removeStrayLockDir(absDir, "request_metrics_minute")
-	if _, err := os.Stat(filepath.Join(absDir, "request_metrics_minute")); err != nil {
-		t.Errorf("the cleanup touched an absolute path: %v", err)
-	}
-
-	// And an empty one is removed, or the guard above would pass trivially.
-	if err := os.RemoveAll("warehouse"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(occupied, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	removeStrayLockDir("warehouse", "request_metrics_minute")
-	if _, err := os.Stat("warehouse"); !os.IsNotExist(err) {
-		t.Errorf("an empty stray warehouse was not removed")
 	}
 }
 
