@@ -4,6 +4,10 @@
 # Usage: ./scripts/smoke_test.sh [--no-build] [--keep-running]
 set -euo pipefail
 
+# Matches use here-strings, not `echo "$X" | grep -q`: grep -q exits on the first
+# match, echo can then die of SIGPIPE, and pipefail turns a found match into a
+# failed condition.
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
@@ -83,7 +87,7 @@ REGISTER_RESP=$(curl -sf -X POST http://localhost:8091/api/gateway/register \
     -H "Content-Type: application/json" \
     -d '{"name":"Smoke Test Org","email":"smoke@gravix.test","password":"SmokeTest123!","accept_tos":true}' 2>&1) || true
 
-if echo "$REGISTER_RESP" | grep -q '"token"'; then
+if grep -q '"token"' <<<"$REGISTER_RESP"; then
     TOKEN=$(echo "$REGISTER_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
     pass "Tenant registered successfully"
 else
@@ -91,7 +95,7 @@ else
     LOGIN_RESP=$(curl -sf -X POST http://localhost:8091/api/gateway/login \
         -H "Content-Type: application/json" \
         -d '{"email":"smoke@gravix.test","password":"SmokeTest123!"}' 2>&1) || true
-    if echo "$LOGIN_RESP" | grep -q '"token"'; then
+    if grep -q '"token"' <<<"$LOGIN_RESP"; then
         TOKEN=$(echo "$LOGIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
         pass "Logged in to existing tenant"
     else
@@ -111,7 +115,7 @@ if [ -n "$TOKEN" ]; then
         -H "Content-Type: application/json" \
         -d '{"name":"smoke-test-key"}' 2>&1) || true
 
-    if echo "$KEY_RESP" | grep -q '"key"'; then
+    if grep -q '"key"' <<<"$KEY_RESP"; then
         API_KEY=$(echo "$KEY_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])")
         pass "API key created"
     else
@@ -171,7 +175,7 @@ fi
 echo "[6/8] Verifying dashboard..."
 
 DASH_RESP=$(curl -sf http://localhost:8000/index.html 2>&1) || DASH_RESP=""
-if echo "$DASH_RESP" | grep -q "Gravix"; then
+if grep -q "Gravix" <<<"$DASH_RESP"; then
     pass "Dashboard serves HTML with Gravix branding"
 else
     fail "Dashboard did not return expected HTML"
@@ -183,7 +187,7 @@ fi
 echo "[7/8] Checking Prometheus targets..."
 
 TARGETS=$(curl -sf http://localhost:9090/api/v1/targets 2>&1) || TARGETS=""
-if echo "$TARGETS" | grep -q '"health":"up"'; then
+if grep -q '"health":"up"' <<<"$TARGETS"; then
     UP_COUNT=$(echo "$TARGETS" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
