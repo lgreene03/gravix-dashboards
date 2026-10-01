@@ -581,3 +581,22 @@ knowing where their data goes, and the four sibling packages each have a README.
 **Done.** `ee/tenancy/byob/README.md` and GRVX-1402 §4.1.
 
 **To reverse.** Delete the README and accept the waiver on the record.
+
+## DD-030 — F-057: build MinIO from source while its images are gone
+
+**Date** 2026-10-01 · **Tier** routine (build recipe for an existing dependency) · **Finding** F-057
+
+**Options.** Switch registries; replace MinIO with another S3-compatible server; or build the same
+pinned MinIO releases from source.
+
+**Chosen.** Build from source. Docker Hub returns 404 and Quay refuses, so no registry has them.
+Replacing MinIO is a new dependency, which is design tier. Building from source changes how the same
+software arrives. It adds about two minutes to the first `docker compose up --build`, and the
+bootstrap stack, which most people start with, does not use MinIO at all.
+
+**Done.** `deploy/minio/Dockerfile`, both compose services, and the Helm default with build
+instructions, verified by running the source-built binaries against each other.
+
+**Not decided, and why.** Whether to replace MinIO for good. That is a new dependency.
+
+**To reverse.** Point both services back at a published image if MinIO resumes publishing.

@@ -449,6 +449,11 @@ jobs:
         with:
           dockerfile: services/gateway/Dockerfile
 
+      - name: Lint MinIO Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: deploy/minio/Dockerfile
+
       # The bootstrap stack had never parsed — one unquoted YAML value ending in
       # a colon made Compose reject the whole file, so no service started and
       # the error named a type rather than a line (F-010). Nothing ran this

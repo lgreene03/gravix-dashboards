@@ -3987,7 +3987,7 @@ as the README says.
 **Found by** the first `docker-smoke` run to get past F-026's `.env` error, on PR #24
 **Affects** `docker-compose.yml` (`minio`, `init-minio`), `deploy/gravix/values.yaml`
 **Severity** high — `docker compose up` on the full stack fails before any container starts
-**Status** fix pushed; the next `docker-smoke` run confirms it
+**Status** fixed by building MinIO from source (DD-030); the next `docker-smoke` run confirms the stack boots
 
 ### What happened
 
@@ -4012,3 +4012,26 @@ It is the same software, so this is not a new dependency. Quay is unreachable fr
 where this was written, so the first `docker-smoke` run on the pull request is what confirms the tags
 exist there. If they do not, replacing MinIO with another S3 server is a new dependency, which is
 design tier.
+
+### Update 2026-10-01 — DD-030: Quay refuses too, so the stack builds MinIO from source
+
+The next `docker-smoke` run failed the same way one registry later:
+
+```
+Error response from daemon: unauthorized: access to the requested resource is not authorized
+```
+
+That is Quay's answer for a repository that is not public. MinIO has stopped publishing its
+community images to both registries, so changing registries cannot fix this.
+
+`deploy/minio/Dockerfile` builds the same two pinned releases, `minio` and `mc`, from source with
+`go install`, statically, into one Alpine image. Both compose services use it. Built here, `minio`
+took 1 minute 43 seconds, and `mc` 25 seconds. The source-built server and client were run against
+each other: `mc ready local` reported ready, `mc mb` created the bucket, and an object round-tripped.
+
+This is the same software at the same releases, so it is not a new dependency. The Helm chart's
+default values now name a locally built image, with the build command beside it. Both production
+values files already disable the bundled MinIO in favour of managed S3.
+
+Replacing MinIO with a maintained S3 server would be a new dependency, which is design tier. It is
+listed in `open-decisions.md` as the long-term answer for whoever owns the full stack.
