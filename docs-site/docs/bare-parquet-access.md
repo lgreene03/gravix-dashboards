@@ -34,7 +34,7 @@ Run from the directory containing `request_metrics_minute/`:
 
 ```sql
 SELECT event_day, SUM(request_count) AS total_requests
-FROM read_parquet('request_metrics_minute/event_day=*/part-0.parquet', hive_partitioning=true)
+FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true)
 GROUP BY event_day ORDER BY event_day;
 ```
 
@@ -46,23 +46,16 @@ event_day,total_requests
 2026-01-02,55
 ```
 
-`part-0.parquet` is the filename the test fixture writes. **A real Gravix warehouse names its files
-differently**, so on your own data widen the glob to match any Parquet file in the partition:
-
-```sql
-SELECT event_day, SUM(request_count) AS total_requests
-FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true)
-GROUP BY event_day ORDER BY event_day;
-```
-
-A rollup writes `request_metrics_minute_<YYYYMMDD>.parquet` — one deterministic name per partition, so
-a recompute replaces its output rather than adding a second file beside it. Compaction writes
-`metrics_<uuid>_<YYYYMMDD>.parquet`. The `*.parquet` glob above matches both, and is the form to
-prefer for anything you script.
+The fixture names its files exactly as production does. A rollup writes
+`request_metrics_minute_<YYYYMMDD>.parquet` — one deterministic name per partition, so a recompute
+replaces its output rather than adding a second file beside it. Compaction writes
+`metrics_<uuid>_<YYYYMMDD>.parquet`. The `*.parquet` glob matches both, and
+`TestBareParquetProductionFilenameGlob` renames the fixture to compaction's shape and runs the query
+again, so neither kind of partition can quietly stop matching.
 
 ## No Gravix process is required
 
-The queries above read files off a disk. Nothing in Gravix is listening, and nothing needs to be:
+The query above reads files off a disk. Nothing in Gravix is listening, and nothing needs to be:
 ingestion, the gateway, Cube and Trino can all be stopped, uninstalled or never installed, and the
 numbers come out the same. `TestBareParquetReadNoGravixProcessRequired` asserts exactly this — it
 first proves nothing is listening on any of the four documented Gravix ports (8080, 8081, 8090,
@@ -123,6 +116,6 @@ go test ./tests/e2e/ -run TestBareParquet -v
 go test ./tests/e2e/ -run TestDocContainsVerifiedQuery -v
 ```
 
-`TestDocContainsVerifiedQuery` reads this file and compares the first query above, character for
+`TestDocContainsVerifiedQuery` reads this file and compares the query above, character for
 character, with the one the test actually executes. The guide cannot drift into publishing SQL that
 nobody ran.

@@ -227,7 +227,9 @@ has_data() {
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $token" \
         -d '{"query": {"measures": ["RequestMetricsMinute.requestCount"]}}' 2>&1)" || true
-    LAST_CUBE_RESPONSE="$(printf '%s' "$response" | head -c 300)"
+    # A substring, not `printf | head -c`: head can close the pipe before printf
+    # finishes, and under pipefail and set -e the SIGPIPE ends the gate.
+    LAST_CUBE_RESPONSE="${response:0:300}"
     [ -n "$response" ] || return 1
 
     printf '%s' "$response" | python3 -c '

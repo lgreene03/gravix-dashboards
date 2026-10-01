@@ -89,8 +89,9 @@ type Estimate struct {
 const (
 	CaveatBootstrap = "You operate this yourself. There is no SLA, no on-call rotation but yours, " +
 		"and no managed backups. That labour is a real cost this figure does not include."
-	CaveatAWSSingle = "This is the shape Gravix moves to at scale. It is roughly 10x the bootstrap " +
-		"figure and is the honest number for a team past a few million events a month."
+	CaveatAWSSingle = "This is the shape Gravix moves to at scale and is the honest number for a " +
+		"team past a few million events a month. Most of it is fixed cost, so it is many times the " +
+		"bootstrap figure at low volume and closer to it at high volume."
 	CaveatAWSMulti = "Multi-region adds a full deployment per region. Choose it for latency or " +
 		"residency, not for cost."
 	CaveatProvenance = `Line items marked "list_price" are the vendor's published rate on the date ` +
@@ -231,18 +232,12 @@ func EstimateAll(in Inputs, prices *Prices) ([]Estimate, error) {
 		awsMultiEstimate(in, prices, shared),
 	}
 
-	// CaveatAWSSingle says the at-scale figure is "roughly 10x the bootstrap
-	// figure". It is not a constant, and at the volumes most readers of that
-	// sentence are at it is far higher — the AWS baseline is dominated by fixed
-	// costs (control plane, nodes, load balancer) that do not scale down, while
-	// the bootstrap VPS is flat until its included storage runs out. Measured
-	// against this model the multiple runs from ~44x at a million events a
-	// month to ~4x at a billion.
-	//
-	// The mandatory sentence still prints verbatim, because §5.2 requires it.
-	// The computed multiple prints beside it, because a reader who acts on
-	// "roughly 10x" at small volume would under-budget by four times over, and
-	// that is the direction this caveat exists to protect against.
+	// The bootstrap-to-at-scale multiple is not a constant. The AWS baseline is
+	// dominated by fixed costs (control plane, nodes, load balancer) that do not
+	// scale down, while the bootstrap VPS is flat until its included storage
+	// runs out, so the multiple runs from ~44x at a million events a month to
+	// ~4x at a billion. §5.2 once mandated a fixed "roughly 10x" here; SD-021
+	// amended it, and the caveat now prints the multiple these inputs produce.
 	estimates = withComputedMultiple(estimates)
 	return estimates, nil
 }
@@ -264,10 +259,9 @@ func withComputedMultiple(estimates []Estimate) []Estimate {
 			continue
 		}
 		estimates[i].Caveats = append(e.Caveats, fmt.Sprintf(
-			"For these inputs the multiple is %.1fx, not the \"roughly 10x\" the caveat above "+
-				"quotes. That sentence describes one point on a curve: the at-scale baseline is "+
-				"mostly fixed cost, so the multiple is highest at low volume and falls as volume "+
-				"grows. Budget from this figure, not from the multiple.",
+			"For these inputs the multiple is %.1fx. It is not a constant: the at-scale "+
+				"baseline is mostly fixed cost, so the multiple is highest at low volume and "+
+				"falls as volume grows. Budget from this figure, not from the multiple.",
 			e.TotalUSDMonth/bootstrap))
 	}
 	return estimates

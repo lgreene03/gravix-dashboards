@@ -112,7 +112,16 @@ persist. A dropped fact is a correctness incident, not a capacity event.
 
 `TestDurabilityUnderKill` must: start the service, send N facts, `SIGKILL` the process the moment the
 last acknowledgement is received, restart, and assert every acknowledged fact is present on disk.
-This is the only test that actually proves §6; a unit test asserting `fsync` was called does not.
+It proves that no userspace buffer strands an acknowledged fact. It does **not** prove fsync
+ordering: `SIGKILL` ends the process, not the kernel, so bytes written but never fsynced survive in
+the page cache and are read back. The ordering is enforced by unit tests that observe *when*
+`Append` returns relative to when `Sync` completes (`TestAppendBlocksUntilDurable`) and that a failed
+`Sync` fails every caller in the batch (`TestAppendReportsSyncFailure`). All three are required; the
+unit tests are the stronger check, and a mutation that acknowledges before fsyncing must fail them.
+
+> **Amended 2026-10-01 (SD-022).** This paragraph previously called the kill test "the only test that
+> actually proves §6". Measured against a batcher mutated to acknowledge before fsyncing, the kill
+> test passed three runs out of three and both unit tests failed, so the ranking was inverted.
 
 ## 6. Behaviour
 

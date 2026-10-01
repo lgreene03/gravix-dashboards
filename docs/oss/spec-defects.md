@@ -978,6 +978,12 @@ without choosing a threshold or configuring a destination — target 100%, measu
 `TestArmProposalCreatesRuleAndChannel` and `TestEvaluatorFiresRulesOnALogChannel`, owned by
 `senior-engineer`"*, but the number and the owner are the CPO's to set.
 
+### Resolved 2026-10-01 — DD-005
+
+G3.8 added to `12-goal-tree.md` as worded above: an armed rule must fire, measured by the two named
+tests, owned by `senior-engineer`. Decided under the owner's delegation rather than by a CPO review;
+recorded in `delegated-decisions.md` DD-005.
+
 ---
 
 ## SD-016 — the cardinality budget is per-process, and the shipped production chart runs ingestion at 2–10 replicas
@@ -1184,6 +1190,11 @@ secret, or dropping `JWT_SECRET` from the `cube` service so `checkAuth` falls th
 choosing the product's authentication posture inside a CI script, and the second option would ship an
 unauthenticated metrics API as a side effect of adding a timer.
 
+### Resolved 2026-10-01 — DD-002
+
+GRVX-910 §2 amended in place to name the JWT secret (`JWT_SECRET_FILE`, else `JWT_SECRET`) and to say the
+poll authenticates the way the dashboard does. Recorded in `delegated-decisions.md` DD-002.
+
 ## SD-020 — GRVX-910 has two contradictory §6.1 tables
 
 **Severity** low — resolved by precedence; no ambiguity about what to build.
@@ -1250,6 +1261,14 @@ and `TestMultipleVariesWithVolume` fails if a future edit reintroduces a fixed m
 multiplier and state the two figures, or state the multiple as a range with the volume it applies at.
 A single number here cannot be right, because the quantity it describes is a curve.
 
+### Resolved 2026-10-01 — DD-001
+
+The fixed multiplier is gone from the spec and from both implementations. GRVX-1004 §5.2 now
+mandates a caveat that names no multiple, and every non-bootstrap estimate carries the one computed
+from its own figures. `TestNoCaveatQuotesAFixedMultiple` (Go) and its JS twin fail on any fixed
+multiple in a caveat; restoring the old sentence fails both. The thesis needed no change: it carries no
+"10x" figure. Recorded in `delegated-decisions.md` DD-001.
+
 ## SD-022 — GRVX-1005 §5.3 claims the SIGKILL test is the only one that proves §6. It proves less than the unit tests do.
 
 **Severity** medium — the claim is wrong in a way that would let a real durability regression ship.
@@ -1293,6 +1312,11 @@ they do.
 **The correction to the spec:** §5.3's last sentence should read the other way round. A unit test
 that observes when `Append` returns relative to when `Sync` completes is the strongest check
 available in-process; the kill test complements it and does not replace it.
+
+### Resolved 2026-10-01 — DD-003
+
+GRVX-1005 §5.3 amended in place: all three tests are required, and the two unit tests are named as
+the ones that enforce fsync ordering. Recorded in `delegated-decisions.md` DD-003.
 
 ## SD-023 — GRVX-1005 §5.1's Batcher takes one writer, but ingestion writes per tenant and per topic
 
@@ -1522,6 +1546,14 @@ decision, and this entry is the request for it.
 Either name the fixture files as production names them, or publish the `*.parquet` glob as the
 verified query. The first is cleaner: a fixture that does not reproduce production filenames cannot
 prove a published path works.
+
+### Resolved 2026-10-01 — DD-004
+
+Resolved the way this entry recommended. The fixture now writes production file names, taken from
+`pkg/recompute.DeterministicKey`, and the guide publishes the `*.parquet` query alone.
+`TestBareParquetProductionFilenameGlob` asserts the fixture name equals the rollup name, re-runs the
+published query against compaction-shaped names, and fails if the guide names `part-0.parquet`.
+GRVX-1101 §5 and §6 amended. Recorded in `delegated-decisions.md` DD-004.
 
 ---
 

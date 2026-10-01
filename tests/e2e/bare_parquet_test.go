@@ -25,7 +25,7 @@ import (
 // The doc and this constant are held identical by TestDocContainsVerifiedQuery, so
 // the guide can never drift into publishing SQL nobody ran.
 const bareParquetQuery = `SELECT event_day, SUM(request_count) AS total_requests
-FROM read_parquet('request_metrics_minute/event_day=*/part-0.parquet', hive_partitioning=true)
+FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true)
 GROUP BY event_day ORDER BY event_day;`
 
 const bareParquetDocPath = "../../docs-site/docs/bare-parquet-access.md"
@@ -110,8 +110,8 @@ func TestBareParquetJoinAcrossPartitions(t *testing.T) {
 	dir := writeBareFixture(t)
 
 	const joinQuery = `SELECT m.event_day, COUNT(*) AS pair_count
-FROM read_parquet('request_metrics_minute/event_day=*/part-0.parquet', hive_partitioning=true) m
-JOIN read_parquet('service_events_daily/event_day=*/part-0.parquet', hive_partitioning=true) s
+FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true) m
+JOIN read_parquet('service_events_daily/event_day=*/*.parquet', hive_partitioning=true) s
   ON m.event_day = s.event_day
 GROUP BY m.event_day ORDER BY m.event_day;`
 
@@ -239,64 +239,55 @@ func TestWriteFixtureRejectsEmptyDays(t *testing.T) {
 	}
 }
 
-// TestBareParquetProductionFilenameGlob covers what the fixture's part-0.parquet
-// naming does not. A real warehouse names its files
-// request_metrics_minute_<YYYYMMDD>.parquet (pkg/recompute.DeterministicKey) or
-// metrics_<uuid>_<YYYYMMDD>.parquet after compaction, so the glob in
-// bareParquetQuery matches no file at all on real data — DuckDB fails it with
-// "No files found that match the pattern".
+// TestBareParquetProductionFilenameGlob holds the published query to the file
+// names production actually writes (SD-026). A rollup writes
+// request_metrics_minute_<YYYYMMDD>.parquet (pkg/recompute.DeterministicKey);
+// compaction rewrites a partition as metrics_<uuid>_<YYYYMMDD>.parquet. The
+// guide once led with a part-0.parquet glob that matched only the test fixture
+// and failed on every real warehouse with "No files found that match the
+// pattern", while CI reported it green.
 //
-// The guide therefore publishes a second, wider glob for readers to use on their
-// own warehouse, and this test is what makes that one a verified claim too:
-// it renames the fixture files to the production shape and asserts the wider
-// glob still returns the same sums.
+// Three things are checked: the fixture names its files exactly as the rollup
+// does, the published query returns the same sums after the files are renamed
+// to compaction's shape, and the guide publishes no fixture-only file name.
 func TestBareParquetProductionFilenameGlob(t *testing.T) {
 	requireDuckDB(t)
 
 	dir := writeBareFixture(t)
+	days := []string{"2026-01-01", "2026-01-02"}
 
-	// Rename each partition's file to the name a rollup actually writes.
-	for _, day := range []string{"2026-01-01", "2026-01-02"} {
+	for _, day := range days {
+		d, err := time.Parse("2006-01-02", day)
+		if err != nil {
+			t.Fatal(err)
+		}
 		partition := filepath.Join(dir, "request_metrics_minute", "event_day="+day)
+		want := recompute.DeterministicKey(partition, "request_metrics_minute", d)
+		if _, err := os.Stat(want); err != nil {
+			t.Fatalf("the fixture does not write the file name a rollup writes (%s): %v", want, err)
+		}
+		// Rename to the shape compaction leaves behind.
 		compact := strings.ReplaceAll(day, "-", "")
-		from := filepath.Join(partition, "part-0.parquet")
-		to := filepath.Join(partition, "request_metrics_minute_"+compact+".parquet")
-		if err := os.Rename(from, to); err != nil {
-			t.Fatalf("rename %s: %v", from, err)
+		to := filepath.Join(partition, "metrics_3f1c2b9e-0000-4000-8000-000000000001_"+compact+".parquet")
+		if err := os.Rename(want, to); err != nil {
+			t.Fatalf("rename %s: %v", want, err)
 		}
 	}
 
-	// The narrow glob the guide publishes as "the query CI verifies" must now
-	// find nothing, which is the whole reason the guide carries a second one.
-	cmd := exec.Command(duckDBPath(), "-csv", "-c", bareParquetQuery)
-	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TMPDIR=" + os.Getenv("TMPDIR")}
-	if err := cmd.Run(); err == nil {
-		t.Errorf("the part-0.parquet glob matched production filenames; the guide's warning that it does not is now wrong")
-	}
-
-	got := runDuckDB(t, dir, productionGlobQuery)
+	got := runDuckDB(t, dir, bareParquetQuery)
 	want := strings.Join([]string{
 		"event_day,total_requests",
 		"2026-01-01,55",
 		"2026-01-02,55",
 	}, "\n")
 	if got != want {
-		t.Fatalf("production-filename read mismatch\n got:\n%s\nwant:\n%s", got, want)
+		t.Fatalf("the published query does not read compacted file names\n got:\n%s\nwant:\n%s", got, want)
 	}
 
-	if !strings.Contains(normalizeWhitespace(readBareParquetDoc(t)), normalizeWhitespace(productionGlobQuery)) {
-		t.Fatalf("%s does not publish the production-filename query:\n%s", bareParquetDocPath, productionGlobQuery)
+	if strings.Contains(readBareParquetDoc(t), "part-0.parquet") {
+		t.Errorf("%s names part-0.parquet, a file nothing in Gravix writes (SD-026)", bareParquetDocPath)
 	}
 }
-
-// productionGlobQuery is bareParquetQuery with the filename widened to match any
-// Parquet file in the partition, which is the form that works on a real
-// warehouse. The guide publishes it and TestBareParquetProductionFilenameGlob
-// holds the two identical.
-const productionGlobQuery = `SELECT event_day, SUM(request_count) AS total_requests
-FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true)
-GROUP BY event_day ORDER BY event_day;`
 
 // TestDocColumnTableMatchesDuckDB makes the guide's column reference a verified
 // claim rather than a hand-maintained list. It asks DuckDB to DESCRIBE the
@@ -311,7 +302,7 @@ func TestDocColumnTableMatchesDuckDB(t *testing.T) {
 	requireDuckDB(t)
 
 	dir := writeBareFixture(t)
-	out := runDuckDB(t, dir, `DESCRIBE SELECT * FROM read_parquet('request_metrics_minute/event_day=*/part-0.parquet', hive_partitioning=true);`)
+	out := runDuckDB(t, dir, `DESCRIBE SELECT * FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true);`)
 
 	doc := readBareParquetDoc(t)
 	lines := strings.Split(out, "\n")

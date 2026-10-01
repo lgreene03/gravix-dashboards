@@ -99,9 +99,15 @@ kept the raw observation.
 | G3.5 | `gravix doctor` diagnoses the top 10 setup failures with the exact fix | 10/10 | `TestDoctorDiagnostics` | `support-engineer` |
 | G3.6 | Path templates auto-learned; cardinality budget never exceeded | 100% | `TestCardinalityBudget` | `senior-engineer` |
 | G3.7 | Every empty state contains the exact command that fills it | 100% | UI review | `product-designer` |
+| G3.8 | An alert rule armed from a proposal, with no threshold chosen and no destination configured, fires on the traffic it was derived from | 100% | `TestArmProposalCreatesRuleAndChannel` + `TestEvaluatorFiresRulesOnALogChannel` | `senior-engineer` |
 
 **Exit:** a stranger with Docker and ten minutes ends with a dashboard showing their own traffic
 and one alert rule armed — having edited nothing.
+
+**G3.8 was added 2026-10-01 to close SD-015**, which found the exit criterion's "one alert rule
+armed" had no owning key result. The measured thing is deliberately not "a rule exists": a rule that
+is armed and inert is worse than none, so the KR is met only when the armed rule fires. Decided by
+the project owner's delegation rather than by a CPO review; see `docs/oss/delegated-decisions.md`.
 
 **G3.1's scope, stated rather than assumed.** The measured window starts at `docker compose up`, not
 at `git clone`, per GRVX-910 §3: CI's checkout is not representative of a real user's clone

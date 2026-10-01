@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
@@ -72,9 +73,15 @@ type EventSummaryRow struct {
 }
 
 // WriteFixture writes one Hive-partitioned MetricRow Parquet file per day in
-// days to <dir>/request_metrics_minute/event_day=<day>/part-0.parquet, and one
-// EventSummaryRow Parquet file per day to
-// <dir>/service_events_daily/event_day=<day>/part-0.parquet.
+// days to <dir>/request_metrics_minute/event_day=<day>/request_metrics_minute_<YYYYMMDD>.parquet,
+// and one EventSummaryRow Parquet file per day to
+// <dir>/service_events_daily/event_day=<day>/events_<uuid>.parquet.
+//
+// Those are the names production writes (pkg/recompute.DeterministicKey and
+// transforms/service_events_daily), so a query verified against the fixture is
+// verified against the shape a reader's warehouse actually has. The fixture once
+// wrote part-0.parquet, which nothing in Gravix writes, and the guide published
+// a query that only matched it (SD-026).
 //
 // rowsPerDay rows of each kind are written per day, with RequestCount =
 // int64(i+1) for the i-th row (0-indexed), so the sum of RequestCount over one
@@ -127,7 +134,21 @@ func WriteFixture(dir string, days []string, rowsPerDay int) error {
 // partitionPath builds the Hive-style path this fixture writes to, mirroring
 // the <table>/event_day=<day>/ layout pkg/etl.OutputKey produces.
 func partitionPath(dir, table, day string) string {
-	return filepath.Join(dir, table, "event_day="+day, "part-0.parquet")
+	return filepath.Join(dir, table, "event_day="+day, FixtureFilename(table, day))
+}
+
+// fixtureEventsUUID stands in for the random UUID transforms/service_events_daily
+// puts in each file name, so the fixture is reproducible.
+const fixtureEventsUUID = "00000000-0000-4000-8000-000000000000"
+
+// FixtureFilename is the file name the fixture writes into one partition: the
+// production name for that table.
+func FixtureFilename(table, day string) string {
+	compact := strings.ReplaceAll(day, "-", "")
+	if table == "request_metrics_minute" {
+		return "request_metrics_minute_" + compact + ".parquet"
+	}
+	return "events_" + fixtureEventsUUID + ".parquet"
 }
 
 func writeParquet[T any](path string, rows []T) error {

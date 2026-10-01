@@ -100,8 +100,16 @@ fi
 # code: `go run` collapses every non-zero exit to 1, so an exit code could not
 # tell "not eligible" from "unclassified", and those need different answers.
 VERDICT_OUT="$(go run ./pkg/version/cmd/eligible -kind "$KIND" 2>/dev/null)"
-VERDICT="$(echo "$VERDICT_OUT" | head -1)"
-REASON="$(echo "$VERDICT_OUT" | tail -n +2)"
+# Split with parameter expansion, not `echo | head -1`. Bash line-buffers its
+# own stdout, so echo writes a multi-line value one line per write(2); head can
+# read the first line and exit before the second write, echo then dies of
+# SIGPIPE, and under pipefail and set -e the whole script exits 141. That made
+# TestBackportScriptRefusesIneligibleKinds fail at random under -race in CI.
+VERDICT="${VERDICT_OUT%%$'\n'*}"
+REASON=""
+if [[ "$VERDICT_OUT" == *$'\n'* ]]; then
+  REASON="${VERDICT_OUT#*$'\n'}"
+fi
 
 case "$VERDICT" in
   "eligible: yes")
