@@ -285,6 +285,9 @@ jobs:
       - name: Verify every spec marked done has its files
         run: make spec-status-check
 
+      - name: Check spec paths before dispatch (F-042)
+        run: make spec-lint
+
       # SECURITY.md's supported-versions table is generated from the release
       # record. A security policy claiming a support window the maintainers do
       # not honour is worse than no policy, and both that file and

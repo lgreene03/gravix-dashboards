@@ -243,3 +243,18 @@ scheduled exports means writing to customers' buckets. Both are security designs
 stops list below.
 
 **To reverse.** Restore the singular route string in the five places named above.
+
+## DD-012 — F-042: two mechanical readiness checks, gating undispatched specs
+
+**Date** 2026-10-01 · **Tier** routine (process tooling) · **Doc** `11-agent-loops.md`
+
+**Options.** Leave the gate as twelve judgement checks; add the two mechanical checks and run them
+over every spec; or add them and gate only specs not yet dispatched.
+
+**Chosen.** The last. Over every spec they would fail on history already recorded in the registers;
+on `planned` specs they catch a defect while it costs one edit. They report on everything else, which
+surfaced GRVX-1305's wrong path before that spec is dispatched.
+
+**Done.** `scripts/spec_lint.py`, `make spec-lint`, a CI step, two tests, and the gate documentation.
+
+**To reverse.** Remove the CI step; the script is inert without it.

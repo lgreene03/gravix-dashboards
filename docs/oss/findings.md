@@ -2840,6 +2840,23 @@ Two mechanical checks, both scriptable in the spirit of `check-boundary`:
 Neither replaces check 12. Both convert "the Lead read it carefully" into something that fails a
 build, which is the difference this project already relies on everywhere else.
 
+### Resolved 2026-10-01 — DD-012: both checks adopted, gating specs not yet dispatched
+
+`scripts/spec_lint.py` implements both, as **M1** and **M2**, and `make spec-lint` runs in CI on every
+pull request. They fail the build for specs marked `planned`, where a defect is still cheap, and only
+report for dispatched specs, whose defects are recorded here already. They are documented beside the
+twelve checks in `11-agent-loops.md` rather than renumbering them.
+
+M2 allows §2 as well as §4: a step that *reads* a context file is not a defect, and without that the
+check fired on GRVX-1107 §6 step 1's "read … in full".
+
+Run over the corpus, it reports drift in eighteen dispatched specs, including two already registered
+(GRVX-1107's `enterprise.go`, SD-029; GRVX-1201's `pkg/notify/slack.go`, SD-031), five that name
+`services/gateway/` files the gateway refactor moved to `pkg/gatewaycore`, and GRVX-1305's §2, which
+names a `gateway_billing.go` that does not exist — a defect in a spec not yet executed, caught before
+dispatch. The two `planned` specs pass. `TestSpecLintCatchesWhatTheGateMissed` reproduces SD-029's
+two defects in fixture specs and requires both to fail.
+
 ---
 
 ## F-043 — `pkg/tenantdb/postgres_test.go` has never run, in CI or anywhere else

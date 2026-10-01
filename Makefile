@@ -1,6 +1,6 @@
 GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check pricing-page pricing-check relnotes bench build-ee spec-status-check incident-audit supported-versions supported-versions-check charter-evidence bus-factor verify-custody
+.PHONY: build build-cli setup test test-fast test-full test-js test-correctness test-race coverage up down clean lint lint-all purge trino-init helm-lint docs chaos build-oss test-oss check-boundary verify-reproducible sbom contracts contracts-check rfc-index rfc-check roadmap-board roadmap-check pricing-page pricing-check relnotes bench build-ee spec-status-check spec-lint incident-audit supported-versions supported-versions-check charter-evidence bus-factor verify-custody
 
 build:
 	go build -o bin/ingestion-service ./services/ingestion/
@@ -176,6 +176,11 @@ pricing-check: ## Fail if either generated pricing page is stale
 
 # A spec marked done whose files do not exist is a published claim that work
 # happened. The register is maintained by hand, so it is checked by machine.
+# Mechanical Spec Readiness checks (F-042): paths in §2/§4.2 exist, and every
+# path §6/§7 names is in §4. Gates "planned" specs; reports on the rest.
+spec-lint:
+	python3 scripts/spec_lint.py
+
 spec-status-check: ## Verify every spec marked done has the files its §4.1 names
 	python3 scripts/audit_spec_status.py
 
