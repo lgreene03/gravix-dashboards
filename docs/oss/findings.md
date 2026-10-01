@@ -3979,3 +3979,36 @@ ingest_events_per_sec_per_core: 73876
 
 That is not the reference machine and is not a published figure. The figure still excludes HTTP,
 as the README says.
+
+---
+
+## F-057 — the full stack's object store image no longer exists on Docker Hub
+
+**Found by** the first `docker-smoke` run to get past F-026's `.env` error, on PR #24
+**Affects** `docker-compose.yml` (`minio`, `init-minio`), `deploy/gravix/values.yaml`
+**Severity** high — `docker compose up` on the full stack fails before any container starts
+**Status** fix pushed; the next `docker-smoke` run confirms it
+
+### What happened
+
+```
+[1/8] Starting Docker Compose stack...
+Error response from daemon: pull access denied for minio/minio, repository does not exist or may
+require 'docker login': denied: requested access to the resource is denied
+```
+
+`https://hub.docker.com/v2/repositories/minio/minio/` returns 404. The repository the full stack and
+the Helm chart pull from is gone upstream, so every fresh `docker compose up` of the full stack has
+failed at the first image pull, whatever else was right.
+
+Nothing could have caught it. `docker-smoke` was the only job that pulls these images, it ran only on
+`main`, and since at least May it had stopped at the `.env` error before pulling anything (F-026).
+F-026 hid F-025, and both hid this.
+
+### What changed
+
+Both MinIO images now come from `quay.io/minio/`, MinIO's own registry, at the same pinned releases.
+It is the same software, so this is not a new dependency. Quay is unreachable from the environment
+where this was written, so the first `docker-smoke` run on the pull request is what confirms the tags
+exist there. If they do not, replacing MinIO with another S3 server is a new dependency, which is
+design tier.

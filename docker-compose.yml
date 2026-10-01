@@ -97,7 +97,10 @@ services:
       - backend
 
   init-minio:
-    image: minio/mc:RELEASE.2024-03-13T23-51-57Z
+    # Quay, not Docker Hub: the minio/* repositories on Docker Hub return 404
+    # and pull fails with "repository does not exist" (F-057). Same software,
+    # same release, MinIO's own registry.
+    image: quay.io/minio/mc:RELEASE.2024-03-13T23-51-57Z
     container_name: gravix-init-minio
     entrypoint: >
       /bin/sh -c "
@@ -576,7 +579,8 @@ services:
       - backend
 
   minio:
-    image: minio/minio:RELEASE.2024-03-15T01-07-19Z
+    # Quay, not Docker Hub (F-057); see init-minio.
+    image: quay.io/minio/minio:RELEASE.2024-03-15T01-07-19Z
     container_name: gravix-minio
     ports:
       - "127.0.0.1:9000:9000"  # localhost only

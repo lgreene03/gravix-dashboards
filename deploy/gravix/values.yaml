@@ -156,7 +156,8 @@ storage:
   minio:
     enabled: true
     image:
-      repository: minio/minio
+      # Quay, not Docker Hub: minio/minio there returns 404 (F-057).
+      repository: quay.io/minio/minio
       tag: "RELEASE.2024-03-15T01-07-19Z"
     persistence:
       enabled: true
