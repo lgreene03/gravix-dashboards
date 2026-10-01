@@ -4150,7 +4150,7 @@ Cube, the endpoints query that failed now answers in 2,255 ms cold, and 14 ms on
 **Found by** a soak test of GRVX-1006's cache warmer against Cube `v0.35` on the bootstrap stack's settings
 **Affects** Cube on the bootstrap stack; the full stack's Trino path is untested
 **Severity** medium — after a Cube restart, two simultaneous first visitors wait about two minutes for anything
-**Status** open; reproduced on the published image in CI, two trials of three
+**Status** open; reproduced on the published image in CI, every trial once data is present; not reproduced on Cube v1.7.48
 
 ### What happens
 
@@ -4215,7 +4215,22 @@ stalled trials stand, because a stall is no reply at all.
 
 The script now waits until the warehouse returns data before it restarts Cube, prints what each
 query returned, and exits 3, inconclusive, when either answer is an error rather than data. Both
-images are measured again with it below.
+images were measured again with it, on the same commit, each trial starting only once the warehouse
+returned a row:
+
+| Cube | Trial 1 | Trial 2 | Trial 3 |
+|---|---|---|---|
+| `v0.35`, pinned ([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36938622555)) | no answer within 60 s | no answer within 60 s | no answer within 60 s |
+| `v1.7.48` ([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36938625666)) | data, 6.6 s | data, 6.4 s | data, 6.8 s |
+
+With data present, the pinned Cube stalls every time, and v1.7.48 does not stall at all: both
+concurrent first queries return their row in under seven seconds, which is the model compile. Gravix's
+model, `cube.js` and `model_flags.js` load on v1.7.48 unchanged, at least on the bootstrap stack's
+DuckDB path.
+
+That makes upgrading Cube the fix to measure next, not yet the fix: every dashboard number passes
+through Cube, so an upgrade has to show that the same queries return the same numbers on both
+versions, on both stacks, before it ships.
 
 ## F-061 — a fresh install told its first visitor to adjust filters they never set
 
