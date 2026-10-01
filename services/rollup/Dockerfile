@@ -47,6 +47,7 @@ COPY --from=builder /app/service-events-rollup .
 COPY --from=builder /app/service-events-detail-rollup .
 COPY --from=builder /app/purge .
 COPY --from=builder /app/bootstrap_seed .
+COPY --from=builder /app/iceberg-sync .
 
 RUN mkdir -p /app/data && chown -R gravix:gravix /app/data
 USER gravix
