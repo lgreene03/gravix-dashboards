@@ -2663,7 +2663,7 @@ guide requires.
 **Owner** `semantic-modeler`, with `perf-cost-engineer` on the retention consequences.
 **Severity** high — it silently deletes data on the project's first superiority axis, and it makes a
 published correctness claim false for any day old enough to have been compacted.
-**Status** open. Not fixed here: `transforms/compaction/main.go` is on GRVX-1101 §4.3's do-not-touch
+**Status** resolved 2026-10-01 (DD-006). Originally: open. Not fixed here: `transforms/compaction/main.go` is on GRVX-1101 §4.3's do-not-touch
 list, and the fix is a schema decision, not a patch.
 
 ### Two defects, one function
@@ -2862,7 +2862,7 @@ sequence, and reading GRVX-1108.
 **Owner** `senior-engineering-lead` (runs the gate) with `orchestrator` (could enforce it).
 **Severity** medium — no defect reached production, but every one cost an implementer a detour, and
 two of them would have produced a red build if followed literally.
-**Status** open.
+**Status** resolved 2026-10-01 (DD-012). Originally: open.
 
 ### The pattern
 

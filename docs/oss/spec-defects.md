@@ -1365,7 +1365,7 @@ the ones that enforce fsync ordering. Recorded in `delegated-decisions.md` DD-00
 
 **Severity** medium — affects how much the batcher can actually amortise, and the spec's interface
 does not express it.
-**Status** open; the Batcher is implemented to §5.1's signature and is not yet wired into the
+**Status** resolved 2026-10-01 (DD-009). Originally: open; the Batcher is implemented to §5.1's signature and is not yet wired into the
 handlers, which is where the mismatch bites.
 
 §5.1 specifies:
@@ -1413,7 +1413,7 @@ writers, 3,875 facts/sec at one fsync per call became 21,801 at 64 facts per fsy
 
 **Severity** high — §5.1 is not executable on the bootstrap stack as written, and AC-1 is premised
 on it.
-**Status** open; returned as `SPEC DEFECT: §5.1`. AC-3 remains complete (§11.1); nothing in this
+**Status** resolved 2026-10-01 (DD-008). Originally: open; returned as `SPEC DEFECT: §5.1`. AC-3 remains complete (§11.1); nothing in this
 entry changes it.
 
 ### The mismatch
@@ -1525,7 +1525,7 @@ dashboard showed an empty chart. Fixed in the same change. GRVX-1006 moves from 
 **Affects:** GRVX-1101 §2 (context), and the published column reference the spec asks for
 **Severity:** medium as a spec defect — GRVX-1101 stays executable — but the underlying codebase
 behaviour it mis-describes is high, recorded separately as F-039
-**Status:** open; returned as `SPEC DEFECT: §2 — transforms/request_metrics_minute/main.go and
+**Status:** resolved 2026-10-01, moot after DD-006. Originally: open; returned as `SPEC DEFECT: §2 — transforms/request_metrics_minute/main.go and
 transforms/compaction/main.go MetricRow disagree on latency_sketch, sketch_version,
 user_agent_family, extra_quantile_label and extra_quantile_ms`. This is the escalation §10 row three
 anticipated.
@@ -1588,7 +1588,7 @@ does not change the metric table's columns because it does not write the metric 
 **Affects:** GRVX-1101 §5 (fixture filenames), §6 steps 4 and 8, AC-4
 **Severity:** high — the spec's whole objective is a *verified* published guide, and as written the
 published query fails on real data
-**Status:** open; returned as `SPEC DEFECT: §6 — the mandated published query's glob matches only the
+**Status:** resolved 2026-10-01 (DD-004). Originally: open; returned as `SPEC DEFECT: §6 — the mandated published query's glob matches only the
 test fixture`.
 
 ### What the spec requires
@@ -1745,7 +1745,7 @@ the source of truth; the command beneath it does not keep the derived file in st
 **Affects:** GRVX-1107 §2, §4.2, §6 steps 1/6/7, AC-9, AC-10, AC-12
 **Severity:** high — half the spec is unreachable, and following §4 literally produces code that
 fails the repository's own lint gate
-**Status:** open; returned as `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and
+**Status:** resolved 2026-10-01 (DD-011); the job endpoint waits on a security design. Originally: open; returned as `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and
 cmd/cli/main.go`. §4.1 was implemented in full; the gateway half was not.
 
 ### The file named does not contain the feature
@@ -4026,7 +4026,7 @@ That is AC-8's subject under another name.
 **Affects:** GRVX-1005 §4.1, §4.2, §7 AC-1/AC-7
 **Severity:** medium — 761 lines of implemented and tested code are not on the production path, and
 five acceptance criteria pass against it there
-**Status:** partial; AC-2…AC-9 have tests, AC-1 needs the reference machine, and the batcher is not
+**Status:** resolved 2026-10-01 (DD-009); AC-1 is measured on the reference machine named by DD-018. Originally: partial; AC-2…AC-9 have tests, AC-1 needs the reference machine, and the batcher is not
 wired in
 
 ### `NewBatcher` is never constructed outside its own tests
