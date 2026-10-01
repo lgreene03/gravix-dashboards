@@ -4400,9 +4400,16 @@ tables and eleven columns that Metabase's sync reads. The option is now in the c
 Trino configs. The script uses `engine: "presto-jdbc"` and passes a user name, which Presto JDBC
 requires.
 
-Metabase itself was not run here: Docker Hub refused the image pull on its anonymous rate limit.
-The setup and query calls are unchanged from the spec apart from the engine name and the user, and
-`docker-smoke` runs them.
+§6 step 3d also adds the database inside `POST /api/setup`. At v0.50.34 that endpoint reads only
+`token`, `user`, `invite` and `prefs` (`src/metabase/api/setup.clj`), though its docstring still says
+it can add a database. So the database was dropped without an error: `docker-smoke` showed
+`POST /api/setup 200`, then a database list with nothing in it, twice. The script now adds the
+database with `POST /api/database`, which tests the connection before it answers, and prints
+Metabase's answer when that or the query fails. Both paths were run against a stand-in for Metabase's
+API that checks each request body.
+
+Metabase itself was not run here: Docker Hub refused the image pull on its anonymous rate limit, and
+Metabase's own download host is unreachable from this environment. `docker-smoke` runs it.
 
 ### Why the fix is not the Starburst driver
 

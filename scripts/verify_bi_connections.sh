@@ -103,20 +103,15 @@ verify_metabase() {
         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("setup-token") or "")')
     [ -n "$token" ] || die "metabase: connection or query verification failed" 1
 
-    # Admin user and the Trino database in one call, which is what /api/setup
-    # accepts. Metabase's "Presto" option is the presto-jdbc engine; v0.50 has
-    # no engine called "presto". Its Presto JDBC driver needs a user name, and
-    # needs Trino's protocol.v1.alternate-header-name=Presto, which Gravix's
-    # Trino config sets.
+    # The admin user first. GRVX-1103 §6 step 3d adds the database in this
+    # same call, and Metabase v0.50 ignores it: /api/setup reads only token,
+    # user, invite and prefs, despite its docstring (SD-060).
     local setup_body
     setup_body=$(cat <<JSON
 {"token":"$token",
  "prefs":{"site_name":"gravix-verify","allow_tracking":false},
  "user":{"first_name":"Gravix","last_name":"Verify","email":"verify@example.com",
-         "site_name":"gravix-verify","password":"Gravix-verify-1"},
- "database":{"engine":"presto-jdbc","name":"gravix",
-             "details":{"host":"$TRINO_HOST","port":$TRINO_PORT,"user":"metabase",
-                        "catalog":"gravix","schema":"raw","ssl":false}}}
+         "site_name":"gravix-verify","password":"Gravix-verify-1"}}
 JSON
 )
     local session
@@ -125,27 +120,42 @@ JSON
         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))') || true
     [ -n "$session" ] || die "metabase: connection or query verification failed" 1
 
-    local db_id
-    db_id=$(curl -sf -H "X-Metabase-Session: $session" http://localhost:3001/api/database \
-        | python3 -c '
-import json,sys
-d = json.load(sys.stdin)
-dbs = d["data"] if isinstance(d, dict) and "data" in d else d
-print(next((str(x["id"]) for x in dbs if x.get("engine") == "presto-jdbc"), ""))')
-    [ -n "$db_id" ] || die "metabase: connection or query verification failed" 1
+    # Then Trino. Metabase's "Presto" option is the presto-jdbc engine; v0.50
+    # has no engine called "presto". Its Presto JDBC driver needs a user name,
+    # and needs Trino's protocol.v1.alternate-header-name=Presto, which
+    # Gravix's Trino config sets. Metabase tests the connection before it
+    # answers, so a refusal here names its reason.
+    local db_body db_resp db_id
+    db_body=$(cat <<JSON
+{"engine":"presto-jdbc","name":"gravix",
+ "details":{"host":"$TRINO_HOST","port":$TRINO_PORT,"user":"metabase",
+            "catalog":"gravix","schema":"raw","ssl":false}}
+JSON
+)
+    db_resp=$(curl -s -X POST http://localhost:3001/api/database \
+        -H "X-Metabase-Session: $session" -H 'Content-Type: application/json' -d "$db_body") || true
+    db_id=$(printf '%s' "$db_resp" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null) || db_id=""
+    if [ -z "$db_id" ]; then
+        echo "metabase: adding the database answered: $(printf '%s' "$db_resp" | head -c 600)" >&2
+        die "metabase: connection or query verification failed" 1
+    fi
 
     # >= 0, not > 0: a fresh warehouse legitimately has no rows. What is being
     # proven is that the connection and query path work.
-    curl -sf -X POST http://localhost:3001/api/dataset \
+    local result
+    result=$(curl -s -X POST http://localhost:3001/api/dataset \
         -H "X-Metabase-Session: $session" -H 'Content-Type: application/json' \
         -d "{\"type\":\"native\",\"database\":$db_id,
-             \"native\":{\"query\":\"SELECT COUNT(*) AS c FROM request_metrics_minute\"}}" \
-        | python3 -c '
+             \"native\":{\"query\":\"SELECT COUNT(*) AS c FROM request_metrics_minute\"}}") || true
+    if ! printf '%s' "$result" | python3 -c '
 import json,sys
 rows = json.load(sys.stdin).get("data", {}).get("rows", [])
 n = rows[0][0] if rows and rows[0] else None
-sys.exit(0 if isinstance(n, (int, float)) and n >= 0 else 1)' \
-        || die "metabase: connection or query verification failed" 1
+sys.exit(0 if isinstance(n, (int, float)) and n >= 0 else 1)' 2>/dev/null; then
+        echo "metabase: the query answered: $(printf '%s' "$result" | head -c 600)" >&2
+        die "metabase: connection or query verification failed" 1
+    fi
 
     echo "==> metabase: ok"
 }
