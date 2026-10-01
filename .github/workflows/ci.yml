@@ -730,7 +730,10 @@ jobs:
     # Runs on pull requests too. It was main-only, and a gate that runs only
     # after merge gates nothing: the full stack went unbooted from May to
     # October 2026 while the summary stayed green (F-025, F-026).
-    timeout-minutes: 20
+    #
+    # The longer timeout is for the live-stack tests after the smoke test,
+    # whose Spark check pulls an image and its Iceberg runtime.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -757,11 +760,39 @@ jobs:
           ENVEOF
 
       - name: Run full-stack smoke test
-        run: bash scripts/smoke_test.sh
+        run: bash scripts/smoke_test.sh --keep-running
 
+      # Tests that need a running Trino and MinIO, which only this job has:
+      # GRVX-1106 AC-4 to AC-6 (SD-050), GRVX-1104 AC-4 (SD-051) and GRVX-1103
+      # AC-1 and AC-2, Metabase and Superset querying Trino (SD-052). Each
+      # skips when Trino does not answer, which is right on a laptop and wrong
+      # here, where the stack is up: a skip on this step is a failure, and so
+      # is a named test that did not report PASS.
+      - name: Run the tests that need the live stack
+        run: |
+          set -o pipefail
+          # The Spark check reads the S3 credentials the stack was started with.
+          set -a; . ./.env; set +a
+          go test -tags=slow -count=1 -v ./tests/e2e/ \
+            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset' \
+            | tee /tmp/live-e2e.txt
+          (cd grafana-plugin/gravix-datasource && go test -count=1 -v ./pkg/ -run 'TestCheckHealthOK') \
+            | tee /tmp/live-plugin.txt
+          if grep -h -- '--- SKIP' /tmp/live-e2e.txt /tmp/live-plugin.txt; then
+            echo "::error::a live-stack test skipped while the stack was running"
+            exit 1
+          fi
+          for t in TestIcebergSyncPreservesRowCount TestIcebergSyncIsIdempotent TestVerifySparkIcebergRead \
+                   TestVerifyBIConnectionsMetabase TestVerifyBIConnectionsSuperset; do
+            grep -q -- "--- PASS: $t " /tmp/live-e2e.txt || { echo "::error::$t did not pass"; exit 1; }
+          done
+          grep -q -- '--- PASS: TestCheckHealthOK ' /tmp/live-plugin.txt || { echo "::error::TestCheckHealthOK did not pass"; exit 1; }
+
+      # Before teardown, so there are logs to collect. This step once ran after
+      # the smoke test had removed every container, and uploaded nothing.
       - name: Collect logs on failure
         if: failure()
-        run: docker compose logs --tail=100 > /tmp/docker-compose-logs.txt 2>&1
+        run: docker compose logs --tail=200 > /tmp/docker-compose-logs.txt 2>&1
 
       - name: Upload logs on failure
         if: failure()
@@ -769,6 +800,10 @@ jobs:
         with:
           name: docker-compose-logs
           path: /tmp/docker-compose-logs.txt
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose down -v --remove-orphans
 
   # ─── Timed onboarding budget (GRVX-910) ───
   # G3.1: the time from `docker compose up` to a dashboard showing real, rolled-up
