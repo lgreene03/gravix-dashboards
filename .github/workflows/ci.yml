@@ -762,6 +762,17 @@ jobs:
       - name: Run full-stack smoke test
         run: bash scripts/smoke_test.sh --keep-running
 
+      # The smoke test does not query Trino, so it can pass while Trino is
+      # down. Waiting here turns "every live test skipped" into a named cause.
+      - name: Wait for Trino
+        run: |
+          for _ in $(seq 1 36); do
+            curl -sf http://localhost:8081/v1/info >/dev/null && exit 0
+            sleep 5
+          done
+          echo "::error::Trino did not answer on localhost:8081 within three minutes"
+          exit 1
+
       # Tests that need a running Trino and MinIO, which only this job has:
       # GRVX-1106 AC-4 to AC-6 (SD-050), GRVX-1104 AC-4 (SD-051) and GRVX-1103
       # AC-1 and AC-2, Metabase and Superset querying Trino (SD-052). Each
@@ -794,7 +805,11 @@ jobs:
       # the smoke test had removed every container, and uploaded nothing.
       - name: Collect logs on failure
         if: failure()
-        run: docker compose logs --tail=200 > /tmp/docker-compose-logs.txt 2>&1
+        run: |
+          docker compose logs --tail=200 > /tmp/docker-compose-logs.txt 2>&1
+          # Also in the job log, which can be read where artifacts cannot.
+          docker compose ps -a
+          docker compose logs --no-color --tail=60 trino init-trino iceberg-sync || true
 
       - name: Upload logs on failure
         if: failure()
