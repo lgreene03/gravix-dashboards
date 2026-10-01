@@ -656,3 +656,34 @@ which needs measuring first.
 
 **To reverse.** `CACHE_WARM_INTERVAL=4m` restores the spec's interval with no code change.
 `CACHE_WARM_ENABLED=false` turns warming off.
+
+## DD-033 — SD-059: keep the Iceberg catalog serviceless, and have Spark read the tables by path
+
+**Date** 2026-10-01 · **Tier** routine (repairing a spec defect within the spec's stated constraint) · **Spec** GRVX-1106
+
+**Options.** Trino's file metastore with its directory in the bucket, and other engines reading each
+table from its own metadata. A JDBC catalog on PostgreSQL, which Spark also implements, so other
+engines would see the tables by name. A REST or Nessie catalog service. Or withdraw the Iceberg
+read path.
+
+**Chosen.** The file metastore. §5.1's one firm constraint is that the catalog needs no metastore
+service, and it is the only option that meets it. JDBC needs PostgreSQL running in every full stack,
+where today it is an opt-in profile, and REST or Nessie is a new service. Both are new runtime
+dependencies, which `GOVERNANCE.md` puts at design tier. The Hive catalog already runs on the same
+file metastore, so this adds no kind of component the stack did not have. Trino names the type
+`TESTING_FILE_METASTORE`. That is the same metastore `hive.metastore=file` selects for the primary
+catalog, so it is no less supported than what the stack already depends on.
+
+What is given up: another engine cannot list Gravix's Iceberg tables by name from the bucket. It can
+read every one of them from its path, and register them in its own catalog if it wants names.
+`iceberg-tables.md` says this plainly rather than repeating §5.1's claim.
+
+**Done.** The catalog, the Spark check, Trino's start order, the docs and a governance test, as
+SD-059 lists. Verified locally against Trino 435, MinIO and Spark 3.5.3. Not yet run in CI.
+
+**Not decided, and why.** Whether Gravix should offer a catalog other engines can discover tables
+in, with JDBC or REST. That is a new runtime dependency and a design-tier RFC.
+
+**To reverse.** Point `gravix_iceberg.properties` at a JDBC or REST catalog and change the Spark
+check to use the same catalog. The tables themselves need no migration: Iceberg's
+`register_table` adds an existing table to a new catalog from its metadata file.

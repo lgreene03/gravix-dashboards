@@ -4316,6 +4316,9 @@ container, and the entrypoint stops the container if either catalog is missing. 
 is removed, and the directory is in `.gitignore`. `TestTrinoRendersCatalogsInsideTheContainer` fails
 on the old compose file six ways.
 
+Rendered at last, the Iceberg catalog was loaded for the first time, and Trino refused to start on it.
+That is SD-059.
+
 ## F-067 — the Spark read check passed with no Iceberg catalog behind it
 
 **Found by** the same run: `TestVerifySparkIcebergRead` passed while Trino reported the catalog missing
@@ -4327,7 +4330,54 @@ The script kept every digit of spark-sql's last output line, whatever the line s
 run's exit status. Any line with a number in it, such as a URL or a timestamp, counted as a row count.
 With no Iceberg table in existence, the check reported success.
 
-The script now requires spark-sql to exit 0 and its last line to be a bare integer, prints the exit
-status, the output and Spark's errors when either fails, and the test logs the script's output on
-success as well. The same review added Hadoop's S3 connector and an Ivy cache directory, without
-which the read could not have worked at all.
+The script now requires Spark to exit 0 and to print its count on a line of its own, prints the exit
+status and Spark's error when either fails, and the test logs the script's output on success as
+well. The same review added Hadoop's S3 connector and an Ivy cache directory, without which the read
+could not have worked at all. SD-059 then replaced the spark-sql query with a read by metadata file;
+pointed at a table that does not exist, the check exits 1 and prints Spark's
+`FileNotFoundException`.
+
+## F-068 — the full stack's Hive tables were never created, because Trino could not write its metastore
+
+**Found by** reading `data-init` while fixing SD-059, then reproduced against `trinodb/trino:435`
+**Affects** `docker-compose.yml` (`data-init`, `trino`)
+**Severity** high — Cube reads `gravix.raw.*`, so the full stack's dashboard had no tables to query on a fresh clone
+**Status** fixed
+
+`data-init` runs `chown -R gravix:gravix /app/data` on every boot (F-025). In the Gravix images,
+`gravix` is an Alpine system user, uid 100. Trino's image runs as uid 1000 and keeps its Hive
+metastore in `./data/trino-metastore`. So the chown took the metastore away from Trino, and where
+the directory did not exist yet, Docker created it root-owned. Either way Trino could not write it.
+
+Reproduced with the metastore owned by uid 100:
+
+```
+CREATE SCHEMA IF NOT EXISTS gravix.raw
+Query 20261001_212419_00000_rjgq4 failed: Could not write database schema
+```
+
+`init-trino` runs its statements without `set -e` and ends with an `echo`, so it exited 0 and the
+stack came up healthy with no Hive schema and no tables. The smoke test never queried through Trino,
+so nothing noticed. A stack that had created its schema before F-025 kept reading it, because the
+files stayed world-readable.
+
+`data-init` now creates `data/trino-metastore` and gives it to uid 1000 after the `gravix` chown,
+and Trino waits for `data-init` to finish. `TestTrinoCanWriteItsMetastore` fails on the old compose
+file twice. The live-stack tests in `docker-smoke` query the Hive tables through Trino, so a
+recurrence would now fail CI.
+
+## F-069 — the iceberg-sync service had no iceberg-sync to run
+
+**Found by** `docker-smoke` on PR #27, in the service's own log: `/bin/sh: ./iceberg-sync: not found`
+**Affects** `services/rollup/Dockerfile`
+**Severity** high — the Iceberg tables GRVX-1106 publishes were never written by the stack itself
+**Status** fixed
+
+SD-050 added `iceberg-sync` to the rollup image's builder stage, and the final stage never copied
+it. The `iceberg-sync` service runs `./iceberg-sync` every five minutes, failed, logged
+`Iceberg sync failed, will retry next cycle`, and stayed up. The e2e tests build and run the job
+themselves, so they could not see that the stack's own copy was missing.
+
+The final stage now copies it. `TestEveryBuiltBinaryIsCopiedIntoTheImage` checks every Gravix
+Dockerfile for a binary the builder writes and no later stage copies, and fails on the old rollup
+Dockerfile.

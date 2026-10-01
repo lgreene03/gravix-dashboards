@@ -70,6 +70,11 @@ Nothing below has shipped in a tagged release yet.
 - **The first dashboard after the countdown looked blank** — one hourly bucket is one point, and the charts drew no points (F-065)
 - **Every endpoints table was empty on the bootstrap stack** — date-range pruning wrote a missing bound into the SQL whenever a query filtered time with `gte` or `lte`, which the endpoints views do. Such queries are no longer pruned (F-059)
 - **The full stack had no working API key** — ingestion ignores `.env`'s `API_KEY` once a tenant database is configured, and key creation needs a verified email that the default mailer never sends. The full stack is now seeded on first boot like the bootstrap stack, with its write key in `data/api_key.txt` (F-058)
+- **The full stack's Trino ran on a stale, committed catalog** — on a host whose user is not uid 1000 the catalogs could not be rendered, so Trino used a committed copy with the wrong S3 credentials and no Iceberg catalog. The catalogs now render inside the container, and Trino refuses to start without both (F-066)
+- **The full stack's Hive tables were never created** — `data-init` gave Trino's metastore directory to the `gravix` user, uid 100, and Trino runs as uid 1000, so `CREATE SCHEMA` failed and the failure was skipped. Cube had no tables to read on a fresh clone (F-068)
+- **The Iceberg catalog stopped Trino from starting** — it asked for a `hadoop` catalog type, which Trino has never had. It now uses Trino's file metastore, kept in the bucket, and other engines read each table from its metadata file (SD-059, DD-033)
+- **The stack never ran its Iceberg sync** — the binary was built and left out of the image, so the `iceberg-sync` service failed every five minutes (F-069)
+- **The Spark read check could not fail** — it took any number on Spark's last output line as a row count, whatever the exit status. It now needs a clean exit and an explicit row count, and prints Spark's error when it fails (F-067)
 
 ### Security
 

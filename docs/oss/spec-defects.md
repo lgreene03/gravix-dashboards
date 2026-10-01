@@ -4292,3 +4292,72 @@ query. The one in flight finishes, bounded by Cube's own ten-minute query timeou
 §4.1 puts the warmer in `services/gateway/`, which is `package main` with one line,
 `gatewaycore.Run()`. The gateway is `pkg/gatewaycore`, so the warmer is there, and §4.2's "start the
 cache warmer" happens in `gatewaycore.Run`.
+
+## SD-059 — GRVX-1106's catalog type does not exist in the pinned Trino
+
+**Found by:** `docker-smoke`, the first run to start the full stack with both catalogs rendered (F-066)
+**Affects:** GRVX-1106 §2, §5.1, §5.3, §6 steps 2, 7 and 8, §6.1
+**Severity:** high — the catalog stopped Trino from starting, so the full stack had no query engine
+**Status:** resolved 2026-10-01 (DD-033)
+
+### What happened
+
+§5.1 configures `iceberg.catalog.type=hadoop`. Trino 435's `CatalogType` enum is
+`TESTING_FILE_METASTORE`, `HIVE_METASTORE`, `GLUE`, `REST`, `JDBC` and `NESSIE`. There is no
+`hadoop`, and Trino refuses to start on a catalog it cannot configure. Reproduced against
+`trinodb/trino:435`:
+
+```
+ERROR  main  io.trino.server.Server  Configuration errors:
+1) Error: Invalid value 'hadoop' for type CatalogType (property 'iceberg.catalog.type') ...
+```
+
+The container exits with status 100. Until F-066 the Iceberg catalog was never rendered where Trino
+read it, so this had never been loaded. §10 names this case and says to return
+`SPEC DEFECT: §5.1 — hadoop catalog type unsupported on pinned Trino version`. It is returned here.
+
+### What §5.1 wanted, and what is left of it
+
+§5.1 chose `hadoop` for two properties: no metastore service, and any engine reads the tables from
+the warehouse path alone. The first survives. Trino's file metastore, the one the Hive catalog
+already uses, needs no service, and its directory can sit in the bucket beside the tables.
+
+The second narrows. A Hadoop catalog lets another engine list the tables by name from the warehouse
+path. The file metastore is Trino's own format, which other engines do not read. They can still read
+every table, because an Iceberg table describes itself: its `metadata/` directory holds each
+`metadata.json` Trino has written, and any Iceberg reader opens the table from the newest one. They
+cannot discover the tables by name without being told where they are.
+
+### Changed
+
+- `gravix_iceberg.properties`: `iceberg.catalog.type=TESTING_FILE_METASTORE`,
+  `hive.metastore.catalog.dir=s3a://${S3_BUCKET}/iceberg-warehouse`, and
+  `iceberg.unique-table-location=false`, so each table is at
+  `s3a://<bucket>/iceberg-warehouse/raw/<table>` rather than at a path with a random suffix.
+- `verify_spark_iceberg_read.sh` (§5.3, §6 step 7): Spark gets no catalog. A `spark-shell` script
+  finds the newest `metadata.json` under the table's path, by its version number, and counts the
+  table. It prints `Spark could not read <table>` and the reason on failure, in place of §6.1's
+  `spark-sql query failed or returned non-numeric output`, which would now name a tool it does not
+  run. Exit codes are unchanged.
+- `docker-compose.yml`: Trino waits for `init-minio`, because the Iceberg metastore is in the
+  bucket. It also waits for `data-init`, which now gives the Hive metastore to Trino's uid 1000.
+  That fixes a separate defect found on the way, F-068.
+- `iceberg-tables.md` (§6 step 8): the new catalog, the new Spark read, and how to register a table
+  in another engine's own catalog.
+- Trino's compose health check and CI's wait for Trino now require `"starting":false`. Trino answers
+  `/v1/info` within a second of starting, while its catalogs are still loading, so both had passed
+  on a Trino that then stopped on this catalog. CI ran its live-stack tests against a stack with no
+  Trino, and they skipped.
+
+### Verified
+
+Against `trinodb/trino:435` and a source-built MinIO, with the rendered templates: Trino started,
+created the schema and table, inserted three rows over two days, deleted one day, and counted two.
+The script, run against that table with the same Spark image and Iceberg jar, printed
+`spark read s3a://gravix/iceberg-warehouse/raw/request_metrics_minute/metadata/00004-….metadata.json: 2 row(s)`
+and exited 0. Pointed at a table that does not exist, it exited 1 and printed Spark's
+`FileNotFoundException`. The local run supplied the jars with `--jars`, because this environment's
+containers cannot reach Maven Central. CI resolves them with `--packages` as the script does.
+
+`TestIcebergCatalogTypeExistsInPinnedTrino` holds the catalog type to Trino 435's list and holds the
+two settings the Spark read depends on. Against §5.1's template it reports three errors.

@@ -764,13 +764,23 @@ jobs:
 
       # The smoke test does not query Trino, so it can pass while Trino is
       # down. Waiting here turns "every live test skipped" into a named cause.
+      # Trino answers /v1/info while it is still loading catalogs, and a
+      # catalog that fails to load stops it after that, so an answer is not
+      # enough: it has to say it has finished starting. This step once passed
+      # on a Trino that exited a few seconds later (SD-059).
       - name: Wait for Trino
         run: |
           for _ in $(seq 1 36); do
-            curl -sf http://localhost:8081/v1/info >/dev/null && exit 0
+            if curl -sf http://localhost:8081/v1/info | grep -q '"starting":false'; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' gravix-trino 2>/dev/null)" = false ]; then
+              echo "::error::Trino exited while starting"
+              exit 1
+            fi
             sleep 5
           done
-          echo "::error::Trino did not answer on localhost:8081 within three minutes"
+          echo "::error::Trino did not finish starting on localhost:8081 within three minutes"
           exit 1
 
       # Tests that need a running Trino and MinIO, which only this job has:
@@ -786,6 +796,10 @@ jobs:
           set -a; . ./.env; set +a
           # The BI checks boot Metabase and Superset, so they also ask for this.
           export BI_CONNECTIONS_E2E=1
+          # The sync tests compare row counts taken seconds apart. A rollup
+          # landing between them, or the stack's own sync interleaving its
+          # DELETE and INSERT with the test's, would fail them on a correct sync.
+          docker compose stop load-generator request-metrics-rollup iceberg-sync
           go test -tags=slow -count=1 -v ./tests/e2e/ \
             -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset' \
             | tee /tmp/live-e2e.txt
