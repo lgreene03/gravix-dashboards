@@ -3660,3 +3660,29 @@ per-schedule credentials are stored, encrypted and rotated. Both are security de
 did not make. Until one is made, the honest interim is to say on the schedule itself that it does
 not run. That copy change is small, but it sits in the dashboard and the API, and is left with the
 design so the two land together.
+
+---
+
+## F-055 — main went red on the first merge whose commit named a new model version, and pull requests cannot see it
+
+**Found by:** reading `main`'s CI after the PR #22 merge
+**Affects:** `.mailmap`, `pkg/relnotes` `TestGeneratesOverThisRepository`
+**Severity:** medium — `main` red on `fast-suite-budget` and `test (1.25)`; nothing published
+**Status:** fixed
+
+`TestGeneratesOverThisRepository` renders release notes over the checkout's history and fails if a
+model identifier reaches them; `.mailmap` folds co-author trailers to "Claude". It listed exactly
+one name, `Claude Opus 5`. The squash commit for PR #22 carried a `Co-Authored-By` trailer naming
+`Claude Opus 5.5`, so on `main` — where the shallow checkout's one commit is that squash — the name
+reached the notes and the test failed.
+
+The pull request ran green on the same content because a pull-request checkout is a synthetic merge
+commit authored by GitHub, with no trailers, so the history the test read had nothing to map. The
+check could only ever fail after merge.
+
+Two weaknesses, both fixed. `.mailmap` now folds **every** identity on `noreply@anthropic.com` to
+"Claude" by address alone, so a new version needs no new line. And the guard matched only the word
+"Opus", so a Sonnet or Fable trailer — both already in this history — would have passed it; it now
+matches any `Claude <Family> <version>`. `TestMailmapFoldsEveryModelIdentity` runs
+`git check-mailmap` against a list of names, including one that does not exist yet, so it does not
+depend on which commits a checkout happens to hold. Restoring the one-name `.mailmap` fails it.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -704,8 +705,48 @@ func TestGeneratesOverThisRepository(t *testing.T) {
 	// No model identifier reaches a published artefact. Commits carry a
 	// Co-Authored-By trailer naming one, and .mailmap is what keeps it out of
 	// the notes — so this fails if that mapping is ever dropped.
-	if strings.Contains(rendered, "Opus") {
-		t.Error("a model identifier reached the rendered notes; check .mailmap")
+	if m := modelIdentifier.FindString(rendered); m != "" {
+		t.Errorf("a model identifier (%q) reached the rendered notes; check .mailmap", m)
+	}
+}
+
+// modelIdentifier matches a model name as co-author trailers spell it:
+// "Claude", a capitalised family name, then a version. It once matched only
+// "Opus", so a Sonnet or Fable trailer would have passed this guard.
+var modelIdentifier = regexp.MustCompile(`Claude [A-Z][a-z]+ \d`)
+
+// TestMailmapFoldsEveryModelIdentity checks .mailmap directly, so it does not
+// depend on which commits a CI checkout happens to contain. On a pull request
+// the checkout is one synthetic merge commit with no trailers, and a model name
+// only reached the notes on the first push to main that carried a new one.
+func TestMailmapFoldsEveryModelIdentity(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve root: %v", err)
+	}
+	// The OSS build copy has no .git, and git will not resolve a mailmap
+	// outside a repository. The file itself must still fold by address alone.
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		body, err := os.ReadFile(filepath.Join(root, ".mailmap"))
+		if err != nil {
+			t.Fatalf("read .mailmap: %v", err)
+		}
+		if !regexp.MustCompile(`(?m)^Claude <noreply@anthropic\.com>\s*$`).Match(body) {
+			t.Error(".mailmap does not fold every identity on noreply@anthropic.com to \"Claude\"")
+		}
+		return
+	}
+	for _, name := range []string{
+		"Claude Opus 5", "Claude Opus 5.5", "Claude Opus 4.7", "Claude Sonnet 4.6",
+		"Claude Fable 5.1", "Claude Haiku 4.5", "Claude Futuremodel 9.9",
+	} {
+		out, err := exec.Command("git", "-C", root, "check-mailmap", name+" <noreply@anthropic.com>").Output()
+		if err != nil {
+			t.Fatalf("git check-mailmap: %v", err)
+		}
+		if got := strings.TrimSpace(string(out)); got != "Claude <noreply@anthropic.com>" {
+			t.Errorf("%s resolves to %q; .mailmap must fold every identity on that address to \"Claude\"", name, got)
+		}
 	}
 }
 

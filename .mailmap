@@ -15,4 +15,9 @@
 # reason is required.
 
 Luke Greene <luke.greene86@gmail.com>
-Claude <noreply@anthropic.com> Claude Opus 5 <noreply@anthropic.com>
+# Every identity on this address is credited as "Claude". Matching by address
+# alone, rather than listing each name, keeps a new co-author trailer from
+# putting a model name into published notes: commits have carried several
+# (Opus, Sonnet and Fable versions), and listing them one by one let a new
+# one through on the first push to main that carried it.
+Claude <noreply@anthropic.com>
