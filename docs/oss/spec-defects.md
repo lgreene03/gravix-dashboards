@@ -3434,7 +3434,7 @@ would have passed silently, which is the failure mode of every guard that has ne
 **Found by:** `senior-engineer` executing GRVX-1106
 **Affects:** GRVX-1106 §4.2, §6 step 5, §7 AC-4/5/6, §8
 **Severity:** medium — the interoperability claim is designed and not yet demonstrated
-**Status:** partial; the buildable half is done and the unproven half is named here and in the published guide
+**Status:** resolved 2026-10-01 — AC-4 to AC-6 pass in `docker-smoke` on the full stack; see the last section
 
 ### What was executable, and what was not
 
@@ -3518,6 +3518,18 @@ Routine wins, on precedent rather than on reading: `GRVX-804` added `influxdata/
 next implementer does not re-litigate it — and so that if the founder disagrees, there is one place
 to say so.
 
+### Demonstrated 2026-10-01
+
+AC-4 to AC-6 ran for the first time in `docker-smoke`, against the full stack, and pass there on
+every pull request ([first passing run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36934275599)). Getting there took four
+fixes their first runs found: the Iceberg catalog's type did not exist in Trino 435 (SD-059), Trino
+could not write its metastore (F-068), the `iceberg-sync` binary was missing from its image (F-069),
+and the Spark check could not fail (F-067).
+
+The rows they compare are three CI fixtures, because the full stack's Hive tables read a location
+the multi-tenant rollup does not write (F-070). The tests prove the Hive to Iceberg to Spark path,
+and say so in `iceberg-tables.md`.
+
 ---
 
 ## SD-051 — GRVX-1104's entrypoint cannot live where §4.1 puts it, and its build command cannot run
@@ -3526,10 +3538,10 @@ to say so.
 **Affects:** GRVX-1104 §4.1, §4.2, §6 step 7, §7 AC-4/AC-7, §8 step 1
 **Severity:** medium — raised from low after AC-7 ran. Two mechanical spec errors and a scope gap are
 low; a published install guide whose build command produces a plugin Grafana cannot start is not.
-**Status:** partial; 6 of 7 acceptance criteria proven. AC-7 passed in CI on 1cf88b4 (run
+**Status:** resolved 2026-10-01 — all 7 acceptance criteria proven. AC-7 passed in CI on 1cf88b4 (run
 35161250004, `isolated-modules` step 9, 52s) after failing on its first run and finding a real defect
-— see the two sections at the end. AC-4 needs a live Trino and remains the one unproven criterion,
-which is why this stays `partial` rather than `done`.
+— see the two sections at the end. AC-4, the last, passes in `docker-smoke` against the full stack's
+Trino.
 
 ### `pkg/main.go` cannot be both
 
@@ -3713,6 +3725,11 @@ the aggregate. One wrong gate, three red checks.
 locally in 6m0s, no failures and no data races. The opt-in fix covers both jobs, because it stops the
 test running anywhere that did not ask for it.
 
+### AC-4 demonstrated 2026-10-01
+
+`TestCheckHealthOK` runs in `docker-smoke` against the full stack's Trino and passes
+([first passing run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36934275599)), which proves the last criterion.
+
 ---
 
 ## SD-052 — GRVX-1103's mandated table is wrong twice, and one of the errors is 144×
@@ -3721,8 +3738,8 @@ test running anywhere that did not ask for it.
 **Affects:** GRVX-1103 §5.1, §6 step 1, §2, §7 AC-4
 **Severity:** high — §6 step 1 requires publishing the table "verbatim", and verbatim is a guide
 whose queries do not run and whose headline number is wrong by two orders of magnitude
-**Status:** partial; AC-3 and AC-4 proven plus two guards beyond them, AC-1 and AC-2 need Docker and
-a live Trino
+**Status:** resolved 2026-10-01 — AC-1 to AC-4 proven; AC-1 and AC-2 pass in `docker-smoke` after
+SD-060, and the guide's queries were run on Trino and corrected (CD-006)
 
 ### The spec was not published verbatim, on purpose
 
@@ -3820,6 +3837,17 @@ passes with nothing to spare and the next skip added anywhere in the repository 
 That is the ratchet working, not a problem to route around. But it does mean whoever adds the next
 Docker- or stack-gated test has to create headroom first, the way SD-051 did, rather than nudging the
 constant up. The constant going up is the one outcome the gate exists to prevent.
+
+### Demonstrated 2026-10-01
+
+AC-1 and AC-2 pass in `docker-smoke` ([first passing run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36934275599)), after
+SD-060 fixed how each tool connects to Trino 435.
+
+The guide's queries have now run on Trino. Three of the four metric queries were right. The two rate
+queries ran but rounded every rate to 0.1 per second, which is CD-006, now fixed and held by
+`TestSQLGuideQueriesRunOnTrino` in `docker-smoke`. The raw-inspection query names
+`gravix.raw.request_facts`, which the full stack does not create, for the reason in F-070. The guide
+says so.
 
 ---
 

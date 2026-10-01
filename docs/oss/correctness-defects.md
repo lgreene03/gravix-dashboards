@@ -21,6 +21,8 @@ defect register is a project that has not looked.
 | CD-002 | GRVX-801 | `gravix recompute` rebuilds one metric of eight; the rest have no CLI reproduction path | Open |
 | CD-003 | GRVX-804 | The scalar percentile column and the sketch answer the same question with different definitions | Open |
 | CD-004 | GRVX-806 | A second evolution silently discards the first: adding a dimension erases a previously added percentile | Open |
+| CD-005 | GRVX-801 | Compaction wrote Parquet at a different zstd level than recompute, so the two could never be byte-identical | Fixed |
+| CD-006 | GRVX-1103 | The SQL guide's rate queries rounded every rate to 0.1/s, so a service with under 15 requests in five minutes showed as idle | Fixed |
 
 ---
 
@@ -315,3 +317,42 @@ non-test Go file and fails on a zstd codec at any other level; reverting `pkg/ex
 The repair this entry proposed — recompute, compact, recompute, assert `Rebuilt == 0` — is now true
 by construction rather than by test: compaction refuses `request_metrics_minute` (F-039, DD-006), so
 it can never rewrite a partition recompute owns.
+
+## CD-006 — the SQL guide's rate queries rounded every rate to a tenth of a request per second
+
+**Owning spec:** GRVX-1103 (SQL-vs-PromQL guide)
+**Found by:** running the guide's queries against Trino 435 for the first time, after PR #27 made a live Trino available
+**State:** fixed
+
+### What happened
+
+`docs-site/docs/sql-vs-promql.md` computed request rates as `SUM(request_count) / 300.0`. The sum is
+a `BIGINT`, and Trino reads the literal `300.0` as `DECIMAL(4,1)`, so the quotient is a `DECIMAL`
+with one digit after the point. On ten requests in the last five minutes:
+
+```
+service    rps  type
+precision  0.0  decimal(21,1)
+```
+
+The true rate is 0.0333 per second. Every rate the page produced was rounded to the nearest 0.1, so
+any service or endpoint with fewer than 15 requests in five minutes read as idle, and every other
+rate was off by up to 0.05 per second. The page's error-ratio query was right all along, because it
+casts the sum to `double` before dividing.
+
+### Why nothing caught it
+
+GRVX-1103 published its queries without running them, and said so (SD-052). The governance test
+checked their text for the two defects SD-052 had found, a type error and a missing window. Neither
+check could see a numeric type, and there was no Trino to ask.
+
+### The repair
+
+Both rate queries now divide `CAST(SUM(request_count) AS double)` by 300. On the same rows they
+return 0.0333 for the service and 0.0233 and 0.01 for its endpoints, which are the true rates.
+
+Two tests hold it. `TestSQLPromQLGuideHasAllRows` rejects any uncast `SUM(...)` divided in the
+page's SQL, and fails on the old page. `TestSQLGuideQueriesRunOnTrino` runs every query on the page
+against the full stack's Trino in `docker-smoke`, and fails if a rate or ratio column comes back as
+anything but a double. On the old page it reports both rate queries as `DECIMAL`.
+

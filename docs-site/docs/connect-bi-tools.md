@@ -134,10 +134,14 @@ would make the check fail for a reason that has nothing to do with connectivity.
 |---|---|
 | The script rejects an unknown tool name with exit 2 | **Tested** — `TestVerifyBIConnectionsInvalidArg` |
 | The script exits 3 when Trino is unreachable | **Tested** — `TestVerifyBIConnectionsNoTrino` |
-| Metabase connects and returns a result | **Not run** — needs Docker *and* a running Trino |
-| Superset connects and returns a result | **Not run** — same |
+| Metabase connects and returns a result | **Tested in CI** — `TestVerifyBIConnectionsMetabase`, against the full stack |
+| Superset connects and returns a result | **Tested in CI** — `TestVerifyBIConnectionsSuperset`, against the full stack |
 
-The two connection tests are written and self-gating. Until they have passed somewhere you can see,
-treat "Metabase and Superset can query Gravix" as **built and not yet demonstrated** — the same
-standard the [Grafana plugin page](grafana-plugin.md) is held to, and for the same reason: a
-connection that has never been made is not a connection.
+Both connection tests run in `docker-smoke` on every pull request and fail rather than skip there.
+They first passed on 2026-10-01 ([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36934275599)). The first runs found
+that neither tool could connect the way this page used to say, which is why the Superset driver step
+and the Trino setting above exist. `docs/oss/spec-defects.md` SD-060 has the detail.
+
+The query they run is a row count, and on a full stack the tables are empty until F-070 is fixed
+(see [Iceberg tables](iceberg-tables.md)). What the tests prove is that each tool connects and gets
+an answer from Trino.

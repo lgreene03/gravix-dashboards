@@ -107,7 +107,7 @@ no Gravix-shaped layer in between that could disagree.
 | `npm install && npm run build` produce a loadable `dist/` | **Run** — `module.js` and `plugin.json` emitted, typecheck clean |
 | Grafana loads the plugin and starts its backend | **Tested in CI** — `TestGrafanaLoadsPlugin`, `isolated-modules` job. It failed on its first run; see below |
 | The documented build command produces a name Grafana can exec | **Tested** — and it did not, at first |
-| A healthy Trino reports `gravix: trino reachable` | Needs a running Trino — `TestCheckHealthOK` |
+| A healthy Trino reports `gravix: trino reachable` | **Tested in CI** — `TestCheckHealthOK`, against the full stack's Trino |
 
 The first time `TestGrafanaLoadsPlugin` ran, it failed: the build command on this page wrote a bare
 `gpx_gravix_datasource`, and Grafana could not exec it. Five other criteria passed throughout, because
@@ -115,5 +115,6 @@ none of them started Grafana. If you read this page before that fix, the plugin 
 work, and the note above the compose snippet is why.
 
 That is fixed and the test now passes in CI, so "Grafana loads it" is **demonstrated**, not assumed.
-The Trino health check is the one thing on this page still unproven — it needs a running warehouse.
-`docs/oss/spec-defects.md` SD-051 records both.
+The Trino health check needs a running warehouse, and now has one: `docker-smoke` runs it against the
+full stack on every pull request, and it first passed on 2026-10-01
+([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36934275599)). `docs/oss/spec-defects.md` SD-051 records both.

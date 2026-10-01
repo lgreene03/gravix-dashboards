@@ -609,10 +609,19 @@ func TestSQLPromQLGuideHasAllRows(t *testing.T) {
 	// has a spare — which is exactly what happened when this guard was first
 	// written and then tested by reintroducing the defect.
 	for i, q := range blocks {
-		if strings.Contains(q, "/ 300.0") && !strings.Contains(q, "bucket_start >=") {
-			t.Errorf("query %d divides by 300.0 with no bucket_start lower bound; a rate without "+
+		if regexp.MustCompile(`/\s*300\b`).MatchString(q) && !strings.Contains(q, "bucket_start >=") {
+			t.Errorf("query %d divides by 300 with no bucket_start lower bound; a rate without "+
 				"a window is the day's total, not a rate:\n%s", i+1, q)
 		}
+	}
+
+	// CD-006: the counts are BIGINT. Divided by 300 they truncate to an
+	// integer, and divided by the literal 300.0, which Trino reads as
+	// DECIMAL(4,1), they round to one decimal place: ten requests in five
+	// minutes reported a rate of 0.0. A sum has to be cast before it is divided.
+	if m := regexp.MustCompile(`SUM\(\w+\)\s*/`).FindString(queries); m != "" {
+		t.Errorf("a query divides an uncast integer sum (%q); Trino keeps the integer or decimal "+
+			"scale, so small rates round to zero. Cast first: CAST(SUM(x) AS double) / 300", m)
 	}
 
 	// The column is UTC and current_timestamp is not. Dropping the conversion

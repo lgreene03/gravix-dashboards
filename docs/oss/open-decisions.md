@@ -104,10 +104,11 @@ HTTP framing excluded, and AC-1 passes (GRVX-1005 §11.2).
 **An unexplained status is indistinguishable from a spec nobody looked at.** That is what hid four of
 these, and it is why every entry on this page now names its cause.
 - **GRVX-1007, GRVX-1008** — not startable; 1007 depends on 1002/1003/1005/1006, and 1008 on 1007.
-- **GRVX-1103** — *no longer blocked.* It was marked blocked with no reason recorded here, and turned
-  out to be two documentation pages and a script: AC-3 and AC-4 are proven, only AC-1 and AC-2 need
-  Docker and a live Trino. Now `partial`. Its §5.1 table was wrong twice — see SD-052. The lesson is
-  the one below.
+- **GRVX-1103** — *no longer blocked, and now done.* It was marked blocked with no reason recorded
+  here, and turned out to be two documentation pages and a script. Its §5.1 table was wrong twice
+  (SD-052), its connection steps could not reach Trino 435 (SD-060), and its rate queries rounded to
+  0.1 per second (CD-006). All four criteria now pass, two of them in `docker-smoke` on the full
+  stack. The lesson is the one below.
 - **GRVX-1407** — blocked for two independent reasons, neither of which was written down until now.
   It `Depends on GRVX-1308`, and 1308 is one of the six specs SD-040 holds, so 1407 is
   **transitively governance-blocked**: it cannot start until a second maintainer exists to approve

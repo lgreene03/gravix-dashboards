@@ -799,10 +799,11 @@ jobs:
 
       # Tests that need a running Trino and MinIO, which only this job has:
       # GRVX-1106 AC-4 to AC-6 (SD-050), GRVX-1104 AC-4 (SD-051) and GRVX-1103
-      # AC-1 and AC-2, Metabase and Superset querying Trino (SD-052). Each
-      # skips when Trino does not answer, which is right on a laptop and wrong
-      # here, where the stack is up: a skip on this step is a failure, and so
-      # is a named test that did not report PASS.
+      # AC-1 and AC-2, Metabase and Superset querying Trino (SD-052), and the
+      # SQL guide's own queries (CD-006). Each skips when Trino does not
+      # answer, which is right on a laptop and wrong here, where the stack is
+      # up: a skip on this step is a failure, and so is a named test that did
+      # not report PASS.
       - name: Run the tests that need the live stack
         run: |
           set -o pipefail
@@ -818,16 +819,17 @@ jobs:
           # (F-070), so they are empty: the sync tests would compare two empty
           # tables and Spark would count nothing. Three rows for today give
           # them a real copy to check. This tests the Iceberg path; it does
-          # not fix F-070.
+          # not fix F-070. bucket_start has the rollup's own format: a string
+          # in any other shape sorts wrongly against the guide's time filters.
           day="$(date -u +%F)"
           docker compose exec -T trino trino --execute "INSERT INTO gravix.raw.request_metrics_minute
             (bucket_start, service, method, path_template, request_count, error_count, error_rate,
              p50_latency_ms, p95_latency_ms, p99_latency_ms, event_day) VALUES
-            ('${day}T00:00:00Z', 'ci-fixture', 'GET', '/fixture/{id}', 10, 1, 0.1, 5.0, 9.0, 12.0, '${day}'),
-            ('${day}T00:01:00Z', 'ci-fixture', 'GET', '/fixture/{id}', 20, 0, 0.0, 4.0, 8.0, 11.0, '${day}'),
-            ('${day}T00:02:00Z', 'ci-fixture', 'POST', '/fixture', 3, 0, 0.0, 6.0, 7.0, 9.0, '${day}')"
+            ('${day} 00:00:00', 'ci-fixture', 'GET', '/fixture/{id}', 10, 1, 0.1, 5.0, 9.0, 12.0, '${day}'),
+            ('${day} 00:01:00', 'ci-fixture', 'GET', '/fixture/{id}', 20, 0, 0.0, 4.0, 8.0, 11.0, '${day}'),
+            ('${day} 00:02:00', 'ci-fixture', 'POST', '/fixture', 3, 0, 0.0, 6.0, 7.0, 9.0, '${day}')"
           go test -tags=slow -count=1 -v ./tests/e2e/ \
-            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset' \
+            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset|TestSQLGuideQueriesRunOnTrino' \
             | tee /tmp/live-e2e.txt
           (cd grafana-plugin/gravix-datasource && go test -count=1 -v ./pkg/ -run 'TestCheckHealthOK') \
             | tee /tmp/live-plugin.txt
@@ -836,7 +838,7 @@ jobs:
             exit 1
           fi
           for t in TestIcebergSyncPreservesRowCount TestIcebergSyncIsIdempotent TestVerifySparkIcebergRead \
-                   TestVerifyBIConnectionsMetabase TestVerifyBIConnectionsSuperset; do
+                   TestVerifyBIConnectionsMetabase TestVerifyBIConnectionsSuperset TestSQLGuideQueriesRunOnTrino; do
             grep -q -- "--- PASS: $t " /tmp/live-e2e.txt || { echo "::error::$t did not pass"; exit 1; }
           done
           grep -q -- '--- PASS: TestCheckHealthOK ' /tmp/live-plugin.txt || { echo "::error::TestCheckHealthOK did not pass"; exit 1; }
