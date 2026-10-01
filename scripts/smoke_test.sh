@@ -29,6 +29,16 @@ pass() { echo "  ✓ $1"; PASS=$((PASS + 1)); }
 fail() { echo "  ✗ $1"; FAIL=$((FAIL + 1)); ERRORS="${ERRORS}\n  - $1"; }
 
 cleanup() {
+    # Diagnose before tearing down. The CI step that used to collect logs ran
+    # after this function had already removed every container, so it uploaded
+    # an empty file on every failure.
+    if [ "$FAIL" -gt 0 ]; then
+        echo ""
+        echo "─── docker compose ps ───"
+        docker compose ps -a 2>&1 || true
+        echo "─── last 40 log lines per service ───"
+        docker compose logs --no-color --tail=40 2>&1 || true
+    fi
     if [ "$KEEP_RUNNING" = false ]; then
         echo ""
         echo "Tearing down Docker Compose..."
@@ -107,34 +117,18 @@ fi
 # -------------------------------------------------------
 # 4. Create an API key
 # -------------------------------------------------------
-echo "[4/8] Creating API key..."
+echo "[4/8] Reading the seeded API key..."
 
-if [ -n "$TOKEN" ]; then
-    KEY_RESP=$(curl -s -X POST http://localhost:8091/api/gateway/api-keys \
-        -H "Authorization: Bearer $TOKEN" \
-        -H "Content-Type: application/json" \
-        -d '{"name":"smoke-test-key"}' 2>&1) || true
-
-    if grep -q '"key"' <<<"$KEY_RESP"; then
-        API_KEY=$(echo "$KEY_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])")
-        pass "API key created"
-    else
-        # Use the .env API_KEY as fallback
-        API_KEY=$(grep '^API_KEY=' .env 2>/dev/null | cut -d= -f2 || echo "")
-        if [ -n "$API_KEY" ]; then
-            pass "Using existing API key from .env"
-        else
-            fail "Could not create API key"
-            API_KEY=""
-        fi
-    fi
+# data-init seeds a tenant and writes its write key to data/api_key.txt, as
+# the bootstrap stack does (F-058). It is read through the gateway container
+# because the file is 0600 and owned by the image's user. The .env API_KEY is
+# not a fallback: once TENANT_DB_PATH is set, ingestion ignores it, which is
+# why this step used to "pass" and then have every fact refused.
+API_KEY="$(docker compose exec -T gateway cat /app/data/api_key.txt 2>/dev/null | tr -d '[:space:]')" || API_KEY=""
+if [ -n "$API_KEY" ]; then
+    pass "Seeded API key found"
 else
-    API_KEY=$(grep '^API_KEY=' .env 2>/dev/null | cut -d= -f2 || echo "")
-    if [ -n "$API_KEY" ]; then
-        pass "Using API key from .env (no auth token)"
-    else
-        fail "No API key available"
-    fi
+    fail "No seeded API key in data/api_key.txt; data-init did not provision the stack"
 fi
 
 # -------------------------------------------------------
@@ -143,6 +137,12 @@ fi
 echo "[5/8] Sending test request facts..."
 
 FACTS_SENT=0
+RATE_LIMITED=0
+# The seeded tenant is on the free plan: 10 requests a second, with a burst of
+# 20. Fifty requests in a tight loop exceed that, and ingestion rightly answers
+# 429 to the rest, which this step once counted as refused facts. So it paces
+# itself under the limit and retries a 429 once, a second later, by which time
+# the tenant's bucket has refilled.
 if [ -n "$API_KEY" ]; then
     for i in $(seq 1 50); do
         STATUS_CODE=$((200 + (i % 5 == 0 ? 300 : 0)))
@@ -150,20 +150,30 @@ if [ -n "$API_KEY" ]; then
         EVENT_ID=$(python3 -c "import uuid,time,os; t=int(time.time()*1000); b=bytearray(t.to_bytes(6,'big')+os.urandom(10)); b[6]=(b[6]&0x0f)|0x70; b[8]=(b[8]&0x3f)|0x80; print(uuid.UUID(bytes=bytes(b)))")
         FACT="{\"event_id\":\"$EVENT_ID\",\"event_time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"service\":\"smoke-svc\",\"method\":\"GET\",\"path_template\":\"/api/smoke/{id}\",\"status_code\":$STATUS_CODE,\"latency_ms\":$LATENCY}"
 
-        RESP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8090/api/v1/facts \
-            -H "Content-Type: application/json" \
-            -H "X-API-Key: $API_KEY" \
-            -d "$FACT" 2>&1) || RESP="000"
+        post_fact() {
+            curl -s -o /dev/null -w "%{http_code}" http://localhost:8090/api/v1/facts \
+                -H "Content-Type: application/json" \
+                -H "X-API-Key: $API_KEY" \
+                -d "$FACT" 2>&1 || echo "000"
+        }
+        RESP=$(post_fact)
+        if [ "$RESP" = "429" ]; then
+            RATE_LIMITED=$((RATE_LIMITED + 1))
+            sleep 1
+            RESP=$(post_fact)
+        fi
 
         if [ "${RESP:0:1}" = "2" ]; then
             FACTS_SENT=$((FACTS_SENT + 1))
         fi
+        sleep 0.15
     done
 
-    if [ $FACTS_SENT -ge 40 ]; then
-        pass "Sent $FACTS_SENT/50 request facts"
+    # Every fact is valid, so every one must be accepted.
+    if [ $FACTS_SENT -eq 50 ]; then
+        pass "Sent 50/50 request facts ($RATE_LIMITED retried after a 429)"
     else
-        fail "Only $FACTS_SENT/50 facts accepted"
+        fail "Only $FACTS_SENT/50 facts accepted ($RATE_LIMITED answered 429 first)"
     fi
 else
     fail "Skipped — no API key"
@@ -186,21 +196,38 @@ fi
 # -------------------------------------------------------
 echo "[7/8] Checking Prometheus targets..."
 
-TARGETS=$(curl -sf http://localhost:9090/api/v1/targets 2>&1) || TARGETS=""
-if grep -q '"health":"up"' <<<"$TARGETS"; then
-    UP_COUNT=$(echo "$TARGETS" | python3 -c "
+# Prometheus marks a target up only after scraping it, every 15 seconds, and
+# the gateway can start seconds before this step. So wait for the first
+# scrapes rather than count once. The rollups serve metrics only while a run
+# is in progress, so ingestion, the gateway and Prometheus itself are the
+# three that must be up.
+UP_COUNT=0
+for _ in $(seq 1 12); do
+    TARGETS=$(curl -sf http://localhost:9090/api/v1/targets 2>&1) || TARGETS=""
+    UP_COUNT=$(python3 -c "
 import sys, json
-data = json.load(sys.stdin)
-up = sum(1 for t in data.get('data',{}).get('activeTargets',[]) if t.get('health')=='up')
-print(up)
-" 2>/dev/null || echo "0")
-    if [ "$UP_COUNT" -ge 3 ]; then
-        pass "Prometheus has $UP_COUNT healthy scrape targets"
-    else
-        fail "Only $UP_COUNT Prometheus targets are up"
-    fi
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print(0); sys.exit()
+print(sum(1 for t in data.get('data',{}).get('activeTargets',[]) if t.get('health')=='up'))
+" <<<"$TARGETS" 2>/dev/null || echo "0")
+    [ "$UP_COUNT" -ge 3 ] && break
+    sleep 5
+done
+if [ "$UP_COUNT" -ge 3 ]; then
+    pass "Prometheus has $UP_COUNT healthy scrape targets"
 else
-    fail "Could not query Prometheus targets"
+    fail "Only $UP_COUNT Prometheus targets are up"
+    python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit()
+for t in data.get('data',{}).get('activeTargets',[]):
+    print('    ', t.get('labels',{}).get('job'), t.get('health'), t.get('lastError',''))
+" <<<"$TARGETS" 2>/dev/null || true
 fi
 
 # -------------------------------------------------------
@@ -208,7 +235,9 @@ fi
 # -------------------------------------------------------
 echo "[8/8] Checking Grafana dashboards..."
 
-GRAFANA_RESP=$(curl -sf http://localhost:3000/api/search 2>&1) || GRAFANA_RESP="[]"
+# The search API needs a login; anonymous access is off. An unauthenticated
+# call answered 401 and was counted as zero dashboards.
+GRAFANA_RESP=$(curl -sf -u "admin:${GRAFANA_ADMIN_PASSWORD:-admin}" "http://localhost:3000/api/search?type=dash-db" 2>&1) || GRAFANA_RESP="[]"
 DASH_COUNT=$(echo "$GRAFANA_RESP" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
 if [ "$DASH_COUNT" -ge 3 ]; then
     pass "Grafana has $DASH_COUNT provisioned dashboards"

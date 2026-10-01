@@ -4035,3 +4035,75 @@ values files already disable the bundled MinIO in favour of managed S3.
 
 Replacing MinIO with a maintained S3 server would be a new dependency, which is design tier. It is
 listed in `open-decisions.md` as the long-term answer for whoever owns the full stack.
+
+## F-058 — the full stack had no working way to get an API key, and its smoke test passed the step anyway
+
+**Found by** the first `docker-smoke` run in which the full stack booted, on PR #24
+**Affects** `docker-compose.yml` (`data-init`), `scripts/smoke_test.sh`, `docs-site/docs/getting-started.md`, `CLAUDE.md`
+**Severity** high — a fresh `docker compose up` of the full stack accepted no facts from anyone
+**Status** fixed by seeding the full stack as the bootstrap stack is seeded (DD-031); the next `docker-smoke` run confirms it
+
+### What happened
+
+With F-025, F-026 and F-057 out of the way, the stack booted and the smoke test reached its data
+steps. Ingestion refused every fact:
+
+```
+[5/8] Sending 50 test facts...
+  ✗ Only 0/50 facts accepted
+```
+
+Three facts combine to cause it.
+
+1. **Ingestion ignores `API_KEY` whenever `TENANT_DB_PATH` is set**, and the full stack always sets
+   it. The key in `.env` is never consulted.
+2. **A newly registered user cannot create an API key until their email is verified.** The gateway
+   answers `403` to key creation before verification.
+3. **The default mailer is a no-op.** No verification token is ever delivered, so no user on a stock
+   full stack can ever be verified.
+
+So the documented path, register then create a key, could not work. Getting Started told people to set
+`GRAVIX_API_KEY` from `.env`, which ingestion ignores.
+
+The smoke test hid this. When key creation failed, step 4 fell back to the `.env` key and counted that
+as a pass. The failure surfaced one step later, as facts refused, which reads like an ingestion bug.
+
+Two more checks failed for their own reasons:
+
+- **Prometheus targets were counted once, immediately.** A target is up only after its first scrape,
+  every 15 seconds, so a gateway that started seconds earlier counted as down.
+- **Grafana's search was called without a login.** Anonymous access is off, so it answered `401`,
+  which the script read as zero dashboards.
+
+And the CI step that uploads compose logs on failure ran after the script had already removed every
+container, so each failed run uploaded an empty file.
+
+### What changed
+
+`data-init` now runs `bootstrap_seed` after fixing ownership, the same seed the bootstrap stack's
+`bootstrap-init` runs. It creates one tenant, writes its write key to `data/api_key.txt` and a
+dashboard login to `data/login.txt`, both mode 0600. A second boot finds the stack provisioned and
+changes nothing.
+
+The smoke test reads that key through the gateway container, with no `.env` fallback. It waits up to
+a minute for three Prometheus targets and names each target's error if they never come up. It logs in
+to Grafana. It prints container state and the last log lines of every service before tearing down.
+
+Getting Started and `CLAUDE.md` tell people to read the key from `data/api_key.txt`.
+`TestFullStackSeedsAnAPIKey` fails if the seed or the smoke test's key source is removed.
+
+### Not changed
+
+The verification gate on key creation is right, and the no-op mailer is the right default for a
+stack with no mail server. What was missing was a seeded key, which the bootstrap stack has had
+since GRVX-901.
+
+### Update 2026-10-01 — the seeded key works, and the next refusal was the rate limit
+
+The next `docker-smoke` run read the seeded key and passed every other step: Prometheus had three
+healthy targets and Grafana seven dashboards. Step 5 then reported 31 of 50 facts accepted.
+
+The other 19 were answered `429`. The seeded tenant is on the free plan, limited to 10 requests a
+second with a burst of 20, and the step sent 50 single-fact requests in about a second. Ingestion was
+right, so the step changed: it paces its requests under the limit, retries a `429` once a second
+later, and now requires all 50 facts, since every one of them is valid.

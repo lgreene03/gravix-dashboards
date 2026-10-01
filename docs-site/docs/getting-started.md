@@ -25,9 +25,18 @@ The fastest way to run Gravix locally is with Docker Compose. This starts the in
 git clone https://github.com/lgreene03/gravix-dashboards.git
 cd gravix-dashboards
 cp .env.example .env
-# Edit .env and set GRAVIX_API_KEY to your API key
 docker-compose up -d --build
 ```
+
+The first boot creates a tenant and writes its API key to `data/api_key.txt`. Read it into your
+shell for the examples below:
+
+```bash
+export GRAVIX_API_KEY="$(docker compose exec -T gateway cat /app/data/api_key.txt)"
+```
+
+The `API_KEY` in `.env` is not this key. Ingestion reads its keys from the tenant database, and
+ignores `API_KEY` whenever one is configured, which this stack always does.
 
 Once running, open the dashboard at [http://localhost:8000/index.html](http://localhost:8000/index.html).
 

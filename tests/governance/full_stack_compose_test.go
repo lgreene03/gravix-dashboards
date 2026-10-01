@@ -4,6 +4,7 @@
 package governance
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,5 +77,43 @@ func TestFullStackOwnsItsDataDirectory(t *testing.T) {
 	}
 	if mounting < 6 {
 		t.Fatalf("only %d services mount ./data; the file changed shape and this test is checking too little", mounting)
+	}
+}
+
+// TestFullStackSeedsAnAPIKey is F-058. With TENANT_DB_PATH set, ingestion
+// ignores API_KEY, and a new user cannot create a key before verifying an email
+// the default mailer never sends. The full stack therefore has to seed a tenant
+// and a key on first boot, as the bootstrap stack does, and the smoke test has
+// to use that key rather than the .env one.
+func TestFullStackSeedsAnAPIKey(t *testing.T) {
+	root := repoRoot(t)
+	compose, err := os.ReadFile(filepath.Join(root, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]struct {
+			Command any `yaml:"command"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(compose, &doc); err != nil {
+		t.Fatal(err)
+	}
+	cmd := fmt.Sprint(doc.Services["data-init"].Command)
+	for _, want := range []string{"./bootstrap_seed", "-db=/app/data/gravix.db", "-api-key-file=/app/data/api_key.txt"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("data-init does not run %s; the full stack would boot with no usable API key", want)
+		}
+	}
+
+	smoke, err := os.ReadFile(filepath.Join(root, "scripts", "smoke_test.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(smoke), "cat /app/data/api_key.txt") {
+		t.Error("smoke_test.sh does not read the seeded key")
+	}
+	if strings.Contains(string(smoke), "grep '^API_KEY=' .env") {
+		t.Error("smoke_test.sh falls back to the .env API_KEY, which ingestion ignores in this stack")
 	}
 }

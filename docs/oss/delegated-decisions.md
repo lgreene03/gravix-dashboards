@@ -600,3 +600,28 @@ instructions, verified by running the source-built binaries against each other.
 **Not decided, and why.** Whether to replace MinIO for good. That is a new dependency.
 
 **To reverse.** Point both services back at a published image if MinIO resumes publishing.
+
+## DD-031 — F-058: seed the full stack with the bootstrap seed
+
+**Date** 2026-10-01 · **Tier** routine (provisioning of an existing stack with an existing tool) · **Finding** F-058
+
+**Options.** Make ingestion honour `API_KEY` alongside the tenant database; let unverified users
+create keys when the mailer is a no-op; or seed the full stack with `bootstrap_seed`, as the
+bootstrap stack already is.
+
+**Chosen.** Seed it. The first option reopens a single shared key on a multi-tenant path, which is a
+security regression. The second weakens a check that exists for hosted installs. Seeding uses a tool
+that is already tested, already idempotent and already writes its secrets at mode 0600. It gives both
+stacks the same first-boot story: read the key from `data/api_key.txt`.
+
+**Done.** `data-init` runs the seed. The smoke test uses the seeded key and no longer passes on a key
+ingestion ignores, waits for Prometheus's first scrapes, logs in to Grafana, and prints diagnostics
+before teardown. Getting Started and `CLAUDE.md` give the new instruction, and a governance test
+holds the seed and the smoke test's key source in place.
+
+**Not decided, and why.** Whether the full stack's dashboard should read the seeded, read-scoped
+`dashboard_config.js` as the bootstrap stack's does. That changes what the full stack serves, and
+F-058 does not need it.
+
+**To reverse.** Restore `data-init`'s command to the bare `chown`. The full stack then has no
+working write key again, so a reversal needs another way to issue one.
