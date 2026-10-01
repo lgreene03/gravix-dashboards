@@ -159,9 +159,16 @@ var ErrAlreadyProvisioned = errors.New("bootstrap_seed: api key file already exi
 window.GRAVIX_CONFIG = {
   ingestionApiUrl: "<IngestionURL>",
   gatewayUrl: "<GatewayURL>",
-  apiKey: "<plainKey>"
+  apiKey: "<dashboardKey>",
+  apiKeyCommand: "<command that prints the write key>"
 };
 ```
+
+> **Amended 2026-10-01 (SD-013, DD-010).** `apiKey` is a second key, restricted to `admin:read`,
+> not the write key in `api_key.txt`. This file is served by nginx to anyone who can load the
+> dashboard, before login, and serving the unrestricted key was a way round the login. The dashboard
+> uses this key only to list discovered services. `apiKeyCommand` is the exact command that prints
+> the write key on the machine running the stack; the empty states run it instead of embedding a key.
 
 One line per field, values JSON-string-escaped via `encoding/json`, file mode `0644`.
 
@@ -254,7 +261,7 @@ matching `COPY --from=builder /app/bootstrap_seed .` in the runtime stage.
 |---|---|---|
 | AC-1 | `provision` on an empty directory creates exactly one tenant with email `local@gravix.invalid` | `TestProvisionCreatesSingleTenant` |
 | AC-2 | `provision` writes a non-empty API key file with mode `0600` | `TestProvisionWritesAPIKeyFileWithCorrectMode` |
-| AC-3 | `provision` writes `dashboard_config.js` containing the literal string `window.GRAVIX_CONFIG` and the written API key | `TestProvisionWritesDashboardConfig` |
+| AC-3 | `provision` writes `dashboard_config.js` containing the literal string `window.GRAVIX_CONFIG`, a working dashboard key restricted to `admin:read`, and `apiKeyCommand` — and never the write key (amended, SD-013) | `TestProvisionWritesDashboardConfig`, `TestServedDashboardKeyIsReadOnly`, `TestUpgradeNarrowsAServedWriteKey` |
 | AC-4 | Calling `provision` a second time returns `ErrAlreadyProvisioned` and does not create a second tenant | `TestProvisionIsIdempotent` |
 | AC-5 | Deleting only the API key file and re-running `provision` reuses the existing tenant (tenant count stays 1) | `TestProvisionReusesExistingTenantWhenKeyFileMissing` |
 | AC-6 | The API key written by `provision` validates successfully via `db.APIKeys().ValidateKey` | `TestProvisionedAPIKeyValidates` |

@@ -125,7 +125,7 @@ func handleRemoteWrite(sink *DurableSink, budget *cardinality.Budget) http.Handl
 		for _, view := range views {
 			if err := writeSeries(sink, tenantID, view); err != nil {
 				slog.Error("remote-write persist failed", "tenant", tenantID, "metric", view.metricName, "error", err)
-				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist external metric sample")
+				writeSinkError(w, err, "failed to persist external metric sample")
 				return
 			}
 			ingestionRemoteWriteSeriesTotal.WithLabelValues(tenantID, resultAccepted).Inc()

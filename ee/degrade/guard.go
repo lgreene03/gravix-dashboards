@@ -38,13 +38,13 @@ var (
 // ExportEndpoint is where a customer gets their ee/ configuration out, named in
 // every refusal so that leaving is never a thing somebody has to ask how to do.
 //
-// GRVX-1303 §5.3 gives "/api/gateway/exports". The gateway registers
-// "/api/gateway/export"; "/api/gateway/exports" is registered only with a
-// trailing segment ("/exports/scheduled"). Pointing an operator at a 404 while
-// telling them their data is exportable would undo the sentence it appears in,
-// so the endpoint that exists is the one named. The collision between the two
-// spellings is SD-029, which is open and needs an owner, not an implementer.
-const ExportEndpoint = "/api/gateway/export"
+// GRVX-1303 §5.3 gave "/api/gateway/exports" while the gateway registered the
+// singular "/api/gateway/export", and pointing an operator at a 404 would undo
+// the sentence this appears in. SD-029 resolved the collision (DD-011): the
+// download moved to "/api/gateway/exports/archive", one segment from the rest
+// of the exports family rather than one character. TestExportEndpointIsRegistered
+// keeps this constant pointing at a route that exists.
+const ExportEndpoint = "/api/gateway/exports/archive"
 
 // Guard wraps an ee/ mutation. Every write path in ee/ passes through it.
 //

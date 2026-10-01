@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -127,16 +128,16 @@ func (b *Batcher) Append(ctx context.Context, facts [][]byte) error {
 		return ErrQueueFull
 	}
 	b.queued += len(facts)
-	b.mu.Unlock()
 
+	// Enqueue under the same lock as the closed check. Done outside it, an
+	// Append could pass the check, lose the CPU while Close ran and the loop
+	// drained, and then enqueue into a channel nobody reads — and wait on it
+	// forever. The send cannot block here: admission caps queued facts at
+	// QueueDepth, every item carries at least one fact, and the channel holds
+	// QueueDepth items, so an admitted item always has room.
 	item := &batchItem{facts: facts, done: make(chan error, 1)}
-
-	select {
-	case b.queue <- item:
-	case <-ctx.Done():
-		b.release(len(facts))
-		return ctx.Err()
-	}
+	b.queue <- item
+	b.mu.Unlock()
 
 	select {
 	case err := <-item.done:
@@ -269,4 +270,66 @@ func (b *Batcher) QueuedFacts() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.queued
+}
+
+// topicFile is one DurableSink topic seen as the Batcher's sink and syncer.
+//
+// Write only buffers. Sync hands the whole batch to the DurableSink, which
+// takes its lock, appends to the topic's current file and fsyncs, in one
+// critical section. That is what makes rotation safe: rotate runs under the
+// same lock, so a batch lands entirely in one file and a file is never closed
+// between a batch's write and its fsync.
+//
+// The buffer is owned by the batcher's single run goroutine, which is the only
+// caller of Write and Sync, so it needs no lock of its own.
+type topicFile struct {
+	ds    *DurableSink
+	topic string
+	buf   bytes.Buffer
+}
+
+func (t *topicFile) Write(p []byte) (int, error) { return t.buf.Write(p) }
+
+func (t *topicFile) Sync() error {
+	// Reset whatever happens. On failure the callers are told, and must not
+	// acknowledge; replaying these bytes into the next batch would write facts
+	// twice behind a success the clients never received.
+	defer t.buf.Reset()
+	return t.ds.appendAndSync(t.topic, t.buf.Bytes())
+}
+
+// batcherFor returns the topic's batcher, starting it on first use.
+//
+// One batcher per topic file, not one fronting all of them (SD-023). A batch
+// costs one fsync per file it touches either way, because fsync is per file:
+// a shared batcher would make the same number of syncs in sequence, where one
+// per file lets different files sync in parallel. It also keeps §5.1's
+// one-writer signature and the on-disk layout exactly as they were.
+func (ds *DurableSink) batcherFor(topic string) (*Batcher, error) {
+	ds.batchMu.Lock()
+	defer ds.batchMu.Unlock()
+	if ds.batchersClosed {
+		return nil, ErrClosed
+	}
+	b, ok := ds.batchers[topic]
+	if !ok {
+		tf := &topicFile{ds: ds, topic: topic}
+		b = NewBatcher(tf, tf, ds.batchCfg)
+		ds.batchers[topic] = b
+	}
+	return b, nil
+}
+
+// closeBatchers drains and stops every batcher. After it returns, everything
+// a caller was told is durable has been fsynced, and new writes are refused.
+func (ds *DurableSink) closeBatchers() {
+	ds.batchMu.Lock()
+	ds.batchersClosed = true
+	batchers := ds.batchers
+	ds.batchers = map[string]*Batcher{}
+	ds.batchMu.Unlock()
+
+	for _, b := range batchers {
+		b.Close()
+	}
 }

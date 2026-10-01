@@ -3548,7 +3548,7 @@ app.listen(8080, () => {
             statusEl.innerHTML = '<span style="color: var(--text-secondary);">Preparing export...</span>';
 
             try {
-                const resp = await fetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/export', {
+                const resp = await fetch(GRAVIX_CONFIG.gatewayUrl + '/api/gateway/exports/archive', {
                     method: 'POST',
                     headers: {
                         'Authorization': 'Bearer ' + getJWT(),

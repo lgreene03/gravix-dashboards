@@ -201,3 +201,53 @@ make check-boundary && make build-oss && make test-oss
 | 20,000/core unreachable without weakening durability | Report the achievable number with durability intact. Return `SPEC DEFECT: §5`. §6 outranks the target; the target is renegotiable, the invariant is not. |
 | A path that acknowledges before fsync | STOP. `CORRECTNESS DEFECT: <path>:<line>` — this is data loss waiting for a power cut. |
 | Throughput gained by relaxing validation | Revert it. Faster acceptance of malformed facts is not throughput. |
+
+---
+
+## 11. Implementation report
+
+The earlier work on this spec is recorded in SD-022, SD-023 and SD-056 rather than here; this section
+begins with the change that put the batcher on the production path.
+
+### 11.1 SD-023 and SD-056 resolved: the batcher is on the production path (2026-10-01, DD-009)
+
+**SD-023 — one batcher per topic file.** SD-023 framed a shared batcher as the option that keeps the
+throughput on a multi-tenant node. It does not: fsync is per file, so a batch spanning *k* files
+costs *k* syncs whichever design collects it. Per-file batchers make the same number of syncs and
+can run them in parallel; a shared one runs them in sequence. Per-file also keeps §5.1's one-writer
+signature and the on-disk layout unchanged.
+
+**SD-056 — wired.** `DurableSink.Write` and `WriteBatch` hand every record to the topic's `Batcher`,
+so all twelve call sites — facts, batches, events, deploy webhooks, traces, OTLP, remote-write and
+the DLQ — group-commit without changing a signature. The batcher's syncer for a topic writes the
+whole batch and fsyncs it inside one critical section on the sink's lock, the same lock rotation
+takes, so a batch can never straddle a rotation. A full queue now answers every handler with §5.2's
+`503`, `Retry-After: 1` and `{"error":"overloaded","retry_after_seconds":1}`.
+
+Wiring it exposed a race in `Append`: the closed check and the enqueue were not under one lock, so an
+`Append` racing `Close` could enqueue after the final drain and wait forever. Fixed by enqueueing
+under the lock, which cannot block because admission already bounds the queue.
+
+**Measured on this machine** (4 cores, no HTTP, 64 concurrent writers, single-fact writes through
+`DurableSink.Write`):
+
+| | facts/sec | fsyncs for 19,200 facts |
+|---|---|---|
+| Before, one fsync per call | 3,875 | 19,200 |
+| After, group commit | 21,801 | 300 |
+
+That is about 5,450 facts/sec/core at the sink. **AC-1 is still not claimed**: its target is
+measured end to end on the reference machine, which does not exist, and this figure excludes HTTP.
+
+| Test | Proves |
+|---|---|
+| `TestDurableSinkGroupCommitsConcurrentWrites` | 200 concurrent writes through the handlers' path share fsyncs; every one is in the file once |
+| `TestDurableSinkRotationLosesNothing` | 800 writes across ~150 forced rotations: each acknowledged fact exactly once across buffer and store |
+| `TestAppendNeverHangsAcrossClose` | every `Append` racing `Close` returns |
+| `TestOverloadIsA503WithRetryAfter` | §5.2's response, including for a wrapped `ErrQueueFull` |
+| `TestDurabilityUnderKill` | now kills a child writing through `DurableSink`, not a hand-built `Batcher` |
+| `TestBothPathsShareBatcher` (AC-7) | now asserts the batcher is shared, which it could not before |
+
+Each was mutation-tested: bypassing the batcher fails the first and AC-7; releasing the lock between
+a batch's write and its fsync fails the rotation test; moving the enqueue back outside the lock
+fails the race test when a yield is placed at the race point.

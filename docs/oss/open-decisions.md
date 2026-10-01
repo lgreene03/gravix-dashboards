@@ -25,14 +25,9 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 | Item | What must be decided | Why it is not an implementation detail |
 |---|---|---|
 | **SD-040** *(high)* | Whether `pkg/extpoint` gains a tenant-resolution extension point (RFC 0002), or `GRVX-1304` is rewritten to run multi-tenancy as a separate `ee/` process in front of the gateway | `GRVX-1304` §6 step 1 requires an extension point `GRVX-1302` §3 explicitly forbids, and an `Extension` cannot do it: it only sees requests under its own path prefix, while tenant resolution has to reach ingestion, the metrics API, the percentile endpoint and export — four core routes. `GOVERNANCE.md` puts a new extension point at design tier: an RFC, seven days' comment and **two maintainer approvals**, of which the project has one. Blocks `GRVX-1304`, `1305`, `1306`, `1308`, `1310`, `1312` and RFC 0002 is drafted and open. (`GRVX-1401` was listed here in error and is not blocked — see SD-040's correction.) |
-| **SD-013** *(high)* | Whether `dashboard_config.js` may carry a live, write-capable ingestion key that any dashboard visitor can read | A security posture. Half of it is already mitigated (the compose file mounts one file rather than the data directory); the other half is a real exposure with no obviously correct fix. |
-| **CD-005** | Which zstd level every Parquet writer uses — `SpeedFastest`, as `pkg/recompute` pins, or `SpeedDefault`, as compaction and the two service-events transforms use | A size-versus-CPU trade, and GRVX-801 §5.3 forbids changing the constant without re-verifying determinism. Until it is one value, a compacted partition can never be byte-identical to a recomputed one. |
-| **SD-024** *(high)* | Whether GRVX-1006's pre-aggregations get an external store (another container, contradicting F-035 and GRVX-1004's cost figure), get one via `CUBEJS_DEV_MODE=true` (a development flag made load-bearing for production performance), or are dropped so ≤400 ms must be met reading Parquet directly | §5.1 mandates four rollups; no shipped stack provides an `externalDriverFactory`, and Cube fails a query matching a rollup it cannot build rather than reading the source. The spec names Redis as the optional component, which is not where a rollup lives. Each resolution trades against a position already taken. |
-| **F-039** *(high)* | Whether compaction preserves and merges `latency_sketch`, or whether compacted days are documented as scalar-only with percentiles dropped rather than averaged | Compaction rewrites `request_metrics_minute` through its own twelve-field `MetricRow`, silently deleting the five columns Phase 8 added — `latency_sketch` among them — and then sets each merged percentile to the arithmetic mean of the per-bucket percentiles. That is the exact error the sketch exists to prevent, committed by the job that deletes the sketch. It is a schema and retention trade, and it makes the correctness axis true for fresh data and false for compacted data. |
-| **SD-029** *(high)* | Whether `/api/gateway/export` (exists today, streams a tar.gz of raw JSONL) and GRVX-1107 §5.4's new `/api/gateway/exports` are reconciled or kept as two endpoints one character apart | GRVX-1107 §2 names `services/gateway/enterprise.go` as holding the scheduled-export code; it holds none — the code is in `gateway_platform.go`, which §4 does not permit touching, so AC-7/8/9/10/12 are unreachable. §4 also omits `cmd/cli/main.go`, without which the new subcommand is dead code that fails `staticcheck`. The engine and CLI are built and tested; the gateway half needs the file list corrected and the endpoint collision decided. |
+| **SD-029 / F-054** *(high)* | How an export reaches a destination the user names: GRVX-1107 §5.4's on-demand endpoint takes `destination` from any role, and scheduled exports (stored, listed, never executed — F-054) would write to a customer's `s3://` bucket | The route collision is resolved (DD-011) and four of five route criteria pass. What remains is a security design: a server-chosen destination, an allow-list, or stored per-schedule credentials. Each lets a different principal write to a different place. |
 | **F-042** *(medium)* | Whether to add two mechanical checks to the Spec Readiness Gate: every §2/§4.2 path must resolve in the repository, and every file named in §6 or §7 must appear in §4 | Every Phase 11 spec records 12/12 PASS, and four of the five executed carried a §2 or §4 defect anyway. Check 1 tests that paths are well-formed, not that they are right or complete. Two of the defects would have produced a red build if followed literally. Both proposed checks are scriptable, in the spirit of `check-boundary`. |
-| **SD-023** *(medium)* | One `Batcher` per (tenant, topic) file, or one fronting all files and fsyncing each it touched | Per-file preserves the on-disk layout and loses most of the amortisation on a multi-tenant node; all-files keeps the throughput and is not what §5.1 describes. Measured curve: 1 fact/fsync ≈ 4,500/sec/core, 8 ≈ 43,000, 512 ≈ 500,000. |
-| **SD-016** *(medium)* | Whether the cardinality budget stays per-process when the shipped Helm chart runs ingestion at 2–10 replicas | The bound is up to 10× looser than documented and segment collapsing is non-deterministic across pods. Either the budget is wrong or the chart is. |
+| **SD-016** *(medium)* | Whether production ingestion runs one replica (exact, deterministic path templates; no horizontal scale) or many (scale; a multiplied bound and templates that can differ between pods) | Examined under the delegation and not decided: the options trade availability, determinism and path detail, and none dominates. Needs someone who operates a production deployment. The trade-off is now written beside `autoscaling` in both production values files, and group commit has made one replica much more capable. |
 | **F-026** *(high)* | When to add `docker-smoke` and `docker-build` to `ci-summary`'s `needs` | One line, and it turns every pull request red immediately — correctly, but for a failure nobody has diagnosed and whose logs have expired. Sequencing, not code. |
 
 ## Spec text that contradicts what was measured
@@ -82,17 +77,12 @@ Docker daemon, and nothing below should be assumed cleared until CI says so.
   120, so no Parquet encoding can close it, and the "compressed at rest" premise §5.1 budgets for
   needs `services/ingestion/**`, which §4.3 forbids touching. What is left is a spec amendment. See
   SD-055.
-- **GRVX-1006** — **blocked by SD-024, and more specifically than "needs a running Cube".** Its §4.1
-  deliverable `cube/model/preaggregations.js` *is* the artefact SD-024 is deciding about: whether
-  pre-aggregations get an external store, get one via `CUBEJS_DEV_MODE`, or **are dropped entirely**
-  so ≤400 ms must be met reading Parquet direct. Writing that file is not implementation; it is
-  picking one of three options in an open trade-off, one of which is "do not build this". The models
-  currently declare `preAggregations: {}` deliberately, because F-038 established that **no shipped
-  stack can build a rollup at all**. AC-7's cache warming is downstream of the same decision — there
-  is nothing to warm if the answer is "dropped".
-
-  Standing consequence, a tested fact rather than a warning: every latency figure this stack produces
-  is a **cold read from Parquet**. Quoting one as pre-aggregated repeats F-020 and F-022.
+- **GRVX-1006** — *no longer blocked; now `partial`.* SD-024 was decided on 2026-10-01 (DD-008)
+  after measuring with a real Cube on the bootstrap stack's limits: no pre-aggregations, warm p95
+  51–100 ms from Cube's result cache, cold p95 193–593 ms for one day and up to 3.7 s for a week.
+  The cold figure is published, not hidden. Measuring also found and fixed F-053, which broke every
+  date-ranged query on the DuckDB stack. The warmer, the CI query driver and the percentile
+  endpoint's figure remain.
 
 ### Every spec has now been audited against its own criteria
 
@@ -105,7 +95,7 @@ wrong by 144×.
 
 What remains blocked is blocked for a named reason that an implementer cannot clear: a second
 maintainer (SD-040), an external auditor (GRVX-1407), a pricing audit the implementer is forbidden to
-self-verify (GRVX-1002), an open cost trade-off (SD-024, GRVX-1006), a reference machine
+self-verify (GRVX-1002), a reference machine
 (GRVX-1005's AC-1), or a dependency on one of those (GRVX-1007, GRVX-1008).
 
 **An unexplained status is indistinguishable from a spec nobody looked at.** That is what hid four of

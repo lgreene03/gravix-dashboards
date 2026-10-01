@@ -9,6 +9,8 @@ package tenantdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -176,6 +178,36 @@ type APIKeyRepo interface {
 
 	// Revoke marks an API key as revoked.
 	Revoke(ctx context.Context, keyID string) error
+
+	// Restrict narrows a key to the given scopes. It only ever narrows: an empty
+	// list is refused, because an empty scope column means unrestricted, and an
+	// unknown scope is refused rather than stored as a key that silently
+	// permits nothing.
+	Restrict(ctx context.Context, keyID string, scopes []string) error
+}
+
+// KnownScopes are the scopes an API key can hold. requireScope in the
+// ingestion service is what enforces them.
+var KnownScopes = []string{"ingest:write", "traces:write", "admin:read", "admin:write"}
+
+// ErrInvalidScopes is returned by Restrict for an empty or unknown scope list.
+var ErrInvalidScopes = errors.New("tenantdb: scopes must be a non-empty list of known scopes")
+
+// scopeColumn validates scopes and returns the stored, comma-separated form.
+func scopeColumn(scopes []string) (string, error) {
+	if len(scopes) == 0 {
+		return "", ErrInvalidScopes
+	}
+	known := map[string]bool{}
+	for _, k := range KnownScopes {
+		known[k] = true
+	}
+	for _, s := range scopes {
+		if !known[s] {
+			return "", fmt.Errorf("%w: %q", ErrInvalidScopes, s)
+		}
+	}
+	return strings.Join(scopes, ","), nil
 }
 
 // UserRepo manages dashboard users.

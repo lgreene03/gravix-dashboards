@@ -51,6 +51,10 @@ const appPath = join(repoRoot, 'dashboards', 'app.js');
 // one, and that is why F-037 survived so long — every environment conditional in the
 // models was dead in production while this loader reported it working. A test
 // sandbox that is more generous than the real one proves nothing about the real one.
+const filterParams = new Proxy({}, { get: () => new Proxy({}, { get: () => ({
+  filter: (f) => (typeof f === 'function' ? f('?', '?') : `${f} >= ? AND ${f} <= ?`),
+}) }) });
+
 function loadModel(env = {}) {
   const src = readFileSync(modelPath, 'utf8');
   const modelRoot = dirname(dirname(modelPath));
@@ -61,6 +65,10 @@ function loadModel(env = {}) {
     get: (_t, prop) => {
       if (prop === 'cube') return (name, def) => { captured = { name, def }; };
       if (prop === 'require') return (p) => loadFlags(modelRoot, p, env);
+      // Cube injects FILTER_PARAMS when it transpiles a cube's sql. This stands
+      // in for it with Cube's shape: FILTER_PARAMS.<Cube>.<member>.filter(fn)
+      // calls fn with the bound parameters.
+      if (prop === 'FILTER_PARAMS') return filterParams;
       if (prop === Symbol.unscopables) return undefined;
       return String(prop);
     }

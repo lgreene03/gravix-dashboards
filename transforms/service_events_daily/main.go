@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lgreene/gravix-dashboards/pkg/leaderelect"
 	"github.com/lgreene/gravix-dashboards/pkg/logging"
+	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 	"github.com/lgreene/gravix-dashboards/schemas"
@@ -420,7 +421,7 @@ func processDay(ctx context.Context, day time.Time, store storage.ObjectStore, i
 	destKey := fmt.Sprintf("%s/events_%s.parquet", partitionDir, idx)
 
 	var parquetBuf bytes.Buffer
-	writer := parquet.NewGenericWriter[EventSummaryRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault}))
+	writer := parquet.NewGenericWriter[EventSummaryRow](&parquetBuf, parquet.Compression(&zstd.Codec{Level: recompute.CompressionLevel}))
 	if _, err := writer.Write(rows); err != nil {
 		return err
 	}

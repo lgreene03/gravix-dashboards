@@ -122,6 +122,12 @@ function loadCube(file, env, modelRoot) {
         get: (_t, p) => {
             if (p === 'cube') return (name, def) => { captured = def; };
             if (p === 'Symbol') return Symbol;
+            // Cube injects FILTER_PARAMS when it transpiles a cube's sql. This
+            // stands in for it with Cube's shape: .<Cube>.<member>.filter(fn)
+            // calls fn with the bound parameters.
+            if (p === 'FILTER_PARAMS') return new Proxy({}, { get: () => new Proxy({}, { get: () => ({
+                filter: (f) => (typeof f === 'function' ? f('?', '?') : `${f} >= ? AND ${f} <= ?`),
+            }) }) });
             if (p === 'require') return (spec) => {
                 // Cube falls through to Node's own require for a path that is not
                 // another model file, resolving it against the model root — which

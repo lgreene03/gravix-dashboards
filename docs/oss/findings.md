@@ -114,6 +114,14 @@ would otherwise rename merged output to `metrics_<uuid>_<date>.parquet`, reintro
 non-deterministic key. A spec that fixes `parseWarehouseKey` must fix that naming in the same
 change, or it will undo GRVX-801.
 
+### Update 2026-10-01 — the metric half is closed by DD-006
+
+`request_metrics_minute` is off compaction's list (F-039), so the metric table no longer depends on
+this fix and fixing it cannot reintroduce a non-deterministic metric key. What remains open is the
+event tables: `service_events_daily` and `service_events_detail` write a UUID-named file per run into
+partitioned directories, and compaction still cannot see them. That is a data-movement change with
+its own dry-run and rollback story, as this entry says, and it is not decided here.
+
 ---
 
 ## F-004 — GO-2026-5764 was reachable from `pkg/storage/s3.go` and CI had been red on it
@@ -2639,6 +2647,32 @@ compacted days are documented as scalar-only with percentiles dropped rather tha
 them is not one of the options: a wrong number is worse than an absent one, and this project's whole
 argument is that it knows the difference.
 
+### Resolved 2026-10-01 — DD-006: compaction no longer rewrites `request_metrics_minute`
+
+Neither option in "What the fix has to decide" was taken, because a third one removes the defect
+instead of choosing which way to be wrong. Compaction now refuses the table outright and returns
+`ErrMetricsNotCompacted`, which names `gravix recompute` as the way to rebuild a partition.
+
+Why that is the right call rather than an evasion:
+
+- **There is nothing to compact.** `pkg/recompute` writes one deterministic file per partition, so a
+  metric partition never accumulates the small files compaction exists to merge.
+- **There is no correct merge without the facts.** Merging two sketches gives a correct cross-file
+  sketch, but the per-bucket p50/p95/p99 columns are documented as exact, and an exact percentile of
+  a union needs the observations. The only writer that has them is recompute.
+- **The path never ran.** F-003 established that compaction cannot parse the partitioned layout the
+  rollup has written since Phase 5, so this code only ever reached legacy flat files. Fixing F-003
+  for the event tables can now never reach the metric table by accident, which also keeps GRVX-801's
+  deterministic key safe (F-003's "Related" note).
+
+Done: the twelve-column `MetricRow`, its key and `mergeMetricRows` are deleted from
+`transforms/compaction`; `request_metrics_minute` is off the compactable list; and
+`TestCompactionLeavesMetricPartitionsToRecompute` seeds two metric files carrying a sketch, asserts
+the refusal in both normal and dry-run modes, and asserts both files are byte-identical afterwards.
+Removing the refusal fails it. The GRVX-802 manifest tests (AC-12, AC-13 and two others) that used the
+metric table as their example now use `service_events_daily`, which goes through the same manifest
+code. The bare-Parquet guide's warning about compacted partitions is replaced by the guarantee.
+
 ---
 
 ## F-040 — the committed protobuf Go code was two fields behind its own `.proto`, and `tenant_id` was rejected on the wire
@@ -3555,3 +3589,100 @@ that has never refused anything is indistinguishable from one that cannot.
 A cleanup without a guard is a cleanup with a half-life. The 66 MB commit was correct work and it
 bought about a day, because nothing was left behind that would notice the next occurrence. The
 useful output of finding a class of mistake is the check, not the fix.
+
+---
+
+## F-053 — on the bootstrap stack, every date-ranged dashboard query failed, and the dashboard showed it as no data
+
+**Found by:** measuring GRVX-1006's cold path through a real Cube for SD-024
+**Affects:** `cube/model_flags.js` (`timestampSql`), every DuckDB stack, the dashboard's date pickers
+and day-over-day comparison
+**Severity:** high — a core dashboard control silently returned nothing on the free product's stack
+**Status:** fixed; guarded by `TestTimeColumnsAreCastOnBothEngines` and
+`TestCubeDateRangePruningPreservesResults`
+
+### What happened
+
+`timestampSql` returned the bare column for DuckDB, on the belief that Parquet already held a
+`TIMESTAMP`. It does not: `bucket_start` is written as text, `YYYY-MM-DD HH:MM:SS` UTC, and
+`event_time` as RFC 3339 text. Cube's DuckDB dialect compares a time dimension's date range as
+`timestamptz`, so every query carrying a range failed at bind time. Reproduced on `main`'s own model
+files in Cube `v0.35`:
+
+```
+no range            -> OK 1 rows
+dateRange 1d        -> 400 Error: Binder Error: Cannot compare values of type VARCHAR and type TIMESTAMP WITH TIME ZONE
+hourly + dateRange  -> 400 (same)
+```
+
+`dashboards/app.js` handles a 400 from Cube with `return []`, so the user saw an empty chart rather
+than an error.
+
+### Why nothing caught it
+
+Every model test evaluates the model files and inspects the SQL they produce, which was well-formed.
+None executed a date-ranged query against DuckDB, and the onboarding gate's poll carries no range.
+The full stack was unaffected because Trino's branch already cast.
+
+### What changed
+
+`timestampSql` casts on both engines. `TestTimeColumnsAreCastOnBothEngines` evaluates
+`cube/model_flags.js` for each engine and fails on a bare column, and
+`TestCubeDateRangePruningPreservesResults` runs the emitted time expression against DuckDB with a
+`timestamptz` range. Reverting the cast fails both.
+
+Left alone, and worth a separate look: the dashboard's `return []` on a 400 is what made this
+invisible. A failed query and an empty result should not render the same.
+
+---
+
+## F-054 — scheduled exports are stored, listed and validated, and nothing ever runs them
+
+**Found by:** looking for the scheduled-export path GRVX-1107 §6 step 6 says to route through
+`pkg/export`, while resolving SD-029
+**Affects:** `/api/gateway/exports/scheduled`, `tenantdb.ScheduledExport`, GRVX-1107 AC-10
+**Severity:** high — a user can create a nightly export to their bucket, see it listed as `active`,
+and receive nothing, ever
+**Status:** open; needs a design, recorded on the stops list
+
+### What is there
+
+Full CRUD in `pkg/gatewaycore/gateway_platform.go`, with a 5-field cron, an `s3://` destination, a
+format, a lookback and a status. The model has `LastRunAt` and `LastError`. Nothing reads a schedule
+back except the CRUD handlers: no goroutine, cron loop, job or binary in the repository lists due
+schedules or writes an export. `LastRunAt` is never set.
+
+### Why it is not fixed here
+
+An executor is not hard to write; deciding what it may do is. It would write to a customer-named
+`s3://` bucket, which means either the gateway's own credentials reach arbitrary buckets, or
+per-schedule credentials are stored, encrypted and rotated. Both are security designs that the spec
+did not make. Until one is made, the honest interim is to say on the schedule itself that it does
+not run. That copy change is small, but it sits in the dashboard and the API, and is left with the
+design so the two land together.
+
+---
+
+## F-055 — main went red on the first merge whose commit named a new model version, and pull requests cannot see it
+
+**Found by:** reading `main`'s CI after the PR #22 merge
+**Affects:** `.mailmap`, `pkg/relnotes` `TestGeneratesOverThisRepository`
+**Severity:** medium — `main` red on `fast-suite-budget` and `test (1.25)`; nothing published
+**Status:** fixed
+
+`TestGeneratesOverThisRepository` renders release notes over the checkout's history and fails if a
+model identifier reaches them; `.mailmap` folds co-author trailers to "Claude". It listed exactly
+one name, `Claude Opus 5`. The squash commit for PR #22 carried a `Co-Authored-By` trailer naming
+`Claude Opus 5.5`, so on `main` — where the shallow checkout's one commit is that squash — the name
+reached the notes and the test failed.
+
+The pull request ran green on the same content because a pull-request checkout is a synthetic merge
+commit authored by GitHub, with no trailers, so the history the test read had nothing to map. The
+check could only ever fail after merge.
+
+Two weaknesses, both fixed. `.mailmap` now folds **every** identity on `noreply@anthropic.com` to
+"Claude" by address alone, so a new version needs no new line. And the guard matched only the word
+"Opus", so a Sonnet or Fable trailer — both already in this history — would have passed it; it now
+matches any `Claude <Family> <version>`. `TestMailmapFoldsEveryModelIdentity` runs
+`git check-mailmap` against a list of names, including one that does not exist yet, so it does not
+depend on which commits a checkout happens to hold. Restoring the one-name `.mailmap` fails it.

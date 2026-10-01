@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/manifest"
+	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 	"github.com/lgreene/gravix-dashboards/pkg/storage"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
@@ -245,94 +247,70 @@ func TestJSONLCompaction(t *testing.T) {
 	}
 }
 
-func TestMetricRowCompaction(t *testing.T) {
-	dataDir := t.TempDir()
-	store, err := storage.NewLocalStore(dataDir)
+// TestCompactionLeavesMetricPartitionsToRecompute pins the F-039 decision.
+// Compaction used to merge request_metrics_minute files through a twelve-column
+// struct that dropped latency_sketch, and set each percentile to a weighted mean
+// of per-file percentiles. It now refuses the table outright: the files are left
+// byte-for-byte as they were, nothing is written, and the error says what to run
+// instead.
+func TestCompactionLeavesMetricPartitionsToRecompute(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewLocalStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
-	ctx := context.Background()
-
-	// Seed multiple duplicate metrics Parquet files for the same day
-	day := "2026-05-21"
-	rows1 := []MetricRow{
-		{
-			TenantID:     "t1",
-			BucketStart:  "2026-05-21 10:00:00",
-			Service:      "auth-service",
-			Method:       "POST",
-			PathTemplate: "/login",
-			RequestCount: 10,
-			ErrorCount:   1,
-			ErrorRate:    0.1,
-			P50LatencyMs: 50.0,
-			P95LatencyMs: 150.0,
-			P99LatencyMs: 250.0,
-			EventDay:     day,
-		},
-	}
-	rows2 := []MetricRow{
-		{
-			TenantID:     "t1",
-			BucketStart:  "2026-05-21 10:00:00",
-			Service:      "auth-service",
-			Method:       "POST",
-			PathTemplate: "/login",
-			RequestCount: 20,
-			ErrorCount:   3,
-			ErrorRate:    0.15,
-			P50LatencyMs: 60.0,
-			P95LatencyMs: 160.0,
-			P99LatencyMs: 260.0,
-			EventDay:     day,
-		},
-	}
-
+	const day = "2026-05-21"
 	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
 	key2 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_xyz_%s.parquet", day)
-	seedParquetFile(t, store, key1, rows1)
-	seedParquetFile(t, store, key2, rows2)
-
 	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
 
-	err = compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, false)
+	sketchRow := recompute.MetricRow{
+		TenantID: "t1", BucketStart: day + "T10:00:00Z", Service: "auth-service",
+		Method: "POST", PathTemplate: "/login", RequestCount: 10, P95LatencyMs: 150,
+		LatencySketch: []byte("sketch-bytes-compaction-must-not-drop"), SketchVersion: "test",
+		EventDay: day,
+	}
+	seedParquetFile(t, store, key1, []recompute.MetricRow{sketchRow})
+	seedParquetFile(t, store, key2, []recompute.MetricRow{sketchRow})
+	before := map[string][]byte{key1: readBytes(t, store, key1), key2: readBytes(t, store, key2)}
+
+	for _, dryRun := range []bool{false, true} {
+		err = compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, dryRun)
+		if !errors.Is(err, ErrMetricsNotCompacted) {
+			t.Fatalf("dryRun=%v: err = %v, want ErrMetricsNotCompacted", dryRun, err)
+		}
+	}
+	if !strings.Contains(ErrMetricsNotCompacted.Error(), "gravix recompute") {
+		t.Errorf("the refusal does not say what to run instead: %q", ErrMetricsNotCompacted)
+	}
+
+	for key, want := range before {
+		if got := readBytes(t, store, key); !bytes.Equal(got, want) {
+			t.Errorf("%s was modified by a refused compaction", key)
+		}
+	}
+	if exists, _ := store.Exists(ctx, destKey); exists {
+		t.Error("a refused compaction wrote a merged metric file")
+	}
+
+	if compactableTopics["request_metrics_minute"] {
+		t.Error("request_metrics_minute is on the compactable list; main would group its files")
+	}
+}
+
+func readBytes(t *testing.T, store storage.ObjectStore, key string) []byte {
+	t.Helper()
+	rc, err := store.Get(context.Background(), key)
 	if err != nil {
-		t.Fatalf("Metric compaction failed: %v", err)
+		t.Fatalf("get %s: %v", key, err)
 	}
-
-	// Read and verify merged parquet file
-	mergedRows := readParquetRows[MetricRow](t, store, destKey)
-	if len(mergedRows) != 1 {
-		t.Fatalf("expected 1 merged row, got %d", len(mergedRows))
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read %s: %v", key, err)
 	}
-
-	m := mergedRows[0]
-	if m.RequestCount != 30 {
-		t.Errorf("expected 30 requests, got %d", m.RequestCount)
-	}
-	if m.ErrorCount != 4 {
-		t.Errorf("expected 4 errors, got %d", m.ErrorCount)
-	}
-	// ErrorRate = 4 / 30 = 0.133333
-	expectedRate := 4.0 / 30.0
-	if m.ErrorRate != expectedRate {
-		t.Errorf("expected rate %f, got %f", expectedRate, m.ErrorRate)
-	}
-
-	// Weighted latency:
-	// P50 = (50*10 + 60*20)/30 = (500 + 1200)/30 = 1700/30 = 56.666
-	expectedP50 := (50.0*10.0 + 60.0*20.0) / 30.0
-	if m.P50LatencyMs != expectedP50 {
-		t.Errorf("expected P50 %f, got %f", expectedP50, m.P50LatencyMs)
-	}
-
-	// Verify original duplicate files are deleted
-	exists1, _ := store.Exists(ctx, key1)
-	exists2, _ := store.Exists(ctx, key2)
-	if exists1 || exists2 {
-		t.Error("original duplicate parquet files were not deleted")
-	}
+	return b
 }
 
 func TestEventSummaryCompaction(t *testing.T) {
@@ -485,7 +463,7 @@ func (o *orderRecordingStore) Delete(ctx context.Context, key string) error {
 func seedManifest(t *testing.T, store storage.ObjectStore, dataFile, tenantID, day string, m manifest.Manifest) {
 	t.Helper()
 	m.SchemaVersion = manifest.SchemaVersion
-	m.Metric = "request_metrics_minute"
+	m.Metric = "service_events_daily"
 	m.MetricVersion = "v1"
 	m.TenantID = tenantID
 	m.EventDay = day
@@ -505,20 +483,16 @@ func mustDay(t *testing.T, s string) time.Time {
 	return d.UTC()
 }
 
-func metricRowFor(day, service string, count int64) MetricRow {
-	return MetricRow{
-		TenantID:     "t1",
-		BucketStart:  day + " 10:00:00",
-		Service:      service,
-		Method:       "GET",
-		PathTemplate: "/users/{id}",
-		RequestCount: count,
-		ErrorCount:   1,
-		ErrorRate:    float64(1) / float64(count),
-		P50LatencyMs: 50,
-		P95LatencyMs: 150,
-		P99LatencyMs: 250,
-		EventDay:     day,
+// eventRowFor is one service_events_daily row. The manifest tests below use
+// this table because request_metrics_minute is never compacted (F-039); the
+// manifest rules they check are the same for every compactable table.
+func eventRowFor(day, service string, count int64) EventSummaryRow {
+	return EventSummaryRow{
+		TenantID:   "t1",
+		EventDay:   day,
+		Service:    service,
+		EventType:  "deploy",
+		EventCount: count,
 	}
 }
 
@@ -531,12 +505,12 @@ func TestCompactionMergesManifests(t *testing.T) {
 	}
 
 	const day = "2026-05-21"
-	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
-	key2 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_xyz_%s.parquet", day)
-	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+	key1 := fmt.Sprintf("warehouse/t1/service_events_daily/events_abc_%s.parquet", day)
+	key2 := fmt.Sprintf("warehouse/t1/service_events_daily/events_xyz_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/service_events_daily/events_merged_%s.parquet", day)
 
-	seedParquetFile(t, store, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
-	seedParquetFile(t, store, key2, []MetricRow{metricRowFor(day, "billing-service", 20)})
+	seedParquetFile(t, store, key1, []EventSummaryRow{eventRowFor(day, "auth-service", 10)})
+	seedParquetFile(t, store, key2, []EventSummaryRow{eventRowFor(day, "billing-service", 20)})
 
 	seedManifest(t, store, key1, "t1", day, manifest.Manifest{
 		ContentDigest:  "sha256:aaa",
@@ -553,7 +527,7 @@ func TestCompactionMergesManifests(t *testing.T) {
 		Revision:       5,
 	})
 
-	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, false); err != nil {
+	if err := compactParquetGroup(ctx, store, "service_events_daily", []string{key1, key2}, destKey, false); err != nil {
 		t.Fatalf("compaction failed: %v", err)
 	}
 
@@ -581,7 +555,7 @@ func TestCompactionMergesManifests(t *testing.T) {
 	if m.Revision != 5 {
 		t.Errorf("Revision = %d, want 5 (max of sources)", m.Revision)
 	}
-	if want := manifest.IdempotencyKey("request_metrics_minute", "v1", "t1", mustDay(t, day)); m.IdempotencyKey != want {
+	if want := manifest.IdempotencyKey("service_events_daily", "v1", "t1", mustDay(t, day)); m.IdempotencyKey != want {
 		t.Errorf("IdempotencyKey = %q, want %q (the merged file's own identity)", m.IdempotencyKey, want)
 	}
 	if m.DataFile != destKey {
@@ -589,7 +563,7 @@ func TestCompactionMergesManifests(t *testing.T) {
 	}
 
 	// The digest must describe the merged rows, not either source's.
-	merged := readParquetRows[MetricRow](t, store, destKey)
+	merged := readParquetRows[EventSummaryRow](t, store, destKey)
 	if m.RowCount != int64(len(merged)) {
 		t.Errorf("RowCount = %d, want %d", m.RowCount, len(merged))
 	}
@@ -614,17 +588,17 @@ func TestCompactionDeleteOrder(t *testing.T) {
 	}
 
 	const day = "2026-05-21"
-	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
-	key2 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_xyz_%s.parquet", day)
-	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+	key1 := fmt.Sprintf("warehouse/t1/service_events_daily/events_abc_%s.parquet", day)
+	key2 := fmt.Sprintf("warehouse/t1/service_events_daily/events_xyz_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/service_events_daily/events_merged_%s.parquet", day)
 
-	seedParquetFile(t, backing, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
-	seedParquetFile(t, backing, key2, []MetricRow{metricRowFor(day, "billing-service", 20)})
+	seedParquetFile(t, backing, key1, []EventSummaryRow{eventRowFor(day, "auth-service", 10)})
+	seedParquetFile(t, backing, key2, []EventSummaryRow{eventRowFor(day, "billing-service", 20)})
 	seedManifest(t, backing, key1, "t1", day, manifest.Manifest{ContentDigest: "sha256:aaa", FactCount: 10})
 	seedManifest(t, backing, key2, "t1", day, manifest.Manifest{ContentDigest: "sha256:bbb", FactCount: 20})
 
 	store := &orderRecordingStore{ObjectStore: backing}
-	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, false); err != nil {
+	if err := compactParquetGroup(ctx, store, "service_events_daily", []string{key1, key2}, destKey, false); err != nil {
 		t.Fatalf("compaction failed: %v", err)
 	}
 
@@ -653,14 +627,14 @@ func TestCompactionWritesNoManifestWhenSourcesHaveNone(t *testing.T) {
 	}
 
 	const day = "2026-05-21"
-	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
-	key2 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_xyz_%s.parquet", day)
-	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+	key1 := fmt.Sprintf("warehouse/t1/service_events_daily/events_abc_%s.parquet", day)
+	key2 := fmt.Sprintf("warehouse/t1/service_events_daily/events_xyz_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/service_events_daily/events_merged_%s.parquet", day)
 
-	seedParquetFile(t, store, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
-	seedParquetFile(t, store, key2, []MetricRow{metricRowFor(day, "billing-service", 20)})
+	seedParquetFile(t, store, key1, []EventSummaryRow{eventRowFor(day, "auth-service", 10)})
+	seedParquetFile(t, store, key2, []EventSummaryRow{eventRowFor(day, "billing-service", 20)})
 
-	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1, key2}, destKey, false); err != nil {
+	if err := compactParquetGroup(ctx, store, "service_events_daily", []string{key1, key2}, destKey, false); err != nil {
 		t.Fatalf("compaction failed: %v", err)
 	}
 
@@ -679,13 +653,13 @@ func TestCompactionDryRunLeavesManifestsAlone(t *testing.T) {
 	}
 
 	const day = "2026-05-21"
-	key1 := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_abc_%s.parquet", day)
-	destKey := fmt.Sprintf("warehouse/t1/request_metrics_minute/metrics_merged_%s.parquet", day)
+	key1 := fmt.Sprintf("warehouse/t1/service_events_daily/events_abc_%s.parquet", day)
+	destKey := fmt.Sprintf("warehouse/t1/service_events_daily/events_merged_%s.parquet", day)
 
-	seedParquetFile(t, store, key1, []MetricRow{metricRowFor(day, "auth-service", 10)})
+	seedParquetFile(t, store, key1, []EventSummaryRow{eventRowFor(day, "auth-service", 10)})
 	seedManifest(t, store, key1, "t1", day, manifest.Manifest{ContentDigest: "sha256:aaa", FactCount: 10})
 
-	if err := compactParquetGroup(ctx, store, "request_metrics_minute", []string{key1}, destKey, true); err != nil {
+	if err := compactParquetGroup(ctx, store, "service_events_daily", []string{key1}, destKey, true); err != nil {
 		t.Fatalf("dry run failed: %v", err)
 	}
 

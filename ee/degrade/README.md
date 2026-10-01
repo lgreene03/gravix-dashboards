@@ -69,7 +69,7 @@ So `read_only` refuses *new* configuration and *new* scheduling; work already sc
   "message": "Your Gravix Enterprise licence expired on 2026-11-04. Existing configuration is readable and exportable. Renew to make changes.",
   "expired_at": "2026-11-04T00:00:00Z",
   "core_unaffected": true,
-  "export_endpoint": "/api/gateway/export"
+  "export_endpoint": "/api/gateway/exports/archive"
 }
 ```
 

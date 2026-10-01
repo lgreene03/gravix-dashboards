@@ -386,6 +386,15 @@ type DurableSink struct {
 
 	cb             *circuitbreaker.CircuitBreaker
 	maxBufferBytes int64 // max buffer size before returning 503
+
+	// Group commit (GRVX-1005). Every durable write goes through its topic's
+	// Batcher, so concurrent requests share an fsync instead of queueing behind
+	// one each. batchMu guards the map and the closed flag; the file I/O itself
+	// happens in appendAndSync under mu.
+	batchMu        sync.Mutex
+	batchers       map[string]*Batcher
+	batchersClosed bool
+	batchCfg       BatcherConfig
 }
 
 func NewDurableSink(bufferDir string, store storage.ObjectStore, cb *circuitbreaker.CircuitBreaker, maxBufferBytes int64) (*DurableSink, error) {
@@ -402,6 +411,7 @@ func NewDurableSink(bufferDir string, store storage.ObjectStore, cb *circuitbrea
 		cancel:         cancel,
 		cb:             cb,
 		maxBufferBytes: maxBufferBytes,
+		batchers:       make(map[string]*Batcher),
 	}
 
 	// Three background loops, each tracked so Close can wait for it.
@@ -426,36 +436,44 @@ func NewDurableSink(bufferDir string, store storage.ObjectStore, cb *circuitbrea
 	return ds, nil
 }
 
-// Write appends data to the active buffer file and fsyncs.
-// Topic is used as directory/prefix.
+// Write appends one record to the topic's buffer file and returns once it is
+// fsynced. It goes through the topic's group-commit batcher, so a burst of
+// single-record requests shares fsyncs rather than paying one each.
 func (ds *DurableSink) Write(topic string, data []byte) error {
+	return ds.WriteBatch(topic, [][]byte{data})
+}
+
+// WriteBatch appends records to the topic's buffer file and returns once every
+// one of them is fsynced, sharing that fsync with any concurrent writers to the
+// same topic. A non-nil error means none of them may be acknowledged;
+// ErrQueueFull in particular means the node is overloaded, not broken.
+func (ds *DurableSink) WriteBatch(topic string, records [][]byte) error {
+	if len(records) == 0 {
+		return nil
+	}
+	b, err := ds.batcherFor(topic)
+	if err != nil {
+		return err
+	}
+	return b.Append(context.Background(), records)
+}
+
+// appendAndSync is the only place a buffer file is written. It runs once per
+// batch, from the topic's batcher, and holds mu across the write and the fsync
+// so that rotation, which takes the same lock, always falls between batches.
+func (ds *DurableSink) appendAndSync(topic string, data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
-	f, ok := ds.activeFiles[topic]
-	if !ok {
-		// Ensure topic dir exists in buffer
-		topicDir := filepath.Join(ds.bufferDir, topic)
-		if err := os.MkdirAll(topicDir, 0755); err != nil {
-			return fmt.Errorf("failed to create topic buffer dir: %w", err)
-		}
-
-		// Open current.jsonl in append mode
-		path := filepath.Join(topicDir, "current.jsonl")
-		var err error
-		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to open buffer file %s: %w", path, err)
-		}
-		ds.activeFiles[topic] = f
+	f, err := ds.activeFileLocked(topic)
+	if err != nil {
+		return err
 	}
-
-	// Append Data + Newline
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write error: %w", err)
-	}
-	if _, err := f.Write([]byte("\n")); err != nil {
-		return fmt.Errorf("newline write error: %w", err)
 	}
 
 	// CRITICAL: Fsync for Durability
@@ -464,50 +482,50 @@ func (ds *DurableSink) Write(topic string, data []byte) error {
 		return fmt.Errorf("fsync error: %w", err)
 	}
 	ingestionFsyncDurationSeconds.WithLabelValues(topic).Observe(time.Since(syncStart).Seconds())
-
 	return nil
 }
 
-// WriteBatch writes multiple records to the buffer in a single fsync call.
-func (ds *DurableSink) WriteBatch(topic string, records [][]byte) error {
-	if len(records) == 0 {
-		return nil
+// activeFileLocked returns the topic's open buffer file, opening it if needed.
+// The caller holds mu.
+func (ds *DurableSink) activeFileLocked(topic string) (*os.File, error) {
+	if f, ok := ds.activeFiles[topic]; ok {
+		return f, nil
 	}
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
-	f, ok := ds.activeFiles[topic]
-	if !ok {
-		topicDir := filepath.Join(ds.bufferDir, topic)
-		if err := os.MkdirAll(topicDir, 0755); err != nil {
-			return fmt.Errorf("failed to create topic buffer dir: %w", err)
-		}
-		path := filepath.Join(topicDir, "current.jsonl")
-		var err error
-		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to open buffer file %s: %w", path, err)
-		}
-		ds.activeFiles[topic] = f
+	topicDir := filepath.Join(ds.bufferDir, topic)
+	if err := os.MkdirAll(topicDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create topic buffer dir: %w", err)
 	}
-
-	// Write all records, then fsync once
-	for _, data := range records {
-		if _, err := f.Write(data); err != nil {
-			return fmt.Errorf("write error: %w", err)
-		}
-		if _, err := f.Write([]byte("\n")); err != nil {
-			return fmt.Errorf("newline write error: %w", err)
-		}
+	path := filepath.Join(topicDir, "current.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open buffer file %s: %w", path, err)
 	}
+	ds.activeFiles[topic] = f
+	return f, nil
+}
 
-	syncStart := time.Now()
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("fsync error: %w", err)
+// sinkStatusLabel is the status a failed durable write is counted under, so
+// the request metric agrees with what writeSinkError sends.
+func sinkStatusLabel(err error) string {
+	if errors.Is(err, ErrQueueFull) {
+		return "503"
 	}
-	ingestionFsyncDurationSeconds.WithLabelValues(topic).Observe(time.Since(syncStart).Seconds())
+	return "500"
+}
 
-	return nil
+// writeSinkError answers a request whose durable write failed. An overloaded
+// node says so in the shape GRVX-1005 §5.2 fixes, so a client backs off for a
+// second instead of treating it as a server fault; anything else is a 500.
+// Either way the facts were not acknowledged.
+func writeSinkError(w http.ResponseWriter, err error, msg string) {
+	if errors.Is(err, ErrQueueFull) {
+		w.Header().Set("Retry-After", "1")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "overloaded", "retry_after_seconds": 1})
+		return
+	}
+	writeErrorJSON(w, http.StatusInternalServerError, msg)
 }
 
 // Go runs fn in a goroutine that Close will wait for, and reports whether it
@@ -582,6 +600,10 @@ func (ds *DurableSink) Close() error {
 	if !waitBounded(&ds.taskWg, 15*time.Second) {
 		slog.Warn("timed out waiting for background writes to finish during shutdown")
 	}
+
+	// Then the batchers: anything a caller is still waiting on is written and
+	// fsynced before the final rotation, or it would stay in current.jsonl.
+	ds.closeBatchers()
 
 	// Final rotation to flush any buffered data before shutdown
 	ds.rotateAll()
@@ -918,7 +940,7 @@ func handleTraces(sink *DurableSink, tdb tenantdb.DB, sampleRate float64) http.H
 		topic := topicForTenant(tenantID, "trace_samples")
 		if err := sink.Write(topic, cleanData); err != nil {
 			slog.Error("sink write error for trace", "error", err)
-			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist trace sample")
+			writeSinkError(w, err, "failed to persist trace sample")
 			return
 		}
 
@@ -1331,8 +1353,8 @@ func handleFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registry, le
 		topic := topicForTenant(tenantID, "request_facts")
 		if err := sink.Write(topic, cleanData); err != nil {
 			slog.Error("sink write error", "error", err)
-			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", "500", tenantID).Inc()
-			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist fact")
+			ingestionRequestsTotal.WithLabelValues("/api/v1/facts", sinkStatusLabel(err), tenantID).Inc()
+			writeSinkError(w, err, "failed to persist fact")
 			return
 		}
 
@@ -1712,7 +1734,7 @@ func handleBatchFacts(sink *DurableSink, tdb tenantdb.DB, reg *discovery.Registr
 		if len(validRecords) > 0 {
 			if err := sink.WriteBatch(topic, validRecords); err != nil {
 				slog.Error("sink batch write error", "error", err)
-				writeErrorJSON(w, http.StatusInternalServerError, "failed to persist facts")
+				writeSinkError(w, err, "failed to persist facts")
 				return
 			}
 		}
@@ -1821,8 +1843,8 @@ func handleEvents(sink *DurableSink, tdb tenantdb.DB) http.HandlerFunc {
 		topic := topicForTenant(tenantID, "service_events")
 		if err := sink.Write(topic, cleanData); err != nil {
 			slog.Error("sink write error", "error", err)
-			ingestionRequestsTotal.WithLabelValues("/api/v1/events", "500", tenantID).Inc()
-			writeErrorJSON(w, http.StatusInternalServerError, "failed to persist event")
+			ingestionRequestsTotal.WithLabelValues("/api/v1/events", sinkStatusLabel(err), tenantID).Inc()
+			writeSinkError(w, err, "failed to persist event")
 			return
 		}
 

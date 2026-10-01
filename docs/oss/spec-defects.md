@@ -905,6 +905,35 @@ the dashboard asks "is my data arriving?" and it authenticates with the generate
 
 Item 2 is the reason this entry stays open rather than being marked fixed.
 
+### Resolved 2026-10-01 — DD-010: the served key is read-only, and the write key is never in the browser
+
+Item 2 was worse than this entry recorded. The scopes column has existed since migration 4, but
+nothing ever wrote it, so every key in the system was unrestricted — the served key held
+`admin:write` and `ingest:write`. The dashboard's charts sit behind a login; this file, served to
+anyone who could reach port 8000, did not. On the `$5` VPS that GRVX-1004 prices the bootstrap stack
+on, that is an unauthenticated write and admin credential on the public internet.
+
+**Decided:** least privilege, without losing the pasteable command.
+
+- `pkg/tenantdb` gains `Restrict`, which narrows a key and refuses an empty or unknown scope list,
+  because an empty column means unrestricted.
+- `bootstrap_seed` mints a second key, restricted to `admin:read` — the only thing the page does with
+  it is list discovered services — and writes that into `dashboard_config.js`. The write key stays in
+  the 0600 file.
+- The config gains `apiKeyCommand`, the exact command that prints the write key on the machine
+  running the stack. The empty states render `export GRAVIX_API_KEY="$(…)"` and a curl that uses it,
+  so G3.7's one-paste command still runs, and no write key is ever in the browser.
+- A stack provisioned earlier is upgraded on its next boot: if the served config holds the write
+  key, it is replaced and the log says to rotate the write key if the dashboard was reachable by
+  others. The write key is not rotated automatically, because instrumented services use it.
+
+**No released version is affected.** The only tag, `v1.0.0` (2026-02-28), predates GRVX-901 and has
+no `bootstrap_seed`, so SECURITY.md's advisory process does not apply; anyone running `main` since
+GRVX-901 gets the upgrade step on their next boot.
+
+Six tests cover it, including the upgrade and its idempotence. Item 1, the Cube queries reading their
+key from `localStorage`, is unaffected: those use a JWT from login, not this key.
+
 ---
 
 ## SD-014 — GRVX-902 records batch facts before they are persisted, and single facts after
@@ -1041,6 +1070,20 @@ or accepting staleness, and both deserve deciding rather than assuming.
 states it, and so does the comment where the `Learner` is constructed in `services/ingestion/main.go`.
 A single-replica deployment — the default, and every self-hoster following the bootstrap path — has
 the exact bound the spec claims.
+
+### Update 2026-10-01 — documented where it is configured; the choice stays open
+
+Under the owner's delegation this was examined and **not** decided, because no option dominates.
+Option 1 cannot be built as described, since facts carry the service in the body, which a load
+balancer does not route on. Option 2 puts a shared write on the hot path. Option 3 keeps the total
+bound but over-collapses paths whenever replicas are idle, and leaves templates non-deterministic.
+Option 4 is honest but changes nothing. Running one replica fixes both effects and gives up
+horizontal scale and rolling-restart availability. Which of those a production deployment should
+pay for needs someone who runs one.
+
+What was done: both production values files now say, beside `autoscaling`, that templates are
+learned per replica, what that does to the bound and to determinism, and that one replica avoids it.
+Group commit (DD-009) makes a single replica a far more realistic choice than when this was filed.
 
 ---
 
@@ -1352,6 +1395,18 @@ Option 2 is the one that delivers the spec's own throughput goal on a multi-tena
 not what §5.1 describes. Which to build is a design decision with a measurable cost either way, so it
 is recorded rather than guessed.
 
+### Resolved 2026-10-01 — DD-009: option 1, one batcher per topic file
+
+Option 2's advantage, as stated above, does not exist. fsync is per file, so a batch that touches
+*k* files costs *k* syncs whichever design collected it; one batcher per file makes the same number
+and can make them in parallel. The amortisation per file is the same in both, because it depends on
+how many writers share a file within one `MaxBatchDelay` window, not on how many queues there are.
+Option 1 also keeps §5.1's signature and the on-disk layout.
+
+Implemented under SD-056's resolution: measured on a 4-core machine with 64 concurrent single-fact
+writers, 3,875 facts/sec at one fsync per call became 21,801 at 64 facts per fsync. Recorded in
+`delegated-decisions.md` DD-009.
+
 ---
 
 ## SD-024 — GRVX-1006 requires pre-aggregations and names Redis as the optional component, but rollups need an external store no shipped stack provides
@@ -1433,6 +1488,35 @@ Even resolved, §6 steps 1 and 4 need a running Cube to measure. The implementat
 Docker daemon. `timed-onboarding` going green (F-037, F-038) cleared the *stack* blocker §11.3 named;
 it did not clear this one.
 
+### Resolved 2026-10-01 — DD-008: option 3, no pre-aggregations, with measurements
+
+A Docker daemon became available, so the option this entry could only describe was measured.
+GRVX-1006 §11.6 has the full method and tables; in short, on the bootstrap stack's half CPU and
+512 MB, with no Redis and no Cube Store, against the standard benchmark's week of data:
+
+| | p95 |
+|---|---|
+| Warm, a result-cache hit, any of the four default-view queries | 51–100 ms |
+| Cold, one-day range | 193–593 ms |
+| Cold, seven-day range | 0.9–3.7 s |
+| New data visible after a write | 6 s |
+
+**Chosen: drop the pre-aggregations.** The warm target is met by Cube's in-memory result cache,
+which costs no container, no development flag and nothing against GRVX-1004's figure. Two model
+changes support it: a refresh key read from the Parquet footers, so a cached answer lasts exactly
+until a rollup writes, and the query's date range pushed into the Parquet read, so a one-day query
+scans one file. A time-based key was rejected because it would hold an empty first answer for up to
+five minutes, which G3.1's onboarding budget cannot absorb.
+
+**Stated plainly: the cold path misses 400 ms beyond one day**, and that is published rather than
+hidden. Its cost is Cube's per-row `timestamptz` arithmetic on a text column, not Parquet I/O.
+Storing `bucket_start` as a timestamp would address it, but that changes a published column type and
+every content digest, so it is design tier and is not decided under this delegation.
+
+Measuring also found **F-053**: on `main`, every date-ranged query on the DuckDB stack failed, and the
+dashboard showed an empty chart. Fixed in the same change. GRVX-1006 moves from `blocked` to
+`partial`; the warmer, the CI query driver and the percentile-endpoint figure remain.
+
 ---
 
 ## SD-025 — GRVX-1101 §2 says compaction does not change column names, and it drops five of them
@@ -1489,6 +1573,12 @@ noticed by hand.
 
 That the rollup and compaction write different column sets, which of the two the reader is looking
 at, and — once F-039 is fixed — that they agree again.
+
+### Resolved 2026-10-01 — moot after DD-006
+
+Compaction no longer touches `request_metrics_minute` at all (F-039, DD-006), so no compaction
+path can drop these columns. GRVX-1101 §2's sentence is now true for a different reason: compaction
+does not change the metric table's columns because it does not write the metric table.
 
 ---
 
@@ -1744,6 +1834,27 @@ role checks), **AC-9** (schedule mutation stays admin-only), **AC-10** (schedule
 `cmd/cli/main.go` added to §4.2 for the dispatch line; and a decision recorded about
 `/api/gateway/export` versus `/api/gateway/exports` — reconcile them, or name the difference in
 §5.4 so both can coexist deliberately rather than by accident.
+
+### Resolved 2026-10-01 — DD-011: reconciled into one family; the job endpoint waits on a design
+
+**The collision.** Reconciled, not kept. No release has shipped the gateway — `v1.0.0` predates it —
+so moving the singular route cost nothing outside this repository, and two specs (GRVX-1107 §5.4 and
+GRVX-1303 §5.3) already named the plural. The raw-archive download is now
+`/api/gateway/exports/archive`, beside `/api/gateway/exports/scheduled`; the dashboard, `gravix
+migrate export`, the OpenAPI document and `ee/degrade.ExportEndpoint` follow it.
+`TestExportRoutesAreOneFamily` keeps every export route under `/api/gateway/exports/`.
+
+**The file list.** §2 and §4.2 corrected to `pkg/gatewaycore/gateway_platform.go`; `cmd/cli/main.go`
+was already wired by GRVX-1109.
+
+**The criteria.** AC-7, AC-8, AC-9 and AC-12 now pass with named tests, mutation-checked. AC-10 cannot:
+looking for the scheduled path to route through `pkg/export` found that nothing runs scheduled
+exports at all (**F-054**).
+
+**Not decided:** §5.4's on-demand endpoint takes a `destination` from any role, which would let a
+viewer have the gateway write a path on its own host or a bucket with its credentials. Whether the
+destination is server-chosen, allow-listed or something else is a security design, and so is how a
+scheduled export reaches a customer's bucket. Both are recorded on the stops list.
 
 ---
 
@@ -3973,6 +4084,21 @@ under a 120-second limit that the compile exhausted, so two greps matched nothin
 removing an fsync fails AC-7's test, adding a plan branch to the write path fails AC-9's, and
 removing the validation call fails AC-8's. A test whose failure has not been observed is a test
 nobody has checked, and that includes the case where the checking itself timed out.
+
+### Resolved 2026-10-01 — DD-009: wired, measured, and a race fixed on the way
+
+The two reasons above for not wiring it were that the change could not be measured and that
+rotation would replace the file handle a batcher held. Both were answered rather than waived.
+Rotation is safe by construction: the batcher's syncer for a topic writes and fsyncs a whole batch
+under the sink's lock, the lock rotation takes, and `TestDurableSinkRotationLosesNothing` forces
+about 150 rotations under 800 concurrent writes and finds each acknowledged fact exactly once. And
+the change was measured: 3,875 facts/sec at one fsync per call became 21,801 at 64 facts per fsync on
+a 4-core machine, with no HTTP in the path.
+
+All twelve sink call sites now group-commit with no signature change, and every handler answers a
+full queue with §5.2's 503. Wiring exposed a hang in `Append` racing `Close`, fixed and tested. AC-7's
+test now asserts the shared batcher it previously could not. AC-1 remains open for the reason it
+always was: the reference machine. GRVX-1005 §11.1 has the full table.
 
 ---
 

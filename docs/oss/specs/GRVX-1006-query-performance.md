@@ -15,13 +15,23 @@
 
 ## 1. Objective
 
-Bring warm dashboard query p95 to **≤400 ms** through pre-aggregation and cache warming, and
-publish the **cold** p95 alongside it rather than only the flattering figure.
+Bring warm dashboard query p95 to **≤400 ms** through Cube's in-memory result cache and cache
+warming, with **no pre-aggregations**, and publish the **cold** p95 alongside it, per date range,
+rather than only the flattering figure.
+
+> **Amended 2026-10-01 (SD-024, DD-008).** This spec first required four Cube pre-aggregations. No
+> shipped stack can build one: a rollup lives in Cube Store, not Redis, and Cube fails a query whose
+> rollup it cannot build. The owner's delegation chose to drop them rather than add a container
+> (contradicting F-035 and GRVX-1004's cost figure) or make `CUBEJS_DEV_MODE` load-bearing in
+> production. "Warm" now means a result-cache hit; the cold path is made cheaper by date-range
+> partition pruning; and the measurements behind the choice are in §11.6.
 
 ## 2. Context the implementer needs
 
 - `cube/model/schema/RequestMetricsMinute.js` reads Parquet via DuckDB `read_parquet(...)` or Trino, switching on `CUBEJS_DB_TYPE`, and single/multi-tenant on `TENANT_DB_PATH`. All four combinations must keep working.
-- `cube/cube.js` sets `contextToAppId`/`contextToOrchestratorId` for per-tenant pre-aggregation namespaces (Horizon 1 Phase 5.1).
+- `cube/cube.js` sets `contextToAppId`/`contextToOrchestratorId` for per-tenant cache namespaces (Horizon 1 Phase 5.1).
+- `cube/model_flags.js` holds every engine-specific SQL fragment, because Cube evaluates model files in a sandbox with no `process` (F-037). Pruning and the refresh key live there.
+- `bucket_start` is text in Parquet and in Trino, `YYYY-MM-DD HH:MM:SS` UTC. Cube's DuckDB dialect compares a time dimension as `timestamptz`, which costs about four times a plain timestamp per row; that, not Parquet I/O, dominates the cold path (§11.6).
 - `deploy/gravix/templates/redis.yaml` deploys Redis; `CUBEJS_CACHE_AND_QUEUE_DRIVER=redis` is set when enabled. Redis is optional and the target must be met without it, since the bootstrap stack has none.
 - `GET /api/v1/percentile` (GRVX-808) merges sketches in Go. Its own budget is p95 ≤400 ms for a 1,440-sketch window, and it is on the dashboard's critical path.
 - `bench/` measures `QueryP95Ms` and `QueryColdP95Ms` separately (GRVX-1001 §5.4 rule 2).
@@ -41,7 +51,6 @@ publish the **cold** p95 alongside it rather than only the flattering figure.
 
 | Path | Purpose |
 |---|---|
-| `cube/model/preaggregations.js` | Pre-aggregation definitions |
 | `services/gateway/cache_warm.go` | Cache warming on a schedule |
 | `services/gateway/cache_warm_test.go` | Tests |
 | `bench/query/query.go` | Query latency driver, cold and warm |
@@ -50,7 +59,8 @@ publish the **cold** p95 alongside it rather than only the flattering figure.
 
 | Path | Change |
 |---|---|
-| `cube/model/schema/RequestMetricsMinute.js` | Reference the pre-aggregations. Change no measure's semantics. |
+| `cube/model/schema/RequestMetricsMinute.js` | Declare the refresh key and prune by the query's date range. Change no measure's semantics. |
+| `cube/model_flags.js` | `dayRangeSql`, `refreshKeyFor`, and a `timestampSql` that casts on both engines (F-053) |
 | `services/gateway/main.go` | Start the cache warmer. Change no existing route. |
 | `scripts/perf_baseline.json` | Record cold and warm p95 |
 
@@ -64,18 +74,23 @@ publish the **cold** p95 alongside it rather than only the flattering figure.
 
 ## 5. Interface contract
 
-### 5.1 Pre-aggregation set
+### 5.1 Result cache and partition pruning
 
-Define exactly these rollups, at the grains the dashboard actually requests:
+No pre-aggregation is declared. Two model changes carry the target instead:
 
-| Name | Grain | Dimensions | Measures | Refresh |
-|---|---|---|---|---|
-| `serviceHourly` | hour | `service` | `requestCount`, `errorCount` | every 5 min |
-| `serviceDaily` | day | `service` | `requestCount`, `errorCount` | every 30 min |
-| `pathHourly` | hour | `service`, `pathTemplate` | `requestCount`, `errorCount` | every 5 min |
-| `methodDaily` | day | `service`, `method` | `requestCount`, `errorCount` | every 30 min |
+| Change | Where | Effect |
+|---|---|---|
+| Refresh key read from the Parquet footers (file count and compressed size) | `refreshKeyFor` in `cube/model_flags.js`, DuckDB only | A repeat query is a cache hit until a rollup writes; new data is visible seconds after it lands, not after a fixed interval |
+| The query's date range pushed into the Parquet read as an `event_day` predicate | `dayRangeSql`, inside `FILTER_PARAMS` on `RequestMetricsMinute` | A one-day query scans one day's file instead of every day retained |
 
-**No percentile appears in any pre-aggregation.** Percentiles are non-aggregatable scalars per the
+Trino keeps Cube's default refresh key and gets a no-op predicate: its table declares `event_day` as
+an ordinary column, so pruning buys nothing there, and nothing was changed without a Trino stack to
+measure it on.
+
+A time-based key such as `every: 5 minute` is ruled out: it holds an empty first answer for up to
+five minutes after data lands, and G3.1's onboarding budget has 134 s of headroom.
+
+**If a pre-aggregation is ever added, no percentile appears in it.** Percentiles are non-aggregatable scalars per the
 metric contracts (GRVX-803) and are served by sketch merge (GRVX-808). Pre-aggregating them would
 reintroduce exactly the defect Phase 8 removed.
 
@@ -90,7 +105,7 @@ type CacheWarmer struct{ /* unexported */ }
 
 // WarmerConfig bounds the warming.
 type WarmerConfig struct {
-    Interval    time.Duration // default 4m, under the 5m pre-aggregation refresh
+    Interval    time.Duration // default 4m; the cache is invalidated by each rollup write
     Queries     []WarmQuery   // the default dashboard view's queries
     MaxDuration time.Duration // abandon a cycle that exceeds this; default 60s
     Enabled     bool          // default true; false on the bootstrap stack if configured
@@ -112,9 +127,9 @@ Warming must never delay a user query: it runs at a lower priority and abandons 
 
 | Field | Meaning |
 |---|---|
-| `query_p95_ms` | Warm cache, pre-aggregation hit |
+| `query_p95_ms` | Warm: a result-cache hit for a query already asked since the last rollup write |
 | `query_cold_p95_ms` | Cold cache, first request after start |
-| `query_p95_no_preagg_ms` | Warm cache, a query no pre-aggregation covers |
+| `query_p95_uncached_ms` | A cache miss — a query nobody has asked since the last write — reported per date range (1 day, 7 days, all retained) |
 | `query_p95_percentile_endpoint_ms` | A windowed percentile through sketch merge |
 
 Publishing only the first would be true and misleading. The fourth is the one a user hits when they
@@ -123,7 +138,7 @@ ask the question Gravix is actually best at answering.
 ## 6. Behaviour
 
 1. Measure all four latencies today; record the baseline.
-2. Define the §5.1 pre-aggregations; confirm none covers a percentile.
+2. Apply §5.1's refresh key and pruning; confirm no pre-aggregation is declared.
 3. Implement the warmer per §5.2.
 4. Re-measure all four on the bootstrap stack **without** Redis, and on the full stack **with** it. Report both.
 5. Verify all four Cube configurations still resolve.
@@ -141,16 +156,16 @@ ask the question Gravix is actually best at answering.
 
 | ID | Criterion | Test name |
 |---|---|---|
-| AC-1 | Warm p95 ≤400 ms without Redis | `TestWarmQueryP95WithoutRedis` |
+| AC-1 | Warm (result-cache hit) p95 ≤400 ms without Redis | `TestWarmQueryP95WithoutRedis` |
 | AC-2 | Cold p95 measured and published | `TestColdQueryP95Published` |
 | AC-3 | No pre-aggregation covers a percentile | `TestNoPercentileInPreAggregations` |
-| AC-4 | An uncovered query's p95 is measured and published | `TestUncoveredQueryLatencyPublished` |
+| AC-4 | A cache miss's p95 is measured and published per date range | `TestUncoveredQueryLatencyPublished` |
 | AC-5 | The percentile endpoint's p95 is measured and published | `TestPercentileEndpointLatencyPublished` |
 | AC-6 | Warming does not increase user query p95 | `TestWarmingDoesNotStarveUsers` |
 | AC-7 | A cycle over `MaxDuration` is abandoned, not queued | `TestWarmCycleAbandonedOnTimeout` |
-| AC-8 | All four Cube configurations resolve | `TestAllFourCubeConfigsAfterPreAgg` |
-| AC-9 | No measure's semantics changed | `TestMeasureSemanticsUnchanged` |
-| AC-10 | Data freshness is unchanged | `TestFreshnessUnaffected` |
+| AC-8 | All four Cube configurations resolve | `TestModelSQLRespondsToTheEngine`, `TestModelSQLRespondsToTenancy`, `the model loads in all four configurations` |
+| AC-9 | No measure's semantics changed | `TestCubeDateRangePruningPreservesResults` |
+| AC-10 | Data freshness is unchanged | `TestCubeRefreshKeyMovesOnlyWithTheData` |
 
 ## 8. Verification
 
@@ -159,21 +174,21 @@ ask the question Gravix is actually best at answering.
 ./bench/run.sh --scale standard && jq '{warm:.query_p95_ms, cold:.query_cold_p95_ms}' bench/results/*.json | tail -5
 # expect: warm <= 400
 
-# 2. Percentiles stay out of pre-aggregations
-go test ./services/gateway/... -run TestNoPercentileInPreAggregations -v
-grep -c "p50_latency\|p95_latency\|p99_latency" cube/model/preaggregations.js || true
-# expect: PASS, and 0
+# 2. No pre-aggregation is declared, and percentiles could not enter one
+go test ./cmd/onboarding_gate/ -run TestModelsDeclareNoPreAggregations -v
+make test-js
+# expect: PASS
 
 # 3. Warming is polite
 go test ./services/gateway/... -run 'TestWarmingDoesNotStarveUsers|TestWarmCycleAbandonedOnTimeout' -v
 # expect: PASS
 
 # 4. All four configurations
-go test ./services/gateway/... -run TestAllFourCubeConfigsAfterPreAgg -v
+go test ./cmd/onboarding_gate/ -run 'TestModelSQLRespondsTo|TestDuckDBModelPrunes|TestTimeColumnsAreCast' -v
 # expect: PASS
 
 # 5. Semantics and freshness unchanged
-go test ./services/gateway/... -run 'TestMeasureSemanticsUnchanged|TestFreshnessUnaffected' -v
+go test -tags=slow ./tests/e2e/ -run 'TestCubeDateRangePruningPreservesResults|TestCubeRefreshKeyMovesOnlyWithTheData' -v
 # expect: PASS
 
 # 6. Open-core integrity
@@ -196,6 +211,7 @@ make check-boundary && make build-oss && make test-oss
 |---|---|
 | 400 ms unreachable without Redis | Publish the no-Redis number as the headline and report it. Never make the optional component's number the headline; the bootstrap stack is the free product. |
 | A pre-aggregation that would need a percentile to hit the target | Return `SPEC DEFECT: §5.1`. Speed does not buy an exception to GRVX-808. |
+| A cold figure the cache cannot hide, such as a week-long range on the half-CPU stack | Publish it beside the warm figure. Making it faster by storing `bucket_start` as a timestamp changes a published column type and every content digest, so it is a design-tier RFC, not this spec. |
 | Warming measurably slowing user queries | Reduce `Interval` or `MaxDuration` and re-measure. A warmer that slows the thing it warms is a regression. |
 
 ---
@@ -303,3 +319,61 @@ would repeat F-020 and F-022.
 has no Docker daemon. `timed-onboarding` going green cleared the stack blocker §11.3 named, not this
 one.
 
+
+### 11.6 SD-024 resolved: measured, decided, and what is still open
+
+A Docker daemon became available on 2026-10-01, so the measurements §11.2 could not take were taken.
+
+**Method.** The warehouse is `./bench/run.sh --scale standard`'s own output: seven days, 1,924,877
+metric rows, 35 MB of Parquet. Cube `v0.35` ran with the bootstrap stack's exact settings —
+`CUBEJS_DB_TYPE=duckdb`, the `memory` cache driver, no Redis, no Cube Store, `--cpus 0.5`,
+`--memory 512m` — against the repository's own `cube/` directory. One deviation, stated: Cube's DuckDB
+driver installs the `httpfs` extension from `extensions.duckdb.org` at start-up, which this
+environment's network policy blocks, so the lab image comments those two lines out. Local Parquet
+never uses `httpfs`. The queries are the dashboard's default view: the summary cards, the endpoints
+table, the top-errors table and the hourly time series. A cache miss is forced by adding an
+always-true filter with a fresh value each time; `renewQuery` did not force one.
+
+**Warm: a result-cache hit (AC-1).**
+
+| Query | 1-day range p50 | p95 | No range p50 | p95 |
+|---|---|---|---|---|
+| summary | 9 ms | 51 ms | 6 ms | 55 ms |
+| endpoints | 10 ms | 58 ms | 7 ms | 53 ms |
+| top errors | 8 ms | 100 ms | 7 ms | 66 ms |
+| hourly series | 10 ms | 71 ms | 19 ms | 75 ms |
+
+**Cold: a cache miss (AC-4), half a CPU.**
+
+| Query | 1 day p95 | 7 days p95 | No range p95 | Before pruning, no range |
+|---|---|---|---|---|
+| summary | 193 ms | 868 ms | 317 ms | 305 ms |
+| endpoints | 299 ms | 1,640 ms | 699 ms | 722 ms |
+| top errors | 294 ms | 1,297 ms | 801 ms | 715 ms |
+| hourly series | 593 ms | 3,670 ms | 3,309 ms | 3,612 ms |
+
+The first query after start (AC-2) took 1,396 ms, most of it DuckDB initialisation. New data was
+visible **6 s** after a partition file appeared (AC-10).
+
+**What the numbers say.** The warm target is met with room to spare. The cold path is not, beyond a
+single day. Profiling the SQL Cube generates shows why: Cube's DuckDB dialect compares and truncates
+a time dimension as `timestamptz`, and on a text column that costs about four times a plain
+timestamp per row — 2.0 s against 0.5 s for the week's hourly series in the DuckDB CLI at half a CPU.
+Parquet I/O is not the bottleneck. A seven-day range is slower than no range because the range adds
+a per-row `timestamptz` comparison on top of the scan; pruning cannot help when every day is in range.
+
+**Found on the way: F-053.** On `main`, every date-ranged query on the DuckDB stack failed — "Cannot
+compare values of type VARCHAR and type TIMESTAMP WITH TIME ZONE" — because `timestampSql` returned
+the bare text column for DuckDB. The dashboard turns a 400 into an empty chart, so choosing a date
+showed no data. Fixed here; `TestTimeColumnsAreCastOnBothEngines` guards it.
+
+**Not done, and why.**
+
+| Item | State |
+|---|---|
+| AC-1 warm ≤400 ms | **Met in the lab** (table above); `TestWarmQueryP95WithoutRedis` and the `bench/query` driver that would make it a CI number are not written |
+| AC-2, AC-4 published | Measured here; not yet in `scripts/perf_baseline.json` or the benchmark page |
+| AC-5 percentile endpoint | Not measured |
+| AC-6, AC-7 warmer | Not built. `cache_warm.go` needs the gateway to mint a Cube JWT, which it can |
+| AC-8, AC-9, AC-10 | **Done** — the named tests above, each mutation-tested |
+| Cold path beyond one day | Needs `bucket_start` stored as a timestamp. That changes a published column type and every content digest: design tier, not decided here |

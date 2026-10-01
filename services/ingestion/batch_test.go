@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/lgreene/gravix-dashboards/pkg/storage"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // countingSyncer records how many fsyncs happened, which is the quantity group
@@ -398,10 +403,10 @@ func TestDurabilityUnderKill(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "facts.jsonl")
+	path := filepath.Join(dir, "buffer", killTopic, "current.jsonl")
 
 	cmd := exec.Command(os.Args[0], "-test.run=TestDurabilityUnderKill")
-	cmd.Env = append(os.Environ(), "GRAVIX_KILL_CHILD=1", "GRAVIX_KILL_PATH="+path)
+	cmd.Env = append(os.Environ(), "GRAVIX_KILL_CHILD=1", "GRAVIX_KILL_DIR="+dir)
 	out, err := cmd.CombinedOutput()
 
 	// The child kills itself, so a non-nil error is expected. What matters is
@@ -443,15 +448,20 @@ func TestDurabilityUnderKill(t *testing.T) {
 }
 
 // killChild runs in the re-executed child: write, acknowledge, then die hard.
+// It writes through DurableSink, the path every handler uses, so the kill test
+// covers the batcher as it is wired rather than a Batcher built by hand.
 func killChild() {
-	path := os.Getenv("GRAVIX_KILL_PATH")
-	f, err := os.Create(path)
+	dir := os.Getenv("GRAVIX_KILL_DIR")
+	store, err := storage.NewLocalStore(filepath.Join(dir, "raw"))
 	if err != nil {
-		fmt.Println("child: create:", err)
+		fmt.Println("child: store:", err)
 		os.Exit(2)
 	}
-
-	b := NewBatcher(f, f, BatcherConfig{MaxBatchSize: 64, MaxBatchDelay: 2 * time.Millisecond})
+	sink, err := NewDurableSink(filepath.Join(dir, "buffer"), store, nil, 0)
+	if err != nil {
+		fmt.Println("child: sink:", err)
+		os.Exit(2)
+	}
 
 	var wg sync.WaitGroup
 	var acked atomic.Int64
@@ -459,7 +469,7 @@ func killChild() {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if err := b.Append(context.Background(), [][]byte{fact(i)}); err == nil {
+			if err := sink.Write(killTopic, fact(i)); err == nil {
 				acked.Add(1)
 			}
 		}(i)
@@ -481,9 +491,256 @@ func killChild() {
 	select {} // unreachable; the signal lands first
 }
 
+// killTopic is the buffer topic the kill test writes to.
+const killTopic = "kill_probe"
+
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
+}
+
+// ─── SD-056: the batcher on the production path ───
+
+// fsyncCount reads how many fsyncs DurableSink has recorded for topic, from the
+// histogram it already exports. Each appendAndSync observes it once, so its
+// sample count is the number of fsyncs.
+func fsyncCount(t *testing.T, topic string) uint64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range families {
+		if mf.GetName() != "ingestion_fsync_duration_seconds" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "topic" && l.GetValue() == topic {
+					return m.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// readAllLines returns every line of every .jsonl file under the roots.
+func readAllLines(t *testing.T, roots ...string) map[string]int {
+	t.Helper()
+	seen := map[string]int{}
+	for _, root := range roots {
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+				return err
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			sc := bufio.NewScanner(f)
+			for sc.Scan() {
+				if line := strings.TrimSpace(sc.Text()); line != "" {
+					seen[line]++
+				}
+			}
+			return sc.Err()
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
+		}
+	}
+	return seen
+}
+
+// TestDurableSinkGroupCommitsConcurrentWrites is SD-056's test: the batcher
+// was implemented and proven, and no request went through it. Concurrent
+// single-fact writes through DurableSink — the path every handler uses — must
+// now share fsyncs, and every acknowledged fact must be in the file.
+func TestDurableSinkGroupCommitsConcurrentWrites(t *testing.T) {
+	bufDir := t.TempDir()
+	store, err := storage.NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+
+	const topic, writers = "group_commit_probe", 200
+	before := fsyncCount(t, topic)
+
+	var wg sync.WaitGroup
+	var acked atomic.Int64
+	start := make(chan struct{})
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if err := sink.Write(topic, fact(i)); err == nil {
+				acked.Add(1)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if acked.Load() != writers {
+		t.Fatalf("%d of %d writes acknowledged", acked.Load(), writers)
+	}
+	syncs := fsyncCount(t, topic) - before
+	t.Logf("%d concurrent single-fact writes cost %d fsyncs (%.1f facts per sync)",
+		writers, syncs, float64(writers)/float64(syncs))
+	if syncs == 0 || syncs > writers/4 {
+		t.Errorf("%d concurrent writes cost %d fsyncs; the handlers' path is not group-committing", writers, syncs)
+	}
+
+	lines := readAllLines(t, filepath.Join(bufDir, topic))
+	for i := 0; i < writers; i++ {
+		if lines[string(fact(i))] != 1 {
+			t.Errorf("acknowledged fact %d appears %d times in the buffer file, want 1", i, lines[string(fact(i))])
+		}
+	}
+}
+
+// TestDurableSinkRotationLosesNothing writes from many goroutines while the
+// topic is rotated as fast as it will go, then closes the sink and counts every
+// line in the buffer and the store. Rotation closes and renames the file a
+// batch is written to; if a batch could straddle it, a fact would land in a
+// closed file, be lost, or be written twice. Each acknowledged fact must appear
+// exactly once.
+func TestDurableSinkRotationLosesNothing(t *testing.T) {
+	bufDir, rawDir := t.TempDir(), t.TempDir()
+	store, err := storage.NewLocalStore(rawDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewDurableSink(bufDir, store, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const topic, writers, each = "rotation_probe", 16, 50
+	stop := make(chan struct{})
+	var rotations atomic.Int64
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				sink.rotateTopic(topic)
+				rotations.Add(1)
+				time.Sleep(200 * time.Microsecond)
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	acked := map[string]bool{}
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				f := fact(w*each + i)
+				if err := sink.Write(topic, f); err == nil {
+					mu.Lock()
+					acked[string(f)] = true
+					mu.Unlock()
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(stop)
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(acked) != writers*each {
+		t.Fatalf("%d of %d writes acknowledged", len(acked), writers*each)
+	}
+	lines := readAllLines(t, bufDir, rawDir)
+	for f := range acked {
+		if n := lines[f]; n != 1 {
+			t.Errorf("acknowledged fact %s appears %d times across buffer and store, want exactly 1", f, n)
+		}
+	}
+	t.Logf("%d facts, %d rotations, every one accounted for exactly once", len(acked), rotations.Load())
+}
+
+// TestAppendNeverHangsAcrossClose pins a race the wiring exposed. Append once
+// checked "closed" under the lock and enqueued after releasing it, so an Append
+// that lost the CPU between the two could enqueue after Close had drained the
+// queue and wait forever on a result nobody would send. With a background
+// context, as DurableSink uses, that is a goroutine stuck for the life of the
+// process. Every Append racing Close must return.
+func TestAppendNeverHangsAcrossClose(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		path := filepath.Join(t.TempDir(), "race.jsonl")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := NewBatcher(f, f, BatcherConfig{MaxBatchDelay: 50 * time.Microsecond})
+
+		var wg sync.WaitGroup
+		for i := 0; i < 64; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_ = b.Append(context.Background(), [][]byte{fact(i)})
+			}(i)
+		}
+		go b.Close()
+
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("round %d: an Append racing Close never returned", round)
+		}
+		f.Close()
+	}
+}
+
+// TestOverloadIsA503WithRetryAfter checks GRVX-1005 §5.2's response shape on
+// the handlers' error path. A full queue is not a server fault: the client is
+// told to back off for a second, and nothing it sent was acknowledged. A
+// wrapped ErrQueueFull, as remote-write returns, must be recognised too.
+func TestOverloadIsA503WithRetryAfter(t *testing.T) {
+	for name, err := range map[string]error{
+		"direct":  ErrQueueFull,
+		"wrapped": fmt.Errorf("write sample: %w", ErrQueueFull),
+	} {
+		rr := httptest.NewRecorder()
+		writeSinkError(rr, err, "failed to persist fact")
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: status %d, want 503", name, rr.Code)
+		}
+		if got := rr.Header().Get("Retry-After"); got != "1" {
+			t.Errorf("%s: Retry-After %q, want \"1\"", name, got)
+		}
+		if body := strings.TrimSpace(rr.Body.String()); body != `{"error":"overloaded","retry_after_seconds":1}` {
+			t.Errorf("%s: body %s", name, body)
+		}
+		if sinkStatusLabel(err) != "503" {
+			t.Errorf("%s: counted as %s, want 503", name, sinkStatusLabel(err))
+		}
+	}
+
+	rr := httptest.NewRecorder()
+	writeSinkError(rr, errors.New("fsync error: input/output error"), "failed to persist fact")
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("a disk error answered %d, want 500", rr.Code)
+	}
 }

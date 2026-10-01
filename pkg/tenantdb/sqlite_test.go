@@ -5,6 +5,7 @@ package tenantdb
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1696,5 +1697,55 @@ func TestRetentionPolicyRepoNotNil(t *testing.T) {
 	db := newTestDB(t)
 	if db.RetentionPolicies() == nil {
 		t.Error("RetentionPolicies() returned nil")
+	}
+}
+
+// TestRestrictNarrowsAKey is SD-013's storage half. A key served to every
+// dashboard visitor must be able to carry less than everything, and the scopes
+// column — present since migration 4 — had no writer at all, so every key in
+// the system was unrestricted.
+func TestRestrictNarrowsAKey(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	tenant := &Tenant{Name: "Scoped", Email: "scoped@example.com", Plan: "free", Status: "active"}
+	if err := db.Tenants().Create(ctx, tenant); err != nil {
+		t.Fatal(err)
+	}
+	plain, key, err := db.APIKeys().Create(ctx, tenant.ID, "dashboard", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := db.APIKeys().ValidateKey(ctx, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.HasScope("ingest:write") {
+		t.Fatal("a fresh key should be unrestricted; the test premise no longer holds")
+	}
+
+	if err := db.APIKeys().Restrict(ctx, key.ID, []string{"admin:read"}); err != nil {
+		t.Fatalf("Restrict: %v", err)
+	}
+	after, err := db.APIKeys().ValidateKey(ctx, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.HasScope("admin:read") {
+		t.Error("the restricted key lost the scope it was given")
+	}
+	for _, s := range []string{"ingest:write", "traces:write", "admin:write"} {
+		if after.HasScope(s) {
+			t.Errorf("the restricted key still has %s", s)
+		}
+	}
+
+	for name, scopes := range map[string][]string{"empty": nil, "unknown": {"admin:read", "everything"}} {
+		if err := db.APIKeys().Restrict(ctx, key.ID, scopes); !errors.Is(err, ErrInvalidScopes) {
+			t.Errorf("%s scopes: err = %v, want ErrInvalidScopes — an empty column means unrestricted", name, err)
+		}
+	}
+	if err := db.APIKeys().Restrict(ctx, "no-such-key", []string{"admin:read"}); err == nil {
+		t.Error("restricting a key that does not exist reported success")
 	}
 }

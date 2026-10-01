@@ -37,8 +37,7 @@
 // has no `process` — the same way Cube does.
 
 // Percentiles are exact only within a bucket, and the SQL that reads them differs
-// by engine: DuckDB reads Parquet directly and already has TIMESTAMP columns,
-// Trino reads a catalog and needs the cast.
+// by engine: DuckDB reads Parquet directly, Trino reads a catalog.
 const isDuckDB = process.env.CUBEJS_DB_TYPE === 'duckdb';
 
 // Tenant-partitioned warehouse layout: data/warehouse/<tenant>/<table>/... rather
@@ -59,15 +58,58 @@ function warehouseGlob(table) {
 }
 
 // The source SQL for one warehouse table on this stack's engine.
+//
+// hive_partitioning is explicit rather than left to DuckDB's auto-detection,
+// because dayRangeSql below depends on event_day being the DATE taken from the
+// directory name: that is what lets DuckDB skip a partition without opening it.
 function tableSql(table) {
   return isDuckDB
-    ? `SELECT * FROM read_parquet('${warehouseGlob(table)}', union_by_name=true)`
+    ? `SELECT * FROM read_parquet('${warehouseGlob(table)}', union_by_name=true, hive_partitioning=true)`
     : `SELECT * FROM gravix.raw.${table}`;
 }
 
-// A column that is already a TIMESTAMP in Parquet but needs a cast out of Trino.
+// A predicate restricting a cube's source to the days a query's date range
+// touches, for use inside FILTER_PARAMS. `from` and `to` are the UTC timestamps
+// Cube binds for the range, so their first ten characters are the UTC days that
+// event_day partitions by, in every query time zone.
+//
+// DuckDB prunes on it: a one-day query over a week of standard-scale data fell
+// from ~700 ms to ~130 ms at the bootstrap stack's half CPU (SD-024). Trino gets
+// a no-op, because its table declares event_day as an ordinary column rather
+// than a partition, and a predicate that buys nothing there was not changed
+// without a Trino stack to measure it on.
+function dayRangeSql(from, to) {
+  return isDuckDB
+    ? `event_day BETWEEN CAST(substr(${from}, 1, 10) AS DATE) AND CAST(substr(${to}, 1, 10) AS DATE)`
+    : '1 = 1';
+}
+
+// How Cube decides a cached result is stale. On DuckDB the key is read from the
+// Parquet footers — file count and compressed size — so it changes exactly when
+// a rollup writes, costs no scan, and serves every repeat in between from
+// Cube's in-memory result cache. That cache is what the warm figure measures
+// now that no stack holds pre-aggregations (SD-024). A time-based key would
+// have been simpler and wrong: `every: 5 minute` holds an empty first answer
+// for up to five minutes after data lands, which the onboarding gate's budget
+// cannot absorb. Measured: new data visible 12 s after the file appeared.
+//
+// Trino keeps Cube's default, for the same reason as dayRangeSql.
+function refreshKeyFor(table) {
+  return isDuckDB
+    // A function, not a string: Cube evaluates refreshKey.sql by calling it, and
+    // only wraps a literal written inside a model file itself.
+    ? { sql: () => `SELECT count(*), sum(total_compressed_size) FROM parquet_metadata('${warehouseGlob(table)}')` }
+    : undefined;
+}
+
+// A time column, cast for both engines. bucket_start is stored as text
+// ("YYYY-MM-DD HH:MM:SS", UTC) in Parquet as well as in Trino. This once returned
+// the bare column for DuckDB on the belief that Parquet already held a
+// TIMESTAMP; it does not, and DuckDB then refused every query with a date range
+// ("Cannot compare values of type VARCHAR and type TIMESTAMP WITH TIME ZONE"),
+// which the dashboard rendered as an empty chart (F-053).
 function timestampSql(column) {
-  return isDuckDB ? column : `CAST(${column} AS TIMESTAMP)`;
+  return `CAST(${column} AS TIMESTAMP)`;
 }
 
 // Only what the models actually use. An unused export here is an invitation to
@@ -75,4 +117,6 @@ function timestampSql(column) {
 module.exports = {
   tableSql,
   timestampSql,
+  dayRangeSql,
+  refreshKeyFor,
 };

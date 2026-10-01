@@ -96,7 +96,7 @@ func dateWindows(since, until time.Time, maxDays int) []dateWindow {
 func (w dateWindow) startString() string { return w.Start.Format("2006-01-02") }
 func (w dateWindow) endString() string   { return w.End.Format("2006-01-02") }
 
-// fetchExportWindow calls POST <gatewayEndpoint>/api/gateway/export for one
+// fetchExportWindow calls POST <gatewayEndpoint>/api/gateway/exports/archive for one
 // window and extracts the tar.gz response into outDir.
 //
 // Every tar entry's Name is the object-store key exactly as the gateway holds
@@ -118,7 +118,7 @@ func fetchExportWindow(ctx context.Context, client *http.Client, gatewayEndpoint
 		return 0, fmt.Errorf("%w: %v", ErrExportFailed, err)
 	}
 
-	endpoint := strings.TrimRight(gatewayEndpoint, "/") + "/api/gateway/export"
+	endpoint := strings.TrimRight(gatewayEndpoint, "/") + "/api/gateway/exports/archive"
 
 	for attempt := 0; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))

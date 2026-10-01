@@ -21,7 +21,7 @@ is a user who can stay by choice.
 
 ## 2. Context the implementer needs
 
-- `services/gateway/enterprise.go` implements `/api/gateway/exports/scheduled` (Horizon 1 Phase 6.7): full CRUD, admin-only create/update/delete, 5-field cron validation, `s3://` destination required, `lookback_days` 1–90, formats jsonl/csv/parquet. Read it in full.
+- `pkg/gatewaycore/gateway_platform.go` implements `/api/gateway/exports/scheduled` (Horizon 1 Phase 6.7): full CRUD, admin-only create/update/delete, 5-field cron validation, `s3://` destination required, `lookback_days` 1–90, formats jsonl/csv/parquet. Read it in full.
 - `GRVX-710` removes its plan gate. This spec assumes the gate is already gone and must not reintroduce one.
 - Storage layout: `data/raw/` JSONL facts, `data/warehouse/` Parquet metrics, both partitioned by `event_day`.
 - `pkg/storage/` provides `ObjectStore` with local and S3 backends.
@@ -53,9 +53,15 @@ is a user who can stay by choice.
 
 | Path | Change |
 |---|---|
-| `services/gateway/enterprise.go` | Route scheduled exports through `pkg/export`; allow `file://` destinations; remove the admin-only restriction on **read**, keeping it on create/update/delete |
-| `services/gateway/main.go` | Register `POST /api/gateway/exports` for on-demand export. Change no existing route. |
-| `docs/openapi.yaml` | Document the on-demand endpoint |
+| `pkg/gatewaycore/gateway_platform.go` | Route scheduled exports through `pkg/export`; allow `file://` destinations; keep create/update/delete admin-only (read already has no role check) |
+| `pkg/gatewaycore/main.go` | Register `POST /api/gateway/exports` for on-demand export. Change no existing route except the one SD-029 moved. |
+| `pkg/gatewaycore/openapi.json` | Document the on-demand endpoint |
+| `cmd/cli/main.go` | Dispatch `gravix export` (done under GRVX-1109) |
+
+> **Amended 2026-10-01 (SD-029, DD-011).** §2 and this table named `services/gateway/enterprise.go`,
+> which holds no export code; the code is in `pkg/gatewaycore/gateway_platform.go`. The raw-archive
+> download that already existed at `/api/gateway/export` — one character from this spec's
+> `/api/gateway/exports` — moved to `/api/gateway/exports/archive` before any release shipped it.
 
 ### 4.3 Files to NOT touch
 
@@ -167,6 +173,14 @@ outside Gravix is only technically an export.
 | `--compress` | `bool` | `false` | `gzip csv and jsonl output` |
 
 ### 5.4 `POST /api/gateway/exports`
+
+> **Not yet buildable as written (DD-011).** Two questions this section does not answer block it.
+> First, the body carries `destination`, so any authenticated role — §5.4 grants export to every
+> role — could direct the gateway to write a `file://` path on its own host or an `s3://` bucket
+> with the gateway's credentials. A destination model is needed: server-chosen under the tenant's
+> export root, or an allow-list. Second, scheduled exports are stored and never run (F-054), so
+> AC-10's "scheduled and on-demand agree" has nothing to agree with. Both are design decisions,
+> not implementation details.
 
 Body is the `Request` fields. Roles: **any authenticated role may export**. Export is how a user
 retrieves their own data; restricting it to admins would make a viewer unable to leave with the data
@@ -370,3 +384,21 @@ correctness possible is not much of one.
 untouched (§4.3). No plan gate, volume cap, row limit or filter expression exists anywhere in the new
 code. `docs/openapi.yaml` is **not** updated: it documents the on-demand endpoint that SD-029 blocks,
 so there is nothing yet to describe.
+
+### 11.8 SD-029 decided: one export family, four more criteria proven (2026-10-01, DD-011)
+
+The route collision is gone: the raw-archive download moved from `/api/gateway/export` to
+`/api/gateway/exports/archive`, along with its callers — the dashboard, `gravix migrate export`, the
+OpenAPI document and `ee/degrade.ExportEndpoint`. No release shipped the singular path.
+`TestExportRoutesAreOneFamily` fails on any export route outside `/api/gateway/exports/`.
+
+| ID | Status | Evidence |
+|---|---|---|
+| AC-7 | **PASS** | `TestExportHasNoPlanGate` — every export route's middleware and handler body; a 402 branch added to `handleExport` fails it |
+| AC-8 | **PASS** | `TestAnyRoleCanExport` — viewer, editor and admin each get the archive; the first test ever to exercise `handleExport` |
+| AC-9 | **PASS** | `TestScheduledExportsCreateNonAdminForbidden`, `TestScheduledExportByIDDeleteNonAdminForbidden`, and the viewer case in `TestExistingScheduleValidationIntact` |
+| AC-10 | **BLOCKED** | scheduled exports are never executed (F-054), so there is no scheduled output to compare |
+| AC-12 | **PASS** | `TestExistingScheduleValidationIntact` — all seven rules SD-029 recorded, plus the defaults |
+
+§5.4's on-demand job endpoint is not built. Its body lets any role choose a write destination, and
+no destination model is specified; see the note under §5.4.

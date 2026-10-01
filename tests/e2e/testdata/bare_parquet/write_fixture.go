@@ -100,7 +100,7 @@ func WriteFixture(dir string, days []string, rowsPerDay int) error {
 
 		for i := 0; i < rowsPerDay; i++ {
 			metrics = append(metrics, MetricRow{
-				BucketStart:  fmt.Sprintf("%sT00:%02d:00Z", day, i),
+				BucketStart:  fmt.Sprintf("%s 00:%02d:00", day, i), // the rollup's format (pkg/recompute)
 				Service:      "checkout",
 				Method:       "GET",
 				PathTemplate: "/orders/{id}",

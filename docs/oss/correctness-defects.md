@@ -296,3 +296,22 @@ Not fixed under GRVX-1003: that spec's §4.2 covers the compaction and recompute
 §5.3 forbids changing the compression level without changing GRVX-801's constant and re-verifying
 determinism, and the decision of which level wins (fastest, or the smaller default) is a
 size-versus-CPU trade this spec was not given the authority to make. It belongs to GRVX-801's owner.
+
+### Resolved 2026-10-01 — DD-007: one zstd level, `recompute.CompressionLevel`, for every writer
+
+**State:** fixed.
+
+`SpeedFastest`, the level recompute already pins, won. Changing recompute's constant would change
+every content digest Gravix has ever published and, by GRVX-801 §5.3, requires re-verifying
+determinism; aligning the other writers to it changes nothing a user has recorded. The size cost of
+the faster level was measured above at 206 bytes on 6,627, about 3%.
+
+Five production writers changed: `transforms/compaction` (its event tables),
+`transforms/service_events_daily`, `transforms/service_events_detail`, `pkg/importer` and
+`pkg/export`. `TestEveryParquetWriterUsesTheRecomputeLevel` in `tests/governance` scans every
+non-test Go file and fails on a zstd codec at any other level; reverting `pkg/export` to
+`SpeedDefault` fails it.
+
+The repair this entry proposed — recompute, compact, recompute, assert `Rebuilt == 0` — is now true
+by construction rather than by test: compaction refuses `request_metrics_minute` (F-039, DD-006), so
+it can never rewrite a partition recompute owns.
