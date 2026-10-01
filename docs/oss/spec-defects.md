@@ -3903,8 +3903,8 @@ which needs the reference machine §5 names, not a decision.
 **Found by:** `perf-cost-engineer` executing GRVX-1003
 **Affects:** GRVX-1003 §2, §4.2, §4.3, §5.1, §5.2, §6 step 7
 **Severity:** medium — a spec closed as blocked that its own §6 says how to finish
-**Status:** partial; the measurement harness and the pinned encodings exist, AC-2 and AC-9 proven,
-AC-1 not met and provably not meetable within §4.3
+**Status:** decided as far as one maintainer can (DD-014); AC-1 waits on RFC 0003, which is design
+tier
 
 ### The spec says what to do when the budget is missed
 
@@ -3995,6 +3995,28 @@ correctness defect — it is why that design was chosen. But §6 step 3 requires
 take their settings from one shared place "so they cannot drift", and on compression level they have
 already drifted. Left unchanged here because changing it rewrites files for no measured benefit, and
 this spec's own evidence says the storage gain would be nil.
+
+### Decided 2026-10-01 — DD-014
+
+**The target stands.** 120 bytes/event is reachable, so restating it would hide a cheap fix behind a
+bigger number. On the bench run's facts, gzip takes raw JSONL from 203.78 to 32.68 bytes/event and the
+total to 35.59.
+
+**Raw compression is proposed, not made.** It changes the stored format of the recompute source of
+truth and every reader of it, which `GOVERNANCE.md` puts at design tier. RFC 0003 proposes doing it in
+compaction rather than ingestion, so the hot path is untouched, behind one shared reader and a guard
+test. It also names a reader that would have broken silently: `scripts/cleanup_data.sh` deletes
+`*.jsonl` only, so compressed facts would have outlived the 30-day purge. The RFC needs two maintainer
+approvals. The project has one.
+
+**The §5.2 encodings stay pinned and unapplied.** They act on 2.89 bytes/event and cannot move the
+total, with or without RFC 0003. Applying them changes every Parquet file's bytes and adds reader
+compatibility to prove under Axis 3, for no measured benefit. `pkg/encoding` keeps the table ready.
+GRVX-1003 §6 step 3 should be executed when the Parquet term nears its own 45-byte allowance.
+
+**The compression-level drift above is fixed** by DD-007. Every Parquet writer now uses
+`recompute.CompressionLevel`, and `TestEveryParquetWriterUsesTheRecomputeLevel` fails on any other.
+That is AC-8's subject under another name.
 
 ---
 

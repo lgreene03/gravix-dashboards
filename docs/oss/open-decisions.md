@@ -25,6 +25,7 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 | Item | What must be decided | Why it is not an implementation detail |
 |---|---|---|
 | **SD-040** *(high)* | Whether `pkg/extpoint` gains a tenant-resolution extension point (RFC 0002), or `GRVX-1304` is rewritten to run multi-tenancy as a separate `ee/` process in front of the gateway | `GRVX-1304` §6 step 1 requires an extension point `GRVX-1302` §3 explicitly forbids, and an `Extension` cannot do it: it only sees requests under its own path prefix, while tenant resolution has to reach ingestion, the metrics API, the percentile endpoint and export — four core routes. `GOVERNANCE.md` puts a new extension point at design tier: an RFC, seven days' comment and **two maintainer approvals**, of which the project has one. Blocks `GRVX-1304`, `1305`, `1306`, `1308`, `1310`, `1312` and RFC 0002 is drafted and open. (`GRVX-1401` was listed here in error and is not blocked — see SD-040's correction.) |
+| **SD-055 / RFC 0003** *(medium)* | Whether compaction writes raw facts as gzip JSONL, so G4.4's 120 bytes/event becomes reachable | Measured: raw JSONL is 203.78 bytes/event of a 206.68 total, and gzip takes it to 32.68. Changing the stored format of the recompute source of truth, and every reader of it, is design tier: RFC 0003 is drafted, and it needs **two maintainer approvals**, of which the project has one. Everything short of that is decided (DD-014). |
 | **SD-029 / F-054** *(high)* | How an export reaches a destination the user names: GRVX-1107 §5.4's on-demand endpoint takes `destination` from any role, and scheduled exports (stored, listed, never executed — F-054) would write to a customer's `s3://` bucket | The route collision is resolved (DD-011) and four of five route criteria pass. What remains is a security design: a server-chosen destination, an allow-list, or stored per-schedule credentials. Each lets a different principal write to a different place. |
 | **SD-016** *(medium)* | Whether production ingestion runs one replica (exact, deterministic path templates; no horizontal scale) or many (scale; a multiplied bound and templates that can differ between pods) | Examined under the delegation and not decided: the options trade availability, determinism and path detail, and none dominates. Needs someone who operates a production deployment. The trade-off is now written beside `autoscaling` in both production values files, and group commit has made one replica much more capable. |
 | **F-026** *(high)* | When to add `docker-smoke` and `docker-build` to `ci-summary`'s `needs` | One line, and it turns every pull request red immediately — correctly, but for a failure nobody has diagnosed and whose logs have expired. Sequencing, not code. |
@@ -70,12 +71,7 @@ Docker daemon, and nothing below should be assumed cleared until CI says so.
 
 - **F-025** *(high)* — the full stack has F-021 too, and the fix is the chown init container that has
   not yet been observed working. Porting it now would be guessing twice.
-- **GRVX-1003** — *no longer blocked; now `partial`.* The defect was returned before §6 step 7, which
-  says what to do when the budget is missed: report the shortfall per component. `bench/storage` now
-  does, and the report is decisive — raw JSONL is 220.40 bytes/event against a **total** budget of
-  120, so no Parquet encoding can close it, and the "compressed at rest" premise §5.1 budgets for
-  needs `services/ingestion/**`, which §4.3 forbids touching. What is left is a spec amendment. See
-  SD-055.
+- **GRVX-1003** — *`partial`; decided as far as one maintainer can (DD-014).* The 120 bytes/event target stands, because it is reachable: gzip on raw facts gives 35.59. That change is RFC 0003, design tier, listed under Decisions above. The §5.2 Parquet encodings stay pinned in `pkg/encoding` and unapplied, because they act on 2.89 bytes/event and cannot move the total. See SD-055.
 - **GRVX-1006** — *no longer blocked; now `partial`.* SD-024 was decided on 2026-10-01 (DD-008)
   after measuring with a real Cube on the bootstrap stack's limits: no pre-aggregations, warm p95
   51–100 ms from Cube's result cache, cold p95 193–593 ms for one day and up to 3.7 s for a week.

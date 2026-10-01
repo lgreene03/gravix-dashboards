@@ -280,3 +280,24 @@ that never fetches the module path. `getting-started.md` and `deployment.md` cor
 create an organisation (option 2, recommended) or provision `gravix.io` (option 3).
 
 **To reverse.** Restore the three pages from git and delete the test.
+
+## DD-014 — SD-055: keep the 120-byte target, propose raw compression as RFC 0003, leave §5.2 unapplied
+
+**Date** 2026-10-01 · **Tier** routine (spec correction) for this entry; the compression itself is
+design tier · **Spec** GRVX-1003
+
+**Options.** Restate G4.4 to about 210 bytes/event; apply §5.2's Parquet encodings and report the
+miss; or keep the target, propose compressing raw facts, and leave the encodings unapplied.
+
+**Chosen.** The last. Raw JSONL is 203.78 of 206.68 bytes/event, and gzip takes the total to 35.59, so
+the target is reachable and restating it would hide a cheap fix. The encodings act on 2.89 bytes/event
+and cannot move the total. Applying them changes every Parquet file's bytes for no measured benefit.
+
+**Done.** RFC 0003 drafted: compaction writes `.jsonl.gz`, ingestion is untouched, every reader goes
+through one function, and a guard test catches a reader that skips compressed files. GRVX-1003 §11.8
+records each criterion's state. SD-055 and `open-decisions.md` updated.
+
+**Not decided, and why.** RFC 0003 itself. It changes the stored format of the recompute source of
+truth, which is design tier, and needs two maintainer approvals. The project has one.
+
+**To reverse.** Withdraw RFC 0003, and execute GRVX-1003 §6 step 3 from `pkg/encoding`'s table.
