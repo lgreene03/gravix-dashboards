@@ -419,6 +419,23 @@ func TestWarmerIsQuietBeforeTheFirstRollup(t *testing.T) {
 	}
 }
 
+// TestFirstCycleWaitsOneInterval — the gateway starts before Cube, so a cycle
+// at start would only log Cube as unreachable on every boot.
+func TestFirstCycleWaitsOneInterval(t *testing.T) {
+	cube := newFakeCube(2, 0)
+	srv := httptest.NewServer(cube)
+	defer srv.Close()
+
+	w := NewCacheWarmer(WarmerConfig{Interval: 200 * time.Millisecond, MaxDuration: time.Minute,
+		Queries: DefaultWarmQueries(), Enabled: true}, srv.URL, staticTenants("t1"), warmToken)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = w.Start(ctx)
+	if got := atomic.LoadInt32(&cube.requests); got != 0 {
+		t.Errorf("Cube received %d requests before the first interval elapsed", got)
+	}
+}
+
 // TestDisabledWarmerReturnsAtOnce — CACHE_WARM_ENABLED=false sends nothing.
 func TestDisabledWarmerReturnsAtOnce(t *testing.T) {
 	cube := newFakeCube(2, 0)

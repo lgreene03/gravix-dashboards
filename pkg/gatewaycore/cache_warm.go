@@ -228,23 +228,25 @@ func NewCacheWarmer(cfg WarmerConfig, cubeURL string, tenants func(context.Conte
 	}
 }
 
-// Start begins warming until ctx ends, then returns ctx's error. A disabled
-// warmer returns nil at once.
+// Start warms every Interval, beginning one Interval from now, until ctx ends,
+// then returns ctx's error. A disabled warmer returns nil at once.
 func (w *CacheWarmer) Start(ctx context.Context) error {
 	if !w.cfg.Enabled || len(w.cfg.Queries) == 0 {
 		return nil
 	}
 	// A ticker drops ticks its reader misses, so a cycle that overruns the
-	// interval is followed by one cycle, not by a backlog of them.
+	// interval is followed by one cycle, not by a backlog of them. The first
+	// cycle waits one interval too: the gateway starts before Cube on every
+	// stack, and a cycle at once would only log Cube as unreachable.
 	ticker := time.NewTicker(w.cfg.Interval)
 	defer ticker.Stop()
 	for {
-		w.cycle(ctx)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 		}
+		w.cycle(ctx)
 	}
 }
 
