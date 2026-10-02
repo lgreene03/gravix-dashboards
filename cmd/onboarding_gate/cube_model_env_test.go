@@ -255,13 +255,18 @@ func TestDuckDBModelPrunesPartitionsByDateRange(t *testing.T) {
 	duck := compileModelSQL(t, map[string]string{"CUBEJS_DB_TYPE": "duckdb"})
 	trino := compileModelSQL(t, map[string]string{"CUBEJS_DB_TYPE": "trino"})
 
-	want := "event_day BETWEEN CAST(substr(?, 1, 10) AS DATE) AND CAST(substr(?, 1, 10) AS DATE)"
+	want := "event_day BETWEEN substr(?, 1, 10) AND substr(?, 1, 10)"
 	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, want) {
 		t.Errorf("RequestMetricsMinute under DuckDB does not prune by date range; want %q in:\n  %s", want, got)
 	}
 	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, "hive_partitioning=true") {
 		t.Errorf("the pruning predicate needs event_day typed from the directory name; "+
 			"hive_partitioning=true is missing:\n  %s", got)
+	}
+	// F-072: typed DATE, the partition collides with the string column every
+	// file also holds, and grouping by it over one partition fails in DuckDB.
+	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, "hive_types={'event_day': VARCHAR}") {
+		t.Errorf("event_day must be read as VARCHAR, the type the files hold (F-072):\n  %s", got)
 	}
 	if got := trino["RequestMetricsMinute"]; strings.Contains(got, "event_day BETWEEN") {
 		t.Errorf("Trino's table has no partition column; its SQL should not carry the DuckDB predicate:\n  %s", got)

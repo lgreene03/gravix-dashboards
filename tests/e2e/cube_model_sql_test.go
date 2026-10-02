@@ -120,6 +120,34 @@ func TestCubeDateRangePruningPreservesResults(t *testing.T) {
 	}
 }
 
+// TestCubeTableGroupsByDayOnOnePartition is F-072. Every Parquet file carries
+// event_day as a string, and the directory names it again. With the partition
+// typed DATE, grouping by event_day over a single partition failed inside
+// DuckDB ("Unsupported type for NumericValueUnionToValue"), and Cube v0.35's
+// DuckDB aborted the process on it, so one dashboard or API query took Cube down
+// for everyone. This runs that query through the model's own SQL.
+//
+// It failed only when the one partition scanned was the first of the table's
+// partitions, so the day the predicate selects is written first here.
+func TestCubeTableGroupsByDayOnOnePartition(t *testing.T) {
+	requireDuckDB(t)
+	dir := t.TempDir()
+	warehouse := filepath.Join(dir, "warehouse")
+	if err := bareparquet.WriteFixture(warehouse, []string{"2026-01-02", "2026-01-03"}, 10); err != nil {
+		t.Fatalf("WriteFixture: %v", err)
+	}
+	table, prune, _, _ := cubeFlags(t, warehouse)
+
+	q := "SELECT event_day, sum(request_count) FROM (" + table + " WHERE " + prune + ") GROUP BY 1"
+	got, err := duckDBErr(t, dir, q)
+	if err != nil {
+		t.Fatalf("grouping one day's partition by event_day failed (F-072): %v\n%s\n%s", err, got, q)
+	}
+	if got != "2026-01-02,55" {
+		t.Errorf("one day grouped by event_day = %q, want 2026-01-02,55", got)
+	}
+}
+
 // TestCubeRefreshKeyMovesOnlyWithTheData checks the refresh key SD-024 chose.
 // Cube serves a cached result until the key changes, so it must be stable while
 // nothing is written and must change when a rollup rewrites a partition in

@@ -4483,3 +4483,33 @@ the old file.
 
 The full stack's event rollups are still hourly. Its dashboard cannot show a signed-in tenant's data
 until F-070 is decided, so the cadence there is not what stands between a user and their events.
+
+## F-072 — one query grouping by day could take the bootstrap stack's Cube down
+
+**Found by** measuring a Cube upgrade: the daily events query crashed the pinned Cube and failed on the candidate
+**Affects** `cube/model_flags.js` (`tableSql`, `dayRangeSql`), every DuckDB-backed cube
+**Severity** high — on the pinned Cube one query aborted the process, and every user's next query failed until it restarted
+**Status** fixed
+
+Each warehouse file carries `event_day` as a string column, and the directory names it again as
+`event_day=<day>`. The models read the files with `hive_partitioning=true`, which types the
+directory's value as a DATE, so the same name arrives as two types. When DuckDB scans only one
+partition and the query groups by `event_day`, it fails inside its statistics code. DuckDB 1.1.3,
+and the one in Cube v1.7.48, answer `INTERNAL Error: Unsupported type for
+NumericValueUnionToValue`. The DuckDB in Cube v0.35, which the stack pins, fails an assertion
+(`numeric_stats.cpp:44`) and aborts the Cube process.
+
+Two ordinary queries reach it. `ServiceEventsDaily` grouped by `eventDay` on a stack whose events
+table holds one day, which is every stack in its first day. And `RequestMetricsMinute` grouped by
+`eventDay` with a date range of one day, when that day is the table's first partition. It did not
+fail when the one partition scanned was a later one, and a scan of several partitions did not fail.
+
+The models now pass `hive_types={'event_day': VARCHAR}`, the type the files hold and the models
+declare, and the pruning predicate compares strings, which order as dates do for `YYYY-MM-DD`.
+DuckDB still prunes a one-day range to one file. `TestCubeTableGroupsByDayOnOnePartition` runs the
+query through the model's own SQL against a real DuckDB, with the selected day written first; it
+fails with the internal error on the old SQL. `TestDuckDBModelPrunesPartitionsByDateRange` checks the
+compiled model carries the VARCHAR type.
+
+A reader querying the warehouse with DuckDB directly meets the same thing, so the bare-Parquet guide
+now says to pass the same option when filtering to a day.
