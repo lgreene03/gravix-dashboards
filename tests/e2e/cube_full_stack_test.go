@@ -8,6 +8,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -46,13 +47,71 @@ func TestCubeAnswersOnTheFullStack(t *testing.T) {
 	}
 
 	const r = "RequestMetricsMinute"
-	query, _ := json.Marshal(map[string]any{"query": map[string]any{
+	rows := askCube(t, tok, map[string]any{
 		"measures": []string{r + ".requestCount", r + ".errorCount", r + ".errorRate"},
 		"filters": []map[string]any{{
 			"member": r + ".service", "operator": "equals", "values": []string{"ci-fixture"},
 		}},
-	}})
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want one row, got %d: %v", len(rows), rows)
+	}
 
+	row := rows[0]
+	num := func(m string) float64 {
+		t.Helper()
+		switch v := row[r+"."+m].(type) {
+		case float64:
+			return v
+		case string:
+			f, err := strconv.ParseFloat(v, 64)
+			if err == nil {
+				return f
+			}
+		}
+		t.Fatalf("%s is %v (%T), not a number", m, row[r+"."+m], row[r+"."+m])
+		return 0
+	}
+	if got := num("requestCount"); got != 33 {
+		t.Errorf("requestCount = %v, want 33", got)
+	}
+	if got := num("errorCount"); got != 1 {
+		t.Errorf("errorCount = %v, want 1", got)
+	}
+	if got := num("errorRate"); math.Abs(got-1.0/33) > 1e-9 {
+		t.Errorf("errorRate = %v, want 1/33 = %v; 0 means the division was done in integers (CD-007)", got, 1.0/33)
+	}
+
+	// The endpoints table's query, filtered by date the way the dashboard sends
+	// it since F-075: one inDateRange (dashboards/lib/cube-client.js
+	// toCubeFilters). As a gte and an lte, Trino refused it.
+	day := time.Now().UTC().Format("2006-01-02")
+	endpoints := askCube(t, tok, map[string]any{
+		"measures":   []string{r + ".requestCount", r + ".errorCount", r + ".errorRate"},
+		"dimensions": []string{r + ".pathTemplate", r + ".method"},
+		"order":      map[string]string{r + ".errorCount": "desc"},
+		"filters": []map[string]any{
+			{"member": r + ".service", "operator": "equals", "values": []string{"ci-fixture"}},
+			{"member": r + ".bucketStart", "operator": "inDateRange",
+				"values": []string{day + "T00:00:00", day + "T23:59:59"}},
+		},
+		"limit": 10,
+	})
+	total := 0.0
+	for _, e := range endpoints {
+		v, _ := strconv.ParseFloat(fmt.Sprint(e[r+".requestCount"]), 64)
+		total += v
+	}
+	if len(endpoints) != 2 || total != 33 {
+		t.Errorf("the endpoints query for %s = %v; want two endpoints and 33 requests", day, endpoints)
+	}
+}
+
+// askCube posts one query to the full stack's Cube, asks again while Cube says
+// "Continue wait", and fails the test on any other error.
+func askCube(t *testing.T, tok string, q map[string]any) []map[string]any {
+	t.Helper()
+	query, _ := json.Marshal(map[string]any{"query": q})
 	var answer struct {
 		Error string           `json:"error"`
 		Data  []map[string]any `json:"data"`
@@ -80,36 +139,8 @@ func TestCubeAnswersOnTheFullStack(t *testing.T) {
 			continue
 		}
 		if answer.Error != "" {
-			t.Fatalf("Cube refused the query (%s): %s", resp.Status, answer.Error)
+			t.Fatalf("Cube refused the query (%s): %s\n%s", resp.Status, answer.Error, query)
 		}
-		break
-	}
-	if len(answer.Data) != 1 {
-		t.Fatalf("want one row, got %d: %v", len(answer.Data), answer.Data)
-	}
-
-	row := answer.Data[0]
-	num := func(m string) float64 {
-		t.Helper()
-		switch v := row[r+"."+m].(type) {
-		case float64:
-			return v
-		case string:
-			f, err := strconv.ParseFloat(v, 64)
-			if err == nil {
-				return f
-			}
-		}
-		t.Fatalf("%s is %v (%T), not a number", m, row[r+"."+m], row[r+"."+m])
-		return 0
-	}
-	if got := num("requestCount"); got != 33 {
-		t.Errorf("requestCount = %v, want 33", got)
-	}
-	if got := num("errorCount"); got != 1 {
-		t.Errorf("errorCount = %v, want 1", got)
-	}
-	if got := num("errorRate"); math.Abs(got-1.0/33) > 1e-9 {
-		t.Errorf("errorRate = %v, want 1/33 = %v; 0 means the division was done in integers (CD-007)", got, 1.0/33)
+		return answer.Data
 	}
 }

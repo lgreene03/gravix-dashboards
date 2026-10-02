@@ -4572,7 +4572,7 @@ the cache driver in v0.32 and removed it in v0.36.
 **Found by** the Cube equivalence run on the full stack: the gateway's cache warmer sent the endpoints query, and Trino refused it on both Cube versions
 **Affects** `dashboards/app.js` (every `gte`/`lte` filter on `bucketStart` and `eventTime`), `pkg/gatewaycore/cache_warm.go` (`endpoints`)
 **Severity** high once F-070 is decided, none today — every signed-in query on Trino already fails on F-070's missing tenant column
-**Status** open; the fix below is the next change after PR #29
+**Status** fixed
 
 Cube turns a `gte` filter on a time dimension into `CAST(bucket_start AS TIMESTAMP) >= ?`, and
 binds the value as text. DuckDB compares the two by casting the text. Trino does not:
@@ -4591,6 +4591,21 @@ timestamps on both engines. It also hands `FILTER_PARAMS` both bounds, so DuckDB
 queries to the days in range, which F-059 had to give up on for `gte` and `lte`. It changes every
 range filter in `app.js`, the two places that read a range back out of a filter, and the warmer,
 whose queries must match the dashboard's byte for byte (GRVX-1006).
+
+### Fixed
+
+`CubeClient.toCubeFilters` sends each `gte` and `lte` pair on a time member as one `inDateRange`.
+The six places in `app.js` that send their filters to Cube as they are now pass them through it.
+The dashboard's own filters keep their old shape, so nothing that reads a range back out of them
+changed. The warmer's endpoints query sends the same `inDateRange`.
+
+Measured through Cube v0.35 and v1.7.48 on both engines. On Trino, the `gte`/`lte` form failed on
+both versions and `inDateRange` answered. On DuckDB the two forms gave the same answer, 1,440,000
+requests and 11,752 errors for one day, and 90,000 for a 90-minute range.
+
+`dashboards/lib/cube-client.test.js` covers the rewrite. `TestWarmQueriesMatchTheDashboard` holds
+the warmer to it. `TestCubeAnswersOnTheFullStack` sends the endpoints query the dashboard's way to
+the full stack's Trino in docker-smoke.
 
 ## F-076 — Cube applied no tenant filter, on any stack, on any version
 

@@ -161,9 +161,12 @@ func DefaultWarmQueries() []WarmQuery {
 				},
 				"dimensions": []string{"RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"},
 				"order":      map[string]string{"RequestMetricsMinute.errorCount": "desc"},
+				// The dashboard's range filters, as CubeClient.toCubeFilters sends
+				// them: one inDateRange, which Trino accepts and gte/lte it does
+				// not (F-075).
 				"filters": []map[string]any{
-					{"member": "RequestMetricsMinute.bucketStart", "operator": "gte", "values": []string{from + "T00:00:00"}},
-					{"member": "RequestMetricsMinute.bucketStart", "operator": "lte", "values": []string{to + "T23:59:59"}},
+					{"member": "RequestMetricsMinute.bucketStart", "operator": "inDateRange",
+						"values": []string{from + "T00:00:00", to + "T23:59:59"}},
 				},
 				"limit": 10,
 			}

@@ -502,7 +502,11 @@ func TestWarmQueriesMatchTheDashboard(t *testing.T) {
 		}
 		return regexp.MustCompile(`\s+`).ReplaceAllString(string(raw), "")
 	}
-	app, html := read("app.js"), read("index.html")
+	app, html, client := read("app.js"), read("index.html"), read(filepath.Join("lib", "cube-client.js"))
+	if !strings.Contains(client, `out.push({member:f.member,operator:'inDateRange',values:[b.gte,b.lte]});`) {
+		t.Errorf("dashboards/lib/cube-client.js no longer turns a gte/lte pair into one inDateRange filter, " +
+			"so the endpoints warm query may no longer be what the dashboard sends (F-075)")
+	}
 
 	// The default view: the last seven days, no service, no comparison.
 	for _, s := range []string{
@@ -517,8 +521,9 @@ func TestWarmQueriesMatchTheDashboard(t *testing.T) {
 		`consttimeDim={dimension:"RequestMetricsMinute.bucketStart",granularity:"hour"};`,
 		`timeDim.dateRange=[dateFrom.slice(0,10),(dateTo||dateFrom).slice(0,10)];`,
 		`measures:measures,timeDimensions:[timeDim],order:{"RequestMetricsMinute.bucketStart":"asc"},filters:otherFilters`,
-		// fetchEndPointsData sends the filters as they are.
-		`measures:["RequestMetricsMinute.requestCount","RequestMetricsMinute.errorCount","RequestMetricsMinute.errorRate"],dimensions:["RequestMetricsMinute.pathTemplate","RequestMetricsMinute.method"],order:{"RequestMetricsMinute.errorCount":"desc"},filters:filters,limit:10`,
+		// fetchEndPointsData sends the filters through toCubeFilters, which
+		// makes the date pair one inDateRange (F-075).
+		`measures:["RequestMetricsMinute.requestCount","RequestMetricsMinute.errorCount","RequestMetricsMinute.errorRate"],dimensions:["RequestMetricsMinute.pathTemplate","RequestMetricsMinute.method"],order:{"RequestMetricsMinute.errorCount":"desc"},filters:CubeClient.toCubeFilters(filters),limit:10`,
 		`query:{dimensions:["RequestMetricsMinute.service"],order:{"RequestMetricsMinute.service":"asc"}}`,
 	} {
 		if !strings.Contains(app, s) {
@@ -535,7 +540,7 @@ func TestWarmQueriesMatchTheDashboard(t *testing.T) {
 		"services":             `{"dimensions":["RequestMetricsMinute.service"],"order":{"RequestMetricsMinute.service":"asc"}}`,
 		"error_rate_hourly":    `{"filters":[],"measures":["RequestMetricsMinute.errorRate"],"order":{"RequestMetricsMinute.bucketStart":"asc"},"timeDimensions":[{"dateRange":["2026-09-24","2026-10-01"],"dimension":"RequestMetricsMinute.bucketStart","granularity":"hour"}]}`,
 		"request_count_hourly": `{"filters":[],"measures":["RequestMetricsMinute.requestCount"],"order":{"RequestMetricsMinute.bucketStart":"asc"},"timeDimensions":[{"dateRange":["2026-09-24","2026-10-01"],"dimension":"RequestMetricsMinute.bucketStart","granularity":"hour"}]}`,
-		"endpoints":            `{"dimensions":["RequestMetricsMinute.pathTemplate","RequestMetricsMinute.method"],"filters":[{"member":"RequestMetricsMinute.bucketStart","operator":"gte","values":["2026-09-24T00:00:00"]},{"member":"RequestMetricsMinute.bucketStart","operator":"lte","values":["2026-10-01T23:59:59"]}],"limit":10,"measures":["RequestMetricsMinute.requestCount","RequestMetricsMinute.errorCount","RequestMetricsMinute.errorRate"],"order":{"RequestMetricsMinute.errorCount":"desc"}}`,
+		"endpoints":            `{"dimensions":["RequestMetricsMinute.pathTemplate","RequestMetricsMinute.method"],"filters":[{"member":"RequestMetricsMinute.bucketStart","operator":"inDateRange","values":["2026-09-24T00:00:00","2026-10-01T23:59:59"]}],"limit":10,"measures":["RequestMetricsMinute.requestCount","RequestMetricsMinute.errorCount","RequestMetricsMinute.errorRate"],"order":{"RequestMetricsMinute.errorCount":"desc"}}`,
 	}
 	qs := DefaultWarmQueries()
 	if len(qs) != len(want) {
