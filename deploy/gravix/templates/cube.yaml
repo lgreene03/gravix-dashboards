@@ -62,22 +62,14 @@ spec:
                   name: {{ .Release.Name }}-secrets
                   key: jwt-secret
             {{- end }}
-            # Redis cache (5.5): enables pre-aggregation storage + cross-replica query queuing.
-            {{- if or .Values.redis.enabled .Values.redis.externalUrl }}
-            - name: CUBEJS_CACHE_AND_QUEUE_DRIVER
-              value: "redis"
-            - name: CUBEJS_REDIS_URL
-              {{- if .Values.redis.externalUrl }}
-              value: {{ .Values.redis.externalUrl | quote }}
-              {{- else }}
-              value: "redis://{{ .Release.Name }}-redis:6379"
-              {{- end }}
-            {{- else }}
-            # Without Redis, Cube's default in production mode is Cube Store,
-            # which this chart does not run, and every query failed (F-074).
+            # Memory, in every deployment. In production mode Cube's default is Cube
+            # Store, which this chart does not run, and every query failed (F-074).
+            # Cube removed Redis as a cache and queue driver in v0.36, so the redis
+            # values no longer reach Cube (DD-034). Each replica keeps its own cache:
+            # nothing declares a pre-aggregation (SD-024), so there is no rollup
+            # for replicas to share, only cached results.
             - name: CUBEJS_CACHE_AND_QUEUE_DRIVER
               value: "memory"
-            {{- end }}
             # DuckDB performance tuning (5.1): only effective when CUBEJS_DB_TYPE=duckdb.
             - name: CUBEJS_DB_MAX_POOL
               value: {{ .Values.storage.cube.duckdb.maxPoolSize | default 8 | quote }}

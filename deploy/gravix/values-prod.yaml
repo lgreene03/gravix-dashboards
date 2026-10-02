@@ -147,7 +147,7 @@ storage:
     devMode: false     # CRITICAL: must be false in production
     image:
       repository: cubejs/cube
-      tag: "v0.35"
+      tag: "v1.7.48"
     duckdb:
       memoryLimitGb: 2   # Increase for production workloads
       threads: 4          # Match node vCPU count
@@ -252,10 +252,10 @@ s3Lifecycle:
   deleteAfterDays: 90
 
 # ─── Redis Cache (5.5) ───
-# Replace with externalUrl pointing to ElastiCache when provisioned.
-# Until then, in-cluster Redis handles Cube.js pre-aggregation.
+# Off: nothing uses it. Cube removed Redis as its cache driver in v0.36, and the
+# chart's Cube uses its memory driver (DD-034). See values.yaml.
 redis:
-  enabled: true
+  enabled: false
   persistence:
     enabled: true
     size: 4Gi

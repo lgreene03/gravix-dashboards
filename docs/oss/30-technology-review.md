@@ -83,7 +83,7 @@ Checked against Docker Hub on 2026-09-11:
 | Trino | `435` | **483** | 48 releases |
 | Prometheus | `v2.51.0` | **v3.13.3** | a **major** version |
 | Grafana | `10.4.0` | **13.0.8** | **three** major versions |
-| Cube | `v0.35` | **v1.7.37** | pre-1.0 → 1.x |
+| Cube | `v0.35` | **v1.7.37** | pre-1.0 → 1.x — upgraded to `v1.7.48` on 2026-10-02 (DD-034) |
 | MinIO | `RELEASE.2024-03-15T01-07-19Z` | `RELEASE.2025-09-07T16-13-09Z` | ~18 months |
 | nginx | `1.25-alpine` | `1.30.4` stable / `1.31.5` mainline | 5 minor |
 | Postgres | `16-alpine` | `16.15` (17 and 18 exist) | patch only — fine |

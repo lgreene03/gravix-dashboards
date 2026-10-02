@@ -760,7 +760,7 @@
     "redis": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Redis cache for Cube.js pre-aggregation storage and query queuing (5.5)",
+      "description": "Deprecated and unused: Cube removed Redis as its cache driver in v0.36, and the chart's Cube uses its memory driver (DD-034). Kept so existing values files still validate.",
       "properties": {
         "enabled": { "type": "boolean", "default": false },
         "image": {

@@ -112,7 +112,7 @@ Key characteristics of this pipeline:
 | Purge | Go CronJob | `cmd/purge/` | Enforce 30-day retention policy |
 | Query Engine (default) | DuckDB (embedded) | `cube/model/` | Embedded SQL engine, reads Parquet directly |
 | Query Engine (full stack) | Trino 351 | `storage/trino/` | Separate SQL engine over Parquet via Hive metastore |
-| Semantic Layer | Cube.js v0.35 | `cube/model/` | Measures, dimensions, and pre-aggregation definitions |
+| Semantic Layer | Cube v1.7.48 | `cube/model/` | Measures, dimensions, and pre-aggregation definitions |
 | Dashboard | HTML/JS + Chart.js | `dashboards/` | Static SPA for visualization |
 | Load Generator | Go | `cmd/load_generator/` | Synthetic traffic for development and testing |
 | Monitoring | Prometheus + Grafana | `storage/prometheus/` | Metrics collection, dashboards, and alerting (optional) |
@@ -361,7 +361,7 @@ Hive file-based metastore provides SQL access over Parquet via S3A.
 
 **Source:** `cube/model/`
 
-Cube.js v0.35 provides a semantic layer between the query engine (DuckDB or
+Cube v1.7.48 provides a semantic layer between the query engine (DuckDB or
 Trino) and the dashboard. It defines measures, dimensions, and pre-aggregation
 rules. The Cube models auto-detect the active engine via `CUBEJS_DB_TYPE` and
 use the appropriate SQL syntax (`read_parquet()` for DuckDB, catalog paths for

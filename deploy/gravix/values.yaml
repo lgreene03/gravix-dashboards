@@ -188,7 +188,7 @@ storage:
     devMode: false  # Set to true only for local development
     image:
       repository: cubejs/cube
-      tag: "v0.35"
+      tag: "v1.7.48"
     hpa:
       enabled: false
       minReplicas: 2
@@ -201,8 +201,10 @@ storage:
       queryTimeoutSec: 30  # Hard ceiling on single-query wall time
       maxPoolSize: 8       # Max concurrent DuckDB connections across all tenants
 
-# Redis cache (5.5) — used by Cube.js for pre-aggregation storage and query queuing.
-# For managed ElastiCache, set externalUrl and leave enabled: false.
+# Deprecated, and used by nothing in this chart. Redis was Cube's cache and queue
+# driver; Cube removed that driver in v0.36, and the chart's Cube now uses its
+# memory driver (DD-034). Kept so existing values files still validate; it will be
+# removed in a later release. Enabling it deploys a Redis that nothing reads.
 redis:
   enabled: false
   image:

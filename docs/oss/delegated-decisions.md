@@ -687,3 +687,55 @@ in, with JDBC or REST. That is a new runtime dependency and a design-tier RFC.
 **To reverse.** Point `gravix_iceberg.properties` at a JDBC or REST catalog and change the Spark
 check to use the same catalog. The tables themselves need no migration: Iceberg's
 `register_table` adds an existing table to a new catalog from its metadata file.
+
+## DD-034 — F-060: upgrade Cube to v1.7.48, on the memory driver everywhere
+
+**Date** 2026-10-02 · **Tier** routine (a dependency's version, to fix a finding; no dependency added) · **Finding** F-060
+
+**Options.** Stay on `cubejs/cube:v0.35`. Upgrade to `v1.7.48` with Cube's memory cache and queue
+driver in every deployment. Or upgrade and run Cube Store, which is what Cube now expects for a
+shared cache.
+
+**Chosen.** `v1.7.48`, in both compose files and both Helm values files. On the pinned version,
+two first queries at once after Cube starts stall every query for about two minutes. That happened
+in 3 of 3 trials, and 0 of 3 on `v1.7.48` (F-060). The upgrade changes the semantic layer under every
+number on the dashboard, so it was held to equal answers first. Both stacks were measured: the
+bootstrap stack on DuckDB, and the full stack on Trino, which is also what the Helm chart runs. The
+same queries went to `v0.35` and `v1.7.48` over a frozen warehouse
+([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36950619111)):
+
+| Stack | Results compared | Identical |
+|---|---|---|
+| Bootstrap (DuckDB), with no tenant, the stack's tenant, and a tenant with no data | 24 | 24 |
+| Full (Trino), seeded fixture rows, no tenant (F-070) | 8 | 8 |
+
+The tenant with no data read nothing on either version, so tenant isolation holds on both (F-076).
+
+Getting to equal answers took six fixes to Gravix, not to Cube: F-071, F-072, F-073, F-074, F-076
+and CD-007. F-072 crashed the pinned Cube outright. F-076 let every tenant read every tenant's data,
+on both versions. Each was found by asking Cube questions it had never been asked, and each is now
+held by a test that runs on every pull request.
+
+Cube removed Redis as a cache and queue driver in v0.36, so the Helm chart's Cube now uses the
+memory driver whatever the `redis` values say. Nothing declares a pre-aggregation (SD-024), so
+Redis held only cached results and the query queue. `values-prod.yaml` stops deploying a Redis that
+nothing would read. The `redis` values stay in `values.yaml` and the schema, marked deprecated,
+because the schema refuses unknown keys and removing them would break existing values files.
+
+Cube Store was not chosen. It is a new runtime service, which `GOVERNANCE.md` puts at design tier,
+and on the bootstrap stack it would contradict the premise the stack exists to show (F-035).
+
+**Given up.** On a Helm deployment with more than one Cube replica, each replica now keeps its own
+result cache, where Redis shared one. A query repeated on another replica is cold once. Results are
+unaffected.
+
+**Done.** The four pins, the Helm template, the values and their schema, the governance test that
+holds the chart to the memory driver, and the docs that named v0.35. CI on this change boots both
+stacks on `v1.7.48`. The onboarding gate's isolation check and docker-smoke's live Cube tests run
+against it there.
+
+**Not decided, and why.** A shared cache across Cube replicas. That means Cube Store, a new
+runtime dependency, so it needs an RFC if per-replica caching ever costs enough to matter.
+
+**To reverse.** Set the four pins back to `v0.35`. To give the chart Redis again, the Helm template
+needs its `redis` branch back, which only works on `v0.35`.
