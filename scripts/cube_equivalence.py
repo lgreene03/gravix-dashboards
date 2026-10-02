@@ -54,7 +54,9 @@ QUERIES = {
     "by_endpoint": {"measures": [f"{R}.requestCount", f"{R}.errorCount", f"{R}.errorRate"],
                     "dimensions": [f"{R}.pathTemplate", f"{R}.method"],
                     "order": {f"{R}.pathTemplate": "asc", f"{R}.method": "asc"}},
-    "row_count": {"measures": [f"{R}.count"]},
+    # Not RequestMetricsMinute.count: it counts metric rows, is hidden (SD-006),
+    # and Cube refuses a hidden member.
+    "total_requests": {"measures": [f"{R}.requestCount"]},
     "minute_percentiles": {"measures": [f"{R}.bucketP50LatencyMs", f"{R}.bucketP95LatencyMs",
                                         f"{R}.bucketP99LatencyMs"],
                            "dimensions": [f"{R}.service"],
@@ -64,7 +66,7 @@ QUERIES = {
     "events_hourly": {"measures": ["ServiceEvents.count"], "dimensions": ["ServiceEvents.eventType"],
                       "timeDimensions": [{"dimension": "ServiceEvents.eventTime", "granularity": "hour"}],
                       "order": {"ServiceEvents.eventTime": "asc", "ServiceEvents.eventType": "asc"}},
-    "events_daily": {"measures": ["ServiceEventsDaily.count", "ServiceEventsDaily.eventCount"],
+    "events_daily": {"measures": ["ServiceEventsDaily.eventCount"],
                      "dimensions": ["ServiceEventsDaily.eventDay", "ServiceEventsDaily.service",
                                     "ServiceEventsDaily.eventType"],
                      "order": {"ServiceEventsDaily.eventDay": "asc", "ServiceEventsDaily.service": "asc",
@@ -119,7 +121,7 @@ def capture(out, date_range):
 
     deadline = time.time() + float(os.environ.get("DATA_WAIT_SECONDS", "600"))
     while True:
-        kind, rows = load(url, tokens["no_tenant"], QUERIES["row_count"])
+        kind, rows = load(url, tokens["no_tenant"], QUERIES["total_requests"])
         if kind == "data" and rows and float(list(rows[0].values())[0] or 0) > 0:
             break
         if time.time() > deadline:
