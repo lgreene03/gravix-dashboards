@@ -4445,3 +4445,26 @@ Starburst publishes a Metabase driver for Trino, and it would avoid the Trino se
 plugin jar downloaded from a third party into Metabase's plugins directory, which the guide's claim
 of "no custom connector" rules out, and its release page could not be read from here to pin a
 version compatible with v0.50.34.
+
+## SD-061 — GRVX-808 froze `errorRate` as correct, and on Trino it was not
+
+**Found by:** CD-007, asking the full stack's Cube for an error rate on Trino 435
+**Affects:** GRVX-808 §2 ("`errorRate` … **is** correct across buckets. Do not change it"), §3, and AC-5
+**Severity:** high — the spec's freeze kept a measure that read 0% on every Trino deployment
+**Status:** resolved 2026-10-02
+
+GRVX-808 judged `sum(error_count) / NULLIF(sum(request_count), 0)` by its formula: a ratio of sums
+merges correctly across buckets, where an average of per-bucket rates would not. That part holds. It
+did not consider the type. Both sums are `BIGINT`, and Trino divides integers as integers, so the
+measure returned 0 for every rate under 100% on the full stack and the Helm chart. DuckDB, where the
+spec's tests ran, divides as floats.
+
+AC-5's `TestCorrectMeasuresUnchanged` pinned the expression's exact text, so the defect could not be
+fixed without failing it.
+
+**Resolution.** The formula stays a ratio of sums; only its arithmetic changes. `errorRate` is now
+`CAST(sum(error_count) AS DOUBLE) / NULLIF(sum(request_count), 0)`. `TestCorrectMeasuresUnchanged`
+now checks for that expression, so it still fails if anyone changes the formula, and it says why the
+cast is there. The spec's intent, that the measure stays mergeable and unchanged in meaning, is what
+the test keeps.
+

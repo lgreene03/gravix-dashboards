@@ -46,6 +46,21 @@ event_day,total_requests
 2026-01-02,55
 ```
 
+To read one day, filter on `event_day` and read it as text:
+
+```sql
+SELECT event_day, SUM(request_count) AS total_requests
+FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true,
+                  hive_types={'event_day': VARCHAR})
+WHERE event_day = '2026-01-01'
+GROUP BY event_day;
+```
+
+Every file also holds `event_day` as text, and `hive_partitioning=true` alone types the directory's
+copy as a `DATE`. With the two types, DuckDB 1.1.3 fails grouping by `event_day` over the first day's
+partition alone, with `INTERNAL Error: Unsupported type for NumericValueUnionToValue` (F-072).
+`hive_types` makes both copies text. DuckDB still opens only that day's file.
+
 The fixture names its files exactly as production does. A rollup writes
 `request_metrics_minute_<YYYYMMDD>.parquet` — one deterministic name per partition, so a recompute
 replaces its output rather than adding a second file beside it. Compaction writes

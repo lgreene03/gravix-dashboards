@@ -255,13 +255,18 @@ func TestDuckDBModelPrunesPartitionsByDateRange(t *testing.T) {
 	duck := compileModelSQL(t, map[string]string{"CUBEJS_DB_TYPE": "duckdb"})
 	trino := compileModelSQL(t, map[string]string{"CUBEJS_DB_TYPE": "trino"})
 
-	want := "event_day BETWEEN CAST(substr(?, 1, 10) AS DATE) AND CAST(substr(?, 1, 10) AS DATE)"
+	want := "event_day BETWEEN substr(?, 1, 10) AND substr(?, 1, 10)"
 	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, want) {
 		t.Errorf("RequestMetricsMinute under DuckDB does not prune by date range; want %q in:\n  %s", want, got)
 	}
 	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, "hive_partitioning=true") {
 		t.Errorf("the pruning predicate needs event_day typed from the directory name; "+
 			"hive_partitioning=true is missing:\n  %s", got)
+	}
+	// F-072: typed DATE, the partition collides with the string column every
+	// file also holds, and grouping by it over one partition fails in DuckDB.
+	if got := duck["RequestMetricsMinute"]; !strings.Contains(got, "hive_types={'event_day': VARCHAR}") {
+		t.Errorf("event_day must be read as VARCHAR, the type the files hold (F-072):\n  %s", got)
 	}
 	if got := trino["RequestMetricsMinute"]; strings.Contains(got, "event_day BETWEEN") {
 		t.Errorf("Trino's table has no partition column; its SQL should not carry the DuckDB predicate:\n  %s", got)
@@ -301,6 +306,7 @@ func TestTimeColumnsAreCastOnBothEngines(t *testing.T) {
 			`const f = require(process.argv[1]); `+
 				`const rk = f.refreshKeyFor('request_metrics_minute'); `+
 				`console.log(JSON.stringify({ts: f.timestampSql('bucket_start'), `+
+				`iso: f.isoTimestampSql('event_time'), `+
 				`rk: rk === undefined ? 'none' : typeof rk.sql}))`,
 			filepath.Join(repoRootDir(t), "cube", "model_flags.js"))
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "CUBEJS_DB_TYPE=" + engine}
@@ -308,13 +314,22 @@ func TestTimeColumnsAreCastOnBothEngines(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: evaluating model_flags.js: %v", engine, err)
 		}
-		var got struct{ TS, RK string }
+		var got struct{ TS, ISO, RK string }
 		if err := json.Unmarshal(out, &got); err != nil {
 			t.Fatalf("%s: %v\n%s", engine, err, out)
 		}
 		if got.TS != "CAST(bucket_start AS TIMESTAMP)" {
 			t.Errorf("%s: timestampSql('bucket_start') = %q; the column is text on this engine and "+
 				"must be cast, or every date-ranged query fails (F-053)", engine, got.TS)
+		}
+		// event_time is RFC 3339 text, which Trino's CAST refuses (F-073).
+		// tests/e2e's TestCubeTimeColumnsCastOnTrino runs both on a real Trino.
+		wantISO := map[string]string{
+			"duckdb": "CAST(event_time AS TIMESTAMP)",
+			"trino":  "CAST(from_iso8601_timestamp(event_time) AS TIMESTAMP)",
+		}[engine]
+		if got.ISO != wantISO {
+			t.Errorf("%s: isoTimestampSql('event_time') = %q, want %q", engine, got.ISO, wantISO)
 		}
 		// Cube calls refreshKey.sql; a string there fails every query with
 		// "Can't match args". Trino keeps Cube's default.

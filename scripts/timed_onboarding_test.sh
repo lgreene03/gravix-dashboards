@@ -324,10 +324,73 @@ check_served_config() {
     echo "dashboard_config.js is served, and its key is not the write key"
 }
 
+# check_tenant_isolation asks Cube as a tenant that has no data, with a token
+# signed by the stack's own secret, and requires it to see none. The bootstrap
+# warehouse is laid out per tenant, Cube reads every tenant's directory, and the
+# tenant filter cube/cube.js adds is the only thing between tenants. It was never
+# applied: checkAuth returned the security context in a field Cube ignores, so
+# every token read every tenant (F-076). The tenant's own events-log query is
+# asked too, because the filter has to land on the cube a query reads. The
+# secret and the token are never printed.
+# cube_ask posts one query and asks again while Cube answers "Continue wait",
+# which it does while compiling the model for a security context it has not
+# seen, as it has not seen the other tenant's.
+cube_ask() {
+    local token="$1" body="$2" response="" i
+    for i in $(seq 1 60); do
+        response="$(curl -s -X POST "$CUBE_URL" -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $token" -d "$body" 2>&1)" || true
+        case "$response" in *'"Continue wait"'*) sleep 2 ;; *) break ;; esac
+    done
+    printf '%s' "$response"
+}
+
+check_tenant_isolation() {
+    local secret other response
+    secret="$($COMPOSE exec -T gateway cat /app/data/jwt_secret.txt 2>/dev/null | tr -d '[:space:]')" || secret=""
+    if [ -z "$secret" ]; then
+        echo "FAIL: the stack's JWT secret could not be read, so tenant isolation cannot be checked"
+        return 1
+    fi
+    other="$(SECRET="$secret" python3 -c '
+import base64, hashlib, hmac, json, os, time
+b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+now = int(time.time())
+head = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+body = b64(json.dumps({"tenant_id": "00000000-0000-4000-8000-00000000f076", "iat": now, "exp": now + 600}).encode())
+sig = b64(hmac.new(os.environ["SECRET"].encode(), f"{head}.{body}".encode(), hashlib.sha256).digest())
+print(f"{head}.{body}.{sig}")')"
+    response="$(cube_ask "$other" '{"query": {"measures": ["RequestMetricsMinute.requestCount"]}}')"
+    if ! printf '%s' "$response" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get("data")
+if rows is None:
+    sys.exit("no data in the answer: " + str(d)[:200])
+for row in rows:
+    v = row.get("RequestMetricsMinute.requestCount")
+    if v is not None and float(v) > 0:
+        sys.exit("it read " + str(v) + " requests")
+'; then
+        echo "FAIL: a token for a tenant with no data read another tenant's metrics (F-076)"
+        return 1
+    fi
+    response="$(cube_ask "$TOKEN" '{"query": {"dimensions": ["ServiceEvents.service"], "limit": 1}}')"
+    case "$response" in
+        *'"data"'*) ;;
+        *)
+            echo "FAIL: the tenant's events-log query failed: ${response:0:200}"
+            return 1
+            ;;
+    esac
+    echo "tenant isolation holds: another tenant's token reads no metrics, and the events log answers"
+}
+
 if [ "$TIMED_OUT" -eq 1 ]; then
     diagnose
     go run ./cmd/onboarding_gate -elapsed-seconds "$ELAPSED" -timed-out
 else
     go run ./cmd/onboarding_gate -elapsed-seconds "$ELAPSED"
     check_served_config
+    check_tenant_isolation
 fi

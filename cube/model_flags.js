@@ -60,11 +60,19 @@ function warehouseGlob(table) {
 // The source SQL for one warehouse table on this stack's engine.
 //
 // hive_partitioning is explicit rather than left to DuckDB's auto-detection,
-// because dayRangeSql below depends on event_day being the DATE taken from the
-// directory name: that is what lets DuckDB skip a partition without opening it.
+// because dayRangeSql below depends on event_day being taken from the directory
+// name: that is what lets DuckDB skip a partition without opening it.
+//
+// event_day is typed VARCHAR, not left to DuckDB's guess of DATE. Every file
+// also carries event_day as a string column, and with the partition typed DATE,
+// grouping by event_day over a single partition fails inside DuckDB ("INTERNAL
+// Error: Unsupported type for NumericValueUnionToValue"). Cube v0.35's DuckDB
+// aborts the whole process on the same query instead, so one query naming
+// eventDay over one day took Cube down for every user (F-072). VARCHAR also
+// matches what the models declare: eventDay is a string dimension.
 function tableSql(table) {
   return isDuckDB
-    ? `SELECT * FROM read_parquet('${warehouseGlob(table)}', union_by_name=true, hive_partitioning=true)`
+    ? `SELECT * FROM read_parquet('${warehouseGlob(table)}', union_by_name=true, hive_partitioning=true, hive_types={'event_day': VARCHAR})`
     : `SELECT * FROM gravix.raw.${table}`;
 }
 
@@ -90,7 +98,8 @@ function dayRangeSql(from, to) {
   if (!isDuckDB || to === undefined) {
     return '1 = 1';
   }
-  return `event_day BETWEEN CAST(substr(${from}, 1, 10) AS DATE) AND CAST(substr(${to}, 1, 10) AS DATE)`;
+  // event_day is a YYYY-MM-DD string (tableSql), and those order as dates do.
+  return `event_day BETWEEN substr(${from}, 1, 10) AND substr(${to}, 1, 10)`;
 }
 
 // How Cube decides a cached result is stale. On DuckDB the key is read from the
@@ -121,11 +130,23 @@ function timestampSql(column) {
   return `CAST(${column} AS TIMESTAMP)`;
 }
 
+// A time column stored as RFC 3339 text ("2026-10-02T10:30:00Z"), which is how
+// the events-detail rollup writes event_time. DuckDB casts that as it is.
+// Trino's CAST refuses both the "T" and the "Z", so on Trino every query naming
+// ServiceEvents.eventTime failed (F-073); from_iso8601_timestamp parses it, and
+// the cast back to TIMESTAMP keeps the UTC wall time, as bucket_start's has.
+function isoTimestampSql(column) {
+  return isDuckDB
+    ? `CAST(${column} AS TIMESTAMP)`
+    : `CAST(from_iso8601_timestamp(${column}) AS TIMESTAMP)`;
+}
+
 // Only what the models actually use. An unused export here is an invitation to
 // reintroduce a gate that cannot work.
 module.exports = {
   tableSql,
   timestampSql,
+  isoTimestampSql,
   dayRangeSql,
   refreshKeyFor,
 };

@@ -28,6 +28,15 @@ const bareParquetQuery = `SELECT event_day, SUM(request_count) AS total_requests
 FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true)
 GROUP BY event_day ORDER BY event_day;`
 
+// bareParquetDayQuery is the guide's one-day query. It reads event_day as
+// text, because the partition typed DATE beside the files' text column makes
+// DuckDB fail grouping by it over the first partition alone (F-072).
+const bareParquetDayQuery = `SELECT event_day, SUM(request_count) AS total_requests
+FROM read_parquet('request_metrics_minute/event_day=*/*.parquet', hive_partitioning=true,
+                  hive_types={'event_day': VARCHAR})
+WHERE event_day = '2026-01-01'
+GROUP BY event_day;`
+
 const bareParquetDocPath = "../../docs-site/docs/bare-parquet-access.md"
 
 const duckDBMissing = "duckdb CLI not found on PATH; install from https://duckdb.org/docs/installation and re-run"
@@ -99,6 +108,20 @@ func TestBareParquetRead(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("bare parquet read mismatch\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestBareParquetReadOneDay runs the guide's one-day query, which selects the
+// first partition: the case F-072 failed on.
+func TestBareParquetReadOneDay(t *testing.T) {
+	requireDuckDB(t)
+
+	dir := writeBareFixture(t)
+	if got, want := runDuckDB(t, dir, bareParquetDayQuery), "event_day,total_requests\n2026-01-01,55"; got != want {
+		t.Fatalf("one-day read mismatch\n got:\n%s\nwant:\n%s", got, want)
+	}
+	if !strings.Contains(normalizeWhitespace(readBareParquetDoc(t)), normalizeWhitespace(bareParquetDayQuery)) {
+		t.Fatalf("%s does not contain the verified one-day query:\n%s", bareParquetDocPath, bareParquetDayQuery)
 	}
 }
 

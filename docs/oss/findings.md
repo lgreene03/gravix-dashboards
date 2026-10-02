@@ -4457,3 +4457,181 @@ What this does to PR #27's live tests: the Hive tables they read are empty on th
 sync tests would compare two empty tables and the Spark check would count zero rows. CI therefore
 inserts fixture rows into the Hive table first, and says why, so the three tests check a copy of real
 rows. That tests the Iceberg path. It does not fix this.
+
+## F-071 — the bootstrap stack's events tab was always empty
+
+**Found by** measuring a Cube upgrade: the event cubes had no files on either Cube version, and the reason was the stack, not Cube
+**Affects** `docker-compose.bootstrap.yml`
+**Severity** medium — the events tab, and the deploy markers it puts on charts, showed nothing on the stack most people start with
+**Status** fixed
+
+The dashboard's events timeline and log read the `ServiceEvents` cube, which is
+`warehouse/<tenant>/service_events_detail/`. The full stack runs `service-events-detail-rollup` to
+write it. The bootstrap stack never had that job, so Cube answered every events query with
+`No files found that match the pattern …/service_events_detail/**/*.parquet`. `dashboards/app.js`
+turns a failed events query into an empty list, so nothing said anything was wrong. Meanwhile the
+synthetic traffic sent an event every 30 seconds.
+
+The daily events rollup it did have ran hourly, and its first run comes before anything has been
+ingested, so the daily view was also empty for the first hour of every fresh stack.
+
+The bootstrap stack now runs both event rollups every five minutes, like the request rollup. Each
+run rewrites the day's file and deletes the previous one (DD-015), so the shorter cadence cannot
+multiply rows. `TestEveryCubeTableIsWrittenOnTheBootstrapStack` reads which warehouse table each Cube
+model names and fails if no job in the bootstrap stack writes it; it names `service_events_detail` on
+the old file.
+
+The full stack's event rollups are still hourly. Its dashboard cannot show a signed-in tenant's data
+until F-070 is decided, so the cadence there is not what stands between a user and their events.
+
+## F-072 — one query grouping by day could take the bootstrap stack's Cube down
+
+**Found by** measuring a Cube upgrade: the daily events query crashed the pinned Cube and failed on the candidate
+**Affects** `cube/model_flags.js` (`tableSql`, `dayRangeSql`), every DuckDB-backed cube
+**Severity** high — on the pinned Cube one query aborted the process, and every user's next query failed until it restarted
+**Status** fixed
+
+Each warehouse file carries `event_day` as a string column, and the directory names it again as
+`event_day=<day>`. The models read the files with `hive_partitioning=true`, which types the
+directory's value as a DATE, so the same name arrives as two types. When DuckDB scans only one
+partition and the query groups by `event_day`, it fails inside its statistics code. DuckDB 1.1.3,
+and the one in Cube v1.7.48, answer `INTERNAL Error: Unsupported type for
+NumericValueUnionToValue`. The DuckDB in Cube v0.35, which the stack pins, fails an assertion
+(`numeric_stats.cpp:44`) and aborts the Cube process.
+
+Two ordinary queries reach it. `ServiceEventsDaily` grouped by `eventDay` on a stack whose events
+table holds one day, which is every stack in its first day. And `RequestMetricsMinute` grouped by
+`eventDay` with a date range of one day, when that day is the table's first partition. It did not
+fail when the one partition scanned was a later one, and a scan of several partitions did not fail.
+
+The models now pass `hive_types={'event_day': VARCHAR}`, the type the files hold and the models
+declare, and the pruning predicate compares strings, which order as dates do for `YYYY-MM-DD`.
+DuckDB still prunes a one-day range to one file. `TestCubeTableGroupsByDayOnOnePartition` runs the
+query through the model's own SQL against a real DuckDB, with the selected day written first; it
+fails with the internal error on the old SQL. `TestDuckDBModelPrunesPartitionsByDateRange` checks the
+compiled model carries the VARCHAR type.
+
+A reader querying the warehouse with DuckDB directly meets the same thing, so the bare-Parquet guide
+now says to pass the same option when filtering to a day.
+
+## F-073 — on Trino, every query on the events cube's time failed
+
+**Found by** preparing the Cube equivalence measurement for the full stack, whose Cube reads Trino
+**Affects** `cube/model/schema/ServiceEvents.js`, `cube/model_flags.js`; the full stack and the Helm chart, which both put Cube on Trino
+**Severity** medium today, high once F-070 is decided — the events timeline and log, and the deploy markers on charts, fail on Trino as soon as an event reaches the table
+**Status** fixed
+
+`ServiceEvents.eventTime` was `CAST(event_time AS TIMESTAMP)`, the expression `bucket_start` uses.
+The events-detail rollup writes `event_time` with Go's `time.RFC3339`, `2026-10-02T10:30:00Z`, and
+Trino 435 refuses that: `Value cannot be cast to timestamp`. DuckDB accepts it, so the bootstrap
+stack worked and nothing caught it. On Trino, every query that groups or filters by the event time
+failed, which is every query the dashboard sends that cube.
+
+Nobody has met it, because of F-070: the full stack's events tables read a prefix no job writes, so
+there was never a row to cast. The fix had to land before F-070's, or deciding F-070 would have
+turned an empty events tab into a broken one.
+
+`isoTimestampSql` in `model_flags.js` gives Trino `CAST(from_iso8601_timestamp(event_time) AS
+TIMESTAMP)`, which keeps the UTC wall time as `bucket_start`'s cast does, and leaves DuckDB's SQL as it
+was. `TestCubeTimeColumnsCastOnTrino` evaluates both time expressions the models give Trino and runs
+them on the live stack's Trino against values in the formats the rollups write. It runs in
+docker-smoke, and fails on the old expression with Trino's own error.
+
+## F-074 — the full stack's Cube, and the Helm chart's without Redis, refused every query
+
+**Found by** running the Cube equivalence queries against the full stack's Cube settings on Trino 435
+**Affects** `docker-compose.yml` (`cube`), `deploy/gravix/templates/cube.yaml`
+**Severity** critical on those deployments — every dashboard number passes through Cube, and Cube answered none
+**Status** fixed
+
+In production mode, which every Gravix deployment runs, Cube v0.35 defaults its cache and queue
+driver to Cube Store. No Gravix deployment runs Cube Store, so every query is answered:
+
+```
+{"error":"Error: Cube Store was specified as queue/cache driver. Please set CUBEJS_CUBESTORE_HOST
+ and CUBEJS_CUBESTORE_PORT variables. …"}
+```
+
+F-035 found and fixed exactly this on the bootstrap stack, with `CUBEJS_CACHE_AND_QUEUE_DRIVER=memory`.
+The full stack's `cube` service never got the same line. Neither did the Helm chart, unless Redis is
+enabled, and it is off in `values.yaml`. Nothing caught it because nothing asked either Cube a
+question. docker-smoke checked that Cube was ready, and readiness does not touch the cache driver.
+
+Both now set `memory` as the bootstrap stack does, and the full stack also turns off the refresh
+scheduler, which has nothing to refresh. Nothing declares a pre-aggregation (SD-024), so there is
+nothing for Cube Store to hold. Two tests hold this. `TestEveryCubeDeploymentNamesACacheDriver` reads
+both compose files and the Helm template. `TestCubeAnswersOnTheFullStack` asks the full stack's Cube
+for docker-smoke's fixture rows on every pull request, and fails with the Cube Store error on the old
+compose file.
+
+Redis, where the chart enables it, is a separate problem for the Cube upgrade: Cube deprecated it as
+the cache driver in v0.32 and removed it in v0.36.
+
+## F-075 — on Trino, every query filtered by time with `gte` or `lte` fails
+
+**Found by** the Cube equivalence run on the full stack: the gateway's cache warmer sent the endpoints query, and Trino refused it on both Cube versions
+**Affects** `dashboards/app.js` (every `gte`/`lte` filter on `bucketStart` and `eventTime`), `pkg/gatewaycore/cache_warm.go` (`endpoints`)
+**Severity** high once F-070 is decided, none today — every signed-in query on Trino already fails on F-070's missing tenant column
+**Status** open; the fix below is the next change after PR #29
+
+Cube turns a `gte` filter on a time dimension into `CAST(bucket_start AS TIMESTAMP) >= ?`, and
+binds the value as text. DuckDB compares the two by casting the text. Trino does not:
+
+```
+line 3:40: Cannot apply operator: timestamp(3) <= varchar(19)
+```
+
+The dashboard sends its date range as a `gte` and an `lte` filter for the endpoints table, the
+comparisons, the events log and the events timeline, and the warmer copies the endpoints query. So on
+Trino all of them fail. The model cannot fix it, because the parameter's type is Cube's choice, not
+the column's.
+
+**Recommended fix.** Send the range as one `inDateRange` filter. Cube then casts its values to
+timestamps on both engines. It also hands `FILTER_PARAMS` both bounds, so DuckDB prunes those
+queries to the days in range, which F-059 had to give up on for `gte` and `lte`. It changes every
+range filter in `app.js`, the two places that read a range back out of a filter, and the warmer,
+whose queries must match the dashboard's byte for byte (GRVX-1006).
+
+## F-076 — Cube applied no tenant filter, on any stack, on any version
+
+**Found by** the Cube upgrade measurement: v1.7.48 logged that it had no security context, and so did the pinned v0.35
+**Affects** `cube/cube.js` (`checkAuth`, `queryRewrite`)
+**Severity** critical under `SECURITY.md` — on a stack with more than one tenant, a signed-in user's dashboard read every tenant's metrics and events
+**Status** fixed; whether to publish an advisory is the owner's decision (`open-decisions.md`)
+
+`checkAuth` verified the token and returned `{ securityContext: { tenant_id } }`. Cube takes the
+security context from `req.securityContext`, or from a returned `security_context`, and ignores any
+other return value. v0.35 and v1.7.48 have the same code for this. So Cube had no security context,
+`queryRewrite` added no tenant filter, and every query ran over every tenant's rows. Cube logged it
+once at startup, as a warning: `Value of securityContext (previously authInfo) expected to be object,
+actual: undefined`.
+
+The bootstrap stack keeps each tenant's files under its own directory, and Cube reads all of them,
+so the filter was the only boundary between tenants. On a lab warehouse with two tenants, Cube v0.35
+gave a token for tenant A, a token for tenant B, and a token for a tenant that does not exist the
+same answer: both tenants' 1,440,542 requests. The full stack reads one table for everyone, so it
+had the same exposure, behind F-070.
+
+Nothing caught it because every test and measurement ran with one tenant. One tenant's filtered and
+unfiltered answers are the same.
+
+`checkAuth` now sets `req.securityContext`. A second fault was hiding behind the first: the filter
+went on `RequestMetricsMinute.tenantId` for any query without a measure, and the events log asks
+only for `ServiceEvents` dimensions. No cube joins another, so that query would have failed as soon
+as the filter applied. The filter now goes on the cube the query names first. On the same two-tenant
+warehouse, A then read 1,440,000, B read 542, and the absent tenant read nothing, on v0.35 and
+v1.7.48 alike, with each tenant's events scoped the same way.
+
+Three tests hold it:
+
+- `tests/cube/cube_auth.test.js` runs `cube.js` against Cube's documented contract, and fails on
+  the old file.
+- The onboarding gate, on every pull request, asks the bootstrap stack's Cube as a tenant with no
+  data, using a token signed with the stack's own secret. It must see nothing, and the tenant's
+  events-log query must answer. On the old file it reports that the absent tenant read the
+  bootstrap tenant's requests.
+- `cube_equivalence.py` asks every query as an absent tenant too, and exits 4 if any answer holds
+  data, on either Cube version.
+
+On the full stack, a signed-in user's queries now fail instead of reading every tenant, because the
+Trino tables have no `tenant_id` column. That is F-070's stated condition, and it is the safe one.

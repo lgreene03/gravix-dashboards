@@ -74,12 +74,18 @@ Nothing below has shipped in a tagged release yet.
 - **The full stack's Hive tables were never created** — `data-init` gave Trino's metastore directory to the `gravix` user, uid 100, and Trino runs as uid 1000, so `CREATE SCHEMA` failed and the failure was skipped. Cube had no tables to read on a fresh clone (F-068)
 - **The Iceberg catalog stopped Trino from starting** — it asked for a `hadoop` catalog type, which Trino has never had. It now uses Trino's file metastore, kept in the bucket, and other engines read each table from its metadata file (SD-059, DD-033)
 - **The stack never ran its Iceberg sync** — the binary was built and left out of the image, so the `iceberg-sync` service failed every five minutes (F-069)
+- **The bootstrap stack's events tab was always empty** — it had no events-detail rollup, so Cube found no files and the dashboard showed an empty list, and its daily events rollup ran hourly. Both now run every five minutes (F-071)
+- **One query grouping by day could take the bootstrap stack's Cube down** — every file holds `event_day` as text and the directory as a date, and grouping by it over a single day's partition aborted Cube v0.35. The models now read it as text (F-072)
+- **On Trino, every query on the events cube's time failed** — events are stored with RFC 3339 times, which Trino cannot cast. No full-stack install had an event in its table yet (F-070), so none has met it (F-073)
+- **The full stack's Cube refused every query**, and so did the Helm chart's without Redis — both defaulted to Cube Store, which nothing runs. They now use Cube's memory driver, as the bootstrap stack has since F-035 (F-074)
+- **On Trino, every error rate under 100% was 0** — Cube's `errorRate` divided two integers, which Trino does as integer division. It now divides as a double (CD-007)
 - **The SQL guide's rate queries rounded every rate to 0.1 per second** — `SUM(request_count) / 300.0` is a decimal with one digit in Trino, so a service with under 15 requests in five minutes read as idle. They now divide as doubles, and CI runs every query on the page against the full stack (CD-006)
 - **The Metabase and Superset guide's steps could not connect to Trino** — Metabase 0.50 has no `presto` engine, the Superset image has no Trino driver, and both tools' Presto clients were refused by Trino. Trino now also answers Presto's protocol headers, and the guide installs Superset's driver (SD-060)
 - **The Spark read check could not fail** — it took any number on Spark's last output line as a row count, whatever the exit status. It now needs a clean exit and an explicit row count, and prints Spark's error when it fails (F-067)
 
 ### Security
 
+- **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
 - **The dashboard was served an unrestricted API key before login** — `dashboard_config.js` now carries a key scoped to `admin:read`, and existing installs are narrowed on their next boot (SD-013)
 

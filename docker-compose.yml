@@ -299,6 +299,13 @@ services:
       - CUBEJS_DB_NAME=raw
       - CUBEJS_DB_USER=trino
       - CUBEJS_DEV_MODE=${CUBEJS_DEV_MODE:-false}
+      # In production mode Cube's cache and queue driver defaults to Cube Store,
+      # which no stack runs, and every query then fails with "Cube Store was
+      # specified as queue/cache driver". The bootstrap stack fixed this in
+      # F-035; this one never had it (F-074). Nothing declares a
+      # pre-aggregation (SD-024), so there is nothing for Cube Store to hold.
+      - CUBEJS_CACHE_AND_QUEUE_DRIVER=memory
+      - CUBEJS_SCHEDULED_REFRESH_TIMER=false
       - CUBEJS_API_SECRET=${CUBEJS_API_SECRET:-}
       - TENANT_DB_PATH=/cube/data/gravix.db
       # Must be the SAME expression the gateway uses. The gateway signs the
