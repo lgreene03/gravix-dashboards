@@ -2,7 +2,7 @@
 <!-- correctness-defects.md, all append-only. This file points into them and may be rewritten. -->
 # What needs a person
 
-Three registers hold 134 entries between them, most of them resolved. Most are ordinary work an
+Three registers hold 144 entries between them, most of them resolved. Most are ordinary work an
 implementer can pick up. This page lists only the ones that **cannot be closed by implementing
 harder**, because they need a decision, a permission, or an external check.
 
@@ -82,7 +82,7 @@ Docker daemon, and nothing below should be assumed cleared until CI says so.
   The cold figure is published, not hidden. Measuring also found and fixed F-053, which broke every
   date-ranged query on the DuckDB stack. The warmer is built and measured against Cube (DD-032):
   one cycle made the default view's queries cache hits, 5 to 95 ms against up to 3 s cold. Doing it
-  found F-059, now fixed, and F-060, open. The CI query driver and the percentile endpoint's figure
+  found F-059 and F-060, both now fixed; F-060 by upgrading Cube (DD-034). The CI query driver and the percentile endpoint's figure
   remain.
 
 ### Every spec has now been audited against its own criteria

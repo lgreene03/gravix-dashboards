@@ -139,7 +139,7 @@ services:
       - backend
 
   cube:
-    image: cubejs/cube:v0.35
+    image: cubejs/cube:v1.7.48
     container_name: gravix-cube
     ports:
       - "4000:4000"

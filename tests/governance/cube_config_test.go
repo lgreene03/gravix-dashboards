@@ -81,9 +81,14 @@ func TestEveryCubeDeploymentNamesACacheDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	memory := regexp.MustCompile(`(?s)\{\{-? else -?\}\}.*?name: CUBEJS_CACHE_AND_QUEUE_DRIVER\s+value: "memory"`)
-	if !strings.Contains(string(tpl), "CUBEJS_CACHE_AND_QUEUE_DRIVER") || !memory.Match(tpl) {
-		t.Errorf("the Helm chart's Cube must set CUBEJS_CACHE_AND_QUEUE_DRIVER to memory when Redis " +
-			"is not configured; without it Cube defaults to Cube Store, which the chart does not run (F-074)")
+	if !regexp.MustCompile(`name: CUBEJS_CACHE_AND_QUEUE_DRIVER\s+value: "memory"`).Match(tpl) {
+		t.Errorf("the Helm chart's Cube must set CUBEJS_CACHE_AND_QUEUE_DRIVER to memory; without it " +
+			"Cube defaults to Cube Store, which the chart does not run (F-074)")
+	}
+	// Cube removed Redis as a cache driver in v0.36 (DD-034), so a template that
+	// can still hand it Redis breaks every deployment that enables it.
+	if strings.Contains(string(tpl), `value: "redis"`) {
+		t.Errorf("the Helm chart can still set Cube's cache driver to redis, which the pinned Cube " +
+			"no longer has (DD-034)")
 	}
 }

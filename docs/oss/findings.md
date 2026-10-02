@@ -4150,7 +4150,7 @@ Cube, the endpoints query that failed now answers in 2,255 ms cold, and 14 ms on
 **Found by** a soak test of GRVX-1006's cache warmer against Cube `v0.35` on the bootstrap stack's settings
 **Affects** Cube on the bootstrap stack; the full stack's Trino path is untested
 **Severity** medium — after a Cube restart, two simultaneous first visitors wait about two minutes for anything
-**Status** open; reproduced on the published image in CI, every trial once data is present; not reproduced on Cube v1.7.48
+**Status** fixed by upgrading Cube to v1.7.48 (DD-034)
 
 ### What happens
 
@@ -4231,6 +4231,14 @@ DuckDB path.
 That makes upgrading Cube the fix to measure next, not yet the fix: every dashboard number passes
 through Cube, so an upgrade has to show that the same queries return the same numbers on both
 versions, on both stacks, before it ships.
+
+### Fixed by the upgrade, 2026-10-02
+
+Every stack now runs `cubejs/cube:v1.7.48` (DD-034). It was held to equal answers first: the
+same queries, asked of `v0.35` and `v1.7.48` over the same frozen warehouse, returned identical
+results, 24 of 24 on the bootstrap stack and 8 of 8 on the full stack's Trino
+([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36950619111)). Measuring that
+found F-071 to F-076 and CD-007, all in Gravix rather than Cube, and all fixed before the pin moved.
 
 ## F-061 — a fresh install told its first visitor to adjust filters they never set
 

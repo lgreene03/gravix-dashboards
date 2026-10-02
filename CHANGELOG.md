@@ -43,6 +43,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Changed
 
+- **Cube v0.35 → v1.7.48** — on every stack and in the Helm chart. Two first queries at once after a Cube restart no longer stall every query for two minutes (F-060). The same queries returned the same answers on both versions, on both stacks, before the pin moved (DD-034)
 - **Test suites are split by speed** — `make test-fast` is the contributor suite; `make test-full` and `make test` still run everything. `tests/e2e/`, `tests/correctness/` and `bench/` carry a `//go:build slow` tag, and CI runs every suite on every pull request (GRVX-1206)
 - **`gravix doctor`** — diagnoses setup failures and prints the fix for each rather than the error
 - **Ingestion commits in groups** — concurrent writes to one topic file share an fsync, and a full queue answers `503` with `Retry-After: 1` instead of waiting. Acknowledgement still follows the fsync (SD-023, SD-056)
@@ -83,6 +84,10 @@ Nothing below has shipped in a tagged release yet.
 - **The SQL guide's rate queries rounded every rate to 0.1 per second** — `SUM(request_count) / 300.0` is a decimal with one digit in Trino, so a service with under 15 requests in five minutes read as idle. They now divide as doubles, and CI runs every query on the page against the full stack (CD-006)
 - **The Metabase and Superset guide's steps could not connect to Trino** — Metabase 0.50 has no `presto` engine, the Superset image has no Trino driver, and both tools' Presto clients were refused by Trino. Trino now also answers Presto's protocol headers, and the guide installs Superset's driver (SD-060)
 - **The Spark read check could not fail** — it took any number on Spark's last output line as a row count, whatever the exit status. It now needs a clean exit and an explicit row count, and prints Spark's error when it fails (F-067)
+
+### Deprecated
+
+- **The Helm chart's `redis` values** — Cube removed Redis as its cache driver in v0.36, so nothing in the chart uses them, and `values-prod.yaml` no longer deploys one. They still validate, and will be removed in a later release (DD-034)
 
 ### Security
 
