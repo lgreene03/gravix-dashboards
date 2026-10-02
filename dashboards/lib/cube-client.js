@@ -128,8 +128,47 @@ var CubeClient = (function() {
         return { path: '/api/v1/percentile', params: params };
     }
 
+    // The time members the dashboard filters by range.
+    var TIME_MEMBERS = ['RequestMetricsMinute.bucketStart', 'ServiceEvents.eventTime'];
+
+    /**
+     * The filters to send Cube for the dashboard's filters. The dashboard keeps a
+     * date range as a "gte" and an "lte" filter on a time member. Cube binds
+     * those values as text: DuckDB compares text with a timestamp, and Trino
+     * refuses to, so on Trino every such query failed (F-075). One inDateRange
+     * filter has Cube cast both bounds, on both engines, and gives the model's
+     * FILTER_PARAMS both, so DuckDB reads only those days (F-059). Each pair
+     * becomes one inDateRange where its first half was; a lone bound and every
+     * other filter pass through unchanged.
+     * @param {Array<{member: string, operator: string, values: string[]}>} filters
+     * @returns {Array<{member: string, operator: string, values: string[]}>}
+     */
+    function toCubeFilters(filters) {
+        var bounds = {};
+        (filters || []).forEach(function(f) {
+            if (TIME_MEMBERS.indexOf(f.member) < 0) return;
+            if (f.operator !== 'gte' && f.operator !== 'lte') return;
+            bounds[f.member] = bounds[f.member] || {};
+            bounds[f.member][f.operator] = f.values[0];
+        });
+        var out = [];
+        (filters || []).forEach(function(f) {
+            var b = bounds[f.member];
+            if (!b || b.gte === undefined || b.lte === undefined ||
+                (f.operator !== 'gte' && f.operator !== 'lte')) {
+                out.push(f);
+                return;
+            }
+            if (b.done) return;
+            b.done = true;
+            out.push({ member: f.member, operator: 'inDateRange', values: [b.gte, b.lte] });
+        });
+        return out;
+    }
+
     return {
         CACHE_MAX_AGE_MS: CACHE_MAX_AGE_MS,
+        toCubeFilters: toCubeFilters,
         PERCENTILE_MEASURES: PERCENTILE_MEASURES,
         isPercentileMeasure: isPercentileMeasure,
         routeFor: routeFor,

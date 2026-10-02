@@ -532,7 +532,7 @@
                 ],
                 dimensions: ["RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"],
                 order: { "RequestMetricsMinute.requestCount": "desc" },
-                filters: filters,
+                filters: CubeClient.toCubeFilters(filters),
                 limit: 500
             };
             const response = await fetch(CUBE_API_URL, {
@@ -716,7 +716,7 @@
                 const summaryQuery = {
                     measures: ["RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount",
                         "RequestMetricsMinute.errorRate"],
-                    filters: filters
+                    filters: CubeClient.toCubeFilters(filters)
                 };
                 const [summaryResp, ...summaryPercentiles] = await Promise.all([
                     fetch(CUBE_API_URL, {
@@ -1864,7 +1864,7 @@
                 measures: ["RequestMetricsMinute.requestCount", "RequestMetricsMinute.errorCount", "RequestMetricsMinute.errorRate"],
                 dimensions: ["RequestMetricsMinute.pathTemplate", "RequestMetricsMinute.method"],
                 order: { "RequestMetricsMinute.errorCount": "desc" },
-                filters: filters,
+                filters: CubeClient.toCubeFilters(filters),
                 limit: 10
             };
 
@@ -1988,7 +1988,7 @@
                 }],
                 dimensions: ["ServiceEvents.eventType"],
                 order: { "ServiceEvents.eventTime": "asc" },
-                filters: filters,
+                filters: CubeClient.toCubeFilters(filters),
                 limit: 5000
             };
             const response = await fetch(CUBE_API_URL, {
@@ -2014,7 +2014,7 @@
                     "ServiceEvents.message"
                 ],
                 order: { "ServiceEvents.eventTime": "desc" },
-                filters: filters,
+                filters: CubeClient.toCubeFilters(filters),
                 offset: offset,
                 limit: limit
             };
@@ -2035,7 +2035,7 @@
             const query = {
                 dimensions: ["ServiceEvents.eventTime", "ServiceEvents.service", "ServiceEvents.eventType"],
                 order: { "ServiceEvents.eventTime": "asc" },
-                filters: filters,
+                filters: CubeClient.toCubeFilters(filters),
                 limit: 100
             };
             const response = await fetch(CUBE_API_URL, {
