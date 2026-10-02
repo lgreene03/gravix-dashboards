@@ -11,10 +11,11 @@ of the same warehouse, get the same answers.
 
   cube_equivalence.py capture OUT.json [--range FROM TO]
       Waits until the warehouse answers with data, then asks every query in
-      QUERIES under two tokens: one with no tenant, and one scoped to the
-      tenant whose directory is first under data/warehouse, which is the path
-      the dashboard takes through cube.js's tenant filter. --range reuses a
-      date range from an earlier capture so both answer the same question.
+      QUERIES under up to three tokens: one with no tenant; one scoped to
+      TENANT_ID, which is the path the dashboard takes through cube.js's
+      tenant filter; and one for a tenant that has no data, which must see
+      none (F-076). --range reuses a date range from an earlier capture so
+      both answer the same question.
 
   cube_equivalence.py trino-fixture DAY
       Prints the INSERT statements that seed the full stack's three Cube
@@ -36,7 +37,7 @@ as the event cubes before their hourly rollup, is listed as not compared. Any
 other error on either side counts as a difference.
 
 Exit codes: 0 captured, or no differences; 1 different, or nothing compared;
-2 the warehouse never answered with data.
+2 the warehouse never answered with data; 4 a tenant with no data read data.
 """
 import base64
 import datetime
@@ -78,6 +79,8 @@ QUERIES = {
                      "order": {"ServiceEventsDaily.eventDay": "asc", "ServiceEventsDaily.service": "asc",
                                "ServiceEventsDaily.eventType": "asc"}},
 }
+# A tenant no stack creates.
+OTHER_TENANT = "00000000-0000-4000-8000-00000000f076"
 # Queries whose time dimension takes the date range.
 RANGED = {"hourly_counts", "minute_percentiles", "events_hourly"}
 
@@ -124,6 +127,10 @@ def capture(out, date_range):
     tokens = {"no_tenant": token(secret, "")}
     if tenant:
         tokens["tenant"] = token(secret, tenant)
+        # A tenant with no data: what it reads is what one tenant can read of
+        # another's. One warehouse tenant cannot show a missing filter, because
+        # its filtered and unfiltered answers are the same.
+        tokens["other_tenant"] = token(secret, OTHER_TENANT)
 
     deadline = time.time() + float(os.environ.get("DATA_WAIT_SECONDS", "600"))
     while True:
@@ -150,7 +157,29 @@ def capture(out, date_range):
             print(f"{who}/{name}: {label}")
     with open(out, "w") as f:
         json.dump({"range": date_range, "tenant": tenant, "results": results}, f, indent=1, sort_keys=True)
+    leaked = [name for name in QUERIES if leaks(results.get(f"other_tenant/{name}"))]
+    if leaked:
+        print(f"ISOLATION BROKEN: a token for tenant {OTHER_TENANT}, which has no data, read rows from "
+              f"{', '.join(leaked)} (F-076)")
+        return 4
     return 0
+
+
+def leaks(result):
+    """True if an answer holds a row with any non-empty, non-zero value."""
+    if not result or result["kind"] != "data":
+        return False
+    for row in result["rows"]:
+        for v in row.values():
+            if v in (None, "", 0, "0"):
+                continue
+            try:
+                if float(v) == 0:
+                    continue
+            except (TypeError, ValueError):
+                pass
+            return True
+    return False
 
 
 def trino_fixture(day):
@@ -234,6 +263,8 @@ def compare(path_a, path_b):
         rows_a, rows_b = ra["rows"], rb["rows"]
         if len(rows_a) != len(rows_b):
             print(f"{key}: {len(rows_a)} row(s) against {len(rows_b)}")
+            print(f"  A: {rows_a[:3]}")
+            print(f"  B: {rows_b[:3]}")
             diffs += 1
             continue
         bad = 0

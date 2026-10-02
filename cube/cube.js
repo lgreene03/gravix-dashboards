@@ -54,12 +54,18 @@ module.exports = {
             if (!token) {
                 throw new Error('No authorization token provided');
             }
+            let decoded;
             try {
-                const decoded = jwt.verify(token, jwtSecret);
-                return { securityContext: { tenant_id: decoded.tenant_id } };
+                decoded = jwt.verify(token, jwtSecret);
             } catch (e) {
                 throw new Error('Invalid or expired token');
             }
+            // Cube takes the security context from req.securityContext, or
+            // from a returned `security_context`. It ignores a returned
+            // `securityContext`, which is what this once returned, so every
+            // query ran with no tenant filter and read every tenant (F-076).
+            req.securityContext = { tenant_id: decoded.tenant_id };
+            return;
         }
 
         // Legacy mode: simple API secret check
@@ -76,10 +82,15 @@ module.exports = {
 
         // Multi-tenant isolation: force tenant_id filter when security context is present
         if (securityContext && securityContext.tenant_id) {
+            // The filter goes on the cube the query reads. No cube joins
+            // another, so a filter on a different cube fails the query: the
+            // events log asks only for ServiceEvents dimensions.
+            const first = (query.measures && query.measures[0])
+                || (query.dimensions && query.dimensions[0])
+                || (query.timeDimensions && query.timeDimensions[0] && query.timeDimensions[0].dimension)
+                || 'RequestMetricsMinute.count';
             const tenantFilter = {
-                member: query.measures && query.measures[0]
-                    ? query.measures[0].split('.')[0] + '.tenantId'
-                    : 'RequestMetricsMinute.tenantId',
+                member: first.split('.')[0] + '.tenantId',
                 operator: 'equals',
                 values: [securityContext.tenant_id]
             };

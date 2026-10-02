@@ -4566,3 +4566,72 @@ compose file.
 
 Redis, where the chart enables it, is a separate problem for the Cube upgrade: Cube deprecated it as
 the cache driver in v0.32 and removed it in v0.36.
+
+## F-075 — on Trino, every query filtered by time with `gte` or `lte` fails
+
+**Found by** the Cube equivalence run on the full stack: the gateway's cache warmer sent the endpoints query, and Trino refused it on both Cube versions
+**Affects** `dashboards/app.js` (every `gte`/`lte` filter on `bucketStart` and `eventTime`), `pkg/gatewaycore/cache_warm.go` (`endpoints`)
+**Severity** high once F-070 is decided, none today — every signed-in query on Trino already fails on F-070's missing tenant column
+**Status** open; the fix below is the next change after PR #29
+
+Cube turns a `gte` filter on a time dimension into `CAST(bucket_start AS TIMESTAMP) >= ?`, and
+binds the value as text. DuckDB compares the two by casting the text. Trino does not:
+
+```
+line 3:40: Cannot apply operator: timestamp(3) <= varchar(19)
+```
+
+The dashboard sends its date range as a `gte` and an `lte` filter for the endpoints table, the
+comparisons, the events log and the events timeline, and the warmer copies the endpoints query. So on
+Trino all of them fail. The model cannot fix it, because the parameter's type is Cube's choice, not
+the column's.
+
+**Recommended fix.** Send the range as one `inDateRange` filter. Cube then casts its values to
+timestamps on both engines. It also hands `FILTER_PARAMS` both bounds, so DuckDB prunes those
+queries to the days in range, which F-059 had to give up on for `gte` and `lte`. It changes every
+range filter in `app.js`, the two places that read a range back out of a filter, and the warmer,
+whose queries must match the dashboard's byte for byte (GRVX-1006).
+
+## F-076 — Cube applied no tenant filter, on any stack, on any version
+
+**Found by** the Cube upgrade measurement: v1.7.48 logged that it had no security context, and so did the pinned v0.35
+**Affects** `cube/cube.js` (`checkAuth`, `queryRewrite`)
+**Severity** critical under `SECURITY.md` — on a stack with more than one tenant, a signed-in user's dashboard read every tenant's metrics and events
+**Status** fixed; whether to publish an advisory is the owner's decision (`open-decisions.md`)
+
+`checkAuth` verified the token and returned `{ securityContext: { tenant_id } }`. Cube takes the
+security context from `req.securityContext`, or from a returned `security_context`, and ignores any
+other return value. v0.35 and v1.7.48 have the same code for this. So Cube had no security context,
+`queryRewrite` added no tenant filter, and every query ran over every tenant's rows. Cube logged it
+once at startup, as a warning: `Value of securityContext (previously authInfo) expected to be object,
+actual: undefined`.
+
+The bootstrap stack keeps each tenant's files under its own directory, and Cube reads all of them,
+so the filter was the only boundary between tenants. On a lab warehouse with two tenants, Cube v0.35
+gave a token for tenant A, a token for tenant B, and a token for a tenant that does not exist the
+same answer: both tenants' 1,440,542 requests. The full stack reads one table for everyone, so it
+had the same exposure, behind F-070.
+
+Nothing caught it because every test and measurement ran with one tenant. One tenant's filtered and
+unfiltered answers are the same.
+
+`checkAuth` now sets `req.securityContext`. A second fault was hiding behind the first: the filter
+went on `RequestMetricsMinute.tenantId` for any query without a measure, and the events log asks
+only for `ServiceEvents` dimensions. No cube joins another, so that query would have failed as soon
+as the filter applied. The filter now goes on the cube the query names first. On the same two-tenant
+warehouse, A then read 1,440,000, B read 542, and the absent tenant read nothing, on v0.35 and
+v1.7.48 alike, with each tenant's events scoped the same way.
+
+Three tests hold it:
+
+- `tests/cube/cube_auth.test.js` runs `cube.js` against Cube's documented contract, and fails on
+  the old file.
+- The onboarding gate, on every pull request, asks the bootstrap stack's Cube as a tenant with no
+  data, using a token signed with the stack's own secret. It must see nothing, and the tenant's
+  events-log query must answer. On the old file it reports that the absent tenant read the
+  bootstrap tenant's requests.
+- `cube_equivalence.py` asks every query as an absent tenant too, and exits 4 if any answer holds
+  data, on either Cube version.
+
+On the full stack, a signed-in user's queries now fail instead of reading every tenant, because the
+Trino tables have no `tenant_id` column. That is F-070's stated condition, and it is the safe one.

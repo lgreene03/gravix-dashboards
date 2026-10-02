@@ -102,6 +102,16 @@ jobs:
       - name: Compare
         run: python3 scripts/cube_equivalence.py compare "$RUNNER_TEMP/pinned.json" "$RUNNER_TEMP/candidate.json"
 
+      - name: Keep both captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cube-equivalence-bootstrap
+          path: |
+            ${{ runner.temp }}/pinned.json
+            ${{ runner.temp }}/candidate.json
+          if-no-files-found: ignore
+
       - name: Tear down
         if: always()
         run: docker compose down -v
@@ -184,6 +194,16 @@ jobs:
       - name: Cube's log on failure
         if: failure()
         run: docker compose logs --no-color --tail=80 cube trino || true
+
+      - name: Keep both captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cube-equivalence-full
+          path: |
+            ${{ runner.temp }}/pinned.json
+            ${{ runner.temp }}/candidate.json
+          if-no-files-found: ignore
 
       - name: Tear down
         if: always()

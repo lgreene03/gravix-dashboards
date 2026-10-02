@@ -85,6 +85,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Security
 
+- **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
 - **The dashboard was served an unrestricted API key before login** — `dashboard_config.js` now carries a key scoped to `admin:read`, and existing installs are narrowed on their next boot (SD-013)
 
