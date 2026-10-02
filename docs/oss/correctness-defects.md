@@ -23,6 +23,7 @@ defect register is a project that has not looked.
 | CD-004 | GRVX-806 | A second evolution silently discards the first: adding a dimension erases a previously added percentile | Open |
 | CD-005 | GRVX-801 | Compaction wrote Parquet at a different zstd level than recompute, so the two could never be byte-identical | Fixed |
 | CD-006 | GRVX-1103 | The SQL guide's rate queries rounded every rate to 0.1/s, so a service with under 15 requests in five minutes showed as idle | Fixed |
+| CD-007 | GRVX-808 | On Trino, Cube's `errorRate` divided two integers, so every error rate under 100% was 0 | Fixed |
 
 ---
 
@@ -356,3 +357,38 @@ page's SQL, and fails on the old page. `TestSQLGuideQueriesRunOnTrino` runs ever
 against the full stack's Trino in `docker-smoke`, and fails if a rate or ratio column comes back as
 anything but a double. On the old page it reports both rate queries as `DECIMAL`.
 
+## CD-007 — on Trino, every error rate under 100% was 0
+
+**Owning spec:** GRVX-808, which declared `errorRate` correct and froze it (SD-061). CD-006 was the same defect in the SQL guide
+**Found by:** asking the full stack's Cube the equivalence queries on Trino 435, once F-074 let it answer
+**State:** fixed
+
+### What happened
+
+`RequestMetricsMinute.errorRate` was `sum(error_count) / NULLIF(sum(request_count), 0)`. Both sums are
+`BIGINT`. DuckDB's `/` divides integers as floats, so the bootstrap stack was right. Trino divides
+them as integers, so on the full stack and every Helm deployment the quotient was 0 for any error rate
+under 100%. On the equivalence fixture's first hour:
+
+```
+errorCount  requestCount  errorRate
+146         8960          0
+```
+
+The true rate is 0.0163. The dashboard's error-rate card and chart, and the SLO views that read the
+same measure, would have shown 0% on every Trino deployment.
+
+### Why nothing caught it
+
+No Trino deployment had ever answered a Cube query (F-074), and the full stack's tables were empty
+(F-070). Each fault hid the next: the rate was wrong behind a Cube that answered nothing, in front of
+tables that held nothing.
+
+### The repair
+
+`errorRate` casts the error sum to `DOUBLE` before dividing. DuckDB's answers do not change, because
+its division already returned a double. On the same fixture Trino now returns 0.0163.
+
+Two tests hold it. `TestCubeMeasuresDivideAsDoubles` rejects an uncast aggregate divided in any Cube
+model, and fails on the old one. `TestCubeAnswersOnTheFullStack` asks the full stack's Cube in
+docker-smoke for 33 requests with 1 error, wants 1/33, and on the old model gets 0.

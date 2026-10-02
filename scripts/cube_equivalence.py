@@ -16,6 +16,12 @@ of the same warehouse, get the same answers.
       the dashboard takes through cube.js's tenant filter. --range reuses a
       date range from an earlier capture so both answer the same question.
 
+  cube_equivalence.py trino-fixture DAY
+      Prints the INSERT statements that seed the full stack's three Cube
+      tables with rows for DAY (YYYY-MM-DD), in the formats the rollups write.
+      Nothing in the full stack writes where its Trino tables read (F-070), so
+      without them every query there would compare two empty answers.
+
   cube_equivalence.py compare A.json B.json
       Prints every difference and exits 1 if there is one. Numbers are
       compared as numbers, because Cube versions differ in whether a measure
@@ -147,6 +153,41 @@ def capture(out, date_range):
     return 0
 
 
+def trino_fixture(day):
+    """Deterministic rows for one day: three services, two endpoints, 150
+    minutes across three hours, and a few events, so every query in QUERIES has
+    more than one row to compare."""
+    services = ["checkout", "payments", "search"]
+    endpoints = [("GET", "/orders/{id}"), ("POST", "/orders")]
+    metrics = []
+    for m in range(150):
+        for si, svc in enumerate(services):
+            for ei, (method, path) in enumerate(endpoints):
+                req = (m * 7 + si * 3 + ei) % 50 + 1
+                err = req // 10 if m % 5 == 0 else 0
+                p50 = 5.0 + (m + si) % 13
+                metrics.append(f"('{day} {m // 60:02d}:{m % 60:02d}:00', '{svc}', '{method}', '{path}', "
+                               f"{req}, {err}, {err / req!r}, {p50!r}, {p50 * 2!r}, {p50 * 3!r}, '{day}')")
+    daily, detail = [], []
+    for si, svc in enumerate(services):
+        for ti, kind in enumerate(["deploy", "config_change"]):
+            daily.append(f"('{day}', '{svc}', '{kind}', {si * 2 + ti + 1})")
+            for k in range(si * 2 + ti + 1):
+                minute = (si * 37 + ti * 11 + k * 23) % 180
+                # transforms/service_events_detail writes event_time as RFC 3339.
+                detail.append(f"('', '{day}T{minute // 60:02d}:{minute % 60:02d}:00Z', '{svc}', '{kind}', "
+                              f"'{svc}-{k}', '{kind} {k}', '{{}}')")
+    return ";\n".join([
+        "INSERT INTO gravix.raw.request_metrics_minute (bucket_start, service, method, path_template, "
+        "request_count, error_count, error_rate, p50_latency_ms, p95_latency_ms, p99_latency_ms, event_day) "
+        "VALUES " + ",\n".join(metrics),
+        "INSERT INTO gravix.raw.service_events_daily (event_day, service, event_type, event_count) "
+        "VALUES " + ",\n".join(daily),
+        "INSERT INTO gravix.raw.service_events_detail (tenant_id, event_time, service, event_type, "
+        "entity_id, message, properties) VALUES " + ",\n".join(detail),
+    ]) + ";"
+
+
 def norm(v):
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         return float(v)
@@ -225,6 +266,9 @@ def main(argv):
     if len(argv) >= 2 and argv[0] == "capture":
         rng = argv[3:5] if len(argv) == 5 and argv[2] == "--range" else None
         return capture(argv[1], rng)
+    if len(argv) == 2 and argv[0] == "trino-fixture":
+        print(trino_fixture(argv[1]))
+        return 0
     if len(argv) == 3 and argv[0] == "compare":
         return compare(argv[1], argv[2])
     print(__doc__, file=sys.stderr)

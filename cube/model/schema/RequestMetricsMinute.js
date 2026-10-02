@@ -46,8 +46,11 @@ cube(`RequestMetricsMinute`, {
       title: `Total Errors`
     },
 
+    // Cast before dividing: both sums are BIGINT, and Trino divides integers
+    // as integers, so every rate under 100% came back 0 there (CD-007). DuckDB's
+    // "/" is already a float division, so its answers do not change.
     errorRate: {
-      sql: `sum(error_count) / NULLIF(sum(request_count), 0)`,
+      sql: `CAST(sum(error_count) AS DOUBLE) / NULLIF(sum(request_count), 0)`,
       type: `number`,
       format: `percent`,
       title: `Error Rate`

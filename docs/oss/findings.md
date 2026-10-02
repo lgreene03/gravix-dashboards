@@ -4513,3 +4513,56 @@ compiled model carries the VARCHAR type.
 
 A reader querying the warehouse with DuckDB directly meets the same thing, so the bare-Parquet guide
 now says to pass the same option when filtering to a day.
+
+## F-073 — on Trino, every query on the events cube's time failed
+
+**Found by** preparing the Cube equivalence measurement for the full stack, whose Cube reads Trino
+**Affects** `cube/model/schema/ServiceEvents.js`, `cube/model_flags.js`; the full stack and the Helm chart, which both put Cube on Trino
+**Severity** medium today, high once F-070 is decided — the events timeline and log, and the deploy markers on charts, fail on Trino as soon as an event reaches the table
+**Status** fixed
+
+`ServiceEvents.eventTime` was `CAST(event_time AS TIMESTAMP)`, the expression `bucket_start` uses.
+The events-detail rollup writes `event_time` with Go's `time.RFC3339`, `2026-10-02T10:30:00Z`, and
+Trino 435 refuses that: `Value cannot be cast to timestamp`. DuckDB accepts it, so the bootstrap
+stack worked and nothing caught it. On Trino, every query that groups or filters by the event time
+failed, which is every query the dashboard sends that cube.
+
+Nobody has met it, because of F-070: the full stack's events tables read a prefix no job writes, so
+there was never a row to cast. The fix had to land before F-070's, or deciding F-070 would have
+turned an empty events tab into a broken one.
+
+`isoTimestampSql` in `model_flags.js` gives Trino `CAST(from_iso8601_timestamp(event_time) AS
+TIMESTAMP)`, which keeps the UTC wall time as `bucket_start`'s cast does, and leaves DuckDB's SQL as it
+was. `TestCubeTimeColumnsCastOnTrino` evaluates both time expressions the models give Trino and runs
+them on the live stack's Trino against values in the formats the rollups write. It runs in
+docker-smoke, and fails on the old expression with Trino's own error.
+
+## F-074 — the full stack's Cube, and the Helm chart's without Redis, refused every query
+
+**Found by** running the Cube equivalence queries against the full stack's Cube settings on Trino 435
+**Affects** `docker-compose.yml` (`cube`), `deploy/gravix/templates/cube.yaml`
+**Severity** critical on those deployments — every dashboard number passes through Cube, and Cube answered none
+**Status** fixed
+
+In production mode, which every Gravix deployment runs, Cube v0.35 defaults its cache and queue
+driver to Cube Store. No Gravix deployment runs Cube Store, so every query is answered:
+
+```
+{"error":"Error: Cube Store was specified as queue/cache driver. Please set CUBEJS_CUBESTORE_HOST
+ and CUBEJS_CUBESTORE_PORT variables. …"}
+```
+
+F-035 found and fixed exactly this on the bootstrap stack, with `CUBEJS_CACHE_AND_QUEUE_DRIVER=memory`.
+The full stack's `cube` service never got the same line. Neither did the Helm chart, unless Redis is
+enabled, and it is off in `values.yaml`. Nothing caught it because nothing asked either Cube a
+question. docker-smoke checked that Cube was ready, and readiness does not touch the cache driver.
+
+Both now set `memory` as the bootstrap stack does, and the full stack also turns off the refresh
+scheduler, which has nothing to refresh. Nothing declares a pre-aggregation (SD-024), so there is
+nothing for Cube Store to hold. Two tests hold this. `TestEveryCubeDeploymentNamesACacheDriver` reads
+both compose files and the Helm template. `TestCubeAnswersOnTheFullStack` asks the full stack's Cube
+for docker-smoke's fixture rows on every pull request, and fails with the Cube Store error on the old
+compose file.
+
+Redis, where the chart enables it, is a separate problem for the Cube upgrade: Cube deprecated it as
+the cache driver in v0.32 and removed it in v0.36.

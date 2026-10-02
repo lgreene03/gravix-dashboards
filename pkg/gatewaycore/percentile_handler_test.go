@@ -127,9 +127,12 @@ func TestBucketMeasuresMarkedNonAggregatable(t *testing.T) {
 func TestCorrectMeasuresUnchanged(t *testing.T) {
 	model := readCubeModel(t)
 
-	// errorRate is already correct across buckets and must not be touched.
-	if !strings.Contains(model, "sum(error_count) / NULLIF(sum(request_count), 0)") {
-		t.Error("errorRate's formula changed; it was already correct")
+	// errorRate is a ratio of sums, which is correct across buckets, and its
+	// formula must not change. The cast is not a change of formula: without it
+	// Trino divides the two BIGINT sums as integers, and every rate under 100%
+	// was 0 (CD-007, SD-061).
+	if !strings.Contains(model, "CAST(sum(error_count) AS DOUBLE) / NULLIF(sum(request_count), 0)") {
+		t.Error("errorRate's formula changed; it must stay the ratio of sums, divided as a double")
 	}
 	for _, want := range []string{
 		"requestCount: {", "errorCount: {", "errorRate: {",

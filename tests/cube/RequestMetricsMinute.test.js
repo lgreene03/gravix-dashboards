@@ -149,7 +149,9 @@ test('the measures that were already correct are unchanged', () => {
   const { def } = loadModel({ CUBEJS_DB_TYPE: 'duckdb' });
   assert.equal(def.measures.requestCount.type, 'sum');
   assert.equal(def.measures.errorCount.type, 'sum');
-  assert.equal(def.measures.errorRate.sql, 'sum(error_count) / NULLIF(sum(request_count), 0)');
+  // Still the ratio of sums, divided as a double: Trino divides BIGINTs as
+  // integers, and every rate under 100% read 0 there (CD-007, SD-061).
+  assert.equal(def.measures.errorRate.sql, 'CAST(sum(error_count) AS DOUBLE) / NULLIF(sum(request_count), 0)');
 });
 
 // ─── AC-10: the sketch is present but hidden ───

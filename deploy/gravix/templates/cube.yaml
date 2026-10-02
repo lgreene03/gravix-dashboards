@@ -72,6 +72,11 @@ spec:
               {{- else }}
               value: "redis://{{ .Release.Name }}-redis:6379"
               {{- end }}
+            {{- else }}
+            # Without Redis, Cube's default in production mode is Cube Store,
+            # which this chart does not run, and every query failed (F-074).
+            - name: CUBEJS_CACHE_AND_QUEUE_DRIVER
+              value: "memory"
             {{- end }}
             # DuckDB performance tuning (5.1): only effective when CUBEJS_DB_TYPE=duckdb.
             - name: CUBEJS_DB_MAX_POOL
