@@ -975,11 +975,15 @@ func (gw *gateway) queryCubeMetric(ctx context.Context, token string, rule *tena
 		})
 	}
 
-	cutoff := time.Now().UTC().Add(-time.Duration(rule.WindowMinutes) * time.Minute)
+	// The window as one inDateRange ending now. Cube binds a lone gte on the
+	// time column as text, which Trino refuses to compare with a timestamp, so
+	// every error-rate and throughput rule failed to evaluate there (F-075).
+	now := time.Now().UTC()
+	cutoff := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
 	filters = append(filters, map[string]interface{}{
 		"member":   "RequestMetricsMinute.bucketStart",
-		"operator": "gte",
-		"values":   []string{cutoff.Format("2006-01-02T15:04:05")},
+		"operator": "inDateRange",
+		"values":   []string{cutoff.Format("2006-01-02T15:04:05"), now.Format("2006-01-02T15:04:05")},
 	})
 
 	query := map[string]interface{}{

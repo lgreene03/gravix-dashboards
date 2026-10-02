@@ -4,8 +4,9 @@
 package gatewaycore
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/pkg/auth"
+	"github.com/lgreene/gravix-dashboards/pkg/recompute"
 	"github.com/lgreene/gravix-dashboards/pkg/tenantdb"
 )
 
@@ -140,15 +142,18 @@ func (gw *gateway) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "metric parameter required (error_rate, p50_latency, p95_latency, p99_latency, throughput)")
 		return
 	}
-	validMetrics := map[string]string{
-		"error_rate":  "RequestMetricsMinute.errorRate",
-		"p50_latency": "RequestMetricsMinute.p50LatencyMs",
-		"p95_latency": "RequestMetricsMinute.p95LatencyMs",
-		"p99_latency": "RequestMetricsMinute.p99LatencyMs",
-		"throughput":  "RequestMetricsMinute.requestCount",
+	// error_rate and throughput aggregate correctly across buckets, so Cube
+	// answers them. A percentile does not (GRVX-808): the gateway merges the
+	// window's sketches, as /api/v1/percentile does, and answers in that
+	// endpoint's shape.
+	cubeMeasures := map[string]string{
+		"error_rate": "RequestMetricsMinute.errorRate",
+		"throughput": "RequestMetricsMinute.requestCount",
 	}
-	cubeMeasure, ok := validMetrics[metric]
-	if !ok {
+	quantiles := map[string]float64{"p50_latency": 0.50, "p95_latency": 0.95, "p99_latency": 0.99}
+	cubeMeasure, isCube := cubeMeasures[metric]
+	quantile, isPercentile := quantiles[metric]
+	if !isCube && !isPercentile {
 		writeError(w, http.StatusBadRequest, "invalid metric; valid values: error_rate, p50_latency, p95_latency, p99_latency, throughput")
 		return
 	}
@@ -178,59 +183,97 @@ func (gw *gateway) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build a Cube.js REST API query.
-	cubeQuery := map[string]any{
-		"measures": []string{cubeMeasure},
-		"timeDimensions": []map[string]any{{
-			"dimension":   "RequestMetricsMinute.timestamp",
-			"granularity": granularity,
-			"dateRange":   []string{from.Format(time.RFC3339), to.Format(time.RFC3339)},
-		}},
+	if isPercentile {
+		req := percentileRequest{
+			metric: recompute.MetricRequestMinute, quantile: quantile,
+			from: from, to: to, granularity: granularity,
+			filters: map[string]string{}, tenantID: info.TenantID,
+		}
+		if service != "" {
+			req.filters["service"] = service
+		}
+		if pathTemplate != "" {
+			req.filters["path_template"] = pathTemplate
+		}
+		resp, status, msg := gw.computeWindowPercentile(r.Context(), req)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+		w.Header().Set("Cache-Control", "max-age=60")
+		writeJSON(w, http.StatusOK, resp)
+		return
 	}
-	filters := []map[string]any{{
-		"member":   "RequestMetricsMinute.tenantId",
-		"operator": "equals",
-		"values":   []string{info.TenantID},
-	}}
+
+	// Cube adds the tenant filter itself, from the token (cube/cube.js). The
+	// token is minted for the key's tenant, as the alert evaluator's are.
+	filters := []map[string]any{}
 	if service != "" {
 		filters = append(filters, map[string]any{
-			"member":   "RequestMetricsMinute.service",
-			"operator": "equals",
-			"values":   []string{service},
+			"member": "RequestMetricsMinute.service", "operator": "equals", "values": []string{service},
 		})
 	}
 	if pathTemplate != "" {
 		filters = append(filters, map[string]any{
-			"member":   "RequestMetricsMinute.pathTemplate",
-			"operator": "equals",
-			"values":   []string{pathTemplate},
+			"member": "RequestMetricsMinute.pathTemplate", "operator": "equals", "values": []string{pathTemplate},
 		})
 	}
-	cubeQuery["filters"] = filters
-
-	queryBytes, _ := json.Marshal(cubeQuery)
-	cubeURL := fmt.Sprintf("%s/cubejs-api/v1/load?query=%s", gw.cubeAPIURL, queryBytes)
-
-	cubeReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, cubeURL, nil)
+	query, _ := json.Marshal(map[string]any{"query": map[string]any{
+		"measures": []string{cubeMeasure},
+		"timeDimensions": []map[string]any{{
+			"dimension":   "RequestMetricsMinute.bucketStart",
+			"granularity": granularity,
+			"dateRange":   []string{from.Format(time.RFC3339), to.Format(time.RFC3339)},
+		}},
+		"filters": filters,
+	}})
+	token, err := gw.tokens.Generate(info.TenantID, "public-metrics-api", "public-metrics-api@system", "viewer")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to build query")
+		writeError(w, http.StatusInternalServerError, "failed to authorize the query")
 		return
 	}
-	if gw.cubeAPISecret != "" {
-		cubeReq.Header.Set("Authorization", "Bearer "+gw.cubeAPISecret)
-	}
 
-	resp, err := http.DefaultClient.Do(cubeReq)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "query engine unavailable")
+	// Cube answers "Continue wait" while a query is still running, and the
+	// query keeps running; asking again waits for the same result.
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	for {
+		cubeReq, err := http.NewRequestWithContext(ctx, http.MethodPost, gw.cubeAPIURL, bytes.NewReader(query))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to build query")
+			return
+		}
+		cubeReq.Header.Set("Content-Type", "application/json")
+		cubeReq.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(cubeReq)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "query engine unavailable")
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		resp.Body.Close()
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "query engine unavailable")
+			return
+		}
+		var wait struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(body, &wait) == nil && wait.Error == "Continue wait" {
+			select {
+			case <-ctx.Done():
+				writeError(w, http.StatusGatewayTimeout, "the query did not finish in time; ask again")
+				return
+			case <-time.After(time.Second):
+				continue
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "max-age=60")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
 		return
 	}
-	defer resp.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "max-age=60")
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
 }
 
 // ─── Scheduled Data Exports (6.7) ────────────────────────────────────────────
