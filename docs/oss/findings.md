@@ -4457,3 +4457,29 @@ What this does to PR #27's live tests: the Hive tables they read are empty on th
 sync tests would compare two empty tables and the Spark check would count zero rows. CI therefore
 inserts fixture rows into the Hive table first, and says why, so the three tests check a copy of real
 rows. That tests the Iceberg path. It does not fix this.
+
+## F-071 — the bootstrap stack's events tab was always empty
+
+**Found by** measuring a Cube upgrade: the event cubes had no files on either Cube version, and the reason was the stack, not Cube
+**Affects** `docker-compose.bootstrap.yml`
+**Severity** medium — the events tab, and the deploy markers it puts on charts, showed nothing on the stack most people start with
+**Status** fixed
+
+The dashboard's events timeline and log read the `ServiceEvents` cube, which is
+`warehouse/<tenant>/service_events_detail/`. The full stack runs `service-events-detail-rollup` to
+write it. The bootstrap stack never had that job, so Cube answered every events query with
+`No files found that match the pattern …/service_events_detail/**/*.parquet`. `dashboards/app.js`
+turns a failed events query into an empty list, so nothing said anything was wrong. Meanwhile the
+synthetic traffic sent an event every 30 seconds.
+
+The daily events rollup it did have ran hourly, and its first run comes before anything has been
+ingested, so the daily view was also empty for the first hour of every fresh stack.
+
+The bootstrap stack now runs both event rollups every five minutes, like the request rollup. Each
+run rewrites the day's file and deletes the previous one (DD-015), so the shorter cadence cannot
+multiply rows. `TestEveryCubeTableIsWrittenOnTheBootstrapStack` reads which warehouse table each Cube
+model names and fails if no job in the bootstrap stack writes it; it names `service_events_detail` on
+the old file.
+
+The full stack's event rollups are still hourly. Its dashboard cannot show a signed-in tenant's data
+until F-070 is decided, so the cadence there is not what stands between a user and their events.

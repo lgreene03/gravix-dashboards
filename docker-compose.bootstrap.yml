@@ -271,15 +271,20 @@ services:
     container_name: gravix-events-rollup
     restart: always
     entrypoint: ["/bin/sh", "-c"]
+    # Every five minutes, like the request rollup, not hourly: its first run
+    # comes before any event has been ingested, so hourly left the events tab
+    # empty for the first hour of a fresh stack (F-071). Each run rewrites the
+    # day's file and deletes the old one (DD-015), so running it more often
+    # cannot multiply rows.
     command:
       - |
-        echo "Starting service-events rollup cron (every hour)..."
+        echo "Starting service-events rollup cron (every 5 minutes)..."
         while true; do
           echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Running service-events rollup..."
           ./service-events-rollup \
             -input-dir ./data/raw/service_events \
             -output-dir ./data/warehouse/service_events_daily || echo "Rollup failed, will retry next cycle"
-          sleep 3600
+          sleep 300
         done
     volumes:
       - ./data:/app/data
@@ -288,6 +293,41 @@ services:
     # raw/service_events/ instead and finds nothing, forever (F-027). The
     # -input-dir/-output-dir flags above are inert in this mode.
     # Still no S3 variables: local disk only.
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+    depends_on:
+      bootstrap-init:
+        condition: service_completed_successfully
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - backend
+
+  # The events tab's timeline and log read ServiceEvents, which is
+  # warehouse/<tenant>/service_events_detail/. The full stack has this job and
+  # this stack did not, so Cube found no files, the dashboard turned the error
+  # into an empty list, and the tab showed no events while the synthetic
+  # traffic sent one every 30 seconds (F-071).
+  service-events-detail-rollup:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-events-detail-rollup
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Starting service-events-detail rollup cron (every 5 minutes)..."
+        while true; do
+          echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Running service-events-detail rollup..."
+          ./service-events-detail-rollup \
+            -input-dir ./data/raw/service_events \
+            -output-dir ./data/warehouse/service_events_detail || echo "Rollup failed, will retry next cycle"
+          sleep 300
+        done
+    volumes:
+      - ./data:/app/data
+    # Multi-tenant like the other jobs here (F-027); local disk only.
     environment:
       - TENANT_DB_PATH=/app/data/gravix.db
     depends_on:

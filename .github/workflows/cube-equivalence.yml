@@ -58,8 +58,20 @@ jobs:
           tenant="$(printf '%s' "$file" | sed -n 's|^/app/data/warehouse/\([^/]*\)/request_metrics_minute/.*|\1|p')"
           [ -n "$tenant" ] || { echo "::error::could not read a tenant from $file"; exit 1; }
           echo "TENANT_ID=$tenant" >> "$GITHUB_ENV"
+          # The event rollups run every five minutes too (F-071). Give both
+          # event tables up to six minutes, so the comparison covers their
+          # cubes; a run without them still compares the metrics.
+          n=0
+          for _ in $(seq 1 36); do
+            n="$(docker compose exec -T gateway sh -c \
+              'for t in service_events_detail service_events_daily; do find /app/data/warehouse -path "*/$t/*" -name "*.parquet" | head -1; done' \
+              2>/dev/null | grep -c . || true)"
+            [ "$n" -ge 2 ] && break
+            sleep 10
+          done
+          echo "event tables with data: $n of 2"
           # Rollups first, so none is cut off by losing its input.
-          docker compose stop request-metrics-rollup service-events-rollup purge synthetic-traffic ingestion
+          docker compose stop request-metrics-rollup service-events-rollup service-events-detail-rollup purge synthetic-traffic ingestion
 
       - name: Ask the pinned Cube
         run: |
