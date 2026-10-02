@@ -4240,6 +4240,10 @@ results, 24 of 24 on the bootstrap stack and 8 of 8 on the full stack's Trino
 ([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36950619111)). Measuring that
 found F-071 to F-076 and CD-007, all in Gravix rather than Cube, and all fixed before the pin moved.
 
+After the merge, `repro-f060` ran on `main` against the pin as shipped: two concurrent first
+queries to a fresh Cube, three times. All three got data and none stalled
+([run](https://github.com/lgreene03/gravix-dashboards/actions/runs/36956758114)).
+
 ## F-061 — a fresh install told its first visitor to adjust filters they never set
 
 **Found by** watching the bootstrap dashboard's first run in a browser, for GRVX-908's last open item
