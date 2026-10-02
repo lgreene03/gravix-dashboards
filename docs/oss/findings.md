@@ -4615,6 +4615,10 @@ requests and 11,752 errors for one day, and 90,000 for a 90-minute range.
 the warmer to it. `TestCubeAnswersOnTheFullStack` sends the endpoints query the dashboard's way to
 the full stack's Trino in docker-smoke.
 
+The alert evaluator had the same fault, with a single `gte` on `bucketStart` for the start of the
+rule's window. So on Trino, no error-rate or throughput rule could evaluate. It now sends the window
+as one `inDateRange` ending now (F-077's change).
+
 ## F-076 — Cube applied no tenant filter, on any stack, on any version
 
 **Found by** the Cube upgrade measurement: v1.7.48 logged that it had no security context, and so did the pinned v0.35
@@ -4658,3 +4662,38 @@ Three tests hold it:
 
 On the full stack, a signed-in user's queries now fail instead of reading every tenant, because the
 Trino tables have no `tenant_id` column. That is F-070's stated condition, and it is the safe one.
+
+## F-077 — the public metrics API had never returned a number
+
+**Found by** reading how the gateway reaches Cube, after F-076 and F-075 showed that nothing else had been asked
+**Affects** `pkg/gatewaycore/gateway_platform.go` (`GET /api/v1/metrics`)
+**Severity** high — a routed, key-authenticated API for a tenant's own metrics answered every call with an error
+**Status** fixed
+
+`GET /api/v1/metrics` takes an API key and a metric, and asks Cube on the key's tenant's behalf.
+Four separate things stopped it:
+
+1. It appended `/cubejs-api/v1/load` to `CUBE_API_URL`, which every deployment already sets to that
+   path, so Cube answered 404.
+2. It sent Cube the API secret as a bearer token. Every stack runs Cube in JWT mode, where
+   `checkAuth` verifies a token signed with the gateway's secret, so the secret was refused.
+3. It asked for `RequestMetricsMinute.timestamp`. The model's time dimension is `bucketStart`.
+4. It asked for `p50LatencyMs`, `p95LatencyMs` and `p99LatencyMs`. Those measures were renamed for
+   GRVX-808, and no correct Cube measure exists for a percentile over a window anyway.
+
+Its tests covered the key check, the method and the plan gate, never an answer, so none of this
+showed.
+
+The handler now asks Cube the way the alert evaluator does. It POSTs to `CUBE_API_URL` with a token
+minted for the key's tenant, and Cube's own tenant filter scopes the query. It uses `bucketStart`,
+and waits out Cube's `Continue wait` for up to 30 seconds. `error_rate` and `throughput` come from
+Cube. `p50_latency`, `p95_latency` and `p99_latency` come from the gateway's sketch merge, the same
+code as `/api/v1/percentile`, in that endpoint's response shape.
+
+Two unit tests hold it, and both fail on the old handler. One puts a Cube in front of the handler
+that checks the path, the token's tenant and the query, and answers `Continue wait` once. The other
+asks for p95 with Cube unreachable and gets the merged sketch. The onboarding gate also calls the
+API on every pull request with the bootstrap stack's own key, and requires the tenant's throughput.
+
+The API is not in the published API reference. Adding it there is a docs decision for whoever owns
+the API surface.

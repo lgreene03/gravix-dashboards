@@ -386,6 +386,32 @@ for row in rows:
     echo "tenant isolation holds: another tenant's token reads no metrics, and the events log answers"
 }
 
+# check_metrics_api asks the gateway's public metrics API for the throughput
+# the dashboard shows, with the stack's own API key. It had never answered: it
+# called Cube at a doubled path, with the API secret where Cube verifies a JWT,
+# for a time dimension the model does not have (F-077). The key is never printed.
+check_metrics_api() {
+    local key response
+    key="$($COMPOSE exec -T gateway cat /app/data/api_key.txt 2>/dev/null | tr -d '[:space:]')" || key=""
+    if [ -z "$key" ]; then
+        echo "FAIL: api_key.txt could not be read, so the public metrics API cannot be checked"
+        return 1
+    fi
+    response="$(curl -s -m 60 -H "X-Gravix-Key: $key" \
+        "http://localhost:8091/api/v1/metrics?metric=throughput&granularity=day" 2>&1)" || true
+    if ! printf '%s' "$response" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+total = sum(float(r.get("RequestMetricsMinute.requestCount") or 0) for r in d.get("data") or [])
+if total <= 0:
+    sys.exit("no requests in: " + str(d)[:200])
+'; then
+        echo "FAIL: GET /api/v1/metrics returned no throughput for the stack's tenant (F-077)"
+        return 1
+    fi
+    echo "the public metrics API answers with the tenant's throughput"
+}
+
 if [ "$TIMED_OUT" -eq 1 ]; then
     diagnose
     go run ./cmd/onboarding_gate -elapsed-seconds "$ELAPSED" -timed-out
@@ -393,4 +419,5 @@ else
     go run ./cmd/onboarding_gate -elapsed-seconds "$ELAPSED"
     check_served_config
     check_tenant_isolation
+    check_metrics_api
 fi
