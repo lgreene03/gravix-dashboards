@@ -130,11 +130,23 @@ function timestampSql(column) {
   return `CAST(${column} AS TIMESTAMP)`;
 }
 
+// A time column stored as RFC 3339 text ("2026-10-02T10:30:00Z"), which is how
+// the events-detail rollup writes event_time. DuckDB casts that as it is.
+// Trino's CAST refuses both the "T" and the "Z", so on Trino every query naming
+// ServiceEvents.eventTime failed (F-073); from_iso8601_timestamp parses it, and
+// the cast back to TIMESTAMP keeps the UTC wall time, as bucket_start's has.
+function isoTimestampSql(column) {
+  return isDuckDB
+    ? `CAST(${column} AS TIMESTAMP)`
+    : `CAST(from_iso8601_timestamp(${column}) AS TIMESTAMP)`;
+}
+
 // Only what the models actually use. An unused export here is an invitation to
 // reintroduce a gate that cannot work.
 module.exports = {
   tableSql,
   timestampSql,
+  isoTimestampSql,
   dayRangeSql,
   refreshKeyFor,
 };

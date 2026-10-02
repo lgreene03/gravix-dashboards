@@ -5,7 +5,7 @@
 // own require rather than evaluating in its model sandbox. Reading process.env
 // here instead would silently do nothing: the sandbox has no `process`. See F-037
 // and the comment at the top of that file.
-const { tableSql, timestampSql } = require('../model_flags.js');
+const { tableSql, isoTimestampSql } = require('../model_flags.js');
 
 const serviceEventsSql = tableSql('service_events_detail');
 
@@ -32,7 +32,7 @@ cube(`ServiceEvents`, {
     },
 
     eventTime: {
-      sql: timestampSql('event_time'),
+      sql: isoTimestampSql('event_time'),
       type: `time`,
       title: `Event Time`
     },
