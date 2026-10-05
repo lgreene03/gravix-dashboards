@@ -113,6 +113,22 @@ Manage ingestion API keys programmatically.
 | DELETE | `/api/gateway/api-keys/{id}` | Revoke an API key |
 | GET | `/api/gateway/api-keys/expiring` | List keys nearing expiration |
 
+### Metrics
+
+Read your own metrics with an API key, sent as `X-Gravix-Key`. The tenant is the one that owns the key.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/metrics` | One metric over time: `error_rate`, `throughput`, `p50_latency`, `p95_latency` or `p99_latency` |
+| GET | `/api/v1/percentile` | Any quantile over a window, merged from the stored sketches |
+
+`error_rate` and `throughput` come from the semantic layer. The three latency percentiles come from the sketches, as `/api/v1/percentile` computes them, because a percentile cannot be averaged across buckets.
+
+```bash
+curl "http://localhost:8091/api/v1/metrics?metric=throughput&granularity=day" \
+  -H "X-Gravix-Key: $GRAVIX_API_KEY"
+```
+
 ### Additional groups
 
 The API also includes endpoints for **2FA** (TOTP setup and management), **SSO** (SAML configuration), **Sessions** (active session listing and revocation), **Organizations** (multi-org hierarchy), **Referrals** (referral code management), **Analytics** (dashboard data queries), **Traces** (sampled trace inspection), **DLQ** (dead letter queue replay), and **Admin** (audit log, retention policy, data export).

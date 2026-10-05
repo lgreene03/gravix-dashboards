@@ -574,10 +574,21 @@ jobs:
       packages: read
       security-events: write
     strategy:
+      # Scan every image. One image's findings cancelling the other three
+      # scans hides what the other three hold.
+      fail-fast: false
       matrix:
         image: [ingestion, rollup, load-generator, gateway]
     steps:
       - uses: actions/checkout@v4
+
+      # docker-build tags each image sha-<short sha> (docker/metadata-action's
+      # format=short, seven characters). This scanned sha-<full sha>, which was
+      # never pushed, so every scan failed with MANIFEST_UNKNOWN before reading
+      # a single package, and main's CI was red for a reason that was not a
+      # vulnerability (F-078).
+      - name: Name the image docker-build pushed
+        run: echo "IMAGE_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -591,10 +602,15 @@ jobs:
         # and this one is bound to an immutable release (F-026).
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.image }}:sha-${{ github.sha }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.image }}:${{ env.IMAGE_TAG }}
           format: 'sarif'
           output: 'trivy-${{ matrix.image }}.sarif'
           severity: 'CRITICAL,HIGH'
+          # Fail on a CRITICAL or HIGH finding that has a fixed version to move
+          # to, which is a finding someone can act on. One with no fix yet goes
+          # to the Security tab through the SARIF upload below, and fails
+          # nothing (DD-036).
+          ignore-unfixed: true
           exit-code: '1'
 
       - name: Upload Trivy scan results to GitHub Security
@@ -603,6 +619,39 @@ jobs:
         with:
           sarif_file: 'trivy-${{ matrix.image }}.sarif'
           category: 'trivy-${{ matrix.image }}'
+
+  # gen/ is generated from proto/ by `make proto`, and the generated files name
+  # the protoc and protoc-gen-go that made them. With both pinned to those
+  # versions, any change to proto/ that is not regenerated, or any hand edit to
+  # gen/, fails here (DD-037).
+  proto-drift:
+    runs-on: ubuntu-latest
+    env:
+      PROTOC_VERSION: "33.4"
+      PROTOC_GEN_GO_VERSION: v1.36.11
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install the pinned protoc and protoc-gen-go
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/protoc.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          unzip -oq -d "$RUNNER_TEMP/protoc" "$RUNNER_TEMP/protoc.zip"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+          GOBIN="$RUNNER_TEMP/protoc/bin" go install "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
+
+      - name: Regenerate and compare
+        run: |
+          protoc --version
+          make proto
+          if ! git diff --exit-code -- gen/; then
+            echo "::error::gen/ does not match proto/. Run make proto with protoc ${PROTOC_VERSION} and protoc-gen-go ${PROTOC_GEN_GO_VERSION}, and commit the result."
+            exit 1
+          fi
 
   # ─── End-to-End Tests ───
   e2e:
@@ -979,7 +1028,7 @@ jobs:
 
   ci-summary:
     runs-on: ubuntu-latest
-    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules, docs-site, docker-build, postgres, docker-smoke]
+    needs: [lint, vuln, fast-suite-budget, test, build, e2e, sdk-tests, helm-validate, docker-lint, correctness, recipe-examples, timed-onboarding, isolated-modules, docs-site, docker-build, postgres, docker-smoke, proto-drift]
     if: always()
     steps:
       - name: Check job results
@@ -1023,7 +1072,8 @@ jobs:
              [[ "${{ needs.docker-lint.result }}" == "failure" ]] || \
              [[ "${{ needs.docker-build.result }}" == "failure" ]] || \
              [[ "${{ needs.postgres.result }}" == "failure" ]] || \
-             [[ "${{ needs.docker-smoke.result }}" == "failure" ]]; then
+             [[ "${{ needs.docker-smoke.result }}" == "failure" ]] || \
+             [[ "${{ needs.proto-drift.result }}" == "failure" ]]; then
             echo "::error::One or more required CI jobs failed"
             exit 1
           fi

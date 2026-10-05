@@ -16,6 +16,8 @@ Nothing below has shipped in a tagged release yet.
 
 ### Added
 
+- **A drift check on generated protobuf code** — CI regenerates `gen/` with the pinned `protoc` and `protoc-gen-go` and fails on any difference (DD-037)
+- **`GET /api/v1/metrics` is documented** in the API reference and the OpenAPI spec
 - **Open-core boundary, enforced by CI** — the Apache-2.0 core builds and tests with `ee/` physically deleted, checked on every pull request by `make build-oss`, `make test-oss` and `make check-boundary` (GRVX-702, GRVX-703, GRVX-704)
 - **Correctness suite** — proves a recompute is byte-identical under adversarial conditions, that a late fact lands in its own bucket without disturbing the prior value, that a retroactively added dimension matches a from-scratch build, and that a merged sketch's percentile stays within its bound (GRVX-801…812)
 - **`gravix explain`** — shows where a number came from: the facts, the transform, and the contract that defines it
@@ -43,6 +45,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Changed
 
+- **Ingestion runs one replica in every shipped values file** — path templates are learned per process, so replicas could give one path two templates, and the production values ran up to ten replicas on one single-attach volume. More than one is now an explicit opt-in, `ingestion.allowMultipleReplicas`, and needs persistence off (DD-035)
 - **Cube v0.35 → v1.7.48** — on every stack and in the Helm chart. Two first queries at once after a Cube restart no longer stall every query for two minutes (F-060). The same queries returned the same answers on both versions, on both stacks, before the pin moved (DD-034)
 - **Test suites are split by speed** — `make test-fast` is the contributor suite; `make test-full` and `make test` still run everything. `tests/e2e/`, `tests/correctness/` and `bench/` carry a `//go:build slow` tag, and CI runs every suite on every pull request (GRVX-1206)
 - **`gravix doctor`** — diagnoses setup failures and prints the fix for each rather than the error
@@ -53,6 +56,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Fixed
 
+- **The image scan on `main` had never scanned an image** — it asked for a tag `docker-build` never pushes, so `main`'s CI failed on every push for a reason that was not a vulnerability. It now scans what was built, and fails on fixable CRITICAL and HIGH findings (F-078, DD-036)
 - **Plugin host data race** — the subprocess reader goroutine and the kill path raced on the same field; a cancelled call also left a response in flight, so the next call could have read the previous one's answer (GRVX-1201)
 - **Cube models never read their environment** — every environment conditional in the schema was dead, because Cube evaluates model files in a sandbox with no `process` (F-037)
 - **Pre-aggregations were declared that no shipped stack could build** (F-035, F-036, F-038)

@@ -14,7 +14,7 @@ global:
     # secretKey: ""
 
 ingestion:
-  replicaCount: 2
+  replicaCount: 1    # one replica: identical templates, one buffer volume (SD-016, DD-035)
   resources:
     limits:
       cpu: "1"

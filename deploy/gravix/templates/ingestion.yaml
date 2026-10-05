@@ -6,8 +6,28 @@ metadata:
     app: ingestion
     app.kubernetes.io/name: gravix
     app.kubernetes.io/instance: {{ .Release.Name }}
+{{- /*
+  Ingestion learns path templates in memory, per process (SD-016). Two
+  replicas multiply the per-service template budget and can turn one raw path
+  into two templates, so more than one replica is an explicit choice. And its
+  buffer lives on one ReadWriteOnce volume, which two pods cannot share at all
+  (DD-035).
+*/}}
+{{- $multi := or (gt (int .Values.ingestion.replicaCount) 1) (and .Values.autoscaling.enabled .Values.ingestion.allowMultipleReplicas) }}
+{{- if and (gt (int .Values.ingestion.replicaCount) 1) (not .Values.ingestion.allowMultipleReplicas) }}
+{{- fail "ingestion.replicaCount > 1 makes path templates differ between replicas (SD-016); set ingestion.allowMultipleReplicas=true to accept that, or run one replica" }}
+{{- end }}
+{{- if and $multi .Values.ingestion.persistence.enabled }}
+{{- fail "more than one ingestion replica cannot share the ReadWriteOnce buffer volume; set ingestion.persistence.enabled=false to run several (DD-035)" }}
+{{- end }}
 spec:
   replicas: {{ .Values.ingestion.replicaCount }}
+  {{- if .Values.ingestion.persistence.enabled }}
+  # A ReadWriteOnce volume attaches to one pod at a time, so a rolling update's
+  # second pod could not start. Recreate stops the old pod first.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app: ingestion

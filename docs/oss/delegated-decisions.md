@@ -739,3 +739,94 @@ runtime dependency, so it needs an RFC if per-replica caching ever costs enough 
 
 **To reverse.** Set the four pins back to `v0.35`. To give the chart Redis again, the Helm template
 needs its `redis` branch back, which only works on `v0.35`.
+
+---
+
+The decisions below were made on 2026-10-05, when the owner extended the delegation to the items
+`open-decisions.md` had listed as needing a person: "for decisions that need a person, if you can
+make recommendations, then just take that and go on". Each records the recommendation that was
+taken, and the project still operates under `GOVERNANCE.md`'s founder-led rules.
+
+## DD-035 — SD-016: one ingestion replica in production
+
+**Date** 2026-10-05 · **Tier** routine (deployment configuration) · **Spec** GRVX-905
+
+**Options.** Run one replica. Shard by service at the load balancer. Move the template counters into
+the discovery registry. Divide the budget by the replica count. Or document the per-replica bound.
+
+**Chosen.** One replica in every shipped values file, with more than one an explicit opt-in. The
+claim Gravix leads with is correctness, and two replicas make it false in a way nobody can see: the
+same request can become `/shop/boots` on one pod and `/shop/{param}` on another. One replica sustains
+73,868 facts per second per core at standard scale (GRVX-1005 §11.2), well beyond what the product is
+for.
+
+Reading the chart settled what the options had left open. The production values ran ingestion at
+two replicas, autoscaling to ten, all on **one** `ReadWriteOnce` buffer volume. Pods on different
+nodes cannot attach it, and pods on the same node would rotate buffer files over each other. So
+several replicas were never a working choice with the shipped storage.
+
+**Done.** `replicaCount: 1` in all four production and regional values files. A new
+`ingestion.allowMultipleReplicas` value, default false, is the only way to run more. Without it the
+chart refuses `replicaCount > 1`, and with a persistent volume it refuses more than one replica at all.
+Ingestion's autoscaler renders only with the opt-in; the gateway's is unaffected. A deployment on a
+persistent volume rolls out with `Recreate`, because a single-attach volume cannot be handed to a
+second pod mid-rollout. `TestEveryValuesFileRunsOneIngestionReplica` holds every values file to it.
+
+**Given up.** Horizontal scale and zero-downtime rollouts for ingestion. A rollout now stops the old
+pod before starting the new one, so ingestion is unavailable for the seconds that takes, and clients
+retry. A regional overlay still learns templates per region, which is inherent to running ingestion
+in two regions.
+
+**To reverse.** Set `ingestion.allowMultipleReplicas=true` and `ingestion.persistence.enabled=false`,
+and raise `replicaCount` or enable autoscaling.
+
+## DD-036 — F-026: image-scan fails `main` on fixable CRITICAL and HIGH findings
+
+**Date** 2026-10-05 · **Tier** routine (CI policy) · **Finding** F-026, F-078
+
+**Options.** Fail on every CRITICAL and HIGH finding. Fail only on those with a fixed version
+available. Or report only.
+
+**Chosen.** Fail on CRITICAL and HIGH findings that have a fix, and report the rest. A finding with a
+fixed version is one somebody can act on, by bumping a base image or a dependency. One with no fix
+yet would hold `main` red with nothing to do. Every finding, fixed or not, still reaches the Security
+tab through the SARIF upload.
+
+Deciding this turned up F-078. The scan had never run: it asked for an image tag that `docker-build`
+never pushes. So until now there were no findings to set a policy against. The scan now names the
+image it was given, and all four images are scanned even when one fails.
+
+**Not decided, and why.** Whether `ci-summary` should also wait on image-scan. It runs only on `main`,
+after the merge, so gating it would gate nothing on a pull request. Its first real results on `main`
+come with this change. Any findings they show are fixed as ordinary work.
+
+**To reverse.** Remove `ignore-unfixed` to fail on every finding, or set `exit-code: 0` to report only.
+
+## DD-037 — a pinned `protoc` in CI, and a drift check on `gen/`
+
+**Date** 2026-10-05 · **Tier** routine (CI tooling) · **Spec** GRVX-1102 (SD-028, DD-027)
+
+**Chosen.** Pin the versions the tracked files were generated with, which their headers name:
+`protoc` 33.4 (`v6.33.4`) and `protoc-gen-go` v1.36.11. A new `proto-drift` job installs both, runs
+`make proto` and fails on any difference. `ci-summary` gates on it. Regenerating with these versions
+reproduced `gen/` byte for byte.
+
+**To reverse.** Remove the job. To move to a newer `protoc`, change both versions and commit the
+regenerated files in the same change.
+
+## DD-038 — F-057: keep MinIO, built from source
+
+**Date** 2026-10-05 · **Tier** routine (no change) · **Finding** F-057
+
+**Options.** Keep the source build of the pinned MinIO releases (DD-030). Or replace MinIO with
+another S3-compatible server.
+
+**Chosen.** Keep it. It has worked in every full-stack run since DD-030, and MinIO is only the local
+stand-in for S3. `pkg/storage` speaks the S3 API, and a production deployment points it at a real
+bucket. The bootstrap stack, which most people start with, does not run MinIO at all. A replacement
+is a new runtime dependency, which is design tier. Its migration would change the full stack's
+storage for a problem a source build already solved.
+
+**Revisit if** the source build breaks on a newer Go or MinIO release, or MinIO's terms change for a
+server run as a separate process. That replacement would need an RFC.
+

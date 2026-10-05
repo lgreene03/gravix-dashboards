@@ -64,7 +64,7 @@ networkPolicies:
 
 # ─── Ingestion ───
 ingestion:
-  replicaCount: 2
+  replicaCount: 1    # one replica: identical templates, one buffer volume (SD-016, DD-035)
   image:
     repository: gravix-ingestion
     tag: "0.1.0"       # Pin to a specific SHA tag in production: sha-abc1234
