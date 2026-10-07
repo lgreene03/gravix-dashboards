@@ -850,7 +850,8 @@ jobs:
       # GRVX-1106 AC-4 to AC-6 (SD-050), GRVX-1104 AC-4 (SD-051) and GRVX-1103
       # AC-1 and AC-2, Metabase and Superset querying Trino (SD-052), the
       # SQL guide's own queries (CD-006), the Cube models' time columns on
-      # Trino (F-073), and the full stack's Cube itself (F-074, CD-007). Each
+      # Trino (F-073), the full stack's Cube itself (F-074, CD-007), and each
+      # tenant's rows served through Trino (F-070). Each
       # skips when Trino does not
       # answer, which is right on a laptop and wrong here, where the stack is
       # up: a skip on this step is a failure, and so is a named test that did
@@ -865,7 +866,10 @@ jobs:
           # The sync tests compare row counts taken seconds apart. A rollup
           # landing between them, or the stack's own sync interleaving its
           # DELETE and INSERT with the test's, would fail them on a correct sync.
-          docker compose stop load-generator request-metrics-rollup iceberg-sync
+          # trino-catalog-sync too: TestTrinoServesEachTenantThroughCube
+          # registers its own tenants, and a sync mid-test would rewrite the
+          # views without them.
+          docker compose stop load-generator request-metrics-rollup iceberg-sync trino-catalog-sync
           # Nothing in the full stack writes where Trino's Hive tables read
           # (F-070), so they are empty: the sync tests would compare two empty
           # tables and Spark would count nothing. Three rows for today give
@@ -880,7 +884,7 @@ jobs:
             ('${day} 00:01:00', 'ci-fixture', 'GET', '/fixture/{id}', 20, 0, 0.0, 4.0, 8.0, 11.0, '${day}'),
             ('${day} 00:02:00', 'ci-fixture', 'POST', '/fixture', 3, 0, 0.0, 6.0, 7.0, 9.0, '${day}')"
           go test -tags=slow -count=1 -v ./tests/e2e/ \
-            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset|TestSQLGuideQueriesRunOnTrino|TestCubeTimeColumnsCastOnTrino|TestCubeAnswersOnTheFullStack' \
+            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset|TestSQLGuideQueriesRunOnTrino|TestCubeTimeColumnsCastOnTrino|TestCubeAnswersOnTheFullStack|TestTrinoServesEachTenantThroughCube' \
             | tee /tmp/live-e2e.txt
           (cd grafana-plugin/gravix-datasource && go test -count=1 -v ./pkg/ -run 'TestCheckHealthOK') \
             | tee /tmp/live-plugin.txt
@@ -890,7 +894,8 @@ jobs:
           fi
           for t in TestIcebergSyncPreservesRowCount TestIcebergSyncIsIdempotent TestVerifySparkIcebergRead \
                    TestVerifyBIConnectionsMetabase TestVerifyBIConnectionsSuperset TestSQLGuideQueriesRunOnTrino \
-                   TestCubeTimeColumnsCastOnTrino TestCubeAnswersOnTheFullStack; do
+                   TestCubeTimeColumnsCastOnTrino TestCubeAnswersOnTheFullStack \
+                   TestTrinoServesEachTenantThroughCube; do
             grep -q -- "--- PASS: $t " /tmp/live-e2e.txt || { echo "::error::$t did not pass"; exit 1; }
           done
           grep -q -- '--- PASS: TestCheckHealthOK ' /tmp/live-plugin.txt || { echo "::error::TestCheckHealthOK did not pass"; exit 1; }

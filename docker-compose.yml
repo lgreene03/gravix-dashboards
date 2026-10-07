@@ -330,6 +330,8 @@ services:
         condition: service_completed_successfully
       trino:
         condition: service_healthy
+      trino-catalog-sync:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "const http = require('http'); http.get('http://localhost:4000/readyz', r => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
       interval: 15s
@@ -579,6 +581,50 @@ services:
       init-trino:
         condition: service_completed_successfully
     mem_limit: 256m
+    cpus: 0.25
+    networks:
+      - backend
+
+  # Registers each tenant's warehouse directories with Trino and rebuilds the
+  # gravix.serving views Cube reads (F-070). The rollups write
+  # warehouse/<tenant>/<table>/, which no single Hive table can read; this
+  # gives each tenant its own table and unions them, one view per table, each
+  # branch carrying its tenant as a constant. Every minute, so a new tenant is
+  # served from the first rollup that writes its data.
+  trino-catalog-sync:
+    build:
+      context: .
+      dockerfile: services/rollup/Dockerfile
+    container_name: gravix-trino-catalog-sync
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          ./trino-catalog-sync -ready-file /tmp/trino-catalog-ready \
+            || echo "Trino catalog sync failed, will retry next cycle"
+          sleep 60
+        done
+    environment:
+      - TENANT_DB_PATH=/app/data/gravix.db
+      - S3_BUCKET=${S3_BUCKET:-gravix}
+    volumes:
+      # Read-only: it only lists tenants.
+      - ./data:/app/data:ro
+    # Cube waits for this: until the first run, the views it reads do not exist.
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/trino-catalog-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+      trino:
+        condition: service_healthy
+      init-trino:
+        condition: service_completed_successfully
+    mem_limit: 128m
     cpus: 0.25
     networks:
       - backend

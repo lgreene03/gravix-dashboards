@@ -830,3 +830,27 @@ storage for a problem a source build already solved.
 **Revisit if** the source build breaks on a newer Go or MinIO release, or MinIO's terms change for a
 server run as a separate process. That replacement would need an RFC.
 
+## DD-039 — F-070: serve each tenant through Trino by registering what the rollups write
+
+**Date** 2026-10-05 · **Tier** routine (catalog registration; no layout, schema or API change) · **Finding** F-070
+
+**Options.** Move the warehouse to Hive-style `tenant_id=` partitions, as `open-decisions.md`
+recommended. Register each tenant's existing directories with Trino and union them in views. Or run
+the full stack single-tenant.
+
+**Chosen.** Register and union. The partition layout would move every object, and change the rollup,
+recompute, purge, export, compaction, Cube's globs and two published guides. It is design tier, with a
+seven-day window, and it fixes nothing that registering the existing layout does not. The stored
+layout is the public data contract, and this leaves it exactly as it is. `gravix.tenants` and
+`gravix.serving` are only Trino's catalog, and dropping them and running the sync again rebuilds them.
+
+**Done.** `pkg/trinocatalog`, the `trino-catalog-sync` command and compose service, with Cube held
+until its first run. Cube's Trino source is now `gravix.serving.<table>`. Unit tests hold the DDL to
+the Hive tables' columns and refuse any tenant ID that could leave an identifier. The docker-smoke
+test is in F-070.
+
+**Given up.** Another engine reading the bucket directly still has to know the tenant directory
+layout, as it does today. The bare-Parquet guide's globs handle it.
+
+**To reverse.** Point Cube's Trino `tableSql` back at `gravix.raw` and remove the service.
+

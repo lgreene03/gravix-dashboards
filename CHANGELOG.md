@@ -56,6 +56,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Fixed
 
+- **On the full stack, a signed-in user's dashboard read nothing** — each tenant's metrics are written under its own directory, which Trino's tables never read. A new `trino-catalog-sync` service registers each tenant's directories and serves them through `gravix.serving` views that carry `tenant_id`, which Cube now reads (F-070, DD-039)
 - **The image scan on `main` had never scanned an image** — it asked for a tag `docker-build` never pushes, so `main`'s CI failed on every push for a reason that was not a vulnerability. It now scans what was built, and fails on fixable CRITICAL and HIGH findings (F-078, DD-036)
 - **Plugin host data race** — the subprocess reader goroutine and the kill path raced on the same field; a cancelled call also left a response in flight, so the next call could have read the previous one's answer (GRVX-1201)
 - **Cube models never read their environment** — every environment conditional in the schema was dead, because Cube evaluates model files in a sandbox with no `process` (F-037)

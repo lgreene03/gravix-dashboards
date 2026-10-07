@@ -2,7 +2,7 @@
 <!-- correctness-defects.md, all append-only. This file points into them and may be rewritten. -->
 # What needs a person
 
-Three registers hold 146 entries between them, most of them resolved. Most are ordinary work an
+Three registers hold 147 entries between them, most of them resolved. Most are ordinary work an
 implementer can pick up. This page lists only the ones that **cannot be closed by implementing
 harder**, because they need a decision, a permission, or an external check.
 
@@ -31,7 +31,6 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 | **SD-055 / RFC 0003** *(medium)* | Whether compaction writes raw facts as gzip JSONL, so G4.4's 120 bytes/event becomes reachable | Measured: raw JSONL is 203.78 bytes/event of a 206.68 total, and gzip takes it to 32.68. Changing the stored format of the recompute source of truth, and every reader of it, is design tier: RFC 0003 is drafted, and it needs **two maintainer approvals**, of which the project has one. Everything short of that is decided (DD-014). |
 | **SD-029 / F-054** *(high)* | How an export reaches a destination the user names: GRVX-1107 §5.4's on-demand endpoint takes `destination` from any role, and scheduled exports (stored, listed, never executed — F-054) would write to a customer's `s3://` bucket | The route collision is resolved (DD-011) and four of five route criteria pass. What remains is a security design: a server-chosen destination, an allow-list, or stored per-schedule credentials. Each lets a different principal write to a different place. |
 | **F-018, across machines** *(medium)* | Whether the rollup lock should hold across machines that share an S3 bucket | Fixed for one machine (DD-022): the cron and `gravix recompute` now take the same lock, found through the store. Across machines it needs a lock object in the store, taken with a conditional write and given an expiry. That changes the storage interface and the locking semantics, so it wants a spec, not a patch. |
-| **F-070** *(high)* | How the full stack's Trino reads a multi-tenant warehouse. **Recommended: Hive-style tenant partitions**, `warehouse/<metric>/tenant_id=<id>/event_day=<day>/`, with the Trino tables partitioned by `tenant_id` and `event_day` and refreshed with `system.sync_partition_metadata`. The alternatives: keep today's layout and register a Trino partition per tenant from a job that runs whenever a tenant is created; or run the full stack single-tenant, which undoes F-027 and F-058 | The rollup writes `warehouse/<tenant-id>/<metric>/`, which a Hive table cannot read and Trino cannot discover, and the tables have no `tenant_id` for Cube's tenant filter. So the full stack's dashboard has no data for a signed-in user. The recommended layout is one that DuckDB, Trino, Spark and a bare-Parquet reader all discover without help, which is the data-ownership claim. But it moves every object in the warehouse and changes the rollup, recompute, purge, export, compaction, Cube's globs and two published guides. A storage layout is a public data contract, so it is design tier: an RFC and **two maintainer approvals**. |
 
 ## Spec text that contradicts what was measured
 

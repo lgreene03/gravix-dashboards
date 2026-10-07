@@ -4448,7 +4448,7 @@ an operator learns to ignore. It now waits for `init-trino` to finish.
 **Found by** reading the rollup's output paths while fixing F-068
 **Affects** `docker-compose.yml` (`init-trino`), `storage/trino/init.sql`, the warehouse layout
 **Severity** high — on the full stack, a signed-in dashboard has no data, and its queries name a column the table lacks
-**Status** open — the fix changes the warehouse layout, which is design tier (see `open-decisions.md`)
+**Status** fixed without changing the layout (DD-039)
 
 Every data-plane job in the full stack runs multi-tenant (F-027), so the request rollup writes
 `warehouse/<tenant-id>/request_metrics_minute/event_day=<day>/…`. Trino's Hive tables are declared
@@ -4469,6 +4469,22 @@ What this does to PR #27's live tests: the Hive tables they read are empty on th
 sync tests would compare two empty tables and the Spark check would count zero rows. CI therefore
 inserts fixture rows into the Hive table first, and says why, so the three tests check a copy of real
 rows. That tests the Iceberg path. It does not fix this.
+
+### Fixed, 2026-10-05, without moving any data
+
+The fix this entry first recommended moved every object into Hive-style `tenant_id=` partitions,
+which is a layout change and design tier. Its second option needed no move at all: register what the
+rollups already write. DD-039 takes that. `trino-catalog-sync` lists active tenants from the tenant
+database, the way the rollups do, and registers `warehouse/<tenant>/<table>/` as
+`gravix.tenants."t_<tenant>_<table>"` for each tenant and table. Every minute it rebuilds
+`gravix.serving.<table>`, a view that unions the single-tenant table with every tenant's table and
+gives each row its tenant as a constant `tenant_id`. Cube reads the views. A tenant filter on a view
+prunes every other tenant's branch before Trino reads a file. Measured on Trino 435, the plan for
+one tenant scans one table.
+
+`TestTrinoServesEachTenantThroughCube` registers two tenants in docker-smoke and writes rows into each
+one's own table through Trino, so the files land where a rollup puts them. It then asks Cube as each
+tenant and as one that is not registered: 7, 5 and 0 requests, each exactly its own.
 
 ## F-071 — the bootstrap stack's events tab was always empty
 
@@ -4726,4 +4742,28 @@ not a vulnerability.
 The scan now asks for the tag `docker-build` pushed, scans all four images even when one fails, and
 fails on fixable CRITICAL and HIGH findings (DD-036). Its first real results come from the first
 push to `main` after this change.
+
+## F-079 — the Helm chart's analytics path has never had tables to read
+
+**Found by** fixing F-070, which needed to know how Helm's Trino gets its tables
+**Affects** `deploy/gravix/templates/` (Trino, Cube, the rollup CronJobs)
+**Severity** high — on a Helm install every dashboard query fails, signed in or not
+**Status** open; the next change after DD-039
+
+Three things are missing, each enough on its own:
+
+1. Nothing in the chart creates a Trino table. The compose stacks run `init-trino`; the chart has no
+   equivalent, so Cube's queries name tables that do not exist.
+2. The chart's rollup CronJobs set no `TENANT_DB_PATH`, so they run single-tenant and read
+   `raw/request_facts/`. Its ingestion and gateway are multi-tenant and write per-tenant raw paths, so
+   the rollups read nothing.
+3. There is no catalog sync, so even with tables, per-tenant directories would not be served (F-070).
+
+The fix mirrors the compose stack. It needs a Trino init Job that creates `gravix.raw`'s tables, rollup
+CronJobs that read the tenant database, and a `trino-catalog-sync` CronJob. How the chart's CronJobs
+reach the tenant database, Postgres or SQLite on a volume, decides the details.
+
+One reader outside the chart has the same gap: `transforms/iceberg_sync` copies `gravix.raw`'s tables
+into Iceberg, and no tenant's rows are in `gravix.raw`. It should read the tenant tables, or
+`gravix.serving` with its `tenant_id`, when this is fixed.
 

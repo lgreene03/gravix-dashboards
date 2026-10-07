@@ -73,7 +73,10 @@ function warehouseGlob(table) {
 function tableSql(table) {
   return isDuckDB
     ? `SELECT * FROM read_parquet('${warehouseGlob(table)}', union_by_name=true, hive_partitioning=true, hive_types={'event_day': VARCHAR})`
-    : `SELECT * FROM gravix.raw.${table}`;
+    // The serving view, not gravix.raw: the rollups write each tenant under
+    // its own directory, and only gravix.serving unions them, each row
+    // carrying its tenant_id for cube.js's tenant filter (F-070).
+    : `SELECT * FROM gravix.serving.${table}`;
 }
 
 // A predicate restricting a cube's source to the days a query's date range
