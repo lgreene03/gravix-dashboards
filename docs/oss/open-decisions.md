@@ -2,7 +2,7 @@
 <!-- correctness-defects.md, all append-only. This file points into them and may be rewritten. -->
 # What needs a person
 
-Three registers hold 147 entries between them, most of them resolved. Most are ordinary work an
+Three registers hold 149 entries between them, most of them resolved. Most are ordinary work an
 implementer can pick up. This page lists only the ones that **cannot be closed by implementing
 harder**, because they need a decision, a permission, or an external check.
 
@@ -27,7 +27,6 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 
 | Item | What must be decided | Why it is not an implementation detail |
 |---|---|---|
-| **SD-040** *(high)* | Whether `pkg/extpoint` gains a tenant-resolution extension point (RFC 0002), or `GRVX-1304` is rewritten to run multi-tenancy as a separate `ee/` process in front of the gateway | `GRVX-1304` §6 step 1 requires an extension point `GRVX-1302` §3 explicitly forbids, and an `Extension` cannot do it: it only sees requests under its own path prefix, while tenant resolution has to reach ingestion, the metrics API, the percentile endpoint and export — four core routes. `GOVERNANCE.md` puts a new extension point at design tier: an RFC, seven days' comment and **two maintainer approvals**, of which the project has one. Blocks `GRVX-1304`, `1305`, `1306`, `1308`, `1310`, `1312` and RFC 0002 is drafted and open. (`GRVX-1401` was listed here in error and is not blocked — see SD-040's correction.) |
 | **SD-055 / RFC 0003** *(medium)* | Whether compaction writes raw facts as gzip JSONL, so G4.4's 120 bytes/event becomes reachable | Measured: raw JSONL is 203.78 bytes/event of a 206.68 total, and gzip takes it to 32.68. Changing the stored format of the recompute source of truth, and every reader of it, is design tier: RFC 0003 is drafted, and it needs **two maintainer approvals**, of which the project has one. Everything short of that is decided (DD-014). |
 | **SD-029 / F-054** *(high)* | How an export reaches a destination the user names: GRVX-1107 §5.4's on-demand endpoint takes `destination` from any role, and scheduled exports (stored, listed, never executed — F-054) would write to a customer's `s3://` bucket | The route collision is resolved (DD-011) and four of five route criteria pass. What remains is a security design: a server-chosen destination, an allow-list, or stored per-schedule credentials. Each lets a different principal write to a different place. |
 | **F-018, across machines** *(medium)* | Whether the rollup lock should hold across machines that share an S3 bucket | Fixed for one machine (DD-022): the cron and `gravix recompute` now take the same lock, found through the store. Across machines it needs a lock object in the store, taken with a conditional write and given an expiry. That changes the storage interface and the locking semantics, so it wants a spec, not a patch. |
@@ -91,8 +90,8 @@ was closed by a defect its own §6 tells you how to handle. Each is now `partial
 real defect on the way — including a Grafana plugin that could not load and a published SQL guide
 wrong by 144×.
 
-What remains blocked is blocked for a named reason that an implementer cannot clear: a second
-maintainer (SD-040), an external auditor (GRVX-1407), a pricing audit the implementer is forbidden to
+What remains blocked is blocked for a named reason that an implementer cannot clear: an external
+auditor (GRVX-1407), a pricing audit the implementer is forbidden to
 self-verify (GRVX-1002), or a dependency on one of those (GRVX-1007, GRVX-1008). GRVX-1005's AC-1
 waited on a reference machine until DD-018 named one, a GitHub-hosted `ubuntu-24.04` runner. Choosing
 it found F-056: the benchmark's per-core ingest figure was a one-core rate divided by every core.
@@ -108,9 +107,8 @@ these, and it is why every entry on this page now names its cause.
   0.1 per second (CD-006). All four criteria now pass, two of them in `docker-smoke` on the full
   stack. The lesson is the one below.
 - **GRVX-1407** — blocked for two independent reasons, neither of which was written down until now.
-  It `Depends on GRVX-1308`, and 1308 is one of the six specs SD-040 holds, so 1407 is
-  **transitively governance-blocked**: it cannot start until a second maintainer exists to approve
-  RFC 0002. Separately, a SOC 2 Type 2 opinion requires an **external auditor** and an observation
+  It `Depends on GRVX-1308`, which SD-040 held until DD-040 resolved it without the second
+  maintainer it was thought to need; 1308 is now `planned`. Separately, a SOC 2 Type 2 opinion requires an **external auditor** and an observation
   window over a **running** cloud, and §3 of the spec is explicit that this produces evidence while
   "an auditor forms the opinion". Neither is something an implementer can supply. The executable
   part — gathering the evidence — still waits on 1308.

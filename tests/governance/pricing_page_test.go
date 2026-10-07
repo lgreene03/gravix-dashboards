@@ -14,7 +14,7 @@ import (
 
 // GRVX-1312. The pricing page is where the charter is easiest to violate, so its
 // constraints are the spec. These check the nine acceptance criteria that do not
-// need ee/packaging — which is blocked behind GRVX-1305 and, through it, SD-040.
+// need ee/packaging — which waits on GRVX-1305, and that on GRVX-1304.
 // AC-6, AC-7 and AC-10 need plan definitions that do not exist yet; AC-12 is
 // deliberately not implemented (see SD-053). Nothing here asserts a price,
 // because no price has been decided.

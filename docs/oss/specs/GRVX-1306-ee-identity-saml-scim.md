@@ -21,7 +21,7 @@ free forever**.
 
 ## 2. Context the implementer needs
 
-- Horizon 1 Phase 4.2 shipped OIDC **and** SAML in `pkg/sso/`, with `/api/gateway/sso`, `/sso/login`, `/sso/callback`, TOTP 2FA at `/api/gateway/2fa/*`, and sessions at `/api/gateway/sessions`.
+- Horizon 1 Phase 4.2 shipped OIDC **and** SAML in `pkg/sso/`, with `/api/gateway/sso`, `/sso/login`, `/sso/callback`, TOTP 2FA (`pkg/totp/`) at `/api/gateway/2fa/*`, and sessions at `/api/gateway/sessions`.
 - **Charter §7.3 Q4 is decisive here.** SAML was already released under Apache-2.0 in Horizon 1. Once open, always open. This spec therefore **cannot** move the existing SAML implementation into `ee/`.
 - What is genuinely new and therefore `ee`-eligible: **SCIM provisioning**, **directory sync** (scheduled group and membership reconciliation), and **cross-org federation** — none of which exists today.
 - `GRVX-1304` provides tenant identity.

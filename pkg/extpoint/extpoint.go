@@ -41,6 +41,11 @@ type Extension interface {
 	// the process — Handler must not depend on per-request state to construct
 	// itself. Register does not call it: registration happens in an ee/ package's
 	// init(), before any flag is parsed or any dependency exists.
+	//
+	// Every request reaches Handler through the gateway's guard: a valid,
+	// unrevoked token held by an admin of its tenant, whose claims are in
+	// auth.ClaimsFromContext (F-080). A handler may narrow that rule, never
+	// widen it, and takes the tenant from those claims, never from the request.
 	Handler() http.Handler
 }
 

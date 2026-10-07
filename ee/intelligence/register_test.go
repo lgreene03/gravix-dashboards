@@ -10,6 +10,7 @@ package intelligence
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/ee/degrade"
+	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/extpoint"
 )
 
@@ -183,12 +185,50 @@ func TestSurfaceRejectsBadRequests(t *testing.T) {
 // rather than returning an empty answer.
 func TestSourceRequiresAService(t *testing.T) {
 	sf := surface{state: func() degrade.State { return degrade.StateLicensed }}
-	_, err := sf.resolveSource(httptest.NewRequest(http.MethodGet, "/forecast?metric=m", nil))
+	_, err := sf.resolveSource(asTenant(httptest.NewRequest(http.MethodGet, "/forecast?metric=m", nil), "acme"))
 	if err == nil {
 		t.Fatal("a request with no service produced a source")
 	}
 	if !strings.Contains(err.Error(), "forecast of nothing in particular") {
 		t.Errorf("err = %v; want it to say why a service is required", err)
+	}
+}
+
+// asTenant is what the gateway's guard leaves on a request it lets through.
+func asTenant(r *http.Request, tenantID string) *http.Request {
+	return r.WithContext(auth.WithClaims(r.Context(), &auth.Claims{TenantID: tenantID, Role: auth.RoleAdmin}))
+}
+
+// F-080. The tenant came from a query parameter, so any caller could read any
+// tenant's warehouse by naming it. It is the caller's, from the verified token,
+// and a request with no caller reads nothing.
+func TestSourceIsTheCallersTenant(t *testing.T) {
+	t.Setenv("GRAVIX_WAREHOUSE_DIR", t.TempDir())
+	sf := surface{state: func() degrade.State { return degrade.StateLicensed }}
+
+	src, err := sf.resolveSource(asTenant(httptest.NewRequest(http.MethodGet, "/forecast?service=checkout", nil), "acme"))
+	if err != nil {
+		t.Fatalf("resolveSource: %v", err)
+	}
+	if got := src.(WarehouseSource).TenantID; got != "acme" {
+		t.Errorf("source reads tenant %q; want the caller's, acme", got)
+	}
+
+	if _, err := sf.resolveSource(asTenant(httptest.NewRequest(http.MethodGet, "/forecast?service=checkout&tenant=other", nil), "acme")); !errors.Is(err, errTenantParam) {
+		t.Errorf("naming another tenant: err = %v; want errTenantParam", err)
+	}
+	if _, err := sf.resolveSource(httptest.NewRequest(http.MethodGet, "/forecast?service=checkout&tenant=acme", nil)); !errors.Is(err, errNoCaller) {
+		t.Errorf("no caller: err = %v; want errNoCaller", err)
+	}
+
+	h := http.StripPrefix("/ee/intelligence", sf.Handler())
+	for path, want := range map[string]int{
+		"/ee/intelligence/forecast?service=checkout":              http.StatusUnauthorized,
+		"/ee/intelligence/capacity?service=checkout&threshold=90": http.StatusUnauthorized,
+	} {
+		if rec := get(t, h, path); rec.Code != want {
+			t.Errorf("GET %s with no caller = %d; want %d", path, rec.Code, want)
+		}
 	}
 }
 

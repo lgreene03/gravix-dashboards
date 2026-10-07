@@ -4767,3 +4767,33 @@ One reader outside the chart has the same gap: `transforms/iceberg_sync` copies 
 into Iceberg, and no tenant's rows are in `gravix.raw`. It should read the tenant tables, or
 `gravix.serving` with its `tenant_id`, when this is fixed.
 
+
+## F-080 — every `ee/` route answered without authentication
+
+**Found by** resolving SD-040, which needed to know who an `ee/` control plane would be talking to
+**Affects** `pkg/gatewaycore` (`mountExtensions`), `ee/intelligence` (`resolveSource`)
+**Severity** critical under `SECURITY.md` for the Enterprise build; the OSS build mounts no extension
+**Status** fixed; never in a release
+
+`mountExtensions` put each registered extension on the gateway's listener with no authentication, so
+everything under `/ee/` answered anyone who could reach the port. On the Enterprise build that was
+`ee/fleet`'s install registry and configuration proposals, `ee/warehouse`'s sync configuration, and
+`ee/intelligence`'s forecasts. `ee/intelligence` also took the tenant to read from a `?tenant=`
+parameter, so a caller could read any tenant's metrics by naming it.
+
+No release carries it. The Enterprise gateway is built only by `make build-ee`. CI publishes no image
+of it, and 1.0.0 has no `ee/` directory. The OSS binary registers nothing, so the loop never ran there.
+
+Each extension is now mounted behind `requireExtensionAdmin`: a valid, unrevoked gateway token held by
+an admin of its tenant, with the claims left in the request context. An `ee/` package can narrow that
+rule and cannot widen it. `ee/intelligence` reads the caller's tenant from those claims, refuses a
+request that names a tenant, and refuses one with no caller.
+
+- `TestExtensionRoutesRequireAnAdmin` mounts an extension the way `Run` does. With no token, a token
+  signed with another secret, or a viewer's token, it must answer 401 or 403 and never reach the
+  extension. It fails on the old loop, which let all six requests through.
+- `TestSourceIsTheCallersTenant` holds `ee/intelligence` to the caller's tenant.
+
+Still open: `ee/fleet` and `ee/warehouse` keep one registry per process. That is right for an
+operator's own installation. On a gateway serving many tenants, every tenant's admin would share
+it. Both are unreleased, and each needs per-tenant state before a multi-tenant deployment uses it.

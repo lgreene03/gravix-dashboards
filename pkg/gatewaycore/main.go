@@ -531,7 +531,7 @@ func Run() {
 	})
 	mux.Handle("/metrics", promhttp.Handler())
 
-	mountExtensions(mux)
+	mountExtensions(mux, gw.requireExtensionAdmin)
 
 	// Metrics middleware wraps CORS so all responses (including OPTIONS) are counted
 	handler := logging.RequestIDMiddleware(metricsMiddleware(securityHeadersMiddleware(mux)))
@@ -2342,20 +2342,38 @@ func (gw *gateway) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Thank you for your feedback!"})
 }
 
-// mountExtensions mounts every registered ee/ extension onto mux and registers the
-// status endpoint. In the OSS binary, extpoint.Registered() is always empty and the
-// loop body never executes — zero routes added, zero log lines, by construction (see
-// the pkg/extpoint doc comment).
+// mountExtensions mounts every registered ee/ extension onto mux behind guard and
+// registers the status endpoint. In the OSS binary, extpoint.Registered() is always
+// empty and the loop body never executes — zero routes added, zero log lines, by
+// construction (see the pkg/extpoint doc comment).
+//
+// guard is the gateway's authentication, and no extension is reachable except
+// through it. An extension shares the gateway's listener; until F-080 it shared it
+// with no authentication at all, so every ee/ route answered anyone who could reach
+// the port. An ee/ package reads its caller with auth.ClaimsFromContext.
 //
 // It is a named function rather than an inline block inside Run so that the mount
 // behaviour itself is what the tests exercise. A test that rebuilt the loop in its
 // own body would pass whatever Run later did.
-func mountExtensions(mux *http.ServeMux) {
+func mountExtensions(mux *http.ServeMux, guard func(http.Handler) http.Handler) {
 	for _, ext := range extpoint.Registered() {
 		prefix := ext.PathPrefix()
-		mux.Handle(prefix, http.StripPrefix(strings.TrimSuffix(prefix, "/"), ext.Handler()))
+		mux.Handle(prefix, guard(http.StripPrefix(strings.TrimSuffix(prefix, "/"), ext.Handler())))
 	}
 	mux.HandleFunc("/api/gateway/ee/status", handleEEStatus)
+}
+
+// requireExtensionAdmin is the guard on every ee/ route: a valid, unrevoked token
+// held by an admin of its tenant (F-080). An ee/ package that wants a narrower rule
+// checks the claims itself; none can be reached under a wider one.
+func (gw *gateway) requireExtensionAdmin(next http.Handler) http.Handler {
+	return gw.requireAuth(gw.rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if !auth.ClaimsFromContext(r.Context()).HasRole(auth.RoleAdmin) {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
 }
 
 // eeStatusEntry is one row of the /api/gateway/ee/status response.

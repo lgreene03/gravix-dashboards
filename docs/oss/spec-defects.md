@@ -2678,7 +2678,8 @@ outright.
 GRVX-1308, GRVX-1310, GRVX-1312, GRVX-1401
 **Severity:** high — it blocks six specs, and neither spec can be executed without contradicting
 the other
-**Status:** escalated. RFC 0002 drafted; the decision is not an implementer's
+**Status:** resolved 2026-10-07 (DD-040): no extension point; RFC 0002 withdrawn; GRVX-1304 corrected.
+Originally: escalated, RFC 0002 drafted; the decision is not an implementer's
 
 ### The contradiction
 
@@ -2763,6 +2764,22 @@ form rather than truth. A dependency graph is exactly the kind of thing a gate c
 mechanically — that every type a spec's §5 names is defined by a spec it declares a dependency on —
 and does not. That is the second time a Phase 13 spec has named something that does not exist
 (SD-039 named `license.Result`), which makes it a pattern rather than an incident.
+
+### Resolved 2026-10-07: neither spec needed the extension point
+
+The question was framed as which of two specs to break. Reading the core answered it. Every call
+site RFC 0002 names already resolves the tenant from the request's own credentials. Ingestion and
+`/api/v1/*` use the API key, through `pkg/tenantdb`, and the gateway uses its JWT. So "an
+`Extension` only sees its own prefix" was true and did not matter: the core routes never needed
+`ee/` to tell them whose request it was. What `GRVX-1304` adds that the core lacks is lifecycle
+(idempotent provisioning, suspension, confirmation-gated deletion), and that is an ordinary mounted
+handler.
+
+RFC 0002 is withdrawn, so no design-tier decision was needed. `GRVX-1304` is corrected to mount at
+`/ee/tenancy/` and act only on the caller's child tenants. Its other premise, that it should *move*
+the core's multi-tenancy into `ee/`, is SD-062. `GRVX-1305`, `1306`, `1308`, `1310` and `1312` are
+unblocked. Doing that work found F-080: no `ee/` route had any authentication, so a control plane
+mounted the old way would have answered anyone.
 
 ---
 
@@ -4468,3 +4485,26 @@ now checks for that expression, so it still fails if anyone changes the formula,
 cast is there. The spec's intent, that the measure stays mergeable and unchanged in meaning, is what
 the test keeps.
 
+## SD-062 — GRVX-1304 told its implementer to move Apache-2.0 code into `ee/`
+
+**Found by:** resolving SD-040
+**Affects:** GRVX-1304 header (Charter basis, Q4), §1, §2; `docs/oss/20-roadmap-horizon-2.md` ("migrated from Horizon 1")
+**Severity:** high — executed as written, it would relicense shipped functionality, which charter §7.3 Q4 forbids and no threshold can permit
+**Status:** resolved 2026-10-07 (DD-040)
+
+GRVX-1304 §1 said "Move Horizon 1's multi-tenancy into `ee/tenancy/`", and its charter basis
+answered Q4 NO on the ground that "multi-tenancy was never released under Apache terms as a
+standalone capability". Tenant-scoped API keys and tokens, per-tenant storage prefixes, the `active`
+check and child organisations are all in the core, under the Apache-2.0 licence the repository has
+carried since 2026-09-17. Its sibling specs already read Q4 the other way: GRVX-1306 §2 ("SAML was
+already released under Apache-2.0 in Horizon 1 … this spec therefore cannot move") and GRVX-1310 §2
+(the branding endpoint "cannot be moved into `ee/`"). "As a standalone capability" is not a
+distinction Q4 draws.
+
+The spec also contradicted itself. §3 and §4.3 forbade editing any core file and kept `pkg/tenantdb`
+in the core, so the move it described could not be carried out under its own rules.
+
+Corrected in place. The objective is now additive: a control plane over the core's multi-tenancy,
+for an operator running Gravix for others. The Q4 answer now covers only what is new. Keeping
+shipped code open is the reading that cannot violate an entrenched clause, so it needs no ruling.
+Moving the code out would have needed one, and §7.3 Q4 leaves no room for that ruling.

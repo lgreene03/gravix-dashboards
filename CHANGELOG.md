@@ -45,6 +45,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Changed
 
+- **No tenant-resolution extension point** — RFC 0002 is withdrawn: the core already resolves every request's tenant from its credentials, and the paid control plane (GRVX-1304) mounts as an ordinary extension over the core's multi-tenancy, which stays Apache-2.0 (DD-040, SD-062)
 - **Ingestion runs one replica in every shipped values file** — path templates are learned per process, so replicas could give one path two templates, and the production values ran up to ten replicas on one single-attach volume. More than one is now an explicit opt-in, `ingestion.allowMultipleReplicas`, and needs persistence off (DD-035)
 - **Cube v0.35 → v1.7.48** — on every stack and in the Helm chart. Two first queries at once after a Cube restart no longer stall every query for two minutes (F-060). The same queries returned the same answers on both versions, on both stacks, before the pin moved (DD-034)
 - **Test suites are split by speed** — `make test-fast` is the contributor suite; `make test-full` and `make test` still run everything. `tests/e2e/`, `tests/correctness/` and `bench/` carry a `//go:build slow` tag, and CI runs every suite on every pull request (GRVX-1206)
@@ -97,6 +98,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Security
 
+- **Every `ee/` route now requires an admin's token** — the Enterprise gateway mounted its extensions with no authentication, and `ee/intelligence` read whichever tenant a request named. Never in a release, and the OSS build mounts nothing (F-080)
 - **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
 - **The dashboard was served an unrestricted API key before login** — `dashboard_config.js` now carries a key scoped to `admin:read`, and existing installs are narrowed on their next boot (SD-013)

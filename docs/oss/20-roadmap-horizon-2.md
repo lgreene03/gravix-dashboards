@@ -285,7 +285,7 @@ drive-by contributors, who are most of them.
 | `GRVX-1301` | Offline Ed25519 licence verification; no network call, ever | core (verifier) |
 | `GRVX-1302` | Extension-point framework: the core interfaces `ee/` registers against | core |
 | `GRVX-1303` | Graceful degrade: expiry → `ee/` read-only, core entirely unaffected | `ee/` |
-| `GRVX-1304` | `ee/tenancy/` — multi-tenant control plane (migrated from Horizon 1) | `ee/` |
+| `GRVX-1304` | `ee/tenancy/` — multi-tenant control plane over the core's multi-tenancy, which stays core (SD-062) | `ee/` |
 | `GRVX-1305` | `ee/billing/` — metering, Stripe, invoicing, overage | `ee/` |
 | `GRVX-1306` | `ee/identity/` — SAML, SCIM, directory sync *(single-org OIDC stays free)* | `ee/` |
 | `GRVX-1307` | `ee/fleet/` — manage N installations from one console | `ee/` |

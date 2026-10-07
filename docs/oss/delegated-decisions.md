@@ -854,3 +854,34 @@ layout, as it does today. The bare-Parquet guide's globs handle it.
 
 **To reverse.** Point Cube's Trino `tableSql` back at `gravix.raw` and remove the service.
 
+
+## DD-040 — SD-040: no tenant-resolution extension point; RFC 0002 withdrawn
+
+**Date** 2026-10-07 · **Tier** routine (spec correction and a security fix; an RFC withdrawn by its author) · **Spec** GRVX-1304, GRVX-1302 · **Findings** SD-040, SD-062, F-080
+
+**Options.** Accept RFC 0002 and add a `TenantResolver` to `pkg/extpoint`. Rewrite GRVX-1304 as a
+separate `ee/` proxy in front of the gateway. Leave Phase 13 blocked. Or find that no hook is needed.
+
+**Chosen.** No hook. The call sites RFC 0002 named already resolve the tenant from the request's
+credentials, so its premise, that they use the single-tenant identity, was wrong. Its default would
+have changed core behaviour, and a registered resolver would have let a paid package overrule the
+core about whose data a request may read. What GRVX-1304 adds that the core lacks is lifecycle,
+and a mounted `Extension` does that. The decision also stays inside the delegation: the delegation
+cannot supply the two approvals a new extension point needs, and withdrawing the proposal needs none.
+The proxy was rejected for the reason RFC 0002 gave: it moves a tenant boundary into deployment
+topology, where a mistake is silent.
+
+**Done.** RFC 0002 withdrawn, with the reason at its head. GRVX-1304 corrected: it mounts at
+`/ee/tenancy/`, `Authorize` admits only an admin of the target tenant's parent, and nothing moves out
+of the core (SD-062). F-080 fixed, since a control plane mounted the old way would have answered
+anyone. GRVX-1304, 1305, 1306, 1308 and 1310 go from `blocked` to `planned` in `spec-status.json`.
+GRVX-1312 stays `partial`, and GRVX-1407 stays `blocked` on its external auditor. Once GRVX-1306
+was `planned`, spec-lint gated it and found that §6 and §7 named `pkg/totp/`, which §2 did not list. §2
+now lists it.
+
+**Given up.** A paid package cannot change how the core decides a request's tenant, for example to
+resolve one from a custom domain. GRVX-1310's custom domains will need to map a domain to a tenant
+inside its own routes, or go through an RFC that argues for a hook with a real use.
+
+**To reverse.** Reopen RFC 0002 as a new RFC, since a withdrawn one stays withdrawn in the log, and
+take it through design tier.
