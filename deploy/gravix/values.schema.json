@@ -204,6 +204,7 @@
       "description": "Ingestion service configuration",
       "properties": {
         "enabled": { "type": "boolean", "default": true },
+        "allowMultipleReplicas": { "type": "boolean", "default": false, "description": "Run more than one ingestion replica. Path templates are learned per process (SD-016), so replicas can disagree; requires persistence.enabled=false (DD-035)." },
         "replicaCount": {
           "type": "integer",
           "minimum": 1,

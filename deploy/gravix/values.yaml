@@ -48,6 +48,12 @@ networkPolicies:
 ingestion:
   enabled: true
   replicaCount: 1
+  # Path templates are learned per process (SD-016): a second replica multiplies
+  # the per-service template budget and can give one raw path two templates. One
+  # replica sustains tens of thousands of facts per second since group commit
+  # (GRVX-1005). Set true to run more anyway; it needs persistence.enabled=false,
+  # because the buffer volume is ReadWriteOnce (DD-035).
+  allowMultipleReplicas: false
   image:
     repository: gravix-ingestion
     tag: "0.1.0"

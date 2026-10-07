@@ -4628,7 +4628,7 @@ as one `inDateRange` ending now (F-077's change).
 **Found by** the Cube upgrade measurement: v1.7.48 logged that it had no security context, and so did the pinned v0.35
 **Affects** `cube/cube.js` (`checkAuth`, `queryRewrite`)
 **Severity** critical under `SECURITY.md` — on a stack with more than one tenant, a signed-in user's dashboard read every tenant's metrics and events
-**Status** fixed; whether to publish an advisory is the owner's decision (`open-decisions.md`)
+**Status** fixed; never in a release (see the correction below)
 
 `checkAuth` verified the token and returned `{ securityContext: { tenant_id } }`. Cube takes the
 security context from `req.securityContext`, or from a returned `security_context`, and ignores any
@@ -4667,6 +4667,14 @@ Three tests hold it:
 On the full stack, a signed-in user's queries now fail instead of reading every tenant, because the
 Trino tables have no `tenant_id` column. That is F-070's stated condition, and it is the safe one.
 
+### Correction, 2026-10-05: no release was affected
+
+This entry and `open-decisions.md` first said 1.0.0 was affected, and that is wrong. 1.0.0 has no
+gateway, no tenants and no authentication. Its `cube.js` has no `checkAuth` and no tenant filter,
+because there was only ever one tenant's data. The multi-tenant code with this fault came later and
+was fixed before any release carried it. So there is no released version to patch and no advisory to
+publish.
+
 ## F-077 — the public metrics API had never returned a number
 
 **Found by** reading how the gateway reaches Cube, after F-076 and F-075 showed that nothing else had been asked
@@ -4701,3 +4709,21 @@ API on every pull request with the bootstrap stack's own key, and requires the t
 
 The API is not in the published API reference. Adding it there is a docs decision for whoever owns
 the API surface.
+
+## F-078 — the image scan on `main` had never scanned an image
+
+**Found by** deciding F-026's open question, whether image-scan should fail `main`
+**Affects** `.github/workflows/ci.yml` (`image-scan`)
+**Severity** high — `main`'s CI was red on every push, and no image had been checked for vulnerabilities
+**Status** fixed
+
+`docker-build` tags each image `sha-<short sha>`, seven characters, which is `docker/metadata-action`'s
+`format=short`. `image-scan` asked Trivy for `sha-<full sha>`. That tag was never pushed, so every
+scan stopped with `MANIFEST_UNKNOWN` before reading a package. The job failed, and its matrix
+cancelled the other three images. `main`'s CI run was red on every push for that reason, and it was
+not a vulnerability.
+
+The scan now asks for the tag `docker-build` pushed, scans all four images even when one fails, and
+fails on fixable CRITICAL and HIGH findings (DD-036). Its first real results come from the first
+push to `main` after this change.
+
