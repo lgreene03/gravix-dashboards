@@ -185,7 +185,9 @@ func TestAllFourCubeConfigs(t *testing.T) {
 		"TENANT_DB_PATH",
 		"/cube/data/warehouse/*/${table}/**/*.parquet",
 		"/cube/data/warehouse/${table}/**/*.parquet",
-		"gravix.raw.${table}",
+		// Trino reads the serving view, which unions every tenant's table and
+		// carries tenant_id; gravix.raw holds no tenant's data (F-070).
+		"gravix.serving.${table}",
 	} {
 		if !strings.Contains(flags, want) {
 			t.Errorf("cube/model_flags.js no longer handles %q", want)
