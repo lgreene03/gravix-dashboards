@@ -64,6 +64,10 @@ type Request struct {
 	TenantID    string    // empty for single-tenant
 	Destination string    // "file:///path", "s3://bucket/prefix", or "-" for stdout
 	Compress    bool      // gzip for csv and jsonl; parquet is already compressed
+
+	// Out is where "-" writes, when set; otherwise it is os.Stdout. The
+	// gateway's on-demand endpoint sets it to the HTTP response (DD-041).
+	Out io.Writer
 }
 
 // Result reports what was written.
@@ -335,7 +339,11 @@ func runDataset[T any](ctx context.Context, store storage.ObjectStore, req Reque
 	// stdout is one stream, not one file per day, so its encoder is opened
 	// once and fed every partition.
 	if dest.stdout {
-		stdoutWriter = &countingWriter{w: os.Stdout}
+		out := req.Out
+		if out == nil {
+			out = os.Stdout
+		}
+		stdoutWriter = &countingWriter{w: out}
 		var err error
 		stdoutRows, closeStdout, err = newRowWriter[T](stdoutWriter, req.Format, req.Compress)
 		if err != nil {
@@ -388,6 +396,13 @@ func runDataset[T any](ctx context.Context, store storage.ObjectStore, req Reque
 		res.BytesWritten += written
 	}
 
+	// Before closing the stream: closing a Parquet or gzip writer emits a
+	// footer, and an empty range must write nothing at all, so a caller that
+	// has not sent anything yet can still answer with the reason.
+	if res.Rows == 0 {
+		return nil, fmt.Errorf("%w: %s .. %s", ErrNoData, req.From.UTC().Format(time.RFC3339), req.To.UTC().Format(time.RFC3339))
+	}
+
 	if dest.stdout {
 		if err := stdoutRows.Close(); err != nil {
 			return nil, err
@@ -396,10 +411,6 @@ func runDataset[T any](ctx context.Context, store storage.ObjectStore, req Reque
 			return nil, err
 		}
 		res.BytesWritten = stdoutWriter.n
-	}
-
-	if res.Rows == 0 {
-		return nil, fmt.Errorf("%w: %s .. %s", ErrNoData, req.From.UTC().Format(time.RFC3339), req.To.UTC().Format(time.RFC3339))
 	}
 
 	// stdout gets no manifest file: there is nowhere to put it, and mixing it

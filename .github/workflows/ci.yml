@@ -884,7 +884,7 @@ jobs:
             ('${day} 00:01:00', 'ci-fixture', 'GET', '/fixture/{id}', 20, 0, 0.0, 4.0, 8.0, 11.0, '${day}'),
             ('${day} 00:02:00', 'ci-fixture', 'POST', '/fixture', 3, 0, 0.0, 6.0, 7.0, 9.0, '${day}')"
           go test -tags=slow -count=1 -v ./tests/e2e/ \
-            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset|TestSQLGuideQueriesRunOnTrino|TestCubeTimeColumnsCastOnTrino|TestCubeAnswersOnTheFullStack|TestTrinoServesEachTenantThroughCube' \
+            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset|TestSQLGuideQueriesRunOnTrino|TestCubeTimeColumnsCastOnTrino|TestCubeAnswersOnTheFullStack|TestTrinoServesEachTenantThroughCube|TestOnDemandExportOnTheFullStack' \
             | tee /tmp/live-e2e.txt
           (cd grafana-plugin/gravix-datasource && go test -count=1 -v ./pkg/ -run 'TestCheckHealthOK') \
             | tee /tmp/live-plugin.txt
@@ -895,7 +895,7 @@ jobs:
           for t in TestIcebergSyncPreservesRowCount TestIcebergSyncIsIdempotent TestVerifySparkIcebergRead \
                    TestVerifyBIConnectionsMetabase TestVerifyBIConnectionsSuperset TestSQLGuideQueriesRunOnTrino \
                    TestCubeTimeColumnsCastOnTrino TestCubeAnswersOnTheFullStack \
-                   TestTrinoServesEachTenantThroughCube; do
+                   TestTrinoServesEachTenantThroughCube TestOnDemandExportOnTheFullStack; do
             grep -q -- "--- PASS: $t " /tmp/live-e2e.txt || { echo "::error::$t did not pass"; exit 1; }
           done
           grep -q -- '--- PASS: TestCheckHealthOK ' /tmp/live-plugin.txt || { echo "::error::TestCheckHealthOK did not pass"; exit 1; }

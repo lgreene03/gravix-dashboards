@@ -237,6 +237,10 @@ func newRowWriter[T any](w io.Writer, format Format, compress bool) (rowWriter[T
 
 // fileExtension is the suffix an exported file carries, so the name alone
 // tells a reader (and their tooling) how to open it.
+// Extension is the file extension an export of this format is written with,
+// such as ".jsonl.gz", for callers that name the file themselves.
+func Extension(format Format, compress bool) string { return fileExtension(format, compress) }
+
 func fileExtension(format Format, compress bool) string {
 	switch format {
 	case FormatParquet:

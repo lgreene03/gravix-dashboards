@@ -377,6 +377,13 @@ func Run() {
 	// Start onboarding email drip loop
 	go gw.onboardingEmailLoop(bgCtx)
 
+	// Run scheduled exports when they come due, into each tenant's own
+	// exports/ prefix (F-054, DD-041). Without a store there is nowhere to
+	// write them, and the schedules stay stored as they always were.
+	if gw.metricStore != nil {
+		go gw.runScheduledExportsLoop(bgCtx)
+	}
+
 	// Initialize Stripe billing if configured
 	stripeKey := os.Getenv("STRIPE_SECRET_KEY")
 	if stripeKey != "" {
@@ -454,6 +461,8 @@ func Run() {
 	// "/api/gateway/exports" was a trap for every client (SD-029). No release
 	// shipped the singular path.
 	mux.HandleFunc("/api/gateway/exports/archive", gw.requireAuth(gw.rateLimitMiddleware(gw.handleExport)))
+	// GRVX-1107 §5.4: any role, any plan, and the export is the response (DD-041).
+	mux.HandleFunc("/api/gateway/exports", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleOnDemandExport))))
 	mux.HandleFunc("/api/gateway/invitations", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleInvitations))))
 	mux.HandleFunc("/api/gateway/invitations/accept", gw.ipRateLimitMiddleware(bodyLimit(gw.handleAcceptInvitation)))
 	mux.HandleFunc("/api/gateway/team", gw.requireAuth(gw.rateLimitMiddleware(bodyLimit(gw.handleTeam))))

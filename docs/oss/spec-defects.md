@@ -1777,7 +1777,7 @@ because the version comment differs between releases. It is noted in DD-027 rath
 **Affects:** GRVX-1107 §2, §4.2, §6 steps 1/6/7, AC-9, AC-10, AC-12
 **Severity:** high — half the spec is unreachable, and following §4 literally produces code that
 fails the repository's own lint gate
-**Status:** resolved 2026-10-01 (DD-011); the job endpoint waits on a security design. Originally: open; returned as `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and
+**Status:** resolved 2026-10-01 (DD-011); the job endpoint built 2026-10-07 with server-chosen destinations (DD-041). Originally: open; returned as `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and
 cmd/cli/main.go`. §4.1 was implemented in full; the gateway half was not.
 
 ### The file named does not contain the feature

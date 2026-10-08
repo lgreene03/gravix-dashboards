@@ -129,6 +129,27 @@ curl "http://localhost:8091/api/v1/metrics?metric=throughput&granularity=day" \
   -H "X-Gravix-Key: $GRAVIX_API_KEY"
 ```
 
+### Export
+
+Leave with your data, on any plan, as any role. The server chooses where an export goes: the on-demand export is the response, and a scheduled one is kept in your tenant's own area of Gravix's store until you download it. A request that names a destination is refused.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/gateway/exports` | `facts`, `metrics` or `events` for a range, as `parquet`, `csv` or `jsonl` |
+| GET, POST | `/api/gateway/exports/scheduled` | List schedules, or create one (admin) |
+| GET, PUT, DELETE | `/api/gateway/exports/scheduled/{id}` | Read, change (admin) or delete (admin) a schedule |
+| GET | `/api/gateway/exports/scheduled/{id}/runs` | The schedule's runs, newest first, with their files |
+| GET | `/api/gateway/exports/scheduled/{id}/runs/{run}/{file}` | Download one file of a run |
+
+```bash
+curl -X POST http://localhost:8091/api/gateway/exports \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"dataset":"facts","format":"parquet","from":"2026-05-01","to":"2026-05-08"}' \
+  -o facts.parquet
+```
+
+`from` is inclusive and `to` exclusive. An empty range answers `422`. A scheduled export covers the `lookback_days` whole UTC days before the day it runs.
+
 ### Additional groups
 
 The API also includes endpoints for **2FA** (TOTP setup and management), **SSO** (SAML configuration), **Sessions** (active session listing and revocation), **Organizations** (multi-org hierarchy), **Referrals** (referral code management), **Analytics** (dashboard data queries), **Traces** (sampled trace inspection), **DLQ** (dead letter queue replay), and **Admin** (audit log, retention policy, data export).

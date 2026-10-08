@@ -1109,6 +1109,79 @@
         }
       }
     },
+    "/api/gateway/exports": {
+      "post": {
+        "summary": "Export facts, metrics or events",
+        "description": "Any role, any plan. The export is the response body, streamed one day at a time. The server chooses where an export goes: a destination field, or any field not listed here, is refused by name (DD-041). One export per tenant at a time.",
+        "operationId": "exportOnDemand",
+        "tags": ["Admin"],
+        "security": [{ "JWTAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["dataset", "from", "to"],
+                "additionalProperties": false,
+                "properties": {
+                  "dataset": { "type": "string", "enum": ["facts", "metrics", "events"] },
+                  "format": { "type": "string", "enum": ["parquet", "csv", "jsonl"], "default": "parquet" },
+                  "from": { "type": "string", "description": "Inclusive. RFC 3339 or YYYY-MM-DD." },
+                  "to": { "type": "string", "description": "Exclusive. RFC 3339 or YYYY-MM-DD." },
+                  "compress": { "type": "boolean", "default": false, "description": "gzip for csv and jsonl; parquet is already compressed" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The export, with a Content-Disposition file name",
+            "content": {
+              "application/vnd.apache.parquet": { "schema": { "type": "string", "format": "binary" } },
+              "text/csv": { "schema": { "type": "string" } },
+              "application/x-ndjson": { "schema": { "type": "string" } },
+              "application/gzip": { "schema": { "type": "string", "format": "binary" } }
+            }
+          },
+          "400": { "description": "An invalid or unaccepted field, named in the error" },
+          "422": { "description": "No data in the range" },
+          "429": { "description": "An export is already running for this tenant" }
+        }
+      }
+    },
+    "/api/gateway/exports/scheduled/{id}/runs": {
+      "get": {
+        "summary": "List a scheduled export's runs",
+        "description": "Every run of the schedule, newest first, with the files it wrote. Any role of the schedule's tenant.",
+        "operationId": "listScheduledExportRuns",
+        "tags": ["Admin"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "{\"runs\": [{\"run\": \"20260522T0300Z\", \"files\": [\"facts_20260521.jsonl\", \"manifest.json\"]}]}" },
+          "404": { "description": "No such schedule for this tenant" }
+        }
+      }
+    },
+    "/api/gateway/exports/scheduled/{id}/runs/{run}/{file}": {
+      "get": {
+        "summary": "Download one file of a scheduled export's run",
+        "operationId": "downloadScheduledExportFile",
+        "tags": ["Admin"],
+        "security": [{ "JWTAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "run", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "file", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The file", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "404": { "description": "No such run or file" }
+        }
+      }
+    },
     "/api/gateway/invitations": {
       "get": {
         "summary": "List invitations",

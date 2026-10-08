@@ -885,3 +885,34 @@ inside its own routes, or go through an RFC that argues for a hook with a real u
 
 **To reverse.** Reopen RFC 0002 as a new RFC, since a withdrawn one stays withdrawn in the log, and
 take it through design tier.
+
+## DD-041 — SD-029 / F-054: the server chooses every export's destination
+
+**Date** 2026-10-07 · **Tier** routine (implementing GRVX-1107 §5.4 and §6 step 6, with the spec corrected) · **Findings** SD-029, F-054, F-081
+
+**Options.** An allow-list of destinations. Per-schedule credentials, stored encrypted and rotated.
+Or a destination the server chooses, with the export returned to the caller or kept where the tenant
+can fetch it.
+
+**Chosen.** The server chooses. Any role may export, so an allow-list still lets a viewer pick among
+places the gateway can write, and the list itself becomes a security boundary someone must keep
+right. Stored credentials make the gateway a keyring for its customers' buckets. Neither is needed to
+leave with one's data: an on-demand export comes back in the response, and a scheduled one is kept
+under the tenant's own `exports/` prefix, beside the facts it came from. A tenant whose storage is
+its own bucket (`ee/tenancy/byob`) finds its exports there by the same rule.
+
+**Done.** `POST /api/gateway/exports`, any role, any plan. It streams the export as the response,
+refuses `destination` and any unknown field by name, and allows one export per tenant at a time.
+Scheduled exports run from a loop in the gateway with a small five-field cron evaluator, and are
+listed and downloaded under `.../scheduled/<id>/runs`. `destination_url` is refused on create and
+update. `pkg/export` takes an `Out` writer for `-`, and writes nothing at all for an empty range, so
+the endpoint can still answer `422`. GRVX-1107 §5.4 is corrected, and all twelve of its criteria now
+pass, so it is `done`. Writing the live test found F-081, and the full stack's gateway now reads
+MinIO.
+
+**Given up.** Delivering into a customer's bucket on a schedule. They fetch it, or run `gravix
+export` with their own credentials. A `202` job API: the response is the export, so a very large
+range is one long request, bounded in memory by one day's partition.
+
+**To reverse.** Accept `destination_url` again and point `runScheduledExport` at it. That is the
+credential question this entry avoided, and it would need answering first.

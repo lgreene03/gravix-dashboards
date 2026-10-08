@@ -174,19 +174,20 @@ outside Gravix is only technically an export.
 
 ### 5.4 `POST /api/gateway/exports`
 
-> **Not yet buildable as written (DD-011).** Two questions this section does not answer block it.
-> First, the body carries `destination`, so any authenticated role — §5.4 grants export to every
-> role — could direct the gateway to write a `file://` path on its own host or an `s3://` bucket
-> with the gateway's credentials. A destination model is needed: server-chosen under the tenant's
-> export root, or an allow-list. Second, scheduled exports are stored and never run (F-054), so
-> AC-10's "scheduled and on-demand agree" has nothing to agree with. Both are design decisions,
-> not implementation details.
+> **Corrected 2026-10-07 (DD-041).** The two questions that blocked this section are answered.
+> The body carries **no** `destination`: any role may export, so no caller chooses where the gateway
+> writes. A request that names one is refused with `400 invalid field "destination"`. The export is
+> the response body, `200`, streamed one day's partition at a time, rather than a `202` job whose
+> output would need somewhere to live. Scheduled exports now run (F-054), into the tenant's own
+> `exports/<tenant>/scheduled/<id>/<run>/` in Gravix's store, and are listed and downloaded under
+> `/api/gateway/exports/scheduled/<id>/runs`. The `destination` failure modes below apply to the
+> CLI, which runs with its operator's own credentials.
 
 Body is the `Request` fields. Roles: **any authenticated role may export**. Export is how a user
 retrieves their own data; restricting it to admins would make a viewer unable to leave with the data
 they can already see on screen.
 
-Status codes: `202` accepted with a job id; `400` invalid field, naming it; `401`; `404` unknown
+Status codes: `200` with the export as the body (DD-041; this read `202` accepted with a job id); `400` invalid field, naming it; `401`; `404` unknown
 dataset; `422` no data in range; `429`. **No `403` for plan.** A `403` on this endpoint would be a
 charter violation and `make check-boundary` will flag any `requirePlan` added here.
 
@@ -283,7 +284,7 @@ make check-boundary && make build-oss && make test-oss
 
 ---
 
-## 11. Implementation report (partial — §4.1 complete, gateway half returned as SD-029)
+## 11. Implementation report (complete 2026-10-07, §11.9; the gateway half was first returned as SD-029)
 
 `pkg/export` and `cmd/cli/cmd_export.go` are complete and tested. The gateway half was returned as
 `SPEC DEFECT: §4 — needs services/gateway/gateway_platform.go and cmd/cli/main.go`; details in
@@ -397,8 +398,30 @@ OpenAPI document and `ee/degrade.ExportEndpoint`. No release shipped the singula
 | AC-7 | **PASS** | `TestExportHasNoPlanGate` — every export route's middleware and handler body; a 402 branch added to `handleExport` fails it |
 | AC-8 | **PASS** | `TestAnyRoleCanExport` — viewer, editor and admin each get the archive; the first test ever to exercise `handleExport` |
 | AC-9 | **PASS** | `TestScheduledExportsCreateNonAdminForbidden`, `TestScheduledExportByIDDeleteNonAdminForbidden`, and the viewer case in `TestExistingScheduleValidationIntact` |
-| AC-10 | **BLOCKED** | scheduled exports are never executed (F-054), so there is no scheduled output to compare |
+| AC-10 | ~~BLOCKED~~ | see §11.9 |
 | AC-12 | **PASS** | `TestExistingScheduleValidationIntact` — all seven rules SD-029 recorded, plus the defaults |
 
 §5.4's on-demand job endpoint is not built. Its body lets any role choose a write destination, and
 no destination model is specified; see the note under §5.4.
+
+### 11.9 DD-041: the on-demand endpoint, and schedules that run (2026-10-07)
+
+`POST /api/gateway/exports` is built, with the corrections in §5.4. Scheduled exports run: a loop in
+the gateway runs each active schedule once for the latest minute it came due, writes the run under
+the tenant's own prefix, and records `LastRunAt` and `LastError`. Two gateways running the same
+schedule write the same files to the same keys, because a run is named by the minute it was due.
+
+| ID | Status | Evidence |
+|---|---|---|
+| AC-8 | **PASS** | also `TestOnDemandExportStreamsToTheCaller`: viewer, editor and admin |
+| AC-10 | **PASS** | `TestScheduledAndOnDemandAgree`: a scheduled run's file and the on-demand stream for the same range are byte-identical |
+| AC-11 | **PASS** | also `TestOnDemandExportRefusesAQuery`: `filter`, `where`, `query` and `sql` are each refused by name |
+
+`TestOnDemandExportRefusesADestination`, `TestScheduledExportRunsWhenDue`,
+`TestScheduledExportRunsAreReadable` and `TestCronSpec` hold the rest. `TestOnDemandExportOnTheFullStack`
+runs in `docker-smoke`. It writes a tenant's facts where ingestion does, and exports them through the
+running gateway. On the stack as it was, it failed with `422`: the gateway was reading its own disk
+(F-081). `docs/openapi.yaml` and the API reference now document the endpoint.
+
+All twelve criteria pass.
+

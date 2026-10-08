@@ -3877,7 +3877,7 @@ invisible. A failed query and an empty result should not render the same.
 **Affects:** `/api/gateway/exports/scheduled`, `tenantdb.ScheduledExport`, GRVX-1107 AC-10
 **Severity:** high — a user can create a nightly export to their bucket, see it listed as `active`,
 and receive nothing, ever
-**Status:** open; needs a design, recorded on the stops list
+**Status:** fixed 2026-10-07 (DD-041). Originally: open; needs a design, recorded on the stops list
 
 ### What is there
 
@@ -3894,6 +3894,16 @@ per-schedule credentials are stored, encrypted and rotated. Both are security de
 did not make. Until one is made, the honest interim is to say on the schedule itself that it does
 not run. That copy change is small, but it sits in the dashboard and the API, and is left with the
 design so the two land together.
+
+### Fixed, 2026-10-07
+
+The design is that no caller names a destination (DD-041). Every run goes under the tenant's own
+`exports/<tenant>/scheduled/<id>/<run>/` in Gravix's store, which is where the tenant's facts
+already live, and is listed and downloaded through `/api/gateway/exports/scheduled/<id>/runs`.
+`destination_url` is refused on create and update. No credential is stored, and the gateway writes
+nowhere it could not already write. A loop in the gateway runs each active schedule once, for the
+latest minute it came due, and records `LastRunAt` and `LastError`. A run that found no data says
+so in `LastError`. `TestScheduledExportRunsWhenDue` and `TestScheduledAndOnDemandAgree` hold it.
 
 ---
 
@@ -4797,3 +4807,28 @@ request that names a tenant, and refuses one with no caller.
 Still open: `ee/fleet` and `ee/warehouse` keep one registry per process. That is right for an
 operator's own installation. On a gateway serving many tenants, every tenant's admin would share
 it. Both are unreleased, and each needs per-tenant state before a multi-tenant deployment uses it.
+
+## F-081 — on the full stack the gateway read its own disk, and the data was in MinIO
+
+**Found by** writing the live test for DD-041's on-demand export
+**Affects** `docker-compose.yml` (`gateway`); every gateway endpoint that reads the store: on-demand export, `/api/v1/percentile`, `/api/v1/lineage`
+**Severity** high — on the full stack those endpoints found no data for any tenant
+**Status** fixed for the store-backed endpoints; the raw archive and the DLQ remain, below
+
+Ingestion and the rollups on the full stack keep raw facts and the warehouse in MinIO. The gateway
+was given no S3 settings, so `newMetricStore` fell back to the local `./data`, where neither is. A
+percentile, a lineage lookup or an export for any tenant answered as if the tenant had no data.
+Nothing showed it because no live test called them. Their unit tests use a local store that the
+test fills itself.
+
+The gateway now gets the same five `S3_*` settings the rollups have, and waits for MinIO.
+`TestOnDemandExportOnTheFullStack` writes a tenant's facts where ingestion puts them and exports
+them through the running gateway. Against a gateway configured the old way it fails with
+`422 no data in range`. Configured the new way, it passes.
+
+Still open: the raw-archive download (`/api/gateway/exports/archive`) and the DLQ read the gateway's
+second store, rooted at `RAW_DATA_DIR`. They also disagree with each other about what that root is:
+the archive expects keys that begin with `raw/`, and the DLQ expects keys that do not. On the full
+stack neither finds MinIO's data. Both need moving to the same store, and the migration guide's test,
+which configures the archive's root its own way, needs to move with them.
+
