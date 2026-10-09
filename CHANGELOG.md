@@ -60,6 +60,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Fixed
 
+- **With network policy on, production cut the gateway off, and four CronJobs with it** — the default deny had no rule for the gateway, and the rollups labelled their CronJobs but not their pods, so the jobs' rule matched nothing. Each workload now has an allow-policy, and CI fails a render that leaves one out (F-083)
 - **The Helm chart's analytics path had never worked** — its rollups ran single-tenant and could not open the Postgres tenant database production uses, its Trino could not start, and nothing created Trino's tables or the views Cube reads. The jobs now read the tenant database, Trino is 435 as in Compose, and a `trino-catalog-sync` CronJob creates and maintains the tables and views (F-079, DD-044)
 - **On the full stack the gateway read its own disk** — facts and the warehouse are in MinIO, so percentiles, lineage and exports found nothing for any tenant. The gateway now reads the same store as ingestion and the rollups (F-081)
 - **On the full stack, a signed-in user's dashboard read nothing** — each tenant's metrics are written under its own directory, which Trino's tables never read. A new `trino-catalog-sync` service registers each tenant's directories and serves them through `gravix.serving` views that carry `tenant_id`, which Cube now reads (F-070, DD-039)

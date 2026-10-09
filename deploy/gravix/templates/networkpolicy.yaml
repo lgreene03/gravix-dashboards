@@ -136,6 +136,71 @@ spec:
           protocol: TCP
     {{- end }}
 
+# ─── Gateway: login, the API and the dashboard's data calls ───
+# Ingress from the ingress controller, as the dashboard has. Egress to Cube,
+# storage, the tenant database, and HTTPS and mail for payments, single
+# sign-on and email. Without this the default deny cut the gateway off in
+# both directions on every install that enabled network policy (F-083).
+{{- if .Values.gateway.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-gateway-allow
+  labels:
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: {{ .Values.gateway.service.port }}
+          protocol: TCP
+  egress:
+    {{- if .Values.storage.cube.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: cube
+      ports:
+        - port: 4000
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.storage.minio.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - port: 9000
+          protocol: TCP
+    {{- end }}
+    {{- if eq (.Values.gateway.dbDriver | default "sqlite") "postgres" }}
+    - to: []
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- end }}
+    # External HTTPS (S3, Stripe, identity providers) and mail submission.
+    - to: []
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 587
+          protocol: TCP
+        - port: 465
+          protocol: TCP
+{{- end }}
+
 # ─── Cube.js: accept from dashboard (nginx proxy) only ───
 # Egress: → Trino (port 8080) for SQL queries
 {{- if .Values.storage.cube.enabled }}
@@ -159,6 +224,10 @@ spec:
         - podSelector:
             matchLabels:
               app: dashboard
+        # The gateway asks Cube for the metrics API and warms its cache (F-083).
+        - podSelector:
+            matchLabels:
+              app: gateway
       ports:
         - port: 4000
           protocol: TCP
@@ -293,7 +362,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [rollup, events-rollup, events-detail, retention, trino-catalog-sync]
+        values: [rollup, events-rollup, events-detail, retention, trino-catalog-sync, backup]
   policyTypes:
     - Egress
   egress:

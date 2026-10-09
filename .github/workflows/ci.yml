@@ -415,6 +415,18 @@ jobs:
             --set certManager.email=test@example.com \
             > /dev/null
 
+      - name: Every workload has a network policy (prod)
+        # Production starts from default-deny. A workload no allow-policy
+        # selects is cut off in both directions, and nothing else says so:
+        # the gateway and four CronJobs were (F-083).
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          helm template gravix deploy/gravix \
+            -f deploy/gravix/values-prod.yaml \
+            $HELM_TEST_SETS \
+            --set certManager.email=test@example.com \
+            | python3 scripts/check_netpol_coverage.py
+
       - name: Verify resource count (prod)
         run: |
           COUNT=$(helm template gravix deploy/gravix \

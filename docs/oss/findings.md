@@ -4872,6 +4872,8 @@ The gateway now gets the same five `S3_*` settings the rollups have, and waits f
 them through the running gateway. Against a gateway configured the old way it fails with
 `422 no data in range`. Configured the new way, it passes.
 
+The Helm chart's gateway had the same gap and now has the same settings.
+
 Still open: the raw-archive download (`/api/gateway/exports/archive`) and the DLQ read the gateway's
 second store, rooted at `RAW_DATA_DIR`. They also disagree with each other about what that root is:
 the archive expects keys that begin with `raw/`, and the DLQ expects keys that do not. On the full
@@ -4908,7 +4910,7 @@ its compiler is a separate change with its own risk.
 **Found by** adding the analytics jobs' egress for F-079
 **Affects** `deploy/gravix/templates/networkpolicy.yaml`, with `networkPolicies.enabled: true` (`values-prod.yaml`)
 **Severity** high — on a production install the gateway can neither be reached nor reach its database
-**Status** open
+**Status** fixed 2026-10-09
 
 The policy starts from default-deny ingress and egress for every pod in the namespace. It then
 allows traffic for ingestion, the dashboard, Cube, Trino, MinIO, the jobs and the load generator.
@@ -4917,7 +4919,18 @@ fail. It reaches nothing in turn: not Postgres, not Cube for the metrics API and
 not object storage, and not the mail and payment providers it calls out to. Cube's ingress also
 admits only the dashboard, so the gateway would be refused there as well.
 
-It is not fixed here because the rule has to name the gateway's real dependencies: the ingress
-controller, Postgres, Cube, storage, SMTP and Stripe. Some of those are outside the cluster, and
-their addresses differ per install. That deserves its own change, with a rendered-policy test.
+Rendering the production values and listing which workloads an allow-policy selects found more. The
+four analytics CronJobs labelled the CronJob but not its pods, and network policy selects pods, so
+the jobs' egress rule never applied: the rollups could reach neither storage nor Trino. The backup
+job had no rule at all.
+
+Fixed. The gateway has a policy: ingress from the ingress controller's namespace, as the dashboard
+has, and egress to Cube, storage, Postgres, and HTTPS and mail submission for payments, single
+sign-on and email. Cube admits the gateway. The four CronJobs label their pods, and the backup job
+joins the jobs' rule. `scripts/check_netpol_coverage.py` runs in `helm-validate` against the
+production render, and fails on any Deployment, StatefulSet, DaemonSet or CronJob that no
+allow-policy selects. On the old chart it names all six.
+
+External destinations are allowed by port, not by address, as the chart already did for S3.
+Narrowing them to addresses is per install and is left to the operator.
 
