@@ -79,6 +79,23 @@ func TableName(tenantID, table string) string {
 	return "t_" + strings.ToLower(strings.ReplaceAll(tenantID, "-", "_")) + "_" + table
 }
 
+// CreateRawTableSQL is the single-tenant table in gravix.raw, the first
+// branch of every serving view. Compose's init-trino creates the same tables;
+// Sync creates them too, if missing, so a deployment with no init step (the
+// Helm chart) and a Trino whose file metastore did not survive a restart both
+// get them back within one run (F-079).
+func CreateRawTableSQL(bucket string, t Table) string {
+	var cols []string
+	if t.LegacyHasTenant {
+		cols = append(cols, "tenant_id VARCHAR")
+	}
+	for _, c := range t.Columns {
+		cols = append(cols, c.Name+" "+c.Type)
+	}
+	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS gravix.raw.%s (%s) WITH (format = 'PARQUET', "+
+		"external_location = 's3a://%s/warehouse/%s/')", t.Name, strings.Join(cols, ", "), bucket, t.Name)
+}
+
 // CreateTenantTableSQL registers one tenant's directory for one table.
 func CreateTenantTableSQL(bucket, tenantID string, t Table) string {
 	cols := []string{"tenant_id VARCHAR"}
@@ -130,11 +147,17 @@ func Sync(ctx context.Context, db *sql.DB, bucket string, tenantIDs []string) (s
 		}
 	}
 	for _, stmt := range []string{
+		"CREATE SCHEMA IF NOT EXISTS gravix.raw",
 		"CREATE SCHEMA IF NOT EXISTS gravix.tenants",
 		"CREATE SCHEMA IF NOT EXISTS gravix.serving",
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return skipped, fmt.Errorf("trinocatalog: %s: %w", stmt, err)
+		}
+	}
+	for _, t := range Tables() {
+		if _, err := db.ExecContext(ctx, CreateRawTableSQL(bucket, t)); err != nil {
+			return skipped, fmt.Errorf("trinocatalog: create gravix.raw.%s: %w", t.Name, err)
 		}
 	}
 	for _, t := range Tables() {

@@ -91,3 +91,26 @@ func TestSyncRefusesABadBucketBeforeTouchingTrino(t *testing.T) {
 		t.Fatal("Sync accepted a bucket name that would end up inside a string literal")
 	}
 }
+
+// TestRawTablesMatchComposeInit: Sync creates gravix.raw's tables when they
+// are missing (F-079), and Compose's init-trino creates them first. Both must
+// be the same tables, column for column and at the same location, or a Helm
+// install and a Compose stack read different data under the same name.
+func TestRawTablesMatchComposeInit(t *testing.T) {
+	raw, err := os.ReadFile("../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(raw)
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	for _, tbl := range Tables() {
+		m := regexp.MustCompile(`(?s)CREATE TABLE IF NOT EXISTS gravix\.raw\.` + tbl.Name + ` \((.*?)\) WITH \((.*?)\)"`).FindStringSubmatch(compose)
+		if m == nil {
+			t.Fatalf("no CREATE TABLE for gravix.raw.%s in docker-compose.yml's init-trino", tbl.Name)
+		}
+		want := norm("CREATE TABLE IF NOT EXISTS gravix.raw." + tbl.Name + " (" + strings.TrimSpace(m[1]) + ") WITH (" + strings.TrimSpace(m[2]) + ")")
+		if got := norm(CreateRawTableSQL("gravix", tbl)); got != want {
+			t.Errorf("%s:\n Sync creates  %s\n Compose has   %s", tbl.Name, got, want)
+		}
+	}
+}

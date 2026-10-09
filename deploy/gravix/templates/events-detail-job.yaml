@@ -17,6 +17,9 @@ spec:
       activeDeadlineSeconds: 600
       template:
         metadata:
+          # The pod's label, not only the CronJob's: network policy selects pods (F-083).
+          labels:
+            app: events-detail
           annotations:
             prometheus.io/scrape: "true"
             prometheus.io/port: "9093"
@@ -39,6 +42,7 @@ spec:
                   drop: ["ALL"]
               command: ["./service-events-detail-rollup"]
               env:
+                {{- include "gravix.tenantDB.env" . | nindent 16 }}
                 - name: S3_ENDPOINT
                   value: {{ .Values.global.storage.endpoint | quote }}
                 - name: S3_REGION
@@ -62,5 +66,7 @@ spec:
                 requests:
                   cpu: 100m
                   memory: 128Mi
+              {{- include "gravix.tenantDB.volumeMounts" . | nindent 14 }}
+          {{- include "gravix.tenantDB.podSpec" . | nindent 10 }}
           restartPolicy: OnFailure
 {{- end }}

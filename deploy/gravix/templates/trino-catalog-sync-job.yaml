@@ -1,0 +1,60 @@
+{{- if and .Values.trinoCatalogSync.enabled .Values.storage.trino.enabled }}
+# Registers each tenant's warehouse directories with Trino and rewrites the
+# gravix.serving views Cube reads (F-070), creating gravix.raw's tables first
+# if they are missing (F-079). Idempotent: a run that finds nothing new
+# rewrites the views with the same text.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-trino-catalog-sync
+  labels:
+    app: trino-catalog-sync
+    app.kubernetes.io/name: gravix
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  schedule: {{ .Values.trinoCatalogSync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: trino-catalog-sync
+        spec:
+          serviceAccountName: {{ .Release.Name }}-jobs
+          {{- include "gravix.imagePullSecrets" . | nindent 10 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+          containers:
+            - name: trino-catalog-sync
+              image: {{ include "gravix.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.rollupJob.image.repository "tag" .Values.rollupJob.image.tag) | quote }}
+              imagePullPolicy: {{ .Values.rollupJob.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["./trino-catalog-sync"]
+              args:
+                - "-trino-dsn"
+                - "http://gravix@{{ .Release.Name }}-trino:8080?catalog=gravix&schema=raw"
+                - "-bucket"
+                - {{ .Values.global.storage.bucket | quote }}
+              env:
+                {{- include "gravix.tenantDB.env" . | nindent 16 }}
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+              {{- include "gravix.tenantDB.volumeMounts" . | nindent 14 }}
+          {{- include "gravix.tenantDB.podSpec" . | nindent 10 }}
+          restartPolicy: OnFailure
+{{- end }}

@@ -972,7 +972,7 @@ driver reproduced it.
 **Severity** medium-high. The stray directory is cosmetic; what it exposes is not. The lock exists to
 stop the cron rollup and a `gravix recompute` writing the same partition at the same time, and in the
 two deployments where that can actually happen it does not.
-**Status** resolved for one machine (DD-022); a lock across machines sharing a bucket needs a spec. Originally: open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
+**Status** resolved for one machine (DD-022); across machines, decided not to build an object-store lock (DD-043). Originally: open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
 a change to locking semantics that wants its own spec.
 
 **The mismatch**, in one place — `pkg/recompute/recompute.go:534`:
@@ -1051,6 +1051,25 @@ The lock now lives where the data lives, and the cron and recompute take the sam
 `os.TempDir`, so two machines sharing a bucket still do not contend. `LockDir`'s comment says so. A
 real cross-machine lock is an object in the store, taken with a conditional write and given an
 expiry. That changes the storage interface and the locking semantics, so it needs a spec.
+
+### Across machines, 2026-10-09 — DD-043
+
+The register asked for a lock object in the store, taken with a conditional write. Before designing
+one, the write it depends on was tried against the stack's own MinIO, the pinned
+`RELEASE.2024-03-15T01-07-19Z`. Two `PUT`s of the same key with `If-None-Match: *` both answered
+`200`, and the second overwrote the first. That MinIO ignores the condition, so a lock built on it
+would report exclusion it does not have, on the store most installations use. That is worse than
+no lock, because it is believed.
+
+What holds instead: one writer per bucket. The Helm chart runs a single rollup CronJob with
+`concurrencyPolicy: Forbid`, and Compose runs one rollup container. The gap is `gravix recompute`
+run from a second machine against the same bucket, or two installations sharing one. The lock now
+logs, every time it is taken on a store with no local root, that it guards this machine only.
+`docs/06-operations.md` no longer claims more than that.
+
+An object-store lock becomes worth building when the pinned MinIO honours conditional writes. When
+it does, the lock should prove the condition at startup, by writing a key twice and requiring the
+second write to fail, before claiming anything.
 
 ## F-019 — the bootstrap stack has not built at all since Alpine bumped tzdata
 
@@ -4758,7 +4777,7 @@ push to `main` after this change.
 **Found by** fixing F-070, which needed to know how Helm's Trino gets its tables
 **Affects** `deploy/gravix/templates/` (Trino, Cube, the rollup CronJobs)
 **Severity** high — on a Helm install every dashboard query fails, signed in or not
-**Status** open; the next change after DD-039
+**Status** fixed 2026-10-09 (DD-044), except the iceberg sync noted at the end. Originally: open; the next change after DD-039
 
 Three things are missing, each enough on its own:
 
@@ -4776,6 +4795,33 @@ reach the tenant database, Postgres or SQLite on a volume, decides the details.
 One reader outside the chart has the same gap: `transforms/iceberg_sync` copies `gravix.raw`'s tables
 into Iceberg, and no tenant's rows are in `gravix.raw`. It should read the tenant tables, or
 `gravix.serving` with its `tenant_id`, when this is fixed.
+
+### Fixed, 2026-10-09
+
+Fixing it found the gap was wider than the three items above.
+
+- **The rollups could not open the production tenant database.** Every shipped production values
+  file uses Postgres, and every job opened only a SQLite path, so even a job given the database
+  would have run single-tenant. The five jobs that list tenants now open Postgres when
+  `DB_DRIVER=postgres`, through `tenantdb.OpenForJobs`.
+- **The chart's Trino could not start.** It pinned 351 in `values.yaml` and 435 in
+  `values-prod.yaml`, with a catalog and config written for 351. Its connector name and two of its
+  config keys are ones 435 removed. The chart now runs 435, the version Compose runs and every Trino
+  test here uses, with Compose's catalog settings.
+- **The retention job pointed at a file it could not see.** It set `TENANT_DB_PATH` and mounted no
+  volume.
+
+Every analytics CronJob now takes the tenant database from one helper. With Postgres it gets
+`DATABASE_URL` from the release secret, and network policy lets it reach port 5432. With SQLite it
+mounts the gateway's volume and is scheduled onto the gateway's node, because that volume is
+ReadWriteOnce. A `trino-catalog-sync` CronJob runs every five minutes. `pkg/trinocatalog.Sync` now
+creates `gravix.raw`'s schema and tables when they are missing, as well as registering tenants, so
+the chart needs no init Job. A Trino restarted with an empty metastore is repaired on the next run.
+`TestRawTablesMatchComposeInit` holds Sync's tables to Compose's `init-trino`, and two governance
+tests hold the chart to all of the above.
+
+Still open: the iceberg sync, above. Also, `trino-worker.yaml` mounts a catalog ConfigMap that no
+template creates. Workers are off in every values file, and enabling them needs that fixing first.
 
 
 ## F-080 — every `ee/` route answered without authentication
@@ -4826,6 +4872,8 @@ The gateway now gets the same five `S3_*` settings the rollups have, and waits f
 them through the running gateway. Against a gateway configured the old way it fails with
 `422 no data in range`. Configured the new way, it passes.
 
+The Helm chart's gateway had the same gap and now has the same settings.
+
 Still open: the raw-archive download (`/api/gateway/exports/archive`) and the DLQ read the gateway's
 second store, rooted at `RAW_DATA_DIR`. They also disagree with each other about what that root is:
 the archive expects keys that begin with `raw/`, and the DLQ expects keys that do not. On the full
@@ -4856,3 +4904,33 @@ its compiler is a separate change with its own risk.
 
 `vuln` only ran on pull requests and pushes, so a quiet week meant no scan at all.
 `.github/workflows/vuln-scheduled.yml` now runs the same scan on `main` every day.
+
+## F-083 — production network policy has no rule for the gateway
+
+**Found by** adding the analytics jobs' egress for F-079
+**Affects** `deploy/gravix/templates/networkpolicy.yaml`, with `networkPolicies.enabled: true` (`values-prod.yaml`)
+**Severity** high — on a production install the gateway can neither be reached nor reach its database
+**Status** fixed 2026-10-09
+
+The policy starts from default-deny ingress and egress for every pod in the namespace. It then
+allows traffic for ingestion, the dashboard, Cube, Trino, MinIO, the jobs and the load generator.
+Nothing selects the gateway. Nothing reaches it, so login, the API and the dashboard's data calls
+fail. It reaches nothing in turn: not Postgres, not Cube for the metrics API and the cache warmer,
+not object storage, and not the mail and payment providers it calls out to. Cube's ingress also
+admits only the dashboard, so the gateway would be refused there as well.
+
+Rendering the production values and listing which workloads an allow-policy selects found more. The
+four analytics CronJobs labelled the CronJob but not its pods, and network policy selects pods, so
+the jobs' egress rule never applied: the rollups could reach neither storage nor Trino. The backup
+job had no rule at all.
+
+Fixed. The gateway has a policy: ingress from the ingress controller's namespace, as the dashboard
+has, and egress to Cube, storage, Postgres, and HTTPS and mail submission for payments, single
+sign-on and email. Cube admits the gateway. The four CronJobs label their pods, and the backup job
+joins the jobs' rule. `scripts/check_netpol_coverage.py` runs in `helm-validate` against the
+production render, and fails on any Deployment, StatefulSet, DaemonSet or CronJob that no
+allow-policy selects. On the old chart it names all six.
+
+External destinations are allowed by port, not by address, as the chart already did for S3.
+Narrowing them to addresses is per install and is left to the operator.
+

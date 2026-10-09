@@ -507,8 +507,8 @@ func main() {
 	// Active tenants lookup setup
 	activeTenants := make(map[string]bool)
 	hasDB := false
-	if tenantDBPath != "" {
-		tdb, err := tenantdb.Open(tenantDBPath)
+	if tenantdb.JobsConfigured(tenantDBPath) {
+		tdb, err := tenantdb.OpenForJobs(tenantDBPath)
 		if err != nil {
 			log.Fatalf("Failed to open tenant database: %v", err)
 		}

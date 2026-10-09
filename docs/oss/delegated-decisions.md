@@ -942,3 +942,58 @@ page and the issue-template chooser still link to Discussions, and they work onc
 them on. That is listed in `open-decisions.md`.
 
 **To reverse.** Close #36 to #51 as not planned.
+
+## DD-043 — F-018 across machines: no object-store lock on a store that ignores the condition
+
+**Date** 2026-10-09 · **Tier** routine (documentation and a warning; no interface change) · **Finding** F-018
+
+**Options.** A lock object in the store, taken with `If-None-Match: *` and given an expiry. The
+existing `leaderelect.DBElector`, over a database the machines share. Or one writer per bucket,
+stated and warned about.
+
+**Chosen.** One writer per bucket. The conditional write was tried first, against the stack's pinned
+MinIO, and that MinIO ignores it: a second conditional `PUT` succeeded and overwrote the first. A
+lock built on it would claim an exclusion it does not provide, on the default store. The database
+lock needs every writer, `gravix recompute` included, to reach the tenant database, and its SQL uses
+SQLite placeholders that would need porting for Postgres. That is a spec's worth of work for a gap
+the deployments do not open: Helm runs one rollup CronJob with `concurrencyPolicy: Forbid`, and
+Compose runs one rollup container.
+
+**Done.** On a store with no local root, `AcquireLocks` logs that the lock guards this machine only,
+every time it is taken. `TestAMachineLocalLockSaysSo` holds that, and that a local store's lock
+says nothing. `docs/06-operations.md` no longer claims that the two writers can never overlap, and
+says how to run a recompute safely against S3. The row leaves `open-decisions.md`.
+
+**Given up.** Running `gravix recompute` from a laptop while the cluster's rollup runs is not
+excluded. It is warned about.
+
+**To reverse.** Build the object lock once the pinned MinIO honours `If-None-Match`, and make it
+prove the condition at startup before it is trusted.
+
+## DD-044 — F-079: how the chart's jobs reach the tenant database
+
+**Date** 2026-10-09 · **Tier** routine (deployment configuration and a bug fix) · **Finding** F-079
+
+**Options.** Require Postgres for any multi-tenant Helm install. Copy the SQLite file to each job.
+Or reach the database wherever it is: Postgres through the release secret, and SQLite through the
+gateway's own volume.
+
+**Chosen.** Reach it wherever it is. Production values already use Postgres, and there the jobs read
+`DATABASE_URL` from the secret the gateway reads. A SQLite install keeps working: the gateway's
+volume is ReadWriteOnce, which allows more than one pod on the node that has it attached, so each
+job is scheduled onto the gateway's node and mounts the same volume. A copied file would be stale
+by definition, and requiring Postgres would break every small install the chart's defaults
+describe. With SQLite and no gateway volume there is no file to reach, and the jobs run
+single-tenant, as they always did.
+
+**Done.** `tenantdb.JobsConfigured` and `OpenForJobs`, used by the five jobs that list tenants. One
+chart helper gives every analytics CronJob its tenant database, mount and affinity. The
+`trino-catalog-sync` CronJob is added, and `Sync` creates `gravix.raw`'s tables. Trino 435 runs with
+Compose's config. Network policy lets the jobs reach Postgres and lets the sync reach Trino. Two
+governance tests and a DDL test hold it.
+
+**Given up.** Jobs on a SQLite install all share one node with the gateway. A SQLite install is one
+node in practice already, because its gateway cannot run more than one replica.
+
+**To reverse.** Drop the helper includes from the five templates and the sync CronJob. The jobs go
+back to single-tenant, and nothing serves Trino's tables on Helm.

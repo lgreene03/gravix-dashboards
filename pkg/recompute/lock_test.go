@@ -4,8 +4,10 @@
 package recompute
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,5 +117,40 @@ func TestCronRollupTakesTheSharedLock(t *testing.T) {
 	}
 	if strings.Contains(string(src), "NewFileElector(") {
 		t.Error("the cron rollup takes a lock of its own that recompute cannot see")
+	}
+}
+
+// TestAMachineLocalLockSaysSo: on a store with no local root the lock excludes
+// writers on this machine only, and two machines sharing a bucket are not
+// excluded (DD-043). The lock says so every time it is taken, and says
+// nothing on a local store, where it does exclude every writer.
+func TestAMachineLocalLockSaysSo(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var bucket storage.ObjectStore = struct{ storage.ObjectStore }{}
+	release, err := AcquireLocks(context.Background(), bucket, []string{"warehouse/" + t.Name() + "/request_metrics_minute"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if !strings.Contains(logs.String(), "guards this machine only") {
+		t.Errorf("a machine-local lock was taken silently; logs: %q", logs.String())
+	}
+
+	logs.Reset()
+	local, err := storage.NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err = AcquireLocks(context.Background(), local, []string{"warehouse/t1/request_metrics_minute"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if logs.Len() != 0 {
+		t.Errorf("a local store's lock warned: %q", logs.String())
 	}
 }
