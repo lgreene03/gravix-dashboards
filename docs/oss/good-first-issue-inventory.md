@@ -19,7 +19,8 @@ an untested function named by `go tool cover`, a register entry, or a documented
 ## GFI-01 — Test the JWT claims helpers in pkg/auth
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#36](https://github.com/lgreene03/gravix-dashboards/issues/36)  
 
 ### The file
 
@@ -55,7 +56,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-02 — Test Bloom filter false-positive-rate reporting
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#37](https://github.com/lgreene03/gravix-dashboards/issues/37)  
 
 ### The file
 
@@ -89,7 +91,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-03 — Test BaseURLFromEnv's trailing-slash handling
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#38](https://github.com/lgreene03/gravix-dashboards/issues/38)  
 
 ### The file
 
@@ -125,7 +128,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-04 — Test RenderFirstData
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#39](https://github.com/lgreene03/gravix-dashboards/issues/39)  
 
 ### The file
 
@@ -159,7 +163,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-05 — Test RenderTryAlerting
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#40](https://github.com/lgreene03/gravix-dashboards/issues/40)  
 
 ### The file
 
@@ -193,7 +198,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-06 — Test RenderUpgradeNudge
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#41](https://github.com/lgreene03/gravix-dashboards/issues/41)  
 
 ### The file
 
@@ -227,7 +233,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-07 — Test AnnualPriceIDFor
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#42](https://github.com/lgreene03/gravix-dashboards/issues/42)  
 
 ### The file
 
@@ -261,7 +268,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-08 — Test IsAnnualPriceID, including the two-key indexing
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#43](https://github.com/lgreene03/gravix-dashboards/issues/43)  
 
 ### The file
 
@@ -297,7 +305,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-09 — Test DefaultPlansLegacy's tier mapping
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#44](https://github.com/lgreene03/gravix-dashboards/issues/44)  
 
 ### The file
 
@@ -333,7 +342,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-10 — Test the billing mock's ParseWebhook and ListInvoices
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#45](https://github.com/lgreene03/gravix-dashboards/issues/45)  
 
 ### The file
 
@@ -369,7 +379,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-11 — Test the release-notes kind classifier against this repository's real subjects
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#46](https://github.com/lgreene03/gravix-dashboards/issues/46)  
 
 ### The file
 
@@ -414,7 +425,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-12 — Fix GRVX-1202's verification command, which cannot pass as written
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#47](https://github.com/lgreene03/gravix-dashboards/issues/47)  
 
 ### The file
 
@@ -450,7 +462,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-13 — Add the missing test to GRVX-1203's verification command
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#48](https://github.com/lgreene03/gravix-dashboards/issues/48)  
 
 ### The file
 
@@ -486,7 +499,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-14 — Recognise three more licences in the plugin registry
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#49](https://github.com/lgreene03/gravix-dashboards/issues/49)  
 
 ### The file
 
@@ -522,7 +536,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-15 — Give every docs-site page a unique sidebar position
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#50](https://github.com/lgreene03/gravix-dashboards/issues/50)  
 
 ### The file
 
@@ -558,7 +573,8 @@ is not actually wanted — say so; that is our bug, not yours.
 ## GFI-16 — Test tenantdb's OpenFromEnv
 
 **Status:** unclaimed  
-**Opened:** 2026-09-16
+**Opened:** 2026-09-16  
+**Issue:** [#51](https://github.com/lgreene03/gravix-dashboards/issues/51)  
 
 ### The file
 

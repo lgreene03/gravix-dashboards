@@ -4,7 +4,7 @@
 # bootstrap stack runs from docker-compose.bootstrap.yml when you want one; the
 # full stack wants about 7.8 GB of RAM and is not something to ask of somebody
 # looking at this project for the first time.
-FROM golang:1.25-bookworm
+FROM golang:1.26-bookworm
 
 ARG DUCKDB_VERSION=1.1.3
 ARG PROTOC_VERSION=29.3

@@ -916,3 +916,29 @@ range is one long request, bounded in memory by one day's partition.
 
 **To reverse.** Accept `destination_url` again and point `runScheduledExport` at it. That is the
 credential question this entry avoided, and it would need answering first.
+
+## DD-042 — GRVX-1205: open the sixteen good-first issues
+
+**Date** 2026-10-09 · **Tier** routine (issue tracker) · **Spec** GRVX-1205
+
+**Options.** Keep the inventory in the repository only. Or open it as issues now.
+
+**Chosen.** Open them. The recommendation was always to open them. What `open-decisions.md` held
+back was timing, and the owner's delegation settles timing. Every remaining stop on that page is
+a second person (RFC 0003's approvals, the succession custodian, the independent audits). First-time
+contributors are where a second maintainer comes from, and they cannot find an inventory that
+exists only as a file.
+
+**Done.** Issues #36 to #51, one per entry, each with the five headings the label promises. Before
+opening, each entry was checked against the code. The functions it names still report 0% coverage,
+the two spec commands still fail as described, and the three licences are still unrecognised. The
+bodies passed `scripts/gfi_audit.sh` before any was opened, and the live tracker now reports 16
+open, 16 unclaimed, 0 failing. Each inventory entry links its issue.
+
+**Not done.** Every entry tells a newcomer to open a discussion, and Discussions are disabled on
+the repository. Turning them on is a repository setting that this session's access cannot change.
+The issues say "comment on this issue" instead, which keeps the promise. The inventory, the label
+page and the issue-template chooser still link to Discussions, and they work once the owner turns
+them on. That is listed in `open-decisions.md`.
+
+**To reverse.** Close #36 to #51 as not planned.

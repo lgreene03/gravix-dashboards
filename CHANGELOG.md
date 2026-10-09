@@ -102,6 +102,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Security
 
+- **Images build on Go 1.26** — every service image was built with Go 1.24, and neither 1.24 nor 1.25 gets security fixes any more; govulncheck found eleven reachable standard-library vulnerabilities. CI now tests 1.26 and 1.27 (F-082)
 - **Every `ee/` route now requires an admin's token** — the Enterprise gateway mounted its extensions with no authentication, and `ee/intelligence` read whichever tenant a request named. Never in a release, and the OSS build mounts nothing (F-080)
 - **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service

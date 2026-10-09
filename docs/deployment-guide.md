@@ -13,7 +13,7 @@ The local environment runs 13 services via Docker Compose, providing a complete 
 ### Prerequisites
 
 - Docker and Docker Compose (v2+)
-- Go 1.24+ (only needed for running tests or building binaries outside containers)
+- Go 1.26+ (only needed for running tests or building binaries outside containers)
 - Ports 3000, 4000, 8000, 8081, 8090, 9000, 9001, 9090 available
 
 ### Step 1: Configure Environment Variables

@@ -4832,3 +4832,27 @@ the archive expects keys that begin with `raw/`, and the DLQ expects keys that d
 stack neither finds MinIO's data. Both need moving to the same store, and the migration guide's test,
 which configures the archive's root its own way, needs to move with them.
 
+
+## F-082 — every shipped image was built with a Go that no longer gets security fixes
+
+**Found by** `vuln` failing on PR #35 for code the PR did not touch
+**Affects** the four service images and the GitHub Action image (`golang:1.24-alpine`), and CI (Go 1.24 and 1.25)
+**Severity** high — eleven standard-library vulnerabilities that the code reaches, including in `net/http` and `html/template`
+**Status** fixed
+
+govulncheck reported eleven standard-library vulnerabilities in go1.25.14, with the fix only in
+go1.26.9. Go supports its two newest releases, now 1.27 and 1.26, so the 1.24 and 1.25 lines receive
+no more fixes. Every image this project ships was built with `golang:1.24-alpine`, and `vuln` ran on
+1.25, so the images carried the unfixed standard library. It went red only when the advisories were
+published, two days after `main` was last green.
+
+The service and Action images now build on `golang:1.26-alpine`, and CI tests on 1.26 and 1.27.
+`vuln` runs on the newest 1.26 patch rather than whatever the runner has cached. The full suite
+passes on go1.26.9 and go1.27.2. `go.mod` still declares `go 1.24.9`: that is the oldest language
+version the code compiles under, not a toolchain recommendation, and the documentation now says 1.26.
+
+The local MinIO build stays on 1.24. It builds a pinned 2024 release that is not shipped, and moving
+its compiler is a separate change with its own risk.
+
+`vuln` only ran on pull requests and pushes, so a quiet week meant no scan at all.
+`.github/workflows/vuln-scheduled.yml` now runs the same scan on `main` every day.

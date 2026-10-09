@@ -9,7 +9,7 @@ This guide gets a new engineer from zero to productive on the Gravix codebase.
 | Tool | Required? | Purpose |
 |------|-----------|---------|
 | Docker & Docker Compose | Yes | Runs all services locally |
-| Go 1.24+ | Yes | Building, testing, and local development |
+| Go 1.26+ | Yes | Building, testing, and local development |
 | Helm | Optional | Kubernetes chart validation (`make helm-lint`) |
 | protoc + protoc-gen-go | Optional | Regenerating protobuf code after `.proto` changes |
 | staticcheck | Optional | Extended linting (`make lint-all`) |
