@@ -54,8 +54,7 @@ spec:
                 - "{{ .Values.retentionJob.coldAfterDays }}"
                 {{- end }}
               env:
-                - name: TENANT_DB_PATH
-                  value: {{ .Values.retentionJob.tenantDBPath | default "/data/gravix.db" | quote }}
+                {{- include "gravix.tenantDB.env" . | nindent 16 }}
                 - name: S3_ENDPOINT
                   value: {{ .Values.global.storage.endpoint | quote }}
                 - name: S3_REGION
@@ -79,5 +78,7 @@ spec:
                 requests:
                   cpu: 50m
                   memory: 64Mi
+              {{- include "gravix.tenantDB.volumeMounts" . | nindent 14 }}
+          {{- include "gravix.tenantDB.podSpec" . | nindent 10 }}
           restartPolicy: OnFailure
 {{- end }}

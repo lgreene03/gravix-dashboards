@@ -261,6 +261,18 @@
         }
       }
     },
+    "trinoCatalogSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CronJob that registers each tenant's warehouse with Trino and keeps the serving views current (F-070, F-079)",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule expression (e.g. '*/5 * * * *')"
+        }
+      }
+    },
     "eventsRollupJob": {
       "type": "object",
       "additionalProperties": false,

@@ -93,6 +93,15 @@ rollupJob:
     pullPolicy: IfNotPresent
   schedule: "*/5 * * * *" # Every 5 minutes
 
+# Registers each tenant's warehouse directories with Trino and keeps the
+# gravix.serving views Cube reads in step with the tenant list (F-070). It also
+# creates gravix.raw's tables if they are missing, so the chart needs no
+# separate init step and a Trino that restarts with an empty metastore is
+# repaired on the next run (F-079). Runs only with storage.trino.enabled.
+trinoCatalogSync:
+  enabled: true
+  schedule: "*/5 * * * *"
+
 eventsRollupJob:
   enabled: true
   schedule: "0 * * * *"  # Every hour
@@ -112,7 +121,7 @@ retentionJob:
   retentionDays: 30     # Only used when mode=manual
   warmAfterDays: 7      # Move data to warm (STANDARD_IA) after this many days (0=disabled)
   coldAfterDays: 30     # Move data to cold (GLACIER) after this many days (0=disabled)
-  tenantDBPath: "/data/gravix.db"  # Path to tenant SQLite database inside the container
+  tenantDBPath: "/data/gravix.db"  # Deprecated and unused: every job reads the gateway's tenant database (F-079)
 
 # S3 lifecycle policy configuration.
 # When enabled, creates a ConfigMap with lifecycle rules for the S3 bucket.
@@ -178,7 +187,10 @@ storage:
     enabled: true
     image:
       repository: trinodb/trino
-      tag: "351"
+      # The version Compose runs and every Trino test here was run against.
+      # 351 could not start with this chart's catalog: its connector name and
+      # two of its config keys are the ones 435 removed (F-079).
+      tag: "435"
     workers:
       enabled: false
       replicaCount: 2

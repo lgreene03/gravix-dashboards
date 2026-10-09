@@ -2,7 +2,7 @@
 <!-- correctness-defects.md, all append-only. This file points into them and may be rewritten. -->
 # What needs a person
 
-Three registers hold 151 entries between them, most of them resolved. Most are ordinary work an
+Three registers hold 152 entries between them, most of them resolved. Most are ordinary work an
 implementer can pick up. This page lists only the ones that **cannot be closed by implementing
 harder**, because they need a decision, a permission, or an external check.
 

@@ -243,8 +243,8 @@ func main() {
 
 	var configs []tenantConfig
 
-	if tenantDBPath != "" {
-		tdb, err := tenantdb.Open(tenantDBPath)
+	if tenantdb.JobsConfigured(tenantDBPath) {
+		tdb, err := tenantdb.OpenForJobs(tenantDBPath)
 		if err != nil {
 			slog.Error("failed to open tenant database", "error", err)
 			os.Exit(1)

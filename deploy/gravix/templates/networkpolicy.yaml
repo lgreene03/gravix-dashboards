@@ -209,6 +209,9 @@ spec:
         - podSelector:
             matchLabels:
               app: retention
+        - podSelector:
+            matchLabels:
+              app: trino-catalog-sync
       ports:
         - port: 8080
           protocol: TCP
@@ -290,10 +293,17 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [rollup, events-rollup, events-detail, retention]
+        values: [rollup, events-rollup, events-detail, retention, trino-catalog-sync]
   policyTypes:
     - Egress
   egress:
+    {{- if eq (.Values.gateway.dbDriver | default "sqlite") "postgres" }}
+    # To the tenant database: every job reads the tenant list (F-079)
+    - to: []
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- end }}
     {{- if .Values.storage.minio.enabled }}
     # To MinIO (in-cluster)
     - to:

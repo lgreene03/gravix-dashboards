@@ -39,6 +39,7 @@ spec:
                   drop: ["ALL"]
               command: ["./service-events-rollup"]
               env:
+                {{- include "gravix.tenantDB.env" . | nindent 16 }}
                 - name: S3_ENDPOINT
                   value: {{ .Values.global.storage.endpoint | quote }}
                 - name: S3_REGION
@@ -62,5 +63,7 @@ spec:
                 requests:
                   cpu: 100m
                   memory: 128Mi
+              {{- include "gravix.tenantDB.volumeMounts" . | nindent 14 }}
+          {{- include "gravix.tenantDB.podSpec" . | nindent 10 }}
           restartPolicy: OnFailure
 {{- end }}

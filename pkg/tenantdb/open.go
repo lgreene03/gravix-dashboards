@@ -41,3 +41,29 @@ func OpenFromEnv() (DB, error) {
 		return nil, fmt.Errorf("unsupported DB_DRIVER: %q (use sqlite or postgres)", driver)
 	}
 }
+
+// JobsConfigured reports whether a batch job has a tenant database: Postgres
+// when DB_DRIVER is "postgres", or the SQLite file at path. With neither, the
+// job runs single-tenant.
+//
+// The rollups once opened only SQLite, so on a deployment whose tenant
+// database is Postgres, which every shipped production values file is, they
+// ran single-tenant and read nothing ingestion wrote (F-079).
+func JobsConfigured(path string) bool {
+	return path != "" || os.Getenv("DB_DRIVER") == "postgres"
+}
+
+// OpenForJobs opens the tenant database JobsConfigured found.
+func OpenForJobs(path string) (DB, error) {
+	if os.Getenv("DB_DRIVER") == "postgres" {
+		url := os.Getenv("DATABASE_URL")
+		if url == "" {
+			return nil, fmt.Errorf("DATABASE_URL is required when DB_DRIVER=postgres")
+		}
+		return OpenPostgres(url)
+	}
+	if path == "" {
+		return nil, fmt.Errorf("no tenant database: set TENANT_DB_PATH, or DB_DRIVER=postgres and DATABASE_URL")
+	}
+	return Open(path)
+}

@@ -969,3 +969,31 @@ excluded. It is warned about.
 
 **To reverse.** Build the object lock once the pinned MinIO honours `If-None-Match`, and make it
 prove the condition at startup before it is trusted.
+
+## DD-044 — F-079: how the chart's jobs reach the tenant database
+
+**Date** 2026-10-09 · **Tier** routine (deployment configuration and a bug fix) · **Finding** F-079
+
+**Options.** Require Postgres for any multi-tenant Helm install. Copy the SQLite file to each job.
+Or reach the database wherever it is: Postgres through the release secret, and SQLite through the
+gateway's own volume.
+
+**Chosen.** Reach it wherever it is. Production values already use Postgres, and there the jobs read
+`DATABASE_URL` from the secret the gateway reads. A SQLite install keeps working: the gateway's
+volume is ReadWriteOnce, which allows more than one pod on the node that has it attached, so each
+job is scheduled onto the gateway's node and mounts the same volume. A copied file would be stale
+by definition, and requiring Postgres would break every small install the chart's defaults
+describe. With SQLite and no gateway volume there is no file to reach, and the jobs run
+single-tenant, as they always did.
+
+**Done.** `tenantdb.JobsConfigured` and `OpenForJobs`, used by the five jobs that list tenants. One
+chart helper gives every analytics CronJob its tenant database, mount and affinity. The
+`trino-catalog-sync` CronJob is added, and `Sync` creates `gravix.raw`'s tables. Trino 435 runs with
+Compose's config. Network policy lets the jobs reach Postgres and lets the sync reach Trino. Two
+governance tests and a DDL test hold it.
+
+**Given up.** Jobs on a SQLite install all share one node with the gateway. A SQLite install is one
+node in practice already, because its gateway cannot run more than one replica.
+
+**To reverse.** Drop the helper includes from the five templates and the sync CronJob. The jobs go
+back to single-tenant, and nothing serves Trino's tables on Helm.

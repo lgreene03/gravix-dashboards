@@ -44,8 +44,8 @@ func run(dsn, bucket, tenantDBPath, readyFile string) error {
 	defer cancel()
 
 	var tenants []string
-	if tenantDBPath != "" {
-		tdb, err := tenantdb.Open(tenantDBPath)
+	if tenantdb.JobsConfigured(tenantDBPath) {
+		tdb, err := tenantdb.OpenForJobs(tenantDBPath)
 		if err != nil {
 			return err
 		}
