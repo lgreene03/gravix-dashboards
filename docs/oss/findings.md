@@ -972,7 +972,7 @@ driver reproduced it.
 **Severity** medium-high. The stray directory is cosmetic; what it exposes is not. The lock exists to
 stop the cron rollup and a `gravix recompute` writing the same partition at the same time, and in the
 two deployments where that can actually happen it does not.
-**Status** resolved for one machine (DD-022); a lock across machines sharing a bucket needs a spec. Originally: open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
+**Status** resolved for one machine (DD-022); across machines, decided not to build an object-store lock (DD-043). Originally: open. Not fixed here: GRVX-1001 measures and does not change behaviour, and the repair is
 a change to locking semantics that wants its own spec.
 
 **The mismatch**, in one place — `pkg/recompute/recompute.go:534`:
@@ -1051,6 +1051,25 @@ The lock now lives where the data lives, and the cron and recompute take the sam
 `os.TempDir`, so two machines sharing a bucket still do not contend. `LockDir`'s comment says so. A
 real cross-machine lock is an object in the store, taken with a conditional write and given an
 expiry. That changes the storage interface and the locking semantics, so it needs a spec.
+
+### Across machines, 2026-10-09 — DD-043
+
+The register asked for a lock object in the store, taken with a conditional write. Before designing
+one, the write it depends on was tried against the stack's own MinIO, the pinned
+`RELEASE.2024-03-15T01-07-19Z`. Two `PUT`s of the same key with `If-None-Match: *` both answered
+`200`, and the second overwrote the first. That MinIO ignores the condition, so a lock built on it
+would report exclusion it does not have, on the store most installations use. That is worse than
+no lock, because it is believed.
+
+What holds instead: one writer per bucket. The Helm chart runs a single rollup CronJob with
+`concurrencyPolicy: Forbid`, and Compose runs one rollup container. The gap is `gravix recompute`
+run from a second machine against the same bucket, or two installations sharing one. The lock now
+logs, every time it is taken on a store with no local root, that it guards this machine only.
+`docs/06-operations.md` no longer claims more than that.
+
+An object-store lock becomes worth building when the pinned MinIO honours conditional writes. When
+it does, the lock should prove the condition at startup, by writing a key twice and requiring the
+second write to fail, before claiming anything.
 
 ## F-019 — the bootstrap stack has not built at all since Alpine bumped tzdata
 

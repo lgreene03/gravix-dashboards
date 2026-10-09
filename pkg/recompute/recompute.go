@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -550,6 +551,15 @@ func AcquireLocks(ctx context.Context, store storage.ObjectStore, metricDirs []s
 		}
 	}
 	sort.Strings(dirs)
+
+	// A store with no local root, such as S3, gets a lock on this machine only.
+	// Say so every time: two machines writing one bucket are not excluded by
+	// it, and an object-store lock is not built because the stack's own MinIO
+	// ignores the conditional write it would need (F-018, DD-043).
+	if _, rooted := store.(interface{ Root() string }); !rooted && len(dirs) > 0 {
+		slog.Warn("the rollup lock guards this machine only; run one writer per bucket (F-018)",
+			"lock_dir", filepath.Dir(dirs[0]))
+	}
 
 	held := make([]*leaderelect.FileElector, 0, len(dirs))
 	release := func() {

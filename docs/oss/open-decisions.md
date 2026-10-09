@@ -28,7 +28,6 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 | Item | What must be decided | Why it is not an implementation detail |
 |---|---|---|
 | **SD-055 / RFC 0003** *(medium)* | Whether compaction writes raw facts as gzip JSONL, so G4.4's 120 bytes/event becomes reachable | Measured: raw JSONL is 203.78 bytes/event of a 206.68 total, and gzip takes it to 32.68. Changing the stored format of the recompute source of truth, and every reader of it, is design tier: RFC 0003 is drafted, and it needs **two maintainer approvals**, of which the project has one. Everything short of that is decided (DD-014). |
-| **F-018, across machines** *(medium)* | Whether the rollup lock should hold across machines that share an S3 bucket | Fixed for one machine (DD-022): the cron and `gravix recompute` now take the same lock, found through the store. Across machines it needs a lock object in the store, taken with a conditional write and given an expiry. That changes the storage interface and the locking semantics, so it wants a spec, not a patch. |
 
 ## Spec text that contradicts what was measured
 

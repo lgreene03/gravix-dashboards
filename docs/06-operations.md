@@ -241,9 +241,12 @@ held by a running rollup.
   rebuilds of the same day agree bit for bit.
 - **Facts are never touched.** Recompute reads facts and rewrites derivatives only,
   per `docs/00-system-truth.md` §2.
-- **One writer at a time.** A recompute takes the same lock as the cron rollup, so the
-  two can never write the same partition concurrently. A held lock exits `3` and
-  writes nothing.
+- **One writer at a time, on one machine.** A recompute takes the same lock as the cron
+  rollup, so on the machine that runs the rollup the two never write the same partition
+  concurrently. A held lock exits `3` and writes nothing. On S3 the lock is held on
+  this machine only, and says so when taken: run `gravix recompute` where the rollup
+  runs, or suspend the rollup first, and never point two installations at one bucket
+  (F-018).
 
 ### 5.2 Why it matters
 
