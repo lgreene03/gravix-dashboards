@@ -854,3 +854,91 @@ layout, as it does today. The bare-Parquet guide's globs handle it.
 
 **To reverse.** Point Cube's Trino `tableSql` back at `gravix.raw` and remove the service.
 
+
+## DD-040 — SD-040: no tenant-resolution extension point; RFC 0002 withdrawn
+
+**Date** 2026-10-07 · **Tier** routine (spec correction and a security fix; an RFC withdrawn by its author) · **Spec** GRVX-1304, GRVX-1302 · **Findings** SD-040, SD-062, F-080
+
+**Options.** Accept RFC 0002 and add a `TenantResolver` to `pkg/extpoint`. Rewrite GRVX-1304 as a
+separate `ee/` proxy in front of the gateway. Leave Phase 13 blocked. Or find that no hook is needed.
+
+**Chosen.** No hook. The call sites RFC 0002 named already resolve the tenant from the request's
+credentials, so its premise, that they use the single-tenant identity, was wrong. Its default would
+have changed core behaviour, and a registered resolver would have let a paid package overrule the
+core about whose data a request may read. What GRVX-1304 adds that the core lacks is lifecycle,
+and a mounted `Extension` does that. The decision also stays inside the delegation: the delegation
+cannot supply the two approvals a new extension point needs, and withdrawing the proposal needs none.
+The proxy was rejected for the reason RFC 0002 gave: it moves a tenant boundary into deployment
+topology, where a mistake is silent.
+
+**Done.** RFC 0002 withdrawn, with the reason at its head. GRVX-1304 corrected: it mounts at
+`/ee/tenancy/`, `Authorize` admits only an admin of the target tenant's parent, and nothing moves out
+of the core (SD-062). F-080 fixed, since a control plane mounted the old way would have answered
+anyone. GRVX-1304, 1305, 1306, 1308 and 1310 go from `blocked` to `planned` in `spec-status.json`.
+GRVX-1312 stays `partial`, and GRVX-1407 stays `blocked` on its external auditor. Once GRVX-1306
+was `planned`, spec-lint gated it and found that §6 and §7 named `pkg/totp/`, which §2 did not list. §2
+now lists it.
+
+**Given up.** A paid package cannot change how the core decides a request's tenant, for example to
+resolve one from a custom domain. GRVX-1310's custom domains will need to map a domain to a tenant
+inside its own routes, or go through an RFC that argues for a hook with a real use.
+
+**To reverse.** Reopen RFC 0002 as a new RFC, since a withdrawn one stays withdrawn in the log, and
+take it through design tier.
+
+## DD-041 — SD-029 / F-054: the server chooses every export's destination
+
+**Date** 2026-10-07 · **Tier** routine (implementing GRVX-1107 §5.4 and §6 step 6, with the spec corrected) · **Findings** SD-029, F-054, F-081
+
+**Options.** An allow-list of destinations. Per-schedule credentials, stored encrypted and rotated.
+Or a destination the server chooses, with the export returned to the caller or kept where the tenant
+can fetch it.
+
+**Chosen.** The server chooses. Any role may export, so an allow-list still lets a viewer pick among
+places the gateway can write, and the list itself becomes a security boundary someone must keep
+right. Stored credentials make the gateway a keyring for its customers' buckets. Neither is needed to
+leave with one's data: an on-demand export comes back in the response, and a scheduled one is kept
+under the tenant's own `exports/` prefix, beside the facts it came from. A tenant whose storage is
+its own bucket (`ee/tenancy/byob`) finds its exports there by the same rule.
+
+**Done.** `POST /api/gateway/exports`, any role, any plan. It streams the export as the response,
+refuses `destination` and any unknown field by name, and allows one export per tenant at a time.
+Scheduled exports run from a loop in the gateway with a small five-field cron evaluator, and are
+listed and downloaded under `.../scheduled/<id>/runs`. `destination_url` is refused on create and
+update. `pkg/export` takes an `Out` writer for `-`, and writes nothing at all for an empty range, so
+the endpoint can still answer `422`. GRVX-1107 §5.4 is corrected, and all twelve of its criteria now
+pass, so it is `done`. Writing the live test found F-081, and the full stack's gateway now reads
+MinIO.
+
+**Given up.** Delivering into a customer's bucket on a schedule. They fetch it, or run `gravix
+export` with their own credentials. A `202` job API: the response is the export, so a very large
+range is one long request, bounded in memory by one day's partition.
+
+**To reverse.** Accept `destination_url` again and point `runScheduledExport` at it. That is the
+credential question this entry avoided, and it would need answering first.
+
+## DD-042 — GRVX-1205: open the sixteen good-first issues
+
+**Date** 2026-10-09 · **Tier** routine (issue tracker) · **Spec** GRVX-1205
+
+**Options.** Keep the inventory in the repository only. Or open it as issues now.
+
+**Chosen.** Open them. The recommendation was always to open them. What `open-decisions.md` held
+back was timing, and the owner's delegation settles timing. Every remaining stop on that page is
+a second person (RFC 0003's approvals, the succession custodian, the independent audits). First-time
+contributors are where a second maintainer comes from, and they cannot find an inventory that
+exists only as a file.
+
+**Done.** Issues #36 to #51, one per entry, each with the five headings the label promises. Before
+opening, each entry was checked against the code. The functions it names still report 0% coverage,
+the two spec commands still fail as described, and the three licences are still unrecognised. The
+bodies passed `scripts/gfi_audit.sh` before any was opened, and the live tracker now reports 16
+open, 16 unclaimed, 0 failing. Each inventory entry links its issue.
+
+**Not done.** Every entry tells a newcomer to open a discussion, and Discussions are disabled on
+the repository. Turning them on is a repository setting that this session's access cannot change.
+The issues say "comment on this issue" instead, which keeps the promise. The inventory, the label
+page and the issue-template chooser still link to Discussions, and they work once the owner turns
+them on. That is listed in `open-decisions.md`.
+
+**To reverse.** Close #36 to #51 as not planned.

@@ -100,7 +100,7 @@ go test -tags=slow ./bench/...
 | Job | What it proves |
 |---|---|
 | `fast-suite-budget` | the contributor suite still fits in 5 minutes |
-| `test` (Go 1.24 and 1.25) | every test, slow ones included, under the race detector |
+| `test` (Go 1.26 and 1.27) | every test, slow ones included, under the race detector |
 | `correctness` | the Phase 8 properties, and the public `prove_it.sh` demonstration |
 | `e2e` | the end-to-end path, including the exit path with Gravix stopped |
 | `oss-integrity` | the core builds and tests with `ee/` deleted |

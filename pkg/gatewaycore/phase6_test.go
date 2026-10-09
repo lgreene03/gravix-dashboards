@@ -435,12 +435,11 @@ func TestScheduledExportsCreateSuccess(t *testing.T) {
 	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
 	body := jsonBody(t, map[string]interface{}{
-		"name":            "Nightly Export",
-		"schedule":        "0 3 * * *",
-		"data_type":       "request_facts",
-		"format":          "parquet",
-		"destination_url": "s3://my-bucket/exports/",
-		"lookback_days":   7,
+		"name":          "Nightly Export",
+		"schedule":      "0 3 * * *",
+		"data_type":     "request_facts",
+		"format":        "parquet",
+		"lookback_days": 7,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/exports/scheduled", body)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
@@ -469,7 +468,6 @@ func TestScheduledExportsCreateNonAdminForbidden(t *testing.T) {
 
 	body := jsonBody(t, map[string]interface{}{
 		"name": "Export", "schedule": "0 3 * * *",
-		"destination_url": "s3://bucket/",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/exports/scheduled", body)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
@@ -489,9 +487,8 @@ func TestScheduledExportsCreateInvalidCron(t *testing.T) {
 	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
 	body := jsonBody(t, map[string]interface{}{
-		"name":            "Bad cron",
-		"schedule":        "not-a-cron",
-		"destination_url": "s3://bucket/",
+		"name":     "Bad cron",
+		"schedule": "not-a-cron",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/exports/scheduled", body)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
@@ -506,6 +503,8 @@ func TestScheduledExportsCreateInvalidCron(t *testing.T) {
 	}
 }
 
+// TestScheduledExportsCreateInvalidDestination: no destination is the
+// caller's to choose, an s3:// bucket included (DD-041).
 func TestScheduledExportsCreateInvalidDestination(t *testing.T) {
 	gw := newTestGateway(t)
 	tenant, user, _, _ := createTestTenantWithUser(t, gw)
@@ -513,7 +512,7 @@ func TestScheduledExportsCreateInvalidDestination(t *testing.T) {
 	body := jsonBody(t, map[string]interface{}{
 		"name":            "Bad dest",
 		"schedule":        "0 3 * * *",
-		"destination_url": "https://not-s3.example.com/",
+		"destination_url": "s3://someone-elses-bucket/",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/exports/scheduled", body)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
@@ -533,10 +532,9 @@ func TestScheduledExportsLookbackExceedsMax(t *testing.T) {
 	tenant, user, _, _ := createTestTenantWithUser(t, gw)
 
 	body := jsonBody(t, map[string]interface{}{
-		"name":            "Too long",
-		"schedule":        "0 3 * * *",
-		"destination_url": "s3://bucket/",
-		"lookback_days":   91,
+		"name":          "Too long",
+		"schedule":      "0 3 * * *",
+		"lookback_days": 91,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/exports/scheduled", body)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{

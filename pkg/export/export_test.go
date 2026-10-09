@@ -428,7 +428,9 @@ func TestExportAcceptsNoQueryExpression(t *testing.T) {
 
 	// The field set itself is the contract. If it grows, someone must decide
 	// deliberately whether the new field is a query in disguise.
-	want := []string{"Dataset", "Format", "From", "To", "TenantID", "Destination", "Compress"}
+	// Out (DD-041) is where a "-" export is written, an io.Writer: it selects
+	// no rows and so is not a query.
+	want := []string{"Dataset", "Format", "From", "To", "TenantID", "Destination", "Compress", "Out"}
 	var got []string
 	for i := 0; i < rt.NumField(); i++ {
 		got = append(got, rt.Field(i).Name)

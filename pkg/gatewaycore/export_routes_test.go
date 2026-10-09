@@ -23,7 +23,8 @@ import (
 // exportHandlers are the handlers behind every export route. GRVX-1107's
 // route-level criteria are about these, and SD-029 found they live in
 // gateway_platform.go and main.go, not in the file the spec named.
-var exportHandlers = []string{"handleExport", "handleScheduledExports", "handleScheduledExportByID"}
+var exportHandlers = []string{"handleExport", "handleScheduledExports", "handleScheduledExportByID",
+	"handleOnDemandExport", "handleScheduledExportRuns", "runScheduledExport"}
 
 // TestExportHasNoPlanGate is GRVX-1107 AC-7. Leaving with your data is free on
 // every plan (charter §7.3, the data-ownership axis), so no export route may be
@@ -31,7 +32,7 @@ var exportHandlers = []string{"handleExport", "handleScheduledExports", "handleS
 func TestExportHasNoPlanGate(t *testing.T) {
 	fset := token.NewFileSet()
 	var routes int
-	for _, file := range []string{"main.go", "gateway_platform.go"} {
+	for _, file := range []string{"main.go", "gateway_platform.go", "export_server.go"} {
 		src, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -111,7 +112,8 @@ func TestAnyRoleCanExport(t *testing.T) {
 // TestExportRoutesAreOneFamily pins SD-029's resolution. A route one character
 // from another — "/api/gateway/export" beside "/api/gateway/exports" — sends
 // clients to the wrong one with nothing to tell them. Every export route is
-// under "/api/gateway/exports/", and the singular path is gone.
+// the family's root, "/api/gateway/exports" (GRVX-1107 §5.4's on-demand
+// export), or under it, and the singular path is gone.
 func TestExportRoutesAreOneFamily(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
@@ -119,7 +121,7 @@ func TestExportRoutesAreOneFamily(t *testing.T) {
 	}
 	re := regexp.MustCompile(`mux\.HandleFunc\("(/api/gateway/export[^"]*)"`)
 	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
-		if !strings.HasPrefix(m[1], "/api/gateway/exports/") {
+		if m[1] != "/api/gateway/exports" && !strings.HasPrefix(m[1], "/api/gateway/exports/") {
 			t.Errorf("export route %q is outside the /api/gateway/exports/ family (SD-029)", m[1])
 		}
 	}
@@ -145,7 +147,7 @@ func TestExistingScheduleValidationIntact(t *testing.T) {
 
 	valid := func() map[string]interface{} {
 		return map[string]interface{}{
-			"name": "nightly", "schedule": "0 3 * * *", "destination_url": "s3://bucket/prefix/",
+			"name": "nightly", "schedule": "0 3 * * *",
 		}
 	}
 	post := func(t *testing.T, fields map[string]interface{}, claims *auth.Claims) *httptest.ResponseRecorder {
@@ -158,9 +160,13 @@ func TestExistingScheduleValidationIntact(t *testing.T) {
 	}
 
 	refused := map[string]func(map[string]interface{}){
-		"blank name":            func(f map[string]interface{}) { f["name"] = "   " },
-		"not a 5-field cron":    func(f map[string]interface{}) { f["schedule"] = "0 3 * *" },
-		"non-s3 destination":    func(f map[string]interface{}) { f["destination_url"] = "file:///tmp/x" },
+		"blank name":         func(f map[string]interface{}) { f["name"] = "   " },
+		"not a 5-field cron": func(f map[string]interface{}) { f["schedule"] = "0 3 * *" },
+		// No destination is the caller's to choose (DD-041). This refuses
+		// everything the old s3://-only rule refused, and s3:// as well.
+		"a file destination":    func(f map[string]interface{}) { f["destination_url"] = "file:///tmp/x" },
+		"an s3 destination":     func(f map[string]interface{}) { f["destination_url"] = "s3://bucket/prefix/" },
+		"an out-of-range cron":  func(f map[string]interface{}) { f["schedule"] = "61 3 * * *" },
 		"unknown data_type":     func(f map[string]interface{}) { f["data_type"] = "metrics_minute" },
 		"unknown format":        func(f map[string]interface{}) { f["format"] = "xlsx" },
 		"lookback over 90 days": func(f map[string]interface{}) { f["lookback_days"] = 91 },

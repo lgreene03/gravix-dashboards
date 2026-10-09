@@ -16,7 +16,13 @@ import (
 	"time"
 
 	"github.com/lgreene/gravix-dashboards/ee/degrade"
+	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/extpoint"
+)
+
+var (
+	errNoCaller    = errors.New("intelligence: no authenticated tenant; refusing to read any")
+	errTenantParam = errors.New("intelligence: the tenant is the caller's; a tenant parameter is not accepted")
 )
 
 func init() {
@@ -80,7 +86,7 @@ func (s surface) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	src, err := s.resolveSource(r)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
+		writeSourceError(w, err)
 		return
 	}
 
@@ -114,7 +120,7 @@ func (s surface) handleCapacity(w http.ResponseWriter, r *http.Request) {
 
 	src, err := s.resolveSource(r)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
+		writeSourceError(w, err)
 		return
 	}
 
@@ -138,9 +144,21 @@ func (s surface) handleCapacity(w http.ResponseWriter, r *http.Request) {
 
 // resolveSource builds a warehouse reader from the request and the same
 // environment the rest of Gravix reads. There is no separate paid data store.
+//
+// The tenant is the caller's, from the token the gateway verified before this
+// handler ran. It once came from a ?tenant= parameter, which let any caller read
+// any tenant by naming it (F-080); a request that names a tenant is now refused
+// rather than quietly answered for a different one.
 func (s surface) resolveSource(r *http.Request) (Source, error) {
 	if s.source != nil {
 		return s.source(r)
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil || claims.TenantID == "" {
+		return nil, errNoCaller
+	}
+	if _, named := r.URL.Query()["tenant"]; named {
+		return nil, errTenantParam
 	}
 	dir := os.Getenv("GRAVIX_WAREHOUSE_DIR")
 	if dir == "" {
@@ -153,10 +171,23 @@ func (s surface) resolveSource(r *http.Request) (Source, error) {
 	}
 	return WarehouseSource{
 		Dir:      dir,
-		TenantID: r.URL.Query().Get("tenant"),
+		TenantID: claims.TenantID,
 		Service:  service,
 		Measure:  Measure(orDefault(r.URL.Query().Get("measure"), string(MeasureP95Latency))),
 	}, nil
+}
+
+// writeSourceError answers a request whose warehouse could not be chosen. Who
+// is asking, and for what, are the caller's faults; anything else is ours.
+func writeSourceError(w http.ResponseWriter, err error) {
+	status := http.StatusServiceUnavailable
+	switch {
+	case errors.Is(err, errNoCaller):
+		status = http.StatusUnauthorized
+	case errors.Is(err, errTenantParam):
+		status = http.StatusBadRequest
+	}
+	writeJSON(w, status, map[string]any{"error": err.Error()})
 }
 
 // writeRefusal answers a refusal to forecast with 422 rather than 500. The

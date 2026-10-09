@@ -2,17 +2,25 @@
 rfc: 0002
 title: A tenant-resolution extension point in pkg/extpoint
 author: lgreene03
-status: draft
+status: withdrawn
 tier: design
 opened: 2026-09-16
 comment_closes: 2026-09-23
-decided:
+decided: 2026-10-07
 approvals: []
 supersedes: 0
 touches_entrenched: false
 ---
 
 # RFC 0002: A tenant-resolution extension point in `pkg/extpoint`
+
+> **Withdrawn 2026-10-07 by its author** (DD-040). Its premise was wrong. The call sites it names do
+> not use the single-tenant identity today: each already resolves the tenant from the request's
+> credentials, the API key through `pkg/tenantdb` or the gateway's JWT. A resolver defaulting to
+> `""` would have changed the core's behaviour, not preserved it. A registered one would have let a
+> paid package overrule the core's answer to "whose data is this", which is the disclosure risk this
+> RFC set out to avoid. Alternative 1 below, rejected here because of that premise, is what
+> `GRVX-1304` now does. The text below is kept as it was proposed.
 
 ## Summary
 

@@ -16,6 +16,8 @@ Nothing below has shipped in a tagged release yet.
 
 ### Added
 
+- **`POST /api/gateway/exports`** — export facts, metrics or events for a range as Parquet, CSV or JSONL, any role, any plan; the export is the response, and no caller chooses where it is written (GRVX-1107, DD-041)
+- **Scheduled exports run** — they were stored and listed and never executed. Each run is kept in the tenant's own area of the store and downloaded from `/api/gateway/exports/scheduled/<id>/runs` (F-054, DD-041)
 - **A drift check on generated protobuf code** — CI regenerates `gen/` with the pinned `protoc` and `protoc-gen-go` and fails on any difference (DD-037)
 - **`GET /api/v1/metrics` is documented** in the API reference and the OpenAPI spec
 - **Open-core boundary, enforced by CI** — the Apache-2.0 core builds and tests with `ee/` physically deleted, checked on every pull request by `make build-oss`, `make test-oss` and `make check-boundary` (GRVX-702, GRVX-703, GRVX-704)
@@ -45,6 +47,8 @@ Nothing below has shipped in a tagged release yet.
 
 ### Changed
 
+- **A scheduled export no longer takes `destination_url`** — no run ever wrote to one; a request that sets it is refused (DD-041)
+- **No tenant-resolution extension point** — RFC 0002 is withdrawn: the core already resolves every request's tenant from its credentials, and the paid control plane (GRVX-1304) mounts as an ordinary extension over the core's multi-tenancy, which stays Apache-2.0 (DD-040, SD-062)
 - **Ingestion runs one replica in every shipped values file** — path templates are learned per process, so replicas could give one path two templates, and the production values ran up to ten replicas on one single-attach volume. More than one is now an explicit opt-in, `ingestion.allowMultipleReplicas`, and needs persistence off (DD-035)
 - **Cube v0.35 → v1.7.48** — on every stack and in the Helm chart. Two first queries at once after a Cube restart no longer stall every query for two minutes (F-060). The same queries returned the same answers on both versions, on both stacks, before the pin moved (DD-034)
 - **Test suites are split by speed** — `make test-fast` is the contributor suite; `make test-full` and `make test` still run everything. `tests/e2e/`, `tests/correctness/` and `bench/` carry a `//go:build slow` tag, and CI runs every suite on every pull request (GRVX-1206)
@@ -56,6 +60,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Fixed
 
+- **On the full stack the gateway read its own disk** — facts and the warehouse are in MinIO, so percentiles, lineage and exports found nothing for any tenant. The gateway now reads the same store as ingestion and the rollups (F-081)
 - **On the full stack, a signed-in user's dashboard read nothing** — each tenant's metrics are written under its own directory, which Trino's tables never read. A new `trino-catalog-sync` service registers each tenant's directories and serves them through `gravix.serving` views that carry `tenant_id`, which Cube now reads (F-070, DD-039)
 - **The image scan on `main` had never scanned an image** — it asked for a tag `docker-build` never pushes, so `main`'s CI failed on every push for a reason that was not a vulnerability. It now scans what was built, and fails on fixable CRITICAL and HIGH findings (F-078, DD-036)
 - **Plugin host data race** — the subprocess reader goroutine and the kill path raced on the same field; a cancelled call also left a response in flight, so the next call could have read the previous one's answer (GRVX-1201)
@@ -97,6 +102,8 @@ Nothing below has shipped in a tagged release yet.
 
 ### Security
 
+- **Images build on Go 1.26** — every service image was built with Go 1.24, and neither 1.24 nor 1.25 gets security fixes any more; govulncheck found eleven reachable standard-library vulnerabilities. CI now tests 1.26 and 1.27 (F-082)
+- **Every `ee/` route now requires an admin's token** — the Enterprise gateway mounted its extensions with no authentication, and `ee/intelligence` read whichever tenant a request named. Never in a release, and the OSS build mounts nothing (F-080)
 - **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
 - **The dashboard was served an unrestricted API key before login** — `dashboard_config.js` now carries a key scoped to `admin:read`, and existing installs are narrowed on their next boot (SD-013)

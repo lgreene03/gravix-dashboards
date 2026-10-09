@@ -169,10 +169,9 @@ reach. None of them is a limit imposed on anything in the free list.
 
 **No plans are defined yet, and this page will not invent them.**
 
-Packaging and prices come from GRVX-1305, which is blocked: it depends on GRVX-1304, which
-needs a new core extension point, and that is a design-tier change requiring **two maintainer
-approvals** under `GOVERNANCE.md`. The project currently has one maintainer. RFC 0002 is drafted
-and open.
+Packaging and prices come from GRVX-1305, which is not built yet. It depends on GRVX-1304, the
+tenant control plane, which is not built either. Until both exist, there is nothing to put a
+price on.
 
 What is already fixed, and will not change when plans are defined:
 

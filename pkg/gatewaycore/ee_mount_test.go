@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/lgreene/gravix-dashboards/pkg/auth"
 	"github.com/lgreene/gravix-dashboards/pkg/boundary"
 	"github.com/lgreene/gravix-dashboards/pkg/extpoint"
 )
@@ -30,15 +32,22 @@ func (fakeExt) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "fake-ok %s", r.URL.Path)
+		if c := auth.ClaimsFromContext(r.Context()); c != nil {
+			fmt.Fprintf(w, " tenant=%s", c.TenantID)
+		}
 	})
 }
+
+// openGuard lets every request through. Only the status endpoint's tests use it:
+// they never reach an extension.
+func openGuard(h http.Handler) http.Handler { return h }
 
 // eeStatus issues GET /api/gateway/ee/status against a freshly mounted mux and
 // returns the decoded extension list.
 func eeStatus(t *testing.T) []eeStatusEntry {
 	t.Helper()
 	mux := http.NewServeMux()
-	mountExtensions(mux)
+	mountExtensions(mux, openGuard)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/gateway/ee/status", nil))
@@ -69,7 +78,7 @@ func TestEEStatusEmptyByDefault(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	mountExtensions(mux)
+	mountExtensions(mux, openGuard)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/gateway/ee/status", nil))
 
@@ -86,7 +95,7 @@ func TestEEStatusEmptyByDefault(t *testing.T) {
 // A non-GET is the one error this endpoint has (§6.1).
 func TestEEStatusRejectsNonGET(t *testing.T) {
 	mux := http.NewServeMux()
-	mountExtensions(mux)
+	mountExtensions(mux, openGuard)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/gateway/ee/status", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -99,20 +108,69 @@ func TestEEStatusRejectsNonGET(t *testing.T) {
 
 // AC-5. StripPrefix semantics are the contract ee/ packages are written against:
 // an extension mounted at /ee/fake/ sees /ping, not /ee/fake/ping.
+//
+// It mounts behind the gateway's real guard, as Run does, and asks as an admin.
 func TestMountLoopStripsPrefix(t *testing.T) {
 	extpoint.Register(fakeExt{})
 
+	gw := newTestGateway(t)
+	tenant, _, _, token := createTestTenantWithUser(t, gw)
 	mux := http.NewServeMux()
-	mountExtensions(mux)
+	mountExtensions(mux, gw.requireExtensionAdmin)
 
+	req := httptest.NewRequest(http.MethodGet, "/ee/fake/ping", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ee/fake/ping", nil))
+	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /ee/fake/ping = %d; want 200", rec.Code)
+		t.Fatalf("GET /ee/fake/ping = %d; want 200: %s", rec.Code, rec.Body.String())
 	}
-	if got, want := rec.Body.String(), "fake-ok /ping"; got != want {
-		t.Errorf("handler saw %q; want %q — the prefix must be stripped", got, want)
+	if got, want := rec.Body.String(), "fake-ok /ping tenant="+tenant.ID; got != want {
+		t.Errorf("handler saw %q; want %q — the prefix must be stripped and the caller passed on", got, want)
+	}
+}
+
+// F-080. Every ee/ route shares the gateway's listener, and until this test it
+// answered anyone who could reach the port. An extension is reached only by an
+// admin holding a valid, unrevoked token. Runs after TestMountLoopStripsPrefix,
+// which did the registering.
+func TestExtensionRoutesRequireAnAdmin(t *testing.T) {
+	gw := newTestGateway(t)
+	tenant, _, _, _ := createTestTenantWithUser(t, gw)
+	viewer, err := gw.tokens.Generate(tenant.ID, "viewer-user", "viewer@corp.com", auth.RoleViewer)
+	if err != nil {
+		t.Fatalf("viewer token: %v", err)
+	}
+	otherSecret, err := auth.NewTokenService("a-different-secret-of-32-chars!!", time.Hour).
+		Generate(tenant.ID, "u", "admin@corp.com", auth.RoleAdmin)
+	if err != nil {
+		t.Fatalf("forged token: %v", err)
+	}
+	mux := http.NewServeMux()
+	mountExtensions(mux, gw.requireExtensionAdmin)
+
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   int
+	}{
+		{"no credentials", "", http.StatusUnauthorized},
+		{"a token signed with another secret", "Bearer " + otherSecret, http.StatusUnauthorized},
+		{"a viewer", "Bearer " + viewer, http.StatusForbidden},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			req := httptest.NewRequest(method, "/ee/fake/anything", nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tc.want || strings.Contains(rec.Body.String(), "fake-ok") {
+				t.Errorf("%s %s: status %d, body %q; want %d and the extension never reached",
+					tc.name, method, rec.Code, rec.Body.String(), tc.want)
+			}
+		}
 	}
 }
 

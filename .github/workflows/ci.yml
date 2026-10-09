@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       - name: Enforce the open-core boundary
         run: make check-boundary
       - name: Build the core with ee/ absent
@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Go module cache
         uses: actions/cache@v4
@@ -84,7 +84,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Terraform provider — build
         working-directory: terraform-provider-gravix
@@ -179,7 +179,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          # The newest patch, not whatever the runner has cached: the standard
+          # library's fixes arrive as patch releases, and this job is what
+          # notices when one is missing (F-082).
+          go-version: '1.26'
+          check-latest: true
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
@@ -197,7 +201,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
 
       - name: Run the contributor suite and enforce its budget
@@ -221,7 +225,7 @@ jobs:
     needs: lint
     strategy:
       matrix:
-        go-version: ['1.24', '1.25']
+        go-version: ['1.26', '1.27']
     steps:
       - uses: actions/checkout@v4
 
@@ -350,7 +354,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Go module cache
         uses: actions/cache@v4
@@ -634,7 +638,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install the pinned protoc and protoc-gen-go
         run: |
@@ -662,7 +666,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Go module cache
         uses: actions/cache@v4
@@ -724,7 +728,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
 
       - name: Run the correctness suite
@@ -788,7 +792,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Create .env for CI
         run: |
@@ -884,7 +888,7 @@ jobs:
             ('${day} 00:01:00', 'ci-fixture', 'GET', '/fixture/{id}', 20, 0, 0.0, 4.0, 8.0, 11.0, '${day}'),
             ('${day} 00:02:00', 'ci-fixture', 'POST', '/fixture', 3, 0, 0.0, 6.0, 7.0, 9.0, '${day}')"
           go test -tags=slow -count=1 -v ./tests/e2e/ \
-            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset|TestSQLGuideQueriesRunOnTrino|TestCubeTimeColumnsCastOnTrino|TestCubeAnswersOnTheFullStack|TestTrinoServesEachTenantThroughCube' \
+            -run 'TestIcebergSyncPreservesRowCount|TestIcebergSyncIsIdempotent|TestVerifySparkIcebergRead|TestVerifyBIConnectionsMetabase|TestVerifyBIConnectionsSuperset|TestSQLGuideQueriesRunOnTrino|TestCubeTimeColumnsCastOnTrino|TestCubeAnswersOnTheFullStack|TestTrinoServesEachTenantThroughCube|TestOnDemandExportOnTheFullStack' \
             | tee /tmp/live-e2e.txt
           (cd grafana-plugin/gravix-datasource && go test -count=1 -v ./pkg/ -run 'TestCheckHealthOK') \
             | tee /tmp/live-plugin.txt
@@ -895,7 +899,7 @@ jobs:
           for t in TestIcebergSyncPreservesRowCount TestIcebergSyncIsIdempotent TestVerifySparkIcebergRead \
                    TestVerifyBIConnectionsMetabase TestVerifyBIConnectionsSuperset TestSQLGuideQueriesRunOnTrino \
                    TestCubeTimeColumnsCastOnTrino TestCubeAnswersOnTheFullStack \
-                   TestTrinoServesEachTenantThroughCube; do
+                   TestTrinoServesEachTenantThroughCube TestOnDemandExportOnTheFullStack; do
             grep -q -- "--- PASS: $t " /tmp/live-e2e.txt || { echo "::error::$t did not pass"; exit 1; }
           done
           grep -q -- '--- PASS: TestCheckHealthOK ' /tmp/live-plugin.txt || { echo "::error::TestCheckHealthOK did not pass"; exit 1; }
@@ -936,7 +940,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       # No .env is created on purpose. The whole claim under test is that this
       # stack needs no configuration, so supplying any would measure a path no
@@ -964,7 +968,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - uses: actions/setup-node@v4
         with:
@@ -1019,7 +1023,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
 
       - name: Postgres backend tests

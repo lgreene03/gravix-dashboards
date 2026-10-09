@@ -2,7 +2,7 @@
 <!-- correctness-defects.md, all append-only. This file points into them and may be rewritten. -->
 # What needs a person
 
-Three registers hold 147 entries between them, most of them resolved. Most are ordinary work an
+Three registers hold 151 entries between them, most of them resolved. Most are ordinary work an
 implementer can pick up. This page lists only the ones that **cannot be closed by implementing
 harder**, because they need a decision, a permission, or an external check.
 
@@ -27,9 +27,7 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 
 | Item | What must be decided | Why it is not an implementation detail |
 |---|---|---|
-| **SD-040** *(high)* | Whether `pkg/extpoint` gains a tenant-resolution extension point (RFC 0002), or `GRVX-1304` is rewritten to run multi-tenancy as a separate `ee/` process in front of the gateway | `GRVX-1304` §6 step 1 requires an extension point `GRVX-1302` §3 explicitly forbids, and an `Extension` cannot do it: it only sees requests under its own path prefix, while tenant resolution has to reach ingestion, the metrics API, the percentile endpoint and export — four core routes. `GOVERNANCE.md` puts a new extension point at design tier: an RFC, seven days' comment and **two maintainer approvals**, of which the project has one. Blocks `GRVX-1304`, `1305`, `1306`, `1308`, `1310`, `1312` and RFC 0002 is drafted and open. (`GRVX-1401` was listed here in error and is not blocked — see SD-040's correction.) |
 | **SD-055 / RFC 0003** *(medium)* | Whether compaction writes raw facts as gzip JSONL, so G4.4's 120 bytes/event becomes reachable | Measured: raw JSONL is 203.78 bytes/event of a 206.68 total, and gzip takes it to 32.68. Changing the stored format of the recompute source of truth, and every reader of it, is design tier: RFC 0003 is drafted, and it needs **two maintainer approvals**, of which the project has one. Everything short of that is decided (DD-014). |
-| **SD-029 / F-054** *(high)* | How an export reaches a destination the user names: GRVX-1107 §5.4's on-demand endpoint takes `destination` from any role, and scheduled exports (stored, listed, never executed — F-054) would write to a customer's `s3://` bucket | The route collision is resolved (DD-011) and four of five route criteria pass. What remains is a security design: a server-chosen destination, an allow-list, or stored per-schedule credentials. Each lets a different principal write to a different place. |
 | **F-018, across machines** *(medium)* | Whether the rollup lock should hold across machines that share an S3 bucket | Fixed for one machine (DD-022): the cron and `gravix recompute` now take the same lock, found through the store. Across machines it needs a lock object in the store, taken with a conditional write and given an expiry. That changes the storage interface and the locking semantics, so it wants a spec, not a patch. |
 
 ## Spec text that contradicts what was measured
@@ -48,7 +46,8 @@ implementations, and a guard test now fails on any fixed multiple in a caveat.
 | **F-050** *(high)* | **A name decision, then two commands.** `go.mod` declares `github.com/lgreene/gravix-dashboards`, the repository is at `lgreene03` (a different, existing GitHub account), and the SDK declares `github.com/gravix-io/gravix-go`, which nobody has confirmed the project holds. The published pages now install through `replace` directives that never fetch either path (DD-013), so nothing printed today can resolve to someone else's code. What remains is the canonical name. **Recommended: option 2** in `findings.md` F-050, move the repository to an organisation and set both paths to it once. That is also item 1 of `succession.md`'s list, so the two decisions are one. Only the account owner can create the organisation. |
 | **Succession: a second custodian** *(high)* | **The only item on this page that needs another human being.** Every live identity asset — the GitHub account, the signing identity, the images, npm, PyPI — has exactly one custodian, and the repository sits under a **personal** account that by construction cannot have a second owner. `./scripts/verify_custody.sh` fails today and is meant to; the 2026 drill in `succession-drill.md` is recorded as not completed. Two things the owner can do alone and now: move the repository to a GitHub organisation (an afternoon, breaks no URL), and add a second owner to the npm and PyPI packages once there is somebody to add. The rest waits on a second maintainer, which is a recruitment problem. Escalated to `cpo` per GRVX-1503 §10. |
 | **GRVX-1506 comment window** | **Closed and final (DD-016).** The window closed on 2026-09-30 with no comments, and the `NOT YET` verdict stands. It was never announced outside this repository. That is acceptable only because `NOT YET` commits to nothing. Any donation RFC will need its own announced 14-day window, which is the owner's call. Two candidate foundations (the Linux Foundation directly, and The Commons Conservancy) could not be read at source from this environment and are still marked UNVERIFIED. Somebody with working access should read them and revise the table. |
-| **GRVX-1205 issues** | **Owner's call, one command away.** The sixteen entries in `docs/oss/good-first-issue-inventory.md` are real work, audited by `scripts/gfi_audit.sh` and by CI: every file exists, every verification command is runnable. Turning them into GitHub issues was not done here, because opening sixteen issues on a public repository is outward-facing and notifies watchers — the owner decides when the project is ready to receive first-time contributors, not the implementer. Nothing is blocked meanwhile: the inventory, the audit, the weekly workflow, the template and the label promise all work against the committed file. `./scripts/gfi_audit.sh` audits the live tracker the moment issues exist. |
+| **GRVX-1205 issues** | **Done (DD-042).** Sixteen issues, #36 to #51, opened on 2026-10-09; the live tracker passes `scripts/gfi_audit.sh`. |
+| **GitHub Discussions** | **Owner, one setting.** The inventory, the label page and the issue-template chooser send newcomers to Discussions, which are disabled. Turn them on (Settings → General → Features), or the three links stay dead. This session's access cannot change repository settings. |
 
 ## Blocked on one thing working
 
@@ -91,8 +90,8 @@ was closed by a defect its own §6 tells you how to handle. Each is now `partial
 real defect on the way — including a Grafana plugin that could not load and a published SQL guide
 wrong by 144×.
 
-What remains blocked is blocked for a named reason that an implementer cannot clear: a second
-maintainer (SD-040), an external auditor (GRVX-1407), a pricing audit the implementer is forbidden to
+What remains blocked is blocked for a named reason that an implementer cannot clear: an external
+auditor (GRVX-1407), a pricing audit the implementer is forbidden to
 self-verify (GRVX-1002), or a dependency on one of those (GRVX-1007, GRVX-1008). GRVX-1005's AC-1
 waited on a reference machine until DD-018 named one, a GitHub-hosted `ubuntu-24.04` runner. Choosing
 it found F-056: the benchmark's per-core ingest figure was a one-core rate divided by every core.
@@ -108,9 +107,8 @@ these, and it is why every entry on this page now names its cause.
   0.1 per second (CD-006). All four criteria now pass, two of them in `docker-smoke` on the full
   stack. The lesson is the one below.
 - **GRVX-1407** — blocked for two independent reasons, neither of which was written down until now.
-  It `Depends on GRVX-1308`, and 1308 is one of the six specs SD-040 holds, so 1407 is
-  **transitively governance-blocked**: it cannot start until a second maintainer exists to approve
-  RFC 0002. Separately, a SOC 2 Type 2 opinion requires an **external auditor** and an observation
+  It `Depends on GRVX-1308`, which SD-040 held until DD-040 resolved it without the second
+  maintainer it was thought to need; 1308 is now `planned`. Separately, a SOC 2 Type 2 opinion requires an **external auditor** and an observation
   window over a **running** cloud, and §3 of the spec is explicit that this produces evidence while
   "an auditor forms the opinion". Neither is something an implementer can supply. The executable
   part — gathering the evidence — still waits on 1308.

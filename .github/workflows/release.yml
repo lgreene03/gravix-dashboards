@@ -109,7 +109,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       # GRVX-1209. Credit is the part that must not depend on somebody
       # remembering, so it is generated; the narrative is the opposite, and the

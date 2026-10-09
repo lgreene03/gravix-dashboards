@@ -321,8 +321,12 @@ func (gw *gateway) handleScheduledExports(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "schedule must be a 5-field cron expression (e.g. '0 3 * * *')")
 			return
 		}
-		if !strings.HasPrefix(req.DestinationURL, "s3://") {
-			writeError(w, http.StatusBadRequest, "destination_url must be an s3:// URL")
+		if _, err := parseCron(req.Schedule); err != nil {
+			writeError(w, http.StatusBadRequest, "schedule: "+err.Error())
+			return
+		}
+		if req.DestinationURL != "" {
+			writeError(w, http.StatusBadRequest, errClientDestination)
 			return
 		}
 		if req.DataType == "" {
@@ -368,11 +372,19 @@ func (gw *gateway) handleScheduledExports(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// handleScheduledExportByID handles GET, PUT, DELETE for a specific scheduled export.
+// errClientDestination refuses a destination chosen by the caller. Scheduled
+// exports are written under the tenant's own exports/ prefix and read back
+// through .../runs (DD-041).
+const errClientDestination = `invalid field "destination_url": the server chooses where a scheduled export goes; ` +
+	`read its runs at /api/gateway/exports/scheduled/<id>/runs`
+
+// handleScheduledExportByID handles GET, PUT, DELETE for a specific scheduled
+// export, and GET of its runs under .../<id>/runs.
 func (gw *gateway) handleScheduledExportByID(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
-	id := strings.TrimPrefix(r.URL.Path, "/api/gateway/exports/scheduled/")
-	if id == "" || strings.Contains(id, "/") {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/gateway/exports/scheduled/"), "/")
+	id := parts[0]
+	if id == "" || (len(parts) > 1 && parts[1] != "runs") {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -380,6 +392,10 @@ func (gw *gateway) handleScheduledExportByID(w http.ResponseWriter, r *http.Requ
 	e, err := gw.db.ScheduledExports().GetByID(r.Context(), id)
 	if err != nil || e.TenantID != claims.TenantID {
 		writeError(w, http.StatusNotFound, "export not found")
+		return
+	}
+	if len(parts) > 1 {
+		gw.handleScheduledExportRuns(w, r, e, parts[2:])
 		return
 	}
 
@@ -411,14 +427,15 @@ func (gw *gateway) handleScheduledExportByID(w http.ResponseWriter, r *http.Requ
 				writeError(w, http.StatusBadRequest, "schedule must be a 5-field cron expression")
 				return
 			}
+			if _, err := parseCron(req.Schedule); err != nil {
+				writeError(w, http.StatusBadRequest, "schedule: "+err.Error())
+				return
+			}
 			e.Schedule = req.Schedule
 		}
 		if req.DestinationURL != "" {
-			if !strings.HasPrefix(req.DestinationURL, "s3://") {
-				writeError(w, http.StatusBadRequest, "destination_url must be an s3:// URL")
-				return
-			}
-			e.DestinationURL = req.DestinationURL
+			writeError(w, http.StatusBadRequest, errClientDestination)
+			return
 		}
 		if req.LookbackDays > 0 {
 			e.LookbackDays = req.LookbackDays

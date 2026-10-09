@@ -3877,7 +3877,7 @@ invisible. A failed query and an empty result should not render the same.
 **Affects:** `/api/gateway/exports/scheduled`, `tenantdb.ScheduledExport`, GRVX-1107 AC-10
 **Severity:** high — a user can create a nightly export to their bucket, see it listed as `active`,
 and receive nothing, ever
-**Status:** open; needs a design, recorded on the stops list
+**Status:** fixed 2026-10-07 (DD-041). Originally: open; needs a design, recorded on the stops list
 
 ### What is there
 
@@ -3894,6 +3894,16 @@ per-schedule credentials are stored, encrypted and rotated. Both are security de
 did not make. Until one is made, the honest interim is to say on the schedule itself that it does
 not run. That copy change is small, but it sits in the dashboard and the API, and is left with the
 design so the two land together.
+
+### Fixed, 2026-10-07
+
+The design is that no caller names a destination (DD-041). Every run goes under the tenant's own
+`exports/<tenant>/scheduled/<id>/<run>/` in Gravix's store, which is where the tenant's facts
+already live, and is listed and downloaded through `/api/gateway/exports/scheduled/<id>/runs`.
+`destination_url` is refused on create and update. No credential is stored, and the gateway writes
+nowhere it could not already write. A loop in the gateway runs each active schedule once, for the
+latest minute it came due, and records `LastRunAt` and `LastError`. A run that found no data says
+so in `LastError`. `TestScheduledExportRunsWhenDue` and `TestScheduledAndOnDemandAgree` hold it.
 
 ---
 
@@ -4767,3 +4777,82 @@ One reader outside the chart has the same gap: `transforms/iceberg_sync` copies 
 into Iceberg, and no tenant's rows are in `gravix.raw`. It should read the tenant tables, or
 `gravix.serving` with its `tenant_id`, when this is fixed.
 
+
+## F-080 — every `ee/` route answered without authentication
+
+**Found by** resolving SD-040, which needed to know who an `ee/` control plane would be talking to
+**Affects** `pkg/gatewaycore` (`mountExtensions`), `ee/intelligence` (`resolveSource`)
+**Severity** critical under `SECURITY.md` for the Enterprise build; the OSS build mounts no extension
+**Status** fixed; never in a release
+
+`mountExtensions` put each registered extension on the gateway's listener with no authentication, so
+everything under `/ee/` answered anyone who could reach the port. On the Enterprise build that was
+`ee/fleet`'s install registry and configuration proposals, `ee/warehouse`'s sync configuration, and
+`ee/intelligence`'s forecasts. `ee/intelligence` also took the tenant to read from a `?tenant=`
+parameter, so a caller could read any tenant's metrics by naming it.
+
+No release carries it. The Enterprise gateway is built only by `make build-ee`. CI publishes no image
+of it, and 1.0.0 has no `ee/` directory. The OSS binary registers nothing, so the loop never ran there.
+
+Each extension is now mounted behind `requireExtensionAdmin`: a valid, unrevoked gateway token held by
+an admin of its tenant, with the claims left in the request context. An `ee/` package can narrow that
+rule and cannot widen it. `ee/intelligence` reads the caller's tenant from those claims, refuses a
+request that names a tenant, and refuses one with no caller.
+
+- `TestExtensionRoutesRequireAnAdmin` mounts an extension the way `Run` does. With no token, a token
+  signed with another secret, or a viewer's token, it must answer 401 or 403 and never reach the
+  extension. It fails on the old loop, which let all six requests through.
+- `TestSourceIsTheCallersTenant` holds `ee/intelligence` to the caller's tenant.
+
+Still open: `ee/fleet` and `ee/warehouse` keep one registry per process. That is right for an
+operator's own installation. On a gateway serving many tenants, every tenant's admin would share
+it. Both are unreleased, and each needs per-tenant state before a multi-tenant deployment uses it.
+
+## F-081 — on the full stack the gateway read its own disk, and the data was in MinIO
+
+**Found by** writing the live test for DD-041's on-demand export
+**Affects** `docker-compose.yml` (`gateway`); every gateway endpoint that reads the store: on-demand export, `/api/v1/percentile`, `/api/v1/lineage`
+**Severity** high — on the full stack those endpoints found no data for any tenant
+**Status** fixed for the store-backed endpoints; the raw archive and the DLQ remain, below
+
+Ingestion and the rollups on the full stack keep raw facts and the warehouse in MinIO. The gateway
+was given no S3 settings, so `newMetricStore` fell back to the local `./data`, where neither is. A
+percentile, a lineage lookup or an export for any tenant answered as if the tenant had no data.
+Nothing showed it because no live test called them. Their unit tests use a local store that the
+test fills itself.
+
+The gateway now gets the same five `S3_*` settings the rollups have, and waits for MinIO.
+`TestOnDemandExportOnTheFullStack` writes a tenant's facts where ingestion puts them and exports
+them through the running gateway. Against a gateway configured the old way it fails with
+`422 no data in range`. Configured the new way, it passes.
+
+Still open: the raw-archive download (`/api/gateway/exports/archive`) and the DLQ read the gateway's
+second store, rooted at `RAW_DATA_DIR`. They also disagree with each other about what that root is:
+the archive expects keys that begin with `raw/`, and the DLQ expects keys that do not. On the full
+stack neither finds MinIO's data. Both need moving to the same store, and the migration guide's test,
+which configures the archive's root its own way, needs to move with them.
+
+
+## F-082 — every shipped image was built with a Go that no longer gets security fixes
+
+**Found by** `vuln` failing on PR #35 for code the PR did not touch
+**Affects** the four service images and the GitHub Action image (`golang:1.24-alpine`), and CI (Go 1.24 and 1.25)
+**Severity** high — eleven standard-library vulnerabilities that the code reaches, including in `net/http` and `html/template`
+**Status** fixed
+
+govulncheck reported eleven standard-library vulnerabilities in go1.25.14, with the fix only in
+go1.26.9. Go supports its two newest releases, now 1.27 and 1.26, so the 1.24 and 1.25 lines receive
+no more fixes. Every image this project ships was built with `golang:1.24-alpine`, and `vuln` ran on
+1.25, so the images carried the unfixed standard library. It went red only when the advisories were
+published, two days after `main` was last green.
+
+The service and Action images now build on `golang:1.26-alpine`, and CI tests on 1.26 and 1.27.
+`vuln` runs on the newest 1.26 patch rather than whatever the runner has cached. The full suite
+passes on go1.26.9 and go1.27.2. `go.mod` still declares `go 1.24.9`: that is the oldest language
+version the code compiles under, not a toolchain recommendation, and the documentation now says 1.26.
+
+The local MinIO build stays on 1.24. It builds a pinned 2024 release that is not shipped, and moving
+its compiler is a separate change with its own risk.
+
+`vuln` only ran on pull requests and pushes, so a quiet week meant no scan at all.
+`.github/workflows/vuln-scheduled.yml` now runs the same scan on `main` every day.

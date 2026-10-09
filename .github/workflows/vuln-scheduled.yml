@@ -1,0 +1,31 @@
+name: vulnerability scan
+
+# ci.yml's `vuln` job runs only when something is pushed, so a quiet week is a
+# week with no scan at all. Advisories do not wait for pushes: F-082 went
+# unnoticed until an unrelated pull request ran the scan two days after the
+# advisories were published. This runs the same scan on main every day.
+#
+# Its own workflow, for the reason incident-audit.yml gives: ci.yml has no
+# schedule, and giving it one would run the whole matrix to answer one question.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
