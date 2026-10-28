@@ -74,3 +74,30 @@ func TestRenderQuotaWarning(t *testing.T) {
 		t.Error("text should contain usage percentage")
 	}
 }
+
+func TestRenderTryAlerting(t *testing.T) {
+	html, text, err := RenderTryAlerting(OnboardingData{
+		UserName:   "Eli",
+		TenantName: "Contoso",
+		Plan:       "free",
+		BaseURL:    "https://app.gravix.io",
+	})
+	if err != nil {
+		t.Fatalf("RenderTryAlerting: %v", err)
+	}
+	if !strings.Contains(html, "Set Up Your First Alert Rule") {
+		t.Error("HTML should render the alert-rule heading")
+	}
+	if text == "" {
+		t.Fatal("text body should not be empty")
+	}
+	if !strings.Contains(text, "#alerts") {
+		t.Errorf("text should carry the #alerts link, got: %q", text)
+	}
+	if strings.Contains(html, "{{") {
+		t.Error("HTML should not contain unrendered template actions")
+	}
+	if strings.Contains(text, "{{") {
+		t.Error("text should not contain unrendered template actions")
+	}
+}
