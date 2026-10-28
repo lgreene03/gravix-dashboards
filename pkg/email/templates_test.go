@@ -74,3 +74,30 @@ func TestRenderQuotaWarning(t *testing.T) {
 		t.Error("text should contain usage percentage")
 	}
 }
+
+func TestRenderFirstData(t *testing.T) {
+	html, text, err := RenderFirstData(OnboardingData{
+		UserName:   "Dana",
+		TenantName: "Northwind Traders",
+		Plan:       "team",
+		BaseURL:    "https://app.gravix.io",
+	})
+	if err != nil {
+		t.Fatalf("RenderFirstData: %v", err)
+	}
+	if !strings.Contains(html, "Northwind Traders") {
+		t.Error("HTML should contain tenant name")
+	}
+	if text == "" {
+		t.Fatal("text body should not be empty")
+	}
+	if !strings.Contains(text, "https://app.gravix.io/index.html") {
+		t.Errorf("text should contain the dashboard URL, got: %q", text)
+	}
+	if strings.Contains(html, "{{") {
+		t.Error("HTML should not contain unrendered template actions")
+	}
+	if strings.Contains(text, "{{") {
+		t.Error("text should not contain unrendered template actions")
+	}
+}
