@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -148,4 +149,137 @@ func TestValidateEmptyClaims(t *testing.T) {
 	if claims.UserID != "" {
 		t.Errorf("expected empty user_id, got %q", claims.UserID)
 	}
+}
+
+func TestClaimsContextRoundTrip(t *testing.T) {
+	want := &Claims{
+		TenantID: "tenant-123",
+		UserID:   "user-456",
+		Email:    "admin@acme.com",
+		Role:     RoleAdmin,
+	}
+
+	ctx := WithClaims(context.Background(), want)
+
+	got := ClaimsFromContext(ctx)
+	if got == nil {
+		t.Fatal("ClaimsFromContext returned nil for a context that carries claims")
+	}
+	if got != want {
+		t.Fatalf("ClaimsFromContext returned %p, want %p", got, want)
+	}
+	if got.TenantID != want.TenantID || got.UserID != want.UserID || got.Email != want.Email || got.Role != want.Role {
+		t.Errorf("claims round-trip mismatch: got %+v, want %+v", *got, *want)
+	}
+
+	// WithClaims derives a new context; the parent must stay untouched.
+	if c := ClaimsFromContext(context.Background()); c != nil {
+		t.Errorf("background context unexpectedly carries claims: %+v", *c)
+	}
+}
+
+func TestClaimsFromContextWithoutClaims(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "background context", ctx: context.Background()},
+		{name: "nil claims stored under the claims key", ctx: WithClaims(context.Background(), nil)},
+		{name: "non-claims value stored under the claims key", ctx: context.WithValue(context.Background(), claimsKey, "not-claims")},
+		{name: "claims value instead of pointer", ctx: context.WithValue(context.Background(), claimsKey, Claims{Role: RoleAdmin})},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Must not panic, and must report that there were no claims.
+			if got := ClaimsFromContext(tc.ctx); got != nil {
+				t.Errorf("ClaimsFromContext = %+v, want nil", *got)
+			}
+		})
+	}
+}
+
+func TestClaimsHasRole(t *testing.T) {
+	tests := []struct {
+		name   string
+		claims *Claims
+		roles  []string
+		want   bool
+	}{
+		{name: "role the claims have", claims: &Claims{Role: RoleAdmin}, roles: []string{RoleAdmin}, want: true},
+		{name: "role the claims do not have", claims: &Claims{Role: RoleAdmin}, roles: []string{RoleViewer}, want: false},
+		{name: "one of several requested roles matches", claims: &Claims{Role: RoleEditor}, roles: []string{RoleAdmin, RoleEditor, RoleViewer}, want: true},
+		{name: "no roles requested", claims: &Claims{Role: RoleAdmin}, roles: nil, want: false},
+		{name: "empty claims reject a role", claims: &Claims{}, roles: []string{RoleAdmin}, want: false},
+		{name: "empty claims request nothing", claims: &Claims{}, roles: nil, want: false},
+		{name: "role match is case sensitive", claims: &Claims{Role: RoleAdmin}, roles: []string{"Admin"}, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.claims.HasRole(tc.roles...); got != tc.want {
+				t.Errorf("HasRole(%v) with role %q = %v, want %v", tc.roles, tc.claims.Role, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaimsFromValidatedToken(t *testing.T) {
+	const secret = "test-secret-key-32-chars-long!!"
+	ts := NewTokenService(secret, 1*time.Hour)
+
+	t.Run("valid token", func(t *testing.T) {
+		token, err := ts.Generate("tenant-1", "user-1", "user@acme.com", RoleAdmin)
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+
+		claims, err := ts.Validate(token)
+		if err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+
+		ctx := WithClaims(context.Background(), claims)
+		got := ClaimsFromContext(ctx)
+		if got == nil {
+			t.Fatal("ClaimsFromContext returned nil after WithClaims")
+		}
+		if !got.HasRole(RoleAdmin) {
+			t.Errorf("HasRole(%q) = false, want true", RoleAdmin)
+		}
+		if got.HasRole(RoleViewer) {
+			t.Errorf("HasRole(%q) = true, want false", RoleViewer)
+		}
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		expired := NewTokenService(secret, -1*time.Hour)
+		token, err := expired.Generate("tenant-1", "user-1", "user@acme.com", RoleAdmin)
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+
+		claims, err := ts.Validate(token)
+		if err == nil {
+			t.Fatalf("Validate accepted an expired token: %+v", *claims)
+		}
+		if claims != nil {
+			t.Errorf("Validate returned claims together with the error: %+v", *claims)
+		}
+
+		// Nothing was put into a context, so the helper still reports no claims.
+		if got := ClaimsFromContext(context.Background()); got != nil {
+			t.Errorf("context carries claims after a failed validation: %+v", *got)
+		}
+	})
+
+	t.Run("unparseable token", func(t *testing.T) {
+		claims, err := ts.Validate("not-a-jwt")
+		if err == nil {
+			t.Fatalf("Validate accepted garbage: %+v", *claims)
+		}
+		if claims != nil {
+			t.Errorf("Validate returned claims together with the error: %+v", *claims)
+		}
+	})
 }
