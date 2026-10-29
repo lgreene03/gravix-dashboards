@@ -88,6 +88,54 @@ func TestDefaultPlans(t *testing.T) {
 	}
 }
 
+func TestDefaultPlansLegacy(t *testing.T) {
+	plans := DefaultPlansLegacy("price_free_legacy", "price_starter_legacy", "price_pro_legacy")
+	if len(plans) != 3 {
+		t.Fatalf("expected 3 plans, got %d", len(plans))
+	}
+
+	// The legacy price arguments are starter and pro, but the plans they return
+	// carry the current team and business names. Pinning the mapping and every
+	// limit is what makes the deprecated function safe to delete later.
+	tests := []struct {
+		name          string
+		priceID       string
+		planName      string
+		eventLimit    int64
+		seatLimit     int
+		serviceLimit  int
+		retentionDays int
+	}{
+		{"free", "price_free_legacy", "free", 500_000, 1, 2, 7},
+		{"starter maps to team", "price_starter_legacy", "team", 10_000_000, 5, 5, 30},
+		{"pro maps to business", "price_pro_legacy", "business", 50_000_000, 20, 20, 90},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := plans[i]
+			if got.PriceID != tt.priceID {
+				t.Errorf("plans[%d].PriceID = %q, want %q", i, got.PriceID, tt.priceID)
+			}
+			if got.PlanName != tt.planName {
+				t.Errorf("plans[%d].PlanName = %q, want %q", i, got.PlanName, tt.planName)
+			}
+			if got.EventLimit != tt.eventLimit {
+				t.Errorf("plans[%d].EventLimit = %d, want %d", i, got.EventLimit, tt.eventLimit)
+			}
+			if got.SeatLimit != tt.seatLimit {
+				t.Errorf("plans[%d].SeatLimit = %d, want %d", i, got.SeatLimit, tt.seatLimit)
+			}
+			if got.ServiceLimit != tt.serviceLimit {
+				t.Errorf("plans[%d].ServiceLimit = %d, want %d", i, got.ServiceLimit, tt.serviceLimit)
+			}
+			if got.RetentionDays != tt.retentionDays {
+				t.Errorf("plans[%d].RetentionDays = %d, want %d", i, got.RetentionDays, tt.retentionDays)
+			}
+		})
+	}
+}
+
 func TestPlanSeatLimit(t *testing.T) {
 	tests := []struct {
 		plan string
