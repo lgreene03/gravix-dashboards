@@ -288,4 +288,7 @@ var licensePhrases = map[string][]string{
 	"MPL-2.0":      {"mozilla public license"},
 	"GPL-3.0":      {"gnu general public license"},
 	"AGPL-3.0":     {"gnu affero general public license"},
+	"ISC":          {"provided that the above copyright notice and this permission notice appear in all copies"},
+	"0BSD":         {"bsd zero clause license", "0bsd"},
+	"Unlicense":    {"this is free and unencumbered software released into the public domain"},
 }
