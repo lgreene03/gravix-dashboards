@@ -595,6 +595,40 @@ func TestKindClassification(t *testing.T) {
 		"SPEC DEFECT: GRVX-1108 §6":             KindInternal,
 		"GRVX-1204: make charter §6 executable": KindFeature,
 		"add a thing that mentions a CVE-2026":  KindSecurity,
+
+		// Real subjects from this repository's history that the heuristics got
+		// wrong (issue #46). In each of them a word in the text beat the type
+		// prefix the author declared.
+		"docs: fix mermaid syntax in readme":                           KindDocs,
+		"docs: fix readme images and diagram syntax":                   KindDocs,
+		"docs: mark Phase 5 ✅ — all Scale & Performance items shipped": KindDocs,
+
+		// "Performance" here names a dashboard and a topic, not a change that
+		// makes anything faster.
+		"feat: provision Huginn Performance Dashboard and scrape configuration":  KindFeature,
+		"feat: query performance and multi-tenant billing completion (phase 18)": KindFeature,
+
+		// The rest of what the history turned up is ambiguous rather than wrong,
+		// so it is pinned to today's answer instead of taught to a new rule. For
+		// each of these the fix is a "Release-Kind:" trailer the commit did not
+		// carry — a heuristic that guesses would file the next one wrongly too.
+		//
+		// Security hardening recorded as a fix or a feature. It is both, but a
+		// reader who scans the Security section to decide whether to upgrade today
+		// does not see it: "Release-Kind: security".
+		"fix: GA security hardening — token blacklist, TOTP, SSO state, API routing, CORS (phase 34)": KindFix,
+		"feat: Phase 9 security hardening and infrastructure improvements":                            KindFeature,
+		// Housekeeping — metadata files and a vendored virtualenv — with no prefix
+		// to read: "Release-Kind: internal".
+		"Add Minio raw data metadata files and Python virtual environment dependencies.": KindFeature,
+		// F-nnn subjects are multi-item commits: a register decided, main's red CI
+		// fixed and a decision recorded, all in one subject. "Decide 17 open
+		// register items" reads as internal work and "...; fix F-053 and main's red
+		// CI" reads as a fix, which is exactly why neither guess belongs in
+		// classify: "Release-Kind: internal" and "Release-Kind: fix".
+		"Decide 17 open register items (DD-012 to DD-030), boot the full stack on PRs, and run the Postgres tests (#24)": KindFeature,
+		"Decide F-039, CD-005, SD-024, SD-023/056, SD-013, SD-029; fix F-053 and main's red CI (F-055) (#23)":            KindFeature,
+		"Make the Helm analytics path work; network policy for every workload; F-018 decided (#52)":                      KindFeature,
 	}
 	for subject, want := range cases {
 		if got := classify(commit{Subject: subject}); got != want {
