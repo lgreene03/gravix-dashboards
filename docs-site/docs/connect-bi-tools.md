@@ -1,6 +1,6 @@
 ---
 title: Connect Metabase or Superset
-sidebar_position: 8
+sidebar_position: 17
 ---
 
 # Point your BI tool at Gravix

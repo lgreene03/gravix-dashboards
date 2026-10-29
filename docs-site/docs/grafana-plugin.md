@@ -1,6 +1,6 @@
 ---
 title: Grafana datasource plugin
-sidebar_position: 5
+sidebar_position: 14
 ---
 
 # Keep Grafana, get Gravix's numbers

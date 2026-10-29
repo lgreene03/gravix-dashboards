@@ -1,6 +1,6 @@
 ---
 title: Alerting
-sidebar_position: 5
+sidebar_position: 9
 ---
 
 # Alerting

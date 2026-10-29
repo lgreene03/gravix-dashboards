@@ -1,6 +1,6 @@
 ---
 title: Finding and scaffolding plugins
-sidebar_position: 7
+sidebar_position: 27
 ---
 
 # Finding and scaffolding plugins

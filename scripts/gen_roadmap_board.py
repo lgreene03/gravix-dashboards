@@ -294,7 +294,7 @@ def render(phases, non_goals, rejected, inputs, progress) -> str:
     # site, not reasoned — see SD-053 and SD-057.
     w("---")
     w("title: Roadmap")
-    w("sidebar_position: 10")
+    w("sidebar_position: 2")
     w("---")
     w(GENERATED_MARKER)
     w("")

@@ -1,6 +1,6 @@
 ---
 title: Prove it
-sidebar_position: 2
+sidebar_position: 24
 ---
 
 # Prove it

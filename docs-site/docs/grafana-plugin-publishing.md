@@ -1,6 +1,6 @@
 ---
 title: Publishing the Grafana plugin
-sidebar_position: 6
+sidebar_position: 15
 ---
 
 # Submitting the plugin to the Grafana catalog

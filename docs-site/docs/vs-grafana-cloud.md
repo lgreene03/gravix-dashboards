@@ -1,6 +1,6 @@
 ---
 title: Gravix vs Grafana Cloud
-sidebar_position: 9
+sidebar_position: 29
 ---
 
 # Gravix vs Grafana Cloud

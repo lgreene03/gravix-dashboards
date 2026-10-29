@@ -93,7 +93,7 @@ def render_free_entries(caps):
 def free_page(core):
     return f"""---
 title: What stays free
-sidebar_position: 9
+sidebar_position: 18
 ---
 {GENERATED}
 
@@ -135,7 +135,7 @@ def pricing_page(core, ee):
 
     return f"""---
 title: Pricing
-sidebar_position: 10
+sidebar_position: 19
 ---
 {GENERATED}
 

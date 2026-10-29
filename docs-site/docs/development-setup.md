@@ -1,6 +1,6 @@
 ---
 title: Development setup
-sidebar_position: 9
+sidebar_position: 25
 ---
 
 # Development setup

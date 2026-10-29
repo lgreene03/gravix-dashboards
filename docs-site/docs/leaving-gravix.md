@@ -1,6 +1,6 @@
 ---
 title: Leaving Gravix
-sidebar_position: 5
+sidebar_position: 23
 ---
 
 # Leaving Gravix

@@ -1,6 +1,6 @@
 ---
 title: Moving to Gravix Cloud
-sidebar_position: 5
+sidebar_position: 22
 ---
 
 # Move a self-hosted install to Gravix Cloud

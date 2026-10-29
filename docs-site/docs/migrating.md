@@ -1,6 +1,6 @@
 ---
 title: Migrating history
-sidebar_position: 4
+sidebar_position: 20
 ---
 
 # Arriving with history

@@ -1,6 +1,6 @@
 ---
 title: Iceberg tables
-sidebar_position: 4
+sidebar_position: 13
 ---
 
 # Query Gravix from Spark, or anything that reads Iceberg

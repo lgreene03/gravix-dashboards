@@ -1,6 +1,6 @@
 ---
 title: Bare-Parquet access
-sidebar_position: 3
+sidebar_position: 12
 ---
 
 # Read your warehouse with no Gravix running

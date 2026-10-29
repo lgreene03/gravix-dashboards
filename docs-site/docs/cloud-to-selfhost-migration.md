@@ -1,6 +1,6 @@
 ---
 title: Leaving Gravix Cloud
-sidebar_position: 4
+sidebar_position: 21
 ---
 
 # Move from Gravix Cloud to a self-hosted install

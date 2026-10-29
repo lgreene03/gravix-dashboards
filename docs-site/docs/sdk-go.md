@@ -1,6 +1,6 @@
 ---
 title: Go SDK
-sidebar_position: 2
+sidebar_position: 6
 ---
 
 # Go SDK

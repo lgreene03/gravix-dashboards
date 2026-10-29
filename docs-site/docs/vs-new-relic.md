@@ -1,6 +1,6 @@
 ---
 title: Gravix vs New Relic
-sidebar_position: 8
+sidebar_position: 30
 ---
 
 # Gravix vs New Relic
