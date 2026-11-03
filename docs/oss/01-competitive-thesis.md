@@ -308,9 +308,9 @@ Sources: [Grafana relicensing](https://grafana.com/blog/grafana-loki-tempo-relic
 
 | ID | Claim | Scope limit | Proof artefact | Status |
 |---|---|---|---|---|
-| C1 | Cost immune to cardinality | Concede Metrics-without-Limits exists; ours is structural not manual | `GRVX-1002` | Pending proof |
-| C2 | Exact recomputable percentiles | **Prometheus/Grafana only.** vs Datadog: only "cannot add a dimension retroactively" | `scripts/prove_it.sh` | **Proven** — run it yourself, ~10s, no Docker |
-| C3 | Open-format data, no rehydration tax | **Metrics/APM only.** Datadog log archives are customer-owned | `GRVX-1101` | Pending proof |
+| C1 | Cost immune to cardinality | Concede Metrics-without-Limits exists; ours is structural not manual. **Re-scope before use (2026-11-03):** Datadog's Infinite Cardinality Metrics, GA 2026-06-09, prices a custom metric by its name, not its tag combinations — see `21-horizon-3-goal.md` §3 | `GRVX-1002` | Pending proof; **contested** |
+| C2 | Exact recomputable percentiles | **Prometheus/Grafana only.** vs Datadog: only "cannot add a dimension retroactively"  Prometheus native histograms, stable since v3.8, narrow the accuracy half; the recompute half stands (2026-11-03) | `scripts/prove_it.sh` | **Proven** — run it yourself, ~10s, no Docker |
+| C3 | Open-format data, no rehydration tax | **Metrics/APM only.** Datadog log archives are customer-owned. Parquet-on-object-storage telemetry stores are now common (2026-11-03), so this is true but no longer distinguishing | `GRVX-1101` | Pending proof |
 | C4 | Under $20/mo hosting | **MVP-stage only.** Must publish at-scale figures alongside | `GRVX-1001` | Pending proof |
 | C5 | No query language lock-in | "Nothing to learn", **not** "more expressive" | `GRVX-1103` | Pending proof |
 | C6 | 20× cheaper per million events | Must be a reproducible benchmark or it does not ship | `GRVX-1004` | Not yet claimed |

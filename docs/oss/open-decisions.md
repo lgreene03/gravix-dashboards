@@ -28,6 +28,7 @@ grep -c '^## CD-' docs/oss/correctness-defects.md
 | Item | What must be decided | Why it is not an implementation detail |
 |---|---|---|
 | **SD-055 / RFC 0003** *(medium)* | Whether compaction writes raw facts as gzip JSONL, so G4.4's 120 bytes/event becomes reachable | Measured: raw JSONL is 203.78 bytes/event of a 206.68 total, and gzip takes it to 32.68. Changing the stored format of the recompute source of truth, and every reader of it, is design tier: RFC 0003 is drafted, and it needs **two maintainer approvals**, of which the project has one. Everything short of that is decided (DD-014). **Its comment window closed on 2026-10-08 with no comments, and the recommendation is to accept it**: the measurement in SD-055 is the whole case, and nothing argued against it. Accepting needs the second approval, so this row waits for a second maintainer, not for more analysis. |
+| **Horizon 3, D2 and D3** *(high)* | Whether Gravix accepts OpenTelemetry HTTP server spans as request facts (it changes non-goal §1), and whether it offers a read-only MCP endpoint over metrics and `explain` | Both are recommended in [`21-horizon-3-goal.md`](21-horizon-3-goal.md) §7 and neither is drafted as an RFC yet. Each is design tier and needs **two maintainer approvals**, so each waits on H3.8, a second maintainer. |
 
 ## Spec text that contradicts what was measured
 

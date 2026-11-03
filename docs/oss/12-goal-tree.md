@@ -4,6 +4,8 @@
 **Owner:** `cpo`. **Refreshed by:** L1 monthly, L0 quarterly.
 **Rule:** every key result has a **numeric target**, a **named measurement source**, and an
 **owning role**. A KR whose source is "we think" is deleted at the next L1 tick.
+**Next:** [`21-horizon-3-goal.md`](21-horizon-3-goal.md) sets the next iteration's targets against
+this North Star, which it leaves unchanged.
 
 ---
 

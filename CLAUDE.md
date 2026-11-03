@@ -156,6 +156,7 @@ Three of the newer roles hold a veto the CPO cannot overrule inside a sprint:
 | `docs/oss/11-agent-loops.md` | Loops L0-L12, including the 12-check Spec Readiness Gate. |
 | `docs/oss/12-goal-tree.md` | G1-G9 with numeric key results and named measurement sources. |
 | `docs/oss/20-roadmap-horizon-2.md` | Phases 7-15. Phases 7-12 are entirely Apache-2.0. |
+| `docs/oss/21-horizon-3-goal.md` | The goal for the next iteration: ship 2.0, prove every install path end to end, one engine by default, and ten outside teams paging on a Gravix alert by 2027-05-31. Read before proposing new work. |
 | `docs/oss/specs/` | 88 executable specifications. One spec is one work order. |
 | `docs/oss/correctness-defects.md` | Where a published number or claim failed a test. Read before making any accuracy claim. |
 | `docs/oss/open-decisions.md` | The subset of the registers that needs a person, not an implementer — decisions, permissions, and external checks. Start here when picking the work back up. |

@@ -37,6 +37,7 @@ Horizon 2 adds relatively little product. It does three things Horizon 1 skipped
 | [`11-agent-loops.md`](11-agent-loops.md) | Loops L0–L12. Each has a trigger, an owner, exit criteria, and a durable artefact. L2 defines the Spec Readiness Gate. |
 | [`12-goal-tree.md`](12-goal-tree.md) | G1–G9, each key result with a numeric target and a named measurement source. |
 | [`20-roadmap-horizon-2.md`](20-roadmap-horizon-2.md) | Phases 7–15, their deliverables and exit criteria. |
+| [`21-horizon-3-goal.md`](21-horizon-3-goal.md) | The goal for the next iteration: ten outside teams paging on a Gravix alert by 2027-05-31, and the research behind it. |
 | [`specs/`](specs/SPEC-INDEX.md) | The executable specifications. One spec is one work order. |
 
 ---
