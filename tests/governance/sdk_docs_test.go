@@ -19,44 +19,54 @@ import (
 func exportedAPI(t *testing.T, dir string) (names map[string]bool, methods map[string]map[string]bool) {
 	t.Helper()
 	names, methods = map[string]bool{}, map[string]map[string]bool{}
-	pkgs, err := parser.ParseDir(token.NewFileSet(), dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	// Each non-test file is parsed on its own: parser.ParseDir is deprecated from
+	// Go 1.25 (SA1019), and the SDK packages carry no build tags.
+	fset := token.NewFileSet()
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
-		t.Fatalf("parse %s: %v", dir, err)
+		t.Fatalf("glob %s: %v", dir, err)
 	}
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, d := range f.Decls {
-				switch d := d.(type) {
-				case *ast.FuncDecl:
-					if !d.Name.IsExported() {
-						continue
+	var files []*ast.File
+	for _, p := range paths {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, p, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", p, err)
+		}
+		files = append(files, f)
+	}
+	for _, f := range files {
+		for _, d := range f.Decls {
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				if !d.Name.IsExported() {
+					continue
+				}
+				if d.Recv == nil {
+					names[d.Name.Name] = true
+					continue
+				}
+				recv := d.Recv.List[0].Type
+				if star, ok := recv.(*ast.StarExpr); ok {
+					recv = star.X
+				}
+				if id, ok := recv.(*ast.Ident); ok {
+					if methods[id.Name] == nil {
+						methods[id.Name] = map[string]bool{}
 					}
-					if d.Recv == nil {
-						names[d.Name.Name] = true
-						continue
-					}
-					recv := d.Recv.List[0].Type
-					if star, ok := recv.(*ast.StarExpr); ok {
-						recv = star.X
-					}
-					if id, ok := recv.(*ast.Ident); ok {
-						if methods[id.Name] == nil {
-							methods[id.Name] = map[string]bool{}
-						}
-						methods[id.Name][d.Name.Name] = true
-					}
-				case *ast.GenDecl:
-					for _, s := range d.Specs {
-						switch s := s.(type) {
-						case *ast.TypeSpec:
-							names[s.Name.Name] = s.Name.IsExported()
-						case *ast.ValueSpec:
-							for _, n := range s.Names {
-								if n.IsExported() {
-									names[n.Name] = true
-								}
+					methods[id.Name][d.Name.Name] = true
+				}
+			case *ast.GenDecl:
+				for _, s := range d.Specs {
+					switch s := s.(type) {
+					case *ast.TypeSpec:
+						names[s.Name.Name] = s.Name.IsExported()
+					case *ast.ValueSpec:
+						for _, n := range s.Names {
+							if n.IsExported() {
+								names[n.Name] = true
 							}
 						}
 					}

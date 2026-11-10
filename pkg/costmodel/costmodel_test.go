@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -96,26 +97,30 @@ func TestEstimateAllReturnsEveryDeployment(t *testing.T) {
 // alone" is enforced in the type signature rather than left to whoever renders
 // the output, and this is what keeps it that way.
 func TestNoSingleDeploymentAPI(t *testing.T) {
+	// Each non-test file is parsed on its own: parser.ParseDir is deprecated from
+	// Go 1.25 (SA1019), and this package has one package clause and no build tags.
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	paths, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatalf("glob: %v", err)
 	}
-
-	for _, pkg := range pkgs {
-		for name, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil {
-					continue
-				}
-				for _, result := range fn.Type.Results.List {
-					if returnsBareEstimate(result.Type) {
-						t.Errorf("%s: exported %s returns a single Estimate; there must be no way "+
-							"to price one deployment in isolation", name, fn.Name.Name)
-					}
+	for _, name := range paths {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil {
+				continue
+			}
+			for _, result := range fn.Type.Results.List {
+				if returnsBareEstimate(result.Type) {
+					t.Errorf("%s: exported %s returns a single Estimate; there must be no way "+
+						"to price one deployment in isolation", name, fn.Name.Name)
 				}
 			}
 		}
