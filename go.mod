@@ -1,6 +1,6 @@
 module github.com/lgreene/gravix-dashboards
 
-go 1.24.9
+go 1.25
 
 require github.com/gravix-io/gravix-go v0.0.0
 
@@ -15,6 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/influxdata/tdigest v0.0.1
 	github.com/jackc/pgx/v5 v5.7.4
+	github.com/klauspost/compress v1.20.2
 	github.com/montanaflynn/stats v0.7.1
 	github.com/parquet-go/parquet-go v0.27.0
 	github.com/prometheus/client_golang v1.23.2
@@ -27,7 +28,7 @@ require (
 )
 
 require (
-	github.com/andybalholm/brotli v1.1.1 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.21 // indirect
@@ -55,7 +56,6 @@ require (
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
-	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

@@ -108,6 +108,7 @@ Nothing below has shipped in a tagged release yet.
 - **Every `ee/` route now requires an admin's token** — the Enterprise gateway mounted its extensions with no authentication, and `ee/intelligence` read whichever tenant a request named. Never in a release, and the OSS build mounts nothing (F-080)
 - **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
+- **GO-2026-6865 and GO-2026-6888** — bumped klauspost/compress to v1.20.2 and andybalholm/brotli to v1.2.7, both reached through the Parquet writer. The compress fix requires Go 1.25, so `go.mod` now declares `go 1.25` and `gravix doctor` checks for 1.25 rather than 1.24
 - **The dashboard was served an unrestricted API key before login** — `dashboard_config.js` now carries a key scoped to `admin:read`, and existing installs are narrowed on their next boot (SD-013)
 
 ## [1.0.0] - 2026-03-23
