@@ -143,7 +143,7 @@ func TestReportPreExistingDataGaps(t *testing.T) {
 // text ban forbids exactly that. Recorded as F-009.
 func TestSuiteNeedsNoDocker(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, packageDir, nil, 0)
+	pkgs, err := parseDir(fset, packageDir, nil, 0)
 	if err != nil {
 		t.Fatalf("parse %s: %v", packageDir, err)
 	}
@@ -271,7 +271,7 @@ func TestSuiteRuntimeBudget(t *testing.T) {
 // and useless.
 func TestNoSkippedTests(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, packageDir, nil, 0)
+	pkgs, err := parseDir(fset, packageDir, nil, 0)
 	if err != nil {
 		t.Fatalf("parse %s: %v", packageDir, err)
 	}
@@ -339,7 +339,7 @@ func enclosingFunc(file *ast.File, pos token.Pos) string {
 // finds it in the source, where it is cheaper.
 func TestNoParallelWithChdir(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, packageDir, nil, 0)
+	pkgs, err := parseDir(fset, packageDir, nil, 0)
 	if err != nil {
 		t.Fatalf("parse %s: %v", packageDir, err)
 	}
@@ -402,4 +402,49 @@ func TestSchemasCoverageUnchanged(t *testing.T) {
 	if pct < 100.0 {
 		t.Errorf("AC-13 FAILED: schemas/ coverage is %.1f%%, CLAUDE.md requires 100%%", pct)
 	}
+}
+
+// parsedPackage stands in for ast.Package: one package clause's files, keyed by
+// path, as parser.ParseDir returned them.
+type parsedPackage struct {
+	Files map[string]*ast.File
+}
+
+// parseDir does what parser.ParseDir did. staticcheck reports ParseDir as
+// deprecated from Go 1.25 (SA1019), which go.mod now declares. It parses every
+// .go file in dir that filter accepts (all of them when filter is nil, so test
+// files are included, as these checks need) and groups the files by package
+// name, so callers iterate exactly as before.
+func parseDir(fset *token.FileSet, dir string, filter func(os.FileInfo) bool, mode parser.Mode) (map[string]parsedPackage, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	pkgs := map[string]parsedPackage{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		if filter != nil {
+			info, err := e.Info()
+			if err != nil {
+				return nil, err
+			}
+			if !filter(info) {
+				continue
+			}
+		}
+		path := filepath.Join(dir, e.Name())
+		f, err := parser.ParseFile(fset, path, nil, mode)
+		if err != nil {
+			return nil, err
+		}
+		pkg, ok := pkgs[f.Name.Name]
+		if !ok {
+			pkg = parsedPackage{Files: map[string]*ast.File{}}
+			pkgs[f.Name.Name] = pkg
+		}
+		pkg.Files[path] = f
+	}
+	return pkgs, nil
 }

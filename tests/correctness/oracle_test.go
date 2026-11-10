@@ -177,7 +177,7 @@ func TestOracleIsIndependent(t *testing.T) {
 	dir := fixturesDir(t)
 
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, nil, parser.ImportsOnly)
+	pkgs, err := parseDir(fset, dir, nil, parser.ImportsOnly)
 	if err != nil {
 		t.Fatalf("parse %s: %v", dir, err)
 	}
