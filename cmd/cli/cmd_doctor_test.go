@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func testConfig(t *testing.T) DoctorConfig {
 		APIKey:       "grvx_test",
 		HTTPClient:   &http.Client{Timeout: time.Second},
 		LookPath:     func(string) (string, error) { return "/usr/bin/docker", nil },
-		RunCommand:   func(string, ...string) ([]byte, error) { return []byte("go version go1.24.9 linux/amd64"), nil },
+		RunCommand:   func(string, ...string) ([]byte, error) { return []byte("go version go1.26.10 linux/amd64"), nil },
 		Stat:         func(string) (os.FileInfo, error) { return nil, nil },
 		Glob:         func(string) ([]string, error) { return []string{"a.parquet"}, nil },
 	}
@@ -117,10 +118,11 @@ func TestCheckGoVersion(t *testing.T) {
 		output string
 		want   DoctorStatus
 	}{
-		{"go version go1.24.9 linux/amd64", DoctorOK},
 		{"go version go1.25.0 darwin/arm64", DoctorOK},
+		{"go version go1.26.10 linux/amd64", DoctorOK},
 		{"go version go1.30.1 linux/amd64", DoctorOK},
 		{"go version go2.0.0 linux/amd64", DoctorOK},
+		{"go version go1.24.9 linux/amd64", DoctorFail},
 		{"go version go1.23.8 linux/amd64", DoctorFail},
 		{"go version go1.21.0 linux/amd64", DoctorFail},
 		{"go version go1.9.7 linux/amd64", DoctorFail},
@@ -135,7 +137,7 @@ func TestCheckGoVersion(t *testing.T) {
 		}
 	}
 
-	// 1.9 must not compare greater than 1.24 — the trap of comparing versions
+	// 1.9 must not compare greater than 1.25 — the trap of comparing versions
 	// as text rather than as numbers.
 	cfg.RunCommand = func(string, ...string) ([]byte, error) {
 		return []byte("go version go1.9.7 linux/amd64"), nil
@@ -156,6 +158,23 @@ func TestCheckGoVersion(t *testing.T) {
 	}
 	if !strings.Contains(got.Detail, "could not parse") {
 		t.Errorf("AC-3 FAILED: detail is %q", got.Detail)
+	}
+}
+
+// The doctor states go.mod's requirement, so it must be go.mod's requirement.
+// It said 1.24 by hand; when a dependency raised go.mod to 1.25, a 1.24
+// toolchain would have been told it was fine and then failed `go build`.
+func TestMinGoMatchesGoMod(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^go 1\.(\d+)`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("go.mod has no `go 1.N` directive")
+	}
+	if want := fmt.Sprintf("%d", minGoMinor); string(m[1]) != want {
+		t.Errorf("go.mod requires go 1.%s but the doctor checks for 1.%s; update minGoMinor", m[1], want)
 	}
 }
 

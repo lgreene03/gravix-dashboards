@@ -134,9 +134,15 @@ func checkDockerCLI(cfg DoctorConfig) DoctorCheck {
 
 var goVersionRe = regexp.MustCompile(`go(\d+)\.(\d+)`)
 
+// minGoMinor is the minor version in go.mod's go directive: the oldest Go 1.x
+// that compiles the source. It rose from 24 to 25 when klauspost/compress
+// v1.20.2, the only release that fixes GO-2026-6865, started requiring Go 1.25.
+// TestMinGoMatchesGoMod fails if the two drift apart.
+const minGoMinor = 25
+
 func checkGoVersion(cfg DoctorConfig) DoctorCheck {
 	const name = "Go toolchain (source builds only)"
-	const fix = "install Go 1.24 or newer: https://go.dev/dl/"
+	fix := fmt.Sprintf("install Go 1.%d or newer: https://go.dev/dl/", minGoMinor)
 
 	out, err := cfg.RunCommand("go", "version")
 	if err != nil {
@@ -153,12 +159,12 @@ func checkGoVersion(cfg DoctorConfig) DoctorCheck {
 	minor, _ := strconv.Atoi(m[2])
 	parsed := fmt.Sprintf("%d.%d", major, minor)
 
-	if major < 1 || (major == 1 && minor < 24) {
+	if major < 1 || (major == 1 && minor < minGoMinor) {
 		return DoctorCheck{name, DoctorFail,
-			fmt.Sprintf("go %s is older than go.mod's requirement of 1.24", parsed), fix}
+			fmt.Sprintf("go %s is older than go.mod's requirement of 1.%d", parsed, minGoMinor), fix}
 	}
 	return DoctorCheck{name, DoctorOK,
-		fmt.Sprintf("go %s satisfies go.mod's 1.24 requirement", parsed), ""}
+		fmt.Sprintf("go %s satisfies go.mod's 1.%d requirement", parsed, minGoMinor), ""}
 }
 
 // ─── 3 ───
