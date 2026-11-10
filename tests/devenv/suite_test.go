@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lgreene/gravix-dashboards/pkg/repotree"
 )
 
 // budget is the fast suite's wall-clock budget, from GRVX-1206 §5.1.
@@ -85,6 +87,11 @@ func testFiles(t *testing.T) []string {
 		if d.IsDir() {
 			switch d.Name() {
 			case ".git", "node_modules", "ee", "data":
+				return filepath.SkipDir
+			}
+			// A nested worktree's tests are another branch's: counting them
+			// took the skip count from 29 to 111 in a checkout hosting five.
+			if repotree.IsNestedCheckout(root, path) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -651,7 +658,7 @@ func TestNoCommittedBinaries(t *testing.T) {
 			return nil // an unreadable path is not this test's problem
 		}
 		if d.IsDir() {
-			if skipWalk[d.Name()] {
+			if skipWalk[d.Name()] || repotree.IsNestedCheckout(root, path) {
 				return filepath.SkipDir
 			}
 			return nil

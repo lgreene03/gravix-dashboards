@@ -18,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lgreene/gravix-dashboards/pkg/repotree"
 )
 
 const repoRoot = "../.."
@@ -606,6 +608,9 @@ func TestNoCoreFilesModified(t *testing.T) {
 			switch rel {
 			case "ee", ".git", "node_modules", "bin", "data", "docs":
 				return filepath.SkipDir
+			}
+			if repotree.IsNestedCheckout(repoRoot, path) {
+				return filepath.SkipDir // another branch's files, not this checkout's
 			}
 			return nil
 		}

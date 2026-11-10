@@ -88,9 +88,46 @@ func TestPagesGeneratedFromBoundary(t *testing.T) {
 	}
 }
 
+// pricingSandbox copies the pricing generator and the three files it reads and
+// writes into a temporary tree with the repository's layout, and returns that
+// tree's root. The script finds its files relative to its own location, so run
+// from the copy it touches only the copy.
+//
+// The tests below used to edit the real files and restore them in t.Cleanup.
+// That is not safe: `go test ./...` runs packages concurrently, so pkg/boundary,
+// cmd/checkboundary and others read docs/oss/boundary.yaml while it said
+// ingestion-http was ee, and failed. Worse, two overlapping runs in one checkout
+// (or one run killed before its cleanup) each saved the other's mutation as the
+// "original" and wrote it back, leaving the tracked file wrong for every later
+// run. A test must not write to the checkout it is testing.
+func pricingSandbox(t *testing.T) string {
+	t.Helper()
+	root := repoRoot(t)
+	sandbox := t.TempDir()
+	for _, rel := range []string{
+		filepath.Join("scripts", "gen_pricing_page.py"),
+		filepath.Join("docs", "oss", "boundary.yaml"),
+		filepath.Join("docs-site", "docs", "what-stays-free.md"),
+		filepath.Join("docs-site", "docs", "pricing.md"),
+	} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("reading %s: %v", rel, err)
+		}
+		dst := filepath.Join(sandbox, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatalf("creating %s: %v", filepath.Dir(dst), err)
+		}
+		if err := os.WriteFile(dst, body, 0o644); err != nil {
+			t.Fatalf("copying %s: %v", rel, err)
+		}
+	}
+	return sandbox
+}
+
 // AC-3. A stale page fails, which is what makes AC-2 mean anything.
 func TestStalePricingPageFails(t *testing.T) {
-	root := repoRoot(t)
+	root := pricingSandbox(t)
 	script := filepath.Join(root, "scripts", "gen_pricing_page.py")
 	target := filepath.Join(root, "docs-site", "docs", "what-stays-free.md")
 
@@ -98,8 +135,6 @@ func TestStalePricingPageFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the free page: %v", err)
 	}
-	t.Cleanup(func() { _ = os.WriteFile(target, original, 0o644) })
-
 	if err := os.WriteFile(target, append(original, []byte("\nhand-edited\n")...), 0o644); err != nil {
 		t.Fatalf("staling the page: %v", err)
 	}
@@ -235,42 +270,38 @@ func boundaryCaps(t *testing.T) (core, ee []string) {
 // AC-4. The consequence that makes the whole apparatus worth having: a
 // capability cannot be moved to ee/ without appearing on the paid list and
 // disappearing from the free list on the next commit. Proven by actually moving
-// one and regenerating, then restoring.
+// one and regenerating, in a copy of the files (see pricingSandbox).
 func TestBoundaryChangeUpdatesBothLists(t *testing.T) {
-	root := repoRoot(t)
+	root := pricingSandbox(t)
 	boundary := filepath.Join(root, "docs", "oss", "boundary.yaml")
 	freePath := filepath.Join(root, "docs-site", "docs", "what-stays-free.md")
 	pricingPath := filepath.Join(root, "docs-site", "docs", "pricing.md")
 
-	originals := map[string][]byte{}
-	for _, p := range []string{boundary, freePath, pricingPath} {
-		body, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatalf("reading %s: %v", p, err)
-		}
-		originals[p] = body
+	raw, err := os.ReadFile(boundary)
+	if err != nil {
+		t.Fatalf("reading boundary.yaml: %v", err)
 	}
-	t.Cleanup(func() {
-		for p, body := range originals {
-			_ = os.WriteFile(p, body, 0o644)
-		}
-	})
 
 	// Pick a real core capability and move it, rather than inventing one — an
 	// invented entry would not prove the generator reads the same file the
 	// boundary checker does.
 	const moved = "ingestion-http"
-	src := string(originals[boundary])
+	src := string(raw)
 	idx := strings.Index(src, "- id: "+moved)
 	if idx < 0 {
 		t.Fatalf("boundary.yaml no longer has %q; pick another capability", moved)
 	}
-	rest := src[idx:]
-	relPlacement := strings.Index(rest, "placement: core")
-	if relPlacement < 0 {
-		t.Fatalf("%q is not placement: core", moved)
+	// Only this entry, up to the next one. Searching to the end of the file
+	// meant that once ingestion-http was already ee, the next core capability
+	// was moved instead and the test still passed.
+	entry := src[idx:]
+	if next := strings.Index(entry[1:], "- id: "); next >= 0 {
+		entry = entry[:next+1]
 	}
-	mutated := src[:idx] + strings.Replace(rest, "placement: core", "placement: ee", 1)
+	if !strings.Contains(entry, "placement: core") {
+		t.Fatalf("%q is not placement: core in docs/oss/boundary.yaml", moved)
+	}
+	mutated := src[:idx] + strings.Replace(entry, "placement: core", "placement: ee", 1) + src[idx+len(entry):]
 	if err := os.WriteFile(boundary, []byte(mutated), 0o644); err != nil {
 		t.Fatalf("mutating boundary.yaml: %v", err)
 	}

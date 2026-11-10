@@ -367,14 +367,31 @@ func requirePython(t *testing.T, modules ...string) string {
 	}
 	candidates = append(candidates, "python3")
 
+	// The probe runs from an empty directory, not from here. With `-c` Python
+	// puts the working directory on sys.path, and this directory holds example
+	// folders named flask/ and django/ and fastapi/: from here `import flask`
+	// succeeded by importing the example folder as a namespace package, so the
+	// test ran an example whose framework was not installed and failed instead of
+	// skipping. The example itself runs as `python3 flask/app.py`, which puts
+	// flask/ on sys.path, not this directory, so a neutral directory is the
+	// faithful probe.
+	neutral := t.TempDir()
 	for _, python := range candidates {
 		if _, err := exec.LookPath(python); err != nil {
 			if _, statErr := os.Stat(python); statErr != nil {
 				continue
 			}
 		}
+		if strings.ContainsRune(python, filepath.Separator) {
+			// A relative path would otherwise resolve against the probe's directory.
+			if abs, err := filepath.Abs(python); err == nil {
+				python = abs
+			}
+		}
 		args := append([]string{"-c"}, "import "+strings.Join(modules, ", "))
-		if err := exec.Command(python, args...).Run(); err == nil {
+		probe := exec.Command(python, args...)
+		probe.Dir = neutral
+		if err := probe.Run(); err == nil {
 			return python
 		}
 	}

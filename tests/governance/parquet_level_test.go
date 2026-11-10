@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/lgreene/gravix-dashboards/pkg/repotree"
 )
 
 // zstdLevel matches the level expression in a parquet-go zstd codec literal.
@@ -37,6 +39,9 @@ func TestEveryParquetWriterUsesTheRecomputeLevel(t *testing.T) {
 			switch d.Name() {
 			case ".git", "node_modules", "vendor", "testdata":
 				return filepath.SkipDir
+			}
+			if repotree.IsNestedCheckout(root, path) {
+				return filepath.SkipDir // another branch's writers, not this checkout's
 			}
 			return nil
 		}

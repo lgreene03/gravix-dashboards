@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/lgreene/gravix-dashboards/pkg/boundary"
+	"github.com/lgreene/gravix-dashboards/pkg/repotree"
 )
 
 // eeImportPrefix identifies an import of the commercial tree.
@@ -95,7 +96,9 @@ func checkImports(root string) ([]Violation, error) {
 			return relErr
 		}
 		if d.IsDir() {
-			if excludedDirs[d.Name()] || isExcludedPath(rel) {
+			// A worktree nested in this checkout is another branch's code, and
+			// its testdata/ is not at the path isExcludedPath knows.
+			if excludedDirs[d.Name()] || isExcludedPath(rel) || repotree.IsNestedCheckout(root, path) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lgreene/gravix-dashboards/pkg/repotree"
 )
 
 // verifyAdopters runs the real script against a file and returns output and code.
@@ -186,6 +188,9 @@ func TestNoInferredAdopters(t *testing.T) {
 			switch d.Name() {
 			case ".git", "node_modules", "data", "dist":
 				return filepath.SkipDir
+			}
+			if repotree.IsNestedCheckout(root, path) {
+				return filepath.SkipDir // another branch's files, not this checkout's
 			}
 			return nil
 		}

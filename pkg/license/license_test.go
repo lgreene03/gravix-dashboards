@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lgreene/gravix-dashboards/pkg/repotree"
 )
 
 // checkTime is the clock every fixture assertion uses: after valid_pro.token's
@@ -368,6 +370,11 @@ func TestDevPrivateKeyIsNeverInNonTestCode(t *testing.T) {
 		if d.IsDir() {
 			switch d.Name() {
 			case ".git", "node_modules", "data", "dist", "bin":
+				return filepath.SkipDir
+			}
+			// A nested worktree carries its own copy of the two allowed files,
+			// at paths the allowance below does not recognise.
+			if repotree.IsNestedCheckout(root, path) {
 				return filepath.SkipDir
 			}
 			return nil

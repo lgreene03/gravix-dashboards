@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/lgreene/gravix-dashboards/pkg/boundary"
+	"github.com/lgreene/gravix-dashboards/pkg/repotree"
 )
 
 // Evidence is one year's measured record against charter §5.
@@ -207,6 +208,10 @@ func CoreToEEImports(repoPath string) (int, error) {
 			switch {
 			case rel == "ee" || strings.HasPrefix(rel, "ee/"),
 				info.Name() == ".git", info.Name() == "node_modules":
+				return filepath.SkipDir
+			case repotree.IsNestedCheckout(repoPath, path):
+				// A nested worktree's ee/ is not at rel "ee/", so its files
+				// would be counted as core files importing ee/.
 				return filepath.SkipDir
 			}
 			return nil
