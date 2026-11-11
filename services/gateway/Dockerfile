@@ -8,7 +8,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o gateway ./services/gateway
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 # OCI image labels for provenance and registry metadata
 LABEL org.opencontainers.image.title="gravix-gateway" \
@@ -16,6 +16,11 @@ LABEL org.opencontainers.image.title="gravix-gateway" \
       org.opencontainers.image.source="https://github.com/lgreene03/gravix-dashboards" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Gravix"
+
+# Take the fixes Alpine has published since the base image was cut. The tag is a
+# floating minor, so a rebuild already moves; this closes the gap between point
+# releases, which is where zlib 1.4-r0 sat while image-scan was red (F-084).
+RUN apk upgrade --no-cache
 
 RUN addgroup -S gravix && adduser -S gravix -G gravix
 WORKDIR /app
