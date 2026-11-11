@@ -589,6 +589,12 @@ jobs:
       contents: read
       packages: read
       security-events: write
+    env:
+      # The scanner is pinned, as the action is below, so a new Trivy cannot
+      # change what the gate fails on between one push and the next. The
+      # vulnerability database still updates daily, which is the point of
+      # scanning. Move this deliberately, in its own change.
+      TRIVY_VERSION: v0.70.0
     strategy:
       # Scan every image. One image's findings cancelling the other three
       # scans hides what the other three hold.
@@ -604,7 +610,7 @@ jobs:
       # a single package, and main's CI was red for a reason that was not a
       # vulnerability (F-078).
       - name: Name the image docker-build pushed
-        run: echo "IMAGE_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+        run: echo "IMAGE_REF=${REGISTRY}/${IMAGE_PREFIX}-${{ matrix.image }}:sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -613,21 +619,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Trivy vulnerability scanner
-        # 0.28.0 stopped resolving: the action now publishes v-prefixed tags,
-        # and this one is bound to an immutable release (F-026).
-        uses: aquasecurity/trivy-action@v0.36.0
+      # The gate, as a table so that a failure prints its findings in this log.
+      #
+      # It used to be one step with format sarif. With sarif the action drops
+      # the severity input unless limit-severities-for-sarif is set ("Building
+      # SARIF report with all severities"), so the job failed on a fixable
+      # finding of any severity: load-generator failed on one MEDIUM zlib CVE
+      # alone (F-084). The gate and the report are separate steps for that.
+      - name: Fail on fixable CRITICAL and HIGH findings
+        # v0.36.0, by commit. A tag can be moved: in March 2026 all but one of
+        # this action's tags were force-pushed to malicious commits
+        # (CVE-2026-33634). This commit is the immutable v0.36.0 release.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.image }}:${{ env.IMAGE_TAG }}
-          format: 'sarif'
-          output: 'trivy-${{ matrix.image }}.sarif'
-          severity: 'CRITICAL,HIGH'
+          image-ref: ${{ env.IMAGE_REF }}
+          version: ${{ env.TRIVY_VERSION }}
+          format: table
+          severity: CRITICAL,HIGH
           # Fail on a CRITICAL or HIGH finding that has a fixed version to move
-          # to, which is a finding someone can act on. One with no fix yet goes
-          # to the Security tab through the SARIF upload below, and fails
-          # nothing (DD-036).
+          # to, which is a finding someone can act on. One with no fix yet would
+          # hold the check red with nothing to do (DD-036).
           ignore-unfixed: true
           exit-code: '1'
+
+      # The report: every finding, at every severity, fixed or not, for the
+      # Security tab. It never fails the job; the gate above decides that.
+      # Before F-084 ignore-unfixed applied to the SARIF too, so a finding with
+      # no fix never reached the Security tab, whatever DD-036 said.
+      - name: Write every finding as SARIF
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          version: ${{ env.TRIVY_VERSION }}
+          format: sarif
+          output: trivy-${{ matrix.image }}.sarif
+          exit-code: '0'
 
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
