@@ -136,9 +136,11 @@ var goVersionRe = regexp.MustCompile(`go(\d+)\.(\d+)`)
 
 // minGoMinor is the minor version in go.mod's go directive: the oldest Go 1.x
 // that compiles the source. It rose from 24 to 25 when klauspost/compress
-// v1.20.2, the only release that fixes GO-2026-6865, started requiring Go 1.25.
-// TestMinGoMatchesGoMod fails if the two drift apart.
-const minGoMinor = 25
+// v1.20.2, the only release that fixes GO-2026-6865, started requiring Go 1.25,
+// and from 25 to 26 when golang.org/x/crypto v0.58.0 and x/net v0.62.0, which
+// fix the HIGH findings that held image-scan red (F-084), started requiring
+// Go 1.26. TestMinGoMatchesGoMod fails if the two drift apart.
+const minGoMinor = 26
 
 func checkGoVersion(cfg DoctorConfig) DoctorCheck {
 	const name = "Go toolchain (source builds only)"

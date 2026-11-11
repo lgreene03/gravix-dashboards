@@ -118,10 +118,11 @@ func TestCheckGoVersion(t *testing.T) {
 		output string
 		want   DoctorStatus
 	}{
-		{"go version go1.25.0 darwin/arm64", DoctorOK},
+		{"go version go1.26.0 darwin/arm64", DoctorOK},
 		{"go version go1.26.10 linux/amd64", DoctorOK},
 		{"go version go1.30.1 linux/amd64", DoctorOK},
 		{"go version go2.0.0 linux/amd64", DoctorOK},
+		{"go version go1.25.14 linux/amd64", DoctorFail},
 		{"go version go1.24.9 linux/amd64", DoctorFail},
 		{"go version go1.23.8 linux/amd64", DoctorFail},
 		{"go version go1.21.0 linux/amd64", DoctorFail},
