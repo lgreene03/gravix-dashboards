@@ -60,6 +60,7 @@ Nothing below has shipped in a tagged release yet.
 
 ### Fixed
 
+- **image-scan failed every push to `main` for over a month, and no required check saw it.** With SARIF output trivy-action drops the severity filter, so the gate failed on fixable findings of any severity and printed none of them, and `ci-summary` did not wait on it. The gate is now its own step that fails only on fixable CRITICAL and HIGH findings and prints them, a second step reports every finding to the Security tab, and pull requests build and scan each image too, with `ci-summary` waiting on the result. trivy-action is pinned by commit and Trivy by version (F-084, DD-045)
 - **With network policy on, production cut the gateway off, and four CronJobs with it** — the default deny had no rule for the gateway, and the rollups labelled their CronJobs but not their pods, so the jobs' rule matched nothing. Each workload now has an allow-policy, and CI fails a render that leaves one out (F-083)
 - **The Helm chart's analytics path had never worked** — its rollups ran single-tenant and could not open the Postgres tenant database production uses, its Trino could not start, and nothing created Trino's tables or the views Cube reads. The jobs now read the tenant database, Trino is 435 as in Compose, and a `trino-catalog-sync` CronJob creates and maintains the tables and views (F-079, DD-044)
 - **On the full stack the gateway read its own disk** — facts and the warehouse are in MinIO, so percentiles, lineage and exports found nothing for any tenant. The gateway now reads the same store as ingestion and the rollups (F-081)
@@ -104,6 +105,8 @@ Nothing below has shipped in a tagged release yet.
 
 ### Security
 
+- **Seventeen HIGH findings in Go modules linked into the images.** None was reachable. golang.org/x/crypto v0.48.0 (ten) and golang.org/x/net v0.49.0 (seven) move to v0.58.0 and v0.62.0, and x/sys to v0.50.0. x/crypto v0.58.0 requires Go 1.26, so `go.mod` now declares `go 1.26.0`, past the 1.25 below, and `gravix doctor` checks for 1.26 (F-084)
+- **The service images run on Alpine 3.24 and take Alpine's fixes when they are built.** Alpine 3.21 reached end of life on 1 November 2026. Each runtime stage now runs `apk upgrade`, which picks up zlib 1.4-r0 for CVE-2026-4738 ahead of the next base image (F-084)
 - **Images build on Go 1.26** — every service image was built with Go 1.24, and neither 1.24 nor 1.25 gets security fixes any more; govulncheck found eleven reachable standard-library vulnerabilities. CI now tests 1.26 and 1.27 (F-082)
 - **Every `ee/` route now requires an admin's token** — the Enterprise gateway mounted its extensions with no authentication, and `ee/intelligence` read whichever tenant a request named. Never in a release, and the OSS build mounts nothing (F-080)
 - **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
