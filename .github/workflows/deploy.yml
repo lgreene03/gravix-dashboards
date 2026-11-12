@@ -31,10 +31,19 @@ jobs:
   # ─── Determine deployment parameters ───
   prepare:
     runs-on: ubuntu-latest
-    # Only run if CI succeeded (workflow_run) or manual trigger (workflow_dispatch)
+    # Only run if CI succeeded on a push to this repository's main
+    # (workflow_run) or on a manual trigger (workflow_dispatch).
+    #
+    # The `branches: [main]` filter above matches the head branch's *name*, so on
+    # its own it also matches a pull request from a fork whose branch is called
+    # "main", and this job would then run in this repository's context with its
+    # secrets. Requiring a push event from this repository closes that path.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     outputs:
       environment: ${{ steps.params.outputs.environment }}
       image_tag: ${{ steps.params.outputs.image_tag }}
