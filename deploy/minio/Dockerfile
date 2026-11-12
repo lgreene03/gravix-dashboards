@@ -6,7 +6,12 @@
 # stack builds the same pinned releases from source instead, which takes about
 # two minutes on a 4-core machine. MinIO is AGPL-3.0; this builds it for a local
 # stack and distributes nothing.
-FROM golang:1.24-alpine AS build
+#
+# The compiler is Go 1.26.11, not 1.24: no 1.24 or 1.25 release gets security
+# fixes, and the server this builds is an HTTP/1 server exposed to GO-2026-6859
+# (F-084). Both pinned releases compile unchanged under 1.26.11. The tag names
+# the version; the digest pins the bytes.
+FROM golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS build
 ARG MINIO_RELEASE=RELEASE.2024-03-15T01-07-19Z
 ARG MC_RELEASE=RELEASE.2024-03-13T23-51-57Z
 ENV CGO_ENABLED=0

@@ -2,6 +2,10 @@ module github.com/lgreene/gravix-datasource
 
 go 1.26.5
 
+// Builds with Go 1.26.11, free of GO-2026-6859 (F-084), whatever older go
+// command starts the build under the default GOTOOLCHAIN=auto.
+toolchain go1.26.11
+
 require (
 	github.com/grafana/grafana-plugin-sdk-go v0.296.4
 	github.com/trinodb/trino-go-client v0.333.0

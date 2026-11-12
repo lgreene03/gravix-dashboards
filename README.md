@@ -159,7 +159,7 @@ None of the paid features exist yet. They are Phase 13. See
 ### Prerequisites
 
 - Docker and Docker Compose
-- Go 1.26+ for local development and tests
+- Go 1.26.11+ (or 1.27.4+) for local development and tests; an older Go fetches 1.26.11 itself through `go.mod`'s toolchain line
 
 ### 1. Configure
 
