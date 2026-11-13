@@ -2,6 +2,12 @@ module github.com/lgreene/gravix-dashboards
 
 go 1.25
 
+// The go line is the oldest language version the source compiles under
+// (F-082). The toolchain line is the oldest Go that builds it free of
+// GO-2026-6859 (F-084): under the default GOTOOLCHAIN=auto, an older go
+// command, including CI's cached 1.26 patch, fetches and uses it.
+toolchain go1.26.11
+
 require github.com/gravix-io/gravix-go v0.0.0
 
 require (

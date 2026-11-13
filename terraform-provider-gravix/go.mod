@@ -2,6 +2,10 @@ module github.com/lgreene/terraform-provider-gravix
 
 go 1.22
 
+// Builds with Go 1.26.11, free of GO-2026-6859 (F-084), whatever older go
+// command starts the build under the default GOTOOLCHAIN=auto.
+toolchain go1.26.11
+
 require github.com/hashicorp/terraform-plugin-sdk/v2 v2.33.0
 
 require (
