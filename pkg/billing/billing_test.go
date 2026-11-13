@@ -49,6 +49,50 @@ func TestFreePriceID(t *testing.T) {
 	}
 }
 
+func TestAnnualPriceIDFor(t *testing.T) {
+	plans := []PlanConfig{
+		{PriceID: "price_team_monthly", AnnualPriceID: "price_team_annual", PlanName: "team"},
+		{PriceID: "price_free_monthly", PlanName: "free"},
+	}
+	svc := NewStripeService("", "", plans)
+
+	tests := []struct {
+		name             string
+		monthlyPriceID   string
+		expectedAnnualID string
+	}{
+		{
+			name:             "configured annual price",
+			monthlyPriceID:   "price_team_monthly",
+			expectedAnnualID: "price_team_annual",
+		},
+		{
+			name:             "plan with no annual price",
+			monthlyPriceID:   "price_free_monthly",
+			expectedAnnualID: "",
+		},
+		{
+			name:             "unknown price ID",
+			monthlyPriceID:   "price_unknown",
+			expectedAnnualID: "",
+		},
+		{
+			name:             "empty price ID",
+			monthlyPriceID:   "",
+			expectedAnnualID: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := svc.AnnualPriceIDFor(tt.monthlyPriceID)
+			if got != tt.expectedAnnualID {
+				t.Errorf("AnnualPriceIDFor(%q) = %q, want %q", tt.monthlyPriceID, got, tt.expectedAnnualID)
+			}
+		})
+	}
+}
+
 func TestDefaultPlans(t *testing.T) {
 	plans := DefaultPlans("pf", "pt", "pb", "ps", "pe")
 	if len(plans) != 5 {
