@@ -4934,3 +4934,49 @@ allow-policy selects. On the old chart it names all six.
 External destinations are allowed by port, not by address, as the chart already did for S3.
 Narrowing them to addresses is per install and is left to the operator.
 
+## F-084: everything but `vuln` built with a Go that GO-2026-6859 affects
+
+**Found by** GO-2026-6859 failing govulncheck in a sibling repository, then the same scan run here on the toolchain CI actually uses
+**Affects** CI and `release.yml` (the runner's cached go1.26.10), the four service images and the Action image (an unpinned `golang:1.26-alpine`), the dev container, and the local MinIO build (`golang:1.24-alpine`)
+**Severity** high: a reachable crash in the standard library's HTTP/1 server
+**Status** fixed
+
+GO-2026-6859 (CVE-2026-97054), published 2026-11-11: when `MaxBytesReader`'s limit is exceeded,
+`net/http` sets `Connection: close` without synchronisation, so a handler that reads the body while
+it writes a header can crash the server with a runtime panic. Every Go release before go1.26.11 is
+affected, and so are go1.27.0 to go1.27.3. There is no 1.25 fix and there will not be one, because
+1.25 is out of support. On go1.26.10, govulncheck finds it reachable from ingestion's
+`ListenAndServe`, the gateway's `ServeMux`, and `maxBytesReader.Read` itself.
+
+`vuln` stayed green only because it asks setup-go for the newest 1.26 patch (F-082), and on the
+day the advisory was published that was already 1.26.11. No other job asks. They take whatever
+1.26 the runner has cached, which was go1.26.10, and that includes `release.yml`, which builds,
+signs and publishes the six release binaries. The image builds named `golang:1.26-alpine` with no digest, so they used
+whichever 1.26 image the builder had cached. The local MinIO build was still on 1.24, which F-082
+left for later.
+
+What changed. `go.mod` keeps `go 1.25`: it is still the oldest language version the source compiles
+under (F-082), so `gravix doctor`, `minGoMinor` and the README badge are unchanged. It gains
+`toolchain go1.26.11`. setup-go leaves `GOTOOLCHAIN` at `auto` here, so every job whose
+`go-version: '1.26'` resolves to an older patch now fetches 1.26.11 and builds with it, the release
+build included, and so does a contributor's older go command. Every `golang` builder image, the dev
+container's included, names 1.26.11 and is pinned by digest. The pinned `minio` and `mc` releases
+compile unchanged under go1.26.11 for linux/amd64, so the MinIO build moves as well, and
+`docker-smoke` boots it. The three standalone modules that build a program, the Grafana plugin, the
+Terraform provider and the Gin recipe, gain the same toolchain line, each keeping its own go line.
+
+Not changed, and why. The `test` matrix's 1.27 leg runs go1.27.3, which is affected; it only runs
+tests, and a toolchain line cannot raise a newer minor. `sdk/go` and `sdk/go/otel` are libraries:
+their consumers' toolchain decides what gets built, a toolchain line in a dependency is ignored,
+and `publish-sdks.yml` tests the Go SDK on 1.22 on purpose, which a toolchain line would quietly
+undo. A digest pin does not follow new patch releases by itself: the next standard-library fix
+needs this same change, and this repository has no Dependabot or Renovate configuration that would
+propose it.
+
+Found alongside, and left open. `vuln` scans only the root module, so the standalone modules are
+never scanned. With the standard library fixed, govulncheck still reports reachable advisories in
+their dependencies: the Grafana plugin seven (golang.org/x/net, google.golang.org/grpc and
+klauspost/compress, the last being GO-2026-6865, which the root module fixed in #65), the
+Terraform provider eleven (x/net, x/text and grpc), the Gin recipe eight (x/net and x/text), and
+`sdk/go/otel` three (go.opentelemetry.io/otel/sdk). Moving those dependencies is a change of its
+own for each module, and adding the modules to `vuln` should come with it.

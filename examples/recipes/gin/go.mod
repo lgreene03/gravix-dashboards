@@ -5,6 +5,10 @@ module gravix-recipe-gin
 
 go 1.24
 
+// Builds with Go 1.26.11, free of GO-2026-6859 (F-084), whatever older go
+// command starts the build under the default GOTOOLCHAIN=auto.
+toolchain go1.26.11
+
 require (
 	github.com/gin-gonic/gin v1.10.1
 	github.com/gravix-io/gravix-go v0.0.0

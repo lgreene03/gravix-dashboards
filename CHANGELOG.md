@@ -109,6 +109,7 @@ Nothing below has shipped in a tagged release yet.
 - **Cube applied no tenant filter** — `cube.js` handed Cube its security context in a field Cube ignores, so on a stack with more than one tenant every signed-in dashboard read every tenant's data. Cube now receives the tenant, and the onboarding gate checks on every pull request that a tenant with no data sees none (F-076)
 - **GO-2026-5764** — bumped the AWS SDK out of a reachable denial of service
 - **GO-2026-6865 and GO-2026-6888** — bumped klauspost/compress to v1.20.2 and andybalholm/brotli to v1.2.7, both reached through the Parquet writer. The compress fix requires Go 1.25, so `go.mod` now declares `go 1.25` and `gravix doctor` checks for 1.25 rather than 1.24
+- **GO-2026-6859**: Go 1.26.11 is now the toolchain for every build. The advisory is a crash in `net/http`'s `MaxBytesReader`, reached from ingestion, the gateway and every other HTTP server here, and fixed only in go1.26.11 and go1.27.4. CI ran the runner's cached go1.26.10, and the images built on whatever `golang:1.26-alpine` the builder had cached. `go.mod` gains `toolchain go1.26.11` (its `go 1.25` line is unchanged), and every Go builder image, the dev container and the local MinIO build are pinned to 1.26.11 by digest (F-084)
 - **The dashboard was served an unrestricted API key before login** — `dashboard_config.js` now carries a key scoped to `admin:read`, and existing installs are narrowed on their next boot (SD-013)
 
 ## [1.0.0] - 2026-03-23
