@@ -4,7 +4,10 @@
 # bootstrap stack runs from docker-compose.bootstrap.yml when you want one; the
 # full stack wants about 7.8 GB of RAM and is not something to ask of somebody
 # looking at this project for the first time.
-FROM golang:1.26-bookworm
+#
+# Go 1.26.11, matching the toolchain line in go.mod and free of GO-2026-6859
+# (F-084). The tag names the version; the digest pins the bytes.
+FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
 
 ARG DUCKDB_VERSION=1.1.3
 ARG PROTOC_VERSION=29.3

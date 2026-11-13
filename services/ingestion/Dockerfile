@@ -1,4 +1,7 @@
-FROM golang:1.26-alpine AS builder
+# Go 1.26.11, the first 1.26 release free of GO-2026-6859 (F-084), matching the
+# toolchain line in go.mod. The tag names the version and the digest pins the
+# bytes, so a stale cached golang:1.26-alpine can no longer build a release.
+FROM golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -19,7 +22,7 @@ LABEL org.opencontainers.image.title="gravix-ingestion" \
 
 # Take the fixes Alpine has published since the base image was cut. The tag is a
 # floating minor, so a rebuild already moves; this closes the gap between point
-# releases, which is where zlib 1.4-r0 sat while image-scan was red (F-084).
+# releases, which is where zlib 1.4-r0 sat while image-scan was red (F-085).
 RUN apk upgrade --no-cache
 
 RUN addgroup -S gravix && adduser -S gravix -G gravix

@@ -587,7 +587,7 @@ jobs:
   # On main this scans the image docker-build pushed. On a pull request it
   # builds the same Dockerfile without pushing and scans that, so a finding
   # fails the pull request that brings it in rather than the push after it
-  # merges, and ci-summary waits on it. Until F-084 it ran on main only and
+  # merges, and ci-summary waits on it. Until F-085 it ran on main only and
   # outside ci-summary: its scans were red on every push for over a month
   # while every pull request and every ci-summary stayed green (DD-045).
   image-scan:
@@ -675,7 +675,7 @@ jobs:
       # the severity input unless limit-severities-for-sarif is set ("Building
       # SARIF report with all severities"), so the job failed on a fixable
       # finding of any severity: load-generator failed on one MEDIUM zlib CVE
-      # alone (F-084). The gate and the report are separate steps for that.
+      # alone (F-085). The gate and the report are separate steps for that.
       - name: Fail on fixable CRITICAL and HIGH findings
         # v0.36.0, by commit. A tag can be moved: in March 2026 all but one of
         # this action's tags were force-pushed to malicious commits
@@ -694,7 +694,7 @@ jobs:
 
       # The report: every finding, at every severity, fixed or not, for the
       # Security tab. It never fails the job; the gate above decides that.
-      # Before F-084 ignore-unfixed applied to the SARIF too, so a finding with
+      # Before F-085 ignore-unfixed applied to the SARIF too, so a finding with
       # no fix never reached the Security tab, whatever DD-036 said. It is
       # written on a pull request as well, so a change that breaks this step
       # fails there and not on main; only main's report is uploaded.
@@ -1150,7 +1150,7 @@ jobs:
           # docker-build runs only on push to main, so on a pull request it is
           # skipped and cannot fail this check. On main it can (F-026).
           echo "Docker build:  ${{ needs.docker-build.result }}"
-          # Runs on pull requests as well as main since F-084. Before that it
+          # Runs on pull requests as well as main since F-085. Before that it
           # was not in this list, so main's scans failed for over a month and
           # this check stayed green (DD-045).
           echo "Image scan:    ${{ needs.image-scan.result }}"

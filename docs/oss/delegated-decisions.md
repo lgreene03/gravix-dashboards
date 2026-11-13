@@ -802,11 +802,11 @@ come with this change. Any findings they show are fixed as ordinary work.
 
 **To reverse.** Remove `ignore-unfixed` to fail on every finding, or set `exit-code: 0` to report only.
 
-**Corrected 2026-11-11 (F-084).** Two statements above did not hold. The SARIF upload never carried
+**Corrected 2026-11-11 (F-085).** Two statements above did not hold. The SARIF upload never carried
 a finding without a fix, because `ignore-unfixed` applied to the one step that both gated and
 reported. And the gate failed on fixable findings of every severity, not only CRITICAL and HIGH,
 because trivy-action drops the severity filter for SARIF output. The gate and the report are now
-separate steps, so both statements hold from F-084 on. The question left open above is decided in
+separate steps, so both statements hold from F-085 on. The question left open above is decided in
 DD-045.
 
 ## DD-037 — a pinned `protoc` in CI, and a drift check on `gen/`
@@ -1005,9 +1005,9 @@ node in practice already, because its gateway cannot run more than one replica.
 **To reverse.** Drop the helper includes from the five templates and the sync CronJob. The jobs go
 back to single-tenant, and nothing serves Trino's tables on Helm.
 
-## DD-045 (F-084): image-scan runs on pull requests, and `ci-summary` waits on it
+## DD-045 (F-085): image-scan runs on pull requests, and `ci-summary` waits on it
 
-**Date** 2026-11-11 · **Tier** routine (CI policy) · **Finding** F-084, F-078
+**Date** 2026-11-11 · **Tier** routine (CI policy) · **Finding** F-085, F-078
 
 **Options.** Keep `image-scan` on `main` only and outside `ci-summary`, as DD-036 left it. Add it to
 `ci-summary` on `main` only. Or build and scan each image on pull requests as well, and have
@@ -1015,7 +1015,7 @@ back to single-tenant, and nothing serves Trino's tables on Helm.
 
 **Chosen.** Scan pull requests too, and have `ci-summary` wait on it. DD-036 kept the scan out of
 `ci-summary` because on a pull request it would have gated nothing. That held, and the result was
-over a month of red scans on `main` that no required check saw (F-084). On a pull request the job
+over a month of red scans on `main` that no required check saw (F-085). On a pull request the job
 now builds each image from the same Dockerfile without pushing, and runs the same gate on it. It
 needs no registry login, so pull requests from forks are scanned too. It costs no wall-clock time:
 on `main`'s last run an image built in about two minutes and scanned in about thirty seconds, while
