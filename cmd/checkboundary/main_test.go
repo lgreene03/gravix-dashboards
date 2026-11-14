@@ -5,6 +5,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -343,5 +344,132 @@ func TestCheckHeadersOnCleanRepo(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("unexpected header violations: %v", got)
+	}
+}
+
+// headerSandbox builds a throwaway repository holding a copy of the real
+// header script, so a test can plant files without touching this checkout.
+func headerSandbox(t *testing.T) string {
+	t.Helper()
+	return headerSandboxAt(t, t.TempDir())
+}
+
+// headerSandboxAt builds the sandbox in dir, creating it if needed.
+func headerSandboxAt(t *testing.T, dir string) string {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "add_license_headers.sh"))
+	if err != nil {
+		t.Fatalf("read header script: %v", err)
+	}
+	writeSandboxFile(t, dir, "scripts/add_license_headers.sh", string(src))
+	if err := os.Chmod(filepath.Join(dir, "scripts", "add_license_headers.sh"), 0o755); err != nil {
+		t.Fatalf("chmod header script: %v", err)
+	}
+	return dir
+}
+
+// depth counts the path separators in an absolute path.
+func depth(p string) int {
+	return strings.Count(filepath.Clean(p), string(filepath.Separator))
+}
+
+func writeSandboxFile(t *testing.T, root, rel, body string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", rel, err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+}
+
+// TestCheckHeadersRunsTheScriptFromARelativeRoot guards the defect that made
+// TestCheckHeadersOnCleanRepo pass without checking anything: given a relative
+// root such as "../..", the script path was resolved against cmd.Dir a second
+// time, the script never started, and that was read as "no missing headers".
+func TestCheckHeadersRunsTheScriptFromARelativeRoot(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	// The sandbox must sit deeper than this package's directory. Otherwise the
+	// relative path climbs to "/" when resolved a second time against cmd.Dir,
+	// the extra "../" steps are absorbed there, and it lands on the right file by
+	// coincidence, so the test would pass against the defect it guards.
+	dir := t.TempDir()
+	for depth(dir) <= depth(wd)+1 {
+		dir = filepath.Join(dir, "deeper")
+	}
+	headerSandboxAt(t, dir)
+	writeSandboxFile(t, dir, "pkg/widget/widget.go", "package widget\n")
+
+	rel, err := filepath.Rel(wd, dir)
+	if err != nil {
+		t.Fatalf("relative path to the sandbox: %v", err)
+	}
+
+	got, err := checkHeaders(rel)
+	if err != nil {
+		t.Fatalf("checkHeaders(%q): %v", rel, err)
+	}
+	if len(got) != 1 || got[0].Path != "pkg/widget/widget.go" {
+		t.Fatalf("checkHeaders(%q) = %v, want one violation for pkg/widget/widget.go", rel, got)
+	}
+}
+
+// TestCheckHeadersSkipsPythonEnvironments plants installed packages, with no
+// headers, in the places a Python environment puts them, beside a first-party
+// file that has one. None of them is first-party source, so the check must pass.
+func TestCheckHeadersSkipsPythonEnvironments(t *testing.T) {
+	dir := headerSandbox(t)
+	writeSandboxFile(t, dir, "sdk/python/gravix/client.py",
+		"# Copyright 2026 The Gravix Authors\n# SPDX-License-Identifier: Apache-2.0\n")
+	for _, rel := range []string{
+		"sdk/python/.venv/lib/python3.14/site-packages/pip/__init__.py",
+		"sdk/python/venv/bin/activate_this.py",
+		"sdk/python/env/lib/python3.12/site-packages/requests/api.py", // an environment by another name
+		"sdk/python/gravix/__pycache__/client.cpython-314.py",
+		"sdk/python/.tox/py314/lib/python3.14/site-packages/x.py",
+	} {
+		writeSandboxFile(t, dir, rel, "import os\n")
+	}
+
+	got, err := checkHeaders(dir)
+	if err != nil {
+		t.Fatalf("checkHeaders: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("installed packages were checked as first-party source: %v", got)
+	}
+}
+
+// TestAddModeLeavesInstalledPackagesAlone runs the script without --check: it
+// must add the header to first-party files and never write into an environment.
+func TestAddModeLeavesInstalledPackagesAlone(t *testing.T) {
+	dir := headerSandbox(t)
+	const installed = "sdk/python/.venv/lib/python3.14/site-packages/pip/__init__.py"
+	writeSandboxFile(t, dir, installed, "import os\n")
+	writeSandboxFile(t, dir, "pkg/widget/widget.go", "package widget\n")
+
+	cmd := exec.Command(filepath.Join(dir, "scripts", "add_license_headers.sh"))
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("add mode: %v\n%s", err, out)
+	}
+
+	body, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(installed)))
+	if err != nil {
+		t.Fatalf("read installed file: %v", err)
+	}
+	if string(body) != "import os\n" {
+		t.Errorf("add mode rewrote an installed package:\n%s", body)
+	}
+	first, err := os.ReadFile(filepath.Join(dir, "pkg", "widget", "widget.go"))
+	if err != nil {
+		t.Fatalf("read first-party file: %v", err)
+	}
+	if !strings.Contains(string(first), "SPDX-License-Identifier: Apache-2.0") {
+		t.Errorf("add mode did not header a first-party file:\n%s", first)
 	}
 }
