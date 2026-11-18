@@ -4980,3 +4980,62 @@ klauspost/compress, the last being GO-2026-6865, which the root module fixed in 
 Terraform provider eleven (x/net, x/text and grpc), the Gin recipe eight (x/net and x/text), and
 `sdk/go/otel` three (go.opentelemetry.io/otel/sdk). Moving those dependencies is a change of its
 own for each module, and adding the modules to `vuln` should come with it.
+
+## F-085: image-scan failed every push to `main` for over a month, and no required check saw it
+
+**Found by** `image-scan` failing on every push to `main` from 2026-10-09 (run 37915366543) to 2026-11-11 (run 42935241347)
+**Affects** `.github/workflows/ci.yml` (`image-scan`, `ci-summary`, `docker-build`), the four service Dockerfiles, `go.mod`
+**Severity** high: seventeen fixable HIGH findings shipped in three of the four images, and the check meant to stop them could not
+**Status** fixed 2026-11-11
+
+Three things were wrong, and each hid the next.
+
+The gate failed on the wrong things. `image-scan` ran trivy-action once, with `format: sarif`,
+`severity: CRITICAL,HIGH`, `ignore-unfixed` and `exit-code: 1`. For SARIF the action unsets the
+severity unless `limit-severities-for-sarif` is set (its log says "Building SARIF report with all
+severities"), so the job failed on a fixable finding of any severity. load-generator holds no HIGH
+or CRITICAL finding and failed on one MEDIUM, zlib CVE-2026-4738, alone. The SARIF went to a file,
+so the failing log printed no findings at all. And `ignore-unfixed` applied to the report too, so a
+finding with no fix never reached the Security tab, whatever DD-036 said.
+
+The images did hold real findings. Trivy 0.70.0 on `main`'s images at `sha-053814c` found no
+CRITICAL, and every HIGH was a Go module compiled into a binary:
+
+| Package | Installed | Fixed in | HIGH findings | Images |
+|---|---|---|---|---|
+| golang.org/x/crypto | v0.48.0 | 0.52.0 | CVE-2026-39828, 39829, 39830, 39831, 39832, 39835, 42508, 46595, 46597 | ingestion, gateway, rollup (all seven binaries) |
+| golang.org/x/crypto | v0.48.0 | 0.55.0 | CVE-2026-56854 | as above |
+| golang.org/x/net | v0.49.0 | 0.53.0 | CVE-2026-33814 | rollup (`iceberg-sync`, `trino-catalog-sync`) |
+| golang.org/x/net | v0.49.0 | 0.55.0 | CVE-2026-25681, 27136, 39821 | as above |
+| golang.org/x/net | v0.49.0 | 0.56.0 | CVE-2026-46600 | as above |
+| golang.org/x/net | v0.49.0 | 0.60.0 | CVE-2026-78669 | as above |
+| golang.org/x/net | v0.49.0 | 0.62.0 | CVE-2026-78661 | as above |
+
+None is reachable, which is why `vuln` stayed green: govulncheck reports code the program calls,
+while Trivy reads each binary's module list and reports every module linked in. The runtime base,
+Alpine 3.21, reached end of life on 2026-11-01; its one finding was the zlib MEDIUM, in all four
+images.
+
+And nothing required the scan to pass. It ran on push to `main` only, and `ci-summary`, the one
+required check, did not wait on it. Every pull request and every `ci-summary` stayed green while
+each push to `main` had four red scans.
+
+Fixed. x/crypto moves to v0.58.0, x/net to v0.62.0 and x/sys to v0.50.0, which takes `go.mod`'s go
+directive to 1.26.0, the go line F-084 left at 1.25; F-084's `toolchain go1.26.11` line stays, and
+still decides which Go builds. The four runtime stages move to `alpine:3.24` and run `apk upgrade --no-cache`,
+because the 3.24.4 base image still ships zlib 1.3.2-r1 while the v3.24 repository serves 1.4-r0.
+The gate is its own step in table format, so it fails only on fixable CRITICAL and HIGH findings and
+prints them in the log; a second step writes every finding, fixed or not, as SARIF and never fails.
+trivy-action is pinned by commit to its immutable v0.36.0 release, since CVE-2026-33634 showed that
+its tags can be moved, and Trivy is pinned to v0.70.0. On pull requests `image-scan` now builds each
+image without pushing and scans it, and `ci-summary` waits on it (DD-045).
+
+After the fix, Trivy 0.70.0 with the gate's settings exits 0 on local builds of all four images. At
+every severity one entry remains, GO-2026-5932, which says the `x/crypto/openpgp` package is
+unmaintained. It has no severity, nothing here imports `openpgp`, and its fix is an untagged commit
+after v0.58.0, so it clears with the next tagged x/crypto. No `.trivyignore` was needed.
+
+Not fixed here, because `image-scan` does not build them: the runtime stage of `action/Dockerfile`,
+the GitHub Action's image, is on `alpine:3.20`, out of support since 2026-04-01, and that of
+`deploy/minio/Dockerfile`, a local build only, is on `alpine:3.21`. F-084 moved both builder stages
+to Go 1.26.11.

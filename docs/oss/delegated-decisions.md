@@ -802,6 +802,13 @@ come with this change. Any findings they show are fixed as ordinary work.
 
 **To reverse.** Remove `ignore-unfixed` to fail on every finding, or set `exit-code: 0` to report only.
 
+**Corrected 2026-11-11 (F-085).** Two statements above did not hold. The SARIF upload never carried
+a finding without a fix, because `ignore-unfixed` applied to the one step that both gated and
+reported. And the gate failed on fixable findings of every severity, not only CRITICAL and HIGH,
+because trivy-action drops the severity filter for SARIF output. The gate and the report are now
+separate steps, so both statements hold from F-085 on. The question left open above is decided in
+DD-045.
+
 ## DD-037 — a pinned `protoc` in CI, and a drift check on `gen/`
 
 **Date** 2026-10-05 · **Tier** routine (CI tooling) · **Spec** GRVX-1102 (SD-028, DD-027)
@@ -997,3 +1004,32 @@ node in practice already, because its gateway cannot run more than one replica.
 
 **To reverse.** Drop the helper includes from the five templates and the sync CronJob. The jobs go
 back to single-tenant, and nothing serves Trino's tables on Helm.
+
+## DD-045 (F-085): image-scan runs on pull requests, and `ci-summary` waits on it
+
+**Date** 2026-11-11 · **Tier** routine (CI policy) · **Finding** F-085, F-078
+
+**Options.** Keep `image-scan` on `main` only and outside `ci-summary`, as DD-036 left it. Add it to
+`ci-summary` on `main` only. Or build and scan each image on pull requests as well, and have
+`ci-summary` wait on it everywhere.
+
+**Chosen.** Scan pull requests too, and have `ci-summary` wait on it. DD-036 kept the scan out of
+`ci-summary` because on a pull request it would have gated nothing. That held, and the result was
+over a month of red scans on `main` that no required check saw (F-085). On a pull request the job
+now builds each image from the same Dockerfile without pushing, and runs the same gate on it. It
+needs no registry login, so pull requests from forks are scanned too. It costs no wall-clock time:
+on `main`'s last run an image built in about two minutes and scanned in about thirty seconds, while
+`docker-smoke`, which waits on the same jobs, ran for twelve and a half.
+
+**Also decided.** trivy-action is pinned by commit and Trivy by version, and each moves only in a
+change of its own. `docker-build`'s cache has one scope per image, so the four images stop
+overwriting each other's cache, and a pull request reads the cache and writes none.
+
+**Given up.** A newly published fixable CRITICAL or HIGH finding turns every open pull request red
+until a fix lands, including pull requests that touch no image. `vuln` already behaves this way, and
+the fix is usually one dependency or base-image bump. The pull request's image is built for the
+runner's platform only, as `docker-build`'s is.
+
+**To reverse.** Drop `image-scan` from `ci-summary`'s `needs` and from its failure check to stop
+gating. To stop scanning pull requests as well, restore `needs: docker-build` and
+`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`, and remove the build steps.
