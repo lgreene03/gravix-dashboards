@@ -5039,3 +5039,54 @@ Not fixed here, because `image-scan` does not build them: the runtime stage of `
 the GitHub Action's image, is on `alpine:3.20`, out of support since 2026-04-01, and that of
 `deploy/minio/Dockerfile`, a local build only, is on `alpine:3.21`. F-084 moved both builder stages
 to Go 1.26.11.
+
+## F-086: the Action and MinIO images ran on unsupported Alpine, and no check builds either
+
+**Found by** F-085, which named both as left behind
+**Affects** `action/Dockerfile` (the GitHub Action's image), `deploy/minio/Dockerfile` (the local MinIO build), `.github/workflows/ci.yml` (`docker-lint`)
+**Severity** high: the old bases held fixable CRITICAL and HIGH findings that will never get another fix
+**Status** base images fixed 2026-11-18; the Action's builder and the MinIO binaries are open
+
+The Action's runtime stage was on `alpine:3.20`, out of support since 2026-04-01, and the MinIO
+build's on `alpine:3.21`, out of support since 2026-11-01. Trivy 0.70.0 finds musl
+CVE-2026-107891 (HIGH) in 3.20.10, and in the 3.21.6 image cached here two CRITICAL and eighteen
+HIGH findings, from OpenSSL CVE-2026-31789 (CRITICAL), six HIGH OpenSSL advisories, two in musl and
+two in zlib.
+
+Both stages now use `alpine:3.24` and run `apk upgrade --no-cache` first, with F-085's comment; on
+the 3.24.4 base that again takes zlib from 1.3.2-r1 to 1.4-r0. Each folds the upgrade and its one
+`apk add` into a single `RUN`, since two one-command `RUN`s in a row fail hadolint's DL3059 (the
+service images' second `RUN` has two commands, which the rule allows). `docker-lint` never linted
+`action/Dockerfile`, which failed DL3018 on its unpinned `apk add bash`; it now carries the reasoned
+ignore rollup's tzdata has (F-019), and `docker-lint` lints it.
+
+Verified with hadolint 2.12.0, which passes both files, and Trivy 0.70.0 with the gate's settings.
+The Action image exits 0, and at every severity holds one entry, GO-2026-5932, the unmaintained
+`openpgp` notice F-085 records. The MinIO image's Alpine layer has no finding at any severity, and
+the image still boots: `mc ready local`, compose's health check, answers, and `mc mb` creates the
+bucket as `init-minio` does.
+
+Found alongside, and left open, because each needs a decision rather than an edit.
+
+The Action image cannot be built. Its builder copies only `sdk/go`, `go.mod`, `go.sum` and
+`cmd/cli`, but the CLI imports ten packages from `pkg/` and `registry/`, so `go build` fails with
+"no required module provides package". With `action/` as the context, the directory a runner builds
+a Docker action from, every `COPY` fails first. The one workflow that uses it,
+`example-deploy-event.yml`, runs only on `workflow_dispatch` and has never run. The scans above used
+a scratch copy whose builder copies the whole module and whose runtime stage is the committed one.
+
+The MinIO binaries fail the gate. The March 2024 `minio` and `mc` releases link old modules, and
+Trivy finds 88 fixable CRITICAL or HIGH findings in them (five CRITICAL; 58 in `minio`, 30 in
+`mc`): x/crypto v0.21.0, x/net v0.21.0 and v0.22.0, grpc, coredns, amqp091-go, thrift, x/text,
+x/oauth2, golang-jwt, klauspost/compress, jsonparser, and three advisories against MinIO itself.
+Five more, against MinIO itself, have no fix, two of them CRITICAL (CVE-2026-33322,
+CVE-2026-33419). None will be fixed upstream: `minio/minio` is archived, and its last commit, of
+2026-02-12, still requires x/crypto v0.37.0, x/net v0.39.0 and grpc v1.72.0. The image is a local
+build that distributes nothing and `image-scan` does not build it, so CI never sees them. A
+`.trivyignore` would be wrong twice over: most have fixes, and a root `.trivyignore` would also
+quiet the four service images. A build with the modules overridden would still keep the five
+unfixed server advisories; only another S3-compatible store for the local stack clears them all.
+
+Neither image is in `image-scan`, which scans what `docker-build` pushes on `main`, and
+`docker-build` builds only the four services, so adding them changes both jobs. And the Helm chart's
+`db-backup-job.yaml` runs `alpine:3.19`, out of support since 2025-11-01.

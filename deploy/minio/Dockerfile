@@ -18,9 +18,14 @@ ENV CGO_ENABLED=0
 RUN go install "github.com/minio/minio@${MINIO_RELEASE}" \
  && go install "github.com/minio/mc@${MC_RELEASE}"
 
-FROM alpine:3.21
+FROM alpine:3.24
+
+# Take the fixes Alpine has published since the base image was cut. The tag is a
+# floating minor, so a rebuild already moves; this closes the gap between point
+# releases, which is where zlib 1.4-r0 sat while image-scan was red (F-085).
 # hadolint ignore=DL3018
-RUN apk add --no-cache ca-certificates
+RUN apk upgrade --no-cache \
+ && apk add --no-cache ca-certificates
 COPY --from=build /go/bin/minio /go/bin/mc /usr/bin/
 # The alias the compose health check names. Readiness needs no credentials.
 ENV MC_HOST_local=http://localhost:9000
