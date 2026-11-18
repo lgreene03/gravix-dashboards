@@ -26,11 +26,21 @@ BUSL_MARKER="SPDX-License-Identifier: BUSL-1.1"
 SEARCH_DIRS="services transforms pkg schemas cmd tests terraform-provider-gravix sdk dashboards cube bench ee"
 
 # collect_files prints one candidate path per line.
+#
+# Installed dependencies are not first-party source and are never checked or
+# edited: node_modules, and Python environments and caches. A virtualenv in
+# sdk/python (the usual way to work on the Python SDK) otherwise put pip, pytest
+# and every other installed package into the check, so `make check-boundary`
+# failed for anyone who had set one up, and running this script without --check
+# would have written Apache headers into third-party files. site-packages is
+# pruned as well as the usual environment names so an environment called
+# something else is still skipped.
 collect_files() {
   for d in $SEARCH_DIRS; do
     [ -d "$d" ] || continue
     find "$d" \
-      -type d \( -name node_modules -o -name .git \) -prune -o \
+      -type d \( -name node_modules -o -name .git -o -name .venv -o -name venv \
+        -o -name site-packages -o -name __pycache__ -o -name .tox \) -prune -o \
       -type f \( -name '*.go' -o -name '*.py' -o -name '*.ts' -o -name '*.js' \) -print
   done
   [ -f proto/gravix.proto ] && echo "proto/gravix.proto"

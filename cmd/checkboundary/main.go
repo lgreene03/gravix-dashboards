@@ -11,6 +11,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"go/parser"
@@ -187,16 +188,30 @@ func checkGates(root string, m *boundary.Map) ([]Violation, error) {
 
 // checkHeaders reports every source file missing its licence header, by
 // delegating to the script that owns that rule.
+//
+// The script path is made absolute because exec resolves a relative path
+// against cmd.Dir: with root "../.." (as the tests pass it) the script was looked
+// for two levels above the repository, failed to start, and that failure was
+// read as "no missing headers". Only the script's own exit status 1 now means
+// "these files are missing a header"; any other failure is an error.
 func checkHeaders(root string) ([]Violation, error) {
-	script := filepath.Join(root, "scripts", "add_license_headers.sh")
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	script := filepath.Join(absRoot, "scripts", "add_license_headers.sh")
 	if _, err := os.Stat(script); err != nil {
 		return nil, nil
 	}
 	cmd := exec.Command(script, "--check")
-	cmd.Dir = root
+	cmd.Dir = absRoot
 	stdout, err := cmd.Output()
 	if err == nil {
 		return nil, nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		return nil, fmt.Errorf("running %s --check: %w", script, err)
 	}
 	var out []Violation
 	for _, line := range strings.Split(strings.TrimSpace(string(stdout)), "\n") {
