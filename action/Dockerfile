@@ -16,9 +16,18 @@ COPY cmd/cli/ cmd/cli/
 RUN go build -ldflags="-s -w" -o /gravix ./cmd/cli/
 
 # --- Runtime ---
-FROM alpine:3.20
+FROM alpine:3.24
 
-RUN apk add --no-cache bash
+# Take the fixes Alpine has published since the base image was cut. The tag is a
+# floating minor, so a rebuild already moves; this closes the gap between point
+# releases, which is where zlib 1.4-r0 sat while image-scan was red (F-085).
+#
+# bash is unpinned, against DL3018: Alpine's repository serves only the current
+# version of each package, so a pinned patch fails the build on the day it moves
+# (F-019).
+# hadolint ignore=DL3018
+RUN apk upgrade --no-cache \
+ && apk add --no-cache bash
 COPY --from=builder /gravix /usr/local/bin/gravix
 COPY action/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
